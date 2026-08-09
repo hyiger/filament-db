@@ -294,6 +294,18 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         setForm((prev) => {
           let changed = false;
           const amsSlots = prev.amsSlots.map((slot) => {
+            // GH #1114 (Codex P2): a slot dedicated to a filament that no
+            // longer exists — "Any spool" on a since-deleted filament, which
+            // the printer-PUT/filament-DELETE race can still produce — was
+            // skipped entirely by the `!slot.spoolId` early return below. It
+            // then sat behind an apparently empty select while every save was
+            // rejected 400 by the new ref validation, with no way to clear it
+            // from the form. Drop a filamentId the fetched options don't know
+            // about, before that return.
+            if (slot.filamentId && !options.some((f) => f._id === slot.filamentId)) {
+              changed = true;
+              return { ...slot, filamentId: null, spoolId: null };
+            }
             if (!slot.spoolId) return slot;
             const owner = options.find((f) =>
               f.spools?.some((sp) => sp._id === slot.spoolId),

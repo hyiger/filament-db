@@ -188,12 +188,18 @@ export async function assignSpoolToSlot(
  * ordering hazards are exactly what the v1.70 epic declined to take on for the
  * analogous parent/target case.
  *
- * The consequence is bounded and self-healing: the worst outcome is one stale
- * `filamentId`, which renders as an empty slot, is cleared by the next delete
- * of that filament, and is repaired in form state by PrinterForm's own
- * post-fetch pass. That is the same trade-off the surrounding code already
- * accepts — the guard turns the COMMON case (a stale form saved minutes later)
- * from silent corruption into a 400.
+ * The consequence is bounded and recoverable: the worst outcome is one stale
+ * `filamentId`, which renders as an empty slot and is cleared by the next
+ * delete of that filament. PrinterForm's post-fetch pass also drops a
+ * `filamentId` the fetched options don't know about — note that pass had to be
+ * EXTENDED for this (Codex P2): it previously returned early for a slot with
+ * no `spoolId`, which is precisely this shape, so the stale id sat behind an
+ * empty select while the new validation rejected every save with a 400 and no
+ * way to clear it.
+ *
+ * That is the same trade-off the surrounding code already accepts — the guard
+ * turns the COMMON case (a stale form saved minutes later) from silent
+ * corruption into a 400.
  */
 export async function findInvalidSlotFilamentRef(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
