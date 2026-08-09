@@ -25,6 +25,7 @@ import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { parentPromotionState } from "@/lib/promoteParent";
+import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
 import { decideSpoolDeepLink, healedSpoolDeepLinkHref } from "@/lib/spoolDeepLink";
 import type { FilamentDetail, FilamentCalibration, FilamentSpool } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -1881,20 +1882,16 @@ function FilamentDetail() {
         const hasSpools = filament.spools?.length > 0;
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 
-        // Aggregate stats across all spools
-        let aggregateRemaining = 0;
-        let aggregateTotal = 0;
-        let validSpoolCount = 0;
-        if (hasSpools && filament.spoolWeight != null) {
-          for (const spool of filament.spools) {
-            if (spool.totalWeight != null) {
-              aggregateRemaining += Math.max(0, spool.totalWeight - filament.spoolWeight);
-              validSpoolCount++;
-            }
-          }
-          aggregateTotal = (filament.netFilamentWeight ?? 0) * validSpoolCount;
-        }
-        const aggregatePct = aggregateTotal > 0 ? Math.min(100, Math.round((aggregateRemaining / aggregateTotal) * 100)) : null;
+        // GH #1099: this used to hand-roll the aggregate, and the hand-rolled
+        // loop had no `if (spool.retired) continue`. So a filament whose only
+        // spool was retired still headlined "1 spools · 320g total (43%)" while
+        // the dashboard, the list, and /inventory all (correctly) treated it as
+        // out of stock — and retiring a spool here appeared to do nothing.
+        // The helpers in @/lib/inventoryStats are the single source of truth
+        // every other surface already uses; the math is otherwise identical.
+        const aggregateSpoolCount = getSpoolCount(filament);
+        const aggregateRemaining = getRemainingGrams(filament);
+        const aggregatePct = getRemainingPct(filament);
 
         return (
           <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
@@ -1902,8 +1899,16 @@ function FilamentDetail() {
               <h2 className="text-sm font-medium text-gray-500">{t("detail.section.spoolTracker")}</h2>
               {hasSpools && (
                 <span className="text-xs text-gray-400">
-                  {t("detail.spoolCount", { count: filament.spools.length })}
-                  {aggregatePct != null && ` · ${formatGrams(aggregateRemaining)}g ${t("detail.total")} (${aggregatePct}%)`}
+                  {/* #1117(a): "1 spools" — the Inventory group header already
+                      picks a singular/plural key (GH #528); this one didn't. */}
+                  {t(
+                    aggregateSpoolCount === 1 ? "detail.spoolCount.one" : "detail.spoolCount.other",
+                    { count: aggregateSpoolCount },
+                  )}
+                  {aggregateRemaining != null &&
+                    ` · ${formatGrams(aggregateRemaining)}g ${t("detail.total")}${
+                      aggregatePct != null ? ` (${aggregatePct}%)` : ""
+                    }`}
                 </span>
               )}
             </div>
