@@ -460,9 +460,14 @@ export default function Home() {
     // spool, and that roll is real. Count every filament with its own
     // spool, parents included, so the chip badge matches the rows the
     // filter renders (see the matching source switch in `visibleFilaments`).
-    counts.hasSpools = filaments.filter(
-      (f) => (f.spools?.length ?? 0) > 0,
-    ).length;
+    // GH #1107: this was `(f.spools?.length ?? 0) > 0`, which disagreed with
+    // the rest of the app in both directions — it EXCLUDED legacy rolls (a
+    // top-level `totalWeight` with no spools[] subdocuments, which every other
+    // surface counts) and INCLUDED filaments whose only spool is retired
+    // (simultaneously reported as out of stock right beside it). `getSpoolCount`
+    // is the shared helper this same file already uses for `spoolStats`,
+    // `inStock`, `outOfStockCount` and the row cell.
+    counts.hasSpools = filaments.filter((f) => getSpoolCount(f) > 0).length;
     return counts;
   }, [filaments, inventoryFilaments]);
 
@@ -528,8 +533,10 @@ export default function Home() {
     // one — see the matching note in `quickFilterCounts`. Dropping it
     // here is what made the filter return no rows for a parent whose
     // only spool sat on the parent itself.
+    // GH #1107: must use the same predicate as the badge above, or the two
+    // disagree by construction.
     if (quickFilter === "hasSpools") {
-      return filaments.filter((f) => (f.spools?.length ?? 0) > 0);
+      return filaments.filter((f) => getSpoolCount(f) > 0);
     }
     // Every other filter resolves against `inventoryFilaments` instead —
     // otherwise the chip badge (derived from `inventoryFilaments`, see
@@ -1334,6 +1341,20 @@ export default function Home() {
           <span>{t("filaments.stats.typeCount", { count: filteredTypeCount })}</span>
           <span className="text-gray-600">·</span>
           <span>{t("filaments.stats.vendorCount", { count: filteredVendorCount })}</span>
+          {/* #1117(d): every figure on this line is a LIBRARY total — it
+              tracks the server-side search/type/vendor filters but never the
+              client-side quick-filter chips, so picking a chip left the line
+              describing a set the table below wasn't showing. Name the
+              matched count rather than silently rewriting the totals, which
+              are still the useful number. */}
+          {quickFilter !== "all" && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span className="text-blue-600 dark:text-blue-400">
+                {t("filaments.stats.quickFilterMatches", { count: visibleFilaments.length })}
+              </span>
+            </>
+          )}
           {/* #616: surface spool + location totals at a glance, like the
               Inventory page header. */}
           {spoolStats.spools > 0 && (
@@ -1373,9 +1394,15 @@ export default function Home() {
                     : "bg-transparent text-gray-600 border-gray-300 hover:bg-gray-100 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                 }`}
               >
-                {showOutOfStock
-                  ? t("filaments.hideOutOfStock")
-                  : t("filaments.showOutOfStock", { count: outOfStockCount })}
+                {/* #1117(e): this read "Show out of stock (4)" beside chips
+                    badged with a pill ("All 71"). Same row, two conventions —
+                    use the chips' pill so the count reads consistently. */}
+                {showOutOfStock ? t("filaments.hideOutOfStock") : t("filaments.showOutOfStockPlain")}
+                {!showOutOfStock && (
+                  <span className="ml-1.5 text-[10px] px-1 rounded bg-gray-200 dark:bg-gray-700">
+                    {outOfStockCount}
+                  </span>
+                )}
               </button>
             ) : null
           }
