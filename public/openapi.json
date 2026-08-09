@@ -6010,6 +6010,22 @@
                           "type": "integer"
                         }
                       }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "description": "Collections the snapshot did not carry, and which were therefore left untouched rather than wiped (GH #1104). A collection present in the file as an explicit empty array is replaced (emptied) and does NOT appear here.",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "filaments",
+                          "nozzles",
+                          "printers",
+                          "bedTypes",
+                          "locations",
+                          "printHistory",
+                          "sharedCatalogs"
+                        ]
+                      }
                     }
                   }
                 }
