@@ -7,6 +7,7 @@ import BedType from "@/models/BedType";
 import SharedCatalog from "@/models/SharedCatalog";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { pickSharedFilamentFields } from "@/lib/sharePublicFields";
 
 /**
  * GET /api/share — list all shared catalogs the user has published.
@@ -112,25 +113,17 @@ export async function POST(request: NextRequest) {
       BedType.find({ _id: { $in: Array.from(bedTypeIds) }, _deletedAt: null }).lean(),
     ]);
 
-    // Strip per-instance inventory + PII fields that aren't part of the
-    // sharable profile: spools (lot numbers, purchase/open dates, photos,
-    // location refs, dry/usage history), lowStockThreshold, instanceId,
-    // and legacy totalWeight. Recipients can still import the profile and
-    // populate their own spools.
-    const filaments = rawFilaments.map((f) => {
-      const {
-        spools: _spools,
-        lowStockThreshold: _lowStockThreshold,
-        instanceId: _instanceId,
-        totalWeight: _totalWeight,
-        ...publicFields
-      } = f;
-      void _spools;
-      void _lowStockThreshold;
-      void _instanceId;
-      void _totalWeight;
-      return publicFields;
-    });
+    // GH #1122: project each filament down to an ALLOW-LIST. This was a
+    // deny-list — strip four fields, publish everything else — which leaks by
+    // default: /share/{slug} is unauthenticated, so every field added to the
+    // schema afterwards became public unless someone remembered to deny it.
+    // That already published `cost` (what this user paid per kg) alongside
+    // internal bookkeeping (syncId, openprinttagSnapshot, promotedByToken,
+    // _purged, the promotion marker). See src/lib/sharePublicFields.ts for
+    // what is on the list and why.
+    const filaments = rawFilaments.map((f) =>
+      pickSharedFilamentFields(f as unknown as Record<string, unknown>),
+    );
 
     const payload = {
       version: 1,
