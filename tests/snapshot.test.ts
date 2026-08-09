@@ -337,8 +337,14 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(await BedType.countDocuments({ name: "Keep Me" })).toBe(1);
   });
 
-  it("POST restore of a v1 snapshot (no bedTypes) leaves the collection empty, not undefined", async () => {
+  it("POST restore of a v1 snapshot (no bedTypes) LEAVES existing bed types alone (#1104)", async () => {
     // Upgrading users with an older snapshot should still be able to restore.
+    //
+    // GH #1104: this test previously asserted the bed type was GONE, on the
+    // reasoning that restore "always wipes everything first". That was the
+    // bug: a v1/v2 file predates several collections entirely, so wiping on
+    // its behalf silently destroyed data the file had no opinion about. An
+    // ABSENT key now means "leave it"; an explicit empty array still empties.
     const snapshot = {
       version: 1,
       createdAt: new Date().toISOString(),
@@ -360,10 +366,14 @@ describe("snapshot route — bedTypes round-trip", () => {
     const body = await res.json();
 
     expect(res.status).toBe(200);
+    // Nothing was restored INTO bedTypes...
     expect(body.restored.bedTypes).toBe(0);
+    // ...and the collection is reported as skipped rather than emptied.
+    expect(body.skipped).toContain("bedTypes");
 
     const bedTypes = await BedType.find({}).lean();
-    expect(bedTypes).toHaveLength(0);
+    expect(bedTypes).toHaveLength(1);
+    expect(bedTypes[0].name).toBe("Pre-restore");
   });
 
   it("#889: rejects a raw body whose declared Content-Length exceeds the cap (413, no buffering)", async () => {
@@ -478,7 +488,7 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(String(restored._id)).toBe(String(seed._id));
   });
 
-  it("POST restore of a snapshot without sharedCatalogs (v3 shape) leaves the collection empty (no crash)", async () => {
+  it("POST restore of a snapshot without sharedCatalogs (v3 shape) LEAVES share links alone (#1104)", async () => {
     delete mongoose.models.SharedCatalog;
     const SharedCatalog = (await import("@/models/SharedCatalog")).default;
     await SharedCatalog.create({
@@ -503,11 +513,13 @@ describe("snapshot route — bedTypes round-trip", () => {
     const res = await POST(req);
     const body = await res.json();
     expect(res.status).toBe(200);
-    // No sharedCatalogs in the snapshot → collection wiped (because POST
-    // always wipes everything before restoring), and the count comes back
-    // 0 — not undefined.
+    // GH #1104: this used to assert the collection was WIPED, "because POST
+    // always wipes everything before restoring". Restoring a v3 backup
+    // therefore destroyed every published share link — silently, under a
+    // green success message. An absent key now leaves the collection alone.
     expect(body.restored.sharedCatalogs).toBe(0);
-    expect(await SharedCatalog.countDocuments({})).toBe(0);
+    expect(body.skipped).toContain("sharedCatalogs");
+    expect(await SharedCatalog.countDocuments({})).toBe(1);
   });
 
   it("POST restore preserves calibration.bedType references through ObjectId rehydration", async () => {
@@ -1039,5 +1051,146 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
       const names = (await Location.find({}).lean()).map((l: { name: string }) => l.name);
       expect(names).toEqual(["Restored No-Version"]);
     });
+  });
+});
+
+/**
+ * GH #1104 — restoring an older-format snapshot must not wipe the collections
+ * it doesn't carry.
+ *
+ * Restore used to deleteMany() all seven collections unconditionally and then
+ * insert only the keys present in the file. A v2-era snapshot (filaments /
+ * nozzles / printers / bedTypes — the only collections that existed then)
+ * therefore emptied Locations, PrintHistory and SharedCatalog: every spool's
+ * locationId dangled and every published share link vanished, while the UI
+ * reported a green "Restored N filament(s), M nozzle(s), P printer(s)".
+ *
+ * This suite registers its OWN models — including SharedCatalog, which the
+ * suites above deliberately don't — because tests/setup.ts wipes
+ * mongoose.models between tests.
+ */
+describe("snapshot restore — collections the file omits (#1104)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let Nozzle: any;
+  let Location: any;
+  let PrintHistory: any;
+  let SharedCatalog: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of [
+      "Filament",
+      "Nozzle",
+      "Printer",
+      "BedType",
+      "Location",
+      "PrintHistory",
+      "SharedCatalog",
+    ]) {
+      delete mongoose.models[m];
+    }
+    Filament = (await import("@/models/Filament")).default;
+    Nozzle = (await import("@/models/Nozzle")).default;
+    await import("@/models/Printer");
+    await import("@/models/BedType");
+    Location = (await import("@/models/Location")).default;
+    PrintHistory = (await import("@/models/PrintHistory")).default;
+    SharedCatalog = (await import("@/models/SharedCatalog")).default;
+  });
+
+  const restore = async (snapshot: unknown) => {
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    return { res, body: await res.json() };
+  };
+
+  it("leaves locations, print history and share links alone for a v2-shape file", async () => {
+    const loc = await Location.create({ name: "Drybox 1", kind: "drybox" });
+    await PrintHistory.create({ jobLabel: "Benchy", startedAt: new Date(), usage: [] });
+    await SharedCatalog.create({
+      slug: "abc123",
+      title: "Shared",
+      description: "",
+      payload: {
+        version: 1,
+        createdAt: new Date().toISOString(),
+        filaments: [],
+        nozzles: [],
+        printers: [],
+        bedTypes: [],
+      },
+    });
+
+    const { res, body } = await restore({
+      version: 2,
+      collections: {
+        filaments: [],
+        nozzles: [{ name: "0.4 Brass", diameter: 0.4, type: "brass" }],
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(body.restored.nozzles).toBe(1);
+    // The headline bug: all three of these used to come back 0.
+    expect(await Location.countDocuments({})).toBe(1);
+    expect(await PrintHistory.countDocuments({})).toBe(1);
+    expect(await SharedCatalog.countDocuments({})).toBe(1);
+    // ...and the surviving location keeps its _id, so spool refs still resolve.
+    expect(String((await Location.findOne({}))._id)).toBe(String(loc._id));
+  });
+
+  it("names the omitted collections in the response so a partial restore is visible", async () => {
+    const { body } = await restore({
+      version: 2,
+      collections: { nozzles: [] },
+    });
+    expect(body.skipped).toEqual(
+      expect.arrayContaining([
+        "filaments",
+        "printers",
+        "bedTypes",
+        "locations",
+        "printHistory",
+        "sharedCatalogs",
+      ]),
+    );
+    expect(body.skipped).not.toContain("nozzles");
+  });
+
+  it("still empties a collection the file carries as an EXPLICIT empty array", async () => {
+    // Present-but-empty is a deliberate "make this collection empty"; only an
+    // ABSENT key means the file has no opinion. Collapsing the two would make
+    // it impossible to restore a snapshot of a legitimately empty collection.
+    await Location.create({ name: "Drybox 1", kind: "drybox" });
+    const { res, body } = await restore({
+      version: 7,
+      collections: { locations: [] },
+    });
+    expect(res.status).toBe(200);
+    expect(await Location.countDocuments({})).toBe(0);
+    expect(body.skipped).not.toContain("locations");
+  });
+
+  it("replaces a collection the file does carry", async () => {
+    await Nozzle.create({ name: "Old", diameter: 0.6, type: "brass" });
+    const { res } = await restore({
+      version: 7,
+      collections: { nozzles: [{ name: "New", diameter: 0.4, type: "brass" }] },
+    });
+    expect(res.status).toBe(200);
+    const names = (await Nozzle.find({}).lean()).map((n: { name: string }) => n.name);
+    expect(names).toEqual(["New"]);
+  });
+
+  it("does not touch filaments when the file omits them", async () => {
+    await Filament.create({ name: "Keep me", vendor: "Acme", type: "PLA", diameter: 1.75 });
+    const { res } = await restore({ version: 7, collections: { nozzles: [] } });
+    expect(res.status).toBe(200);
+    expect(await Filament.countDocuments({})).toBe(1);
   });
 });
