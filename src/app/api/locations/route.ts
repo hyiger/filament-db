@@ -57,22 +57,39 @@ export async function GET(request: NextRequest) {
         },
       },
       { $unwind: "$spools" },
-      { $match: { "spools.retired": { $ne: true }, "spools.locationId": { $ne: null } } },
+      // GH #1106: the retired filter moved OUT of $match and INTO the
+      // accumulators, so one pass yields both numbers. The page needs the
+      // retired count because a location holding only retired spools read
+      // "Spools 0" and then refused to delete, telling the user to reassign
+      // spools the same row said didn't exist.
+      { $match: { "spools.locationId": { $ne: null } } },
       {
         $group: {
           _id: "$spools.locationId",
-          spoolCount: { $sum: 1 },
+          // { $eq: [..., true] } reproduces the old { $ne: true } semantics
+          // for missing / false / legacy values (the schema default is false).
+          spoolCount: { $sum: { $cond: [{ $eq: ["$spools.retired", true] }, 0, 1] } },
+          retiredSpoolCount: { $sum: { $cond: [{ $eq: ["$spools.retired", true] }, 1, 0] } },
           totalGrams: {
             $sum: {
-              $max: [
+              // TRAP: this $cond is load-bearing. Without it, dropping the
+              // retired filter from $match above would silently start adding
+              // retired spools into every location's gram total.
+              $cond: [
+                { $eq: ["$spools.retired", true] },
                 0,
                 {
-                  $subtract: [
-                    { $ifNull: ["$spools.totalWeight", 0] },
+                  $max: [
+                    0,
                     {
-                      $ifNull: [
-                        "$spoolWeight",
-                        { $ifNull: [{ $arrayElemAt: ["$_parent.spoolWeight", 0] }, 0] },
+                      $subtract: [
+                        { $ifNull: ["$spools.totalWeight", 0] },
+                        {
+                          $ifNull: [
+                            "$spoolWeight",
+                            { $ifNull: [{ $arrayElemAt: ["$_parent.spoolWeight", 0] }, 0] },
+                          ],
+                        },
                       ],
                     },
                   ],
@@ -90,6 +107,7 @@ export async function GET(request: NextRequest) {
       return {
         ...l,
         spoolCount: stats?.spoolCount ?? 0,
+        retiredSpoolCount: stats?.retiredSpoolCount ?? 0,
         totalGrams: stats?.totalGrams ?? 0,
       };
     });
