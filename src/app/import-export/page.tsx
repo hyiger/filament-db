@@ -102,8 +102,10 @@ export default function ImportExportPage() {
         });
         if (report) {
           // See the note on the filaments page — three shapes, three titles.
-          // The INI importer reports per-profile WRITE FAILURES in `errors`
-          // with no row accounting at all, and those are not "notes".
+          // The INI importer returns no row accounting and mixes write
+          // failures with non-fatal adjustments in one `errors` array, so it
+          // gets a NEUTRAL title: anything sharper would misdescribe one of
+          // the two.
           const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
           const noRowAccounting =
             data.skipped === undefined && data.skippedRows === undefined;
@@ -112,7 +114,7 @@ export default function ImportExportPage() {
               skippedCount > 0
                 ? t("filaments.import.skippedTitle", { count: skippedCount })
                 : noRowAccounting
-                  ? t("filaments.import.problemsTitle", { count: data.errors?.length ?? 0 })
+                  ? t("filaments.import.detailsTitle", { count: data.errors?.length ?? 0 })
                   : t("filaments.import.notesTitle"),
             message: report,
             confirmLabel: t("common.close"),

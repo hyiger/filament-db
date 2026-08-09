@@ -855,10 +855,13 @@ export default function Home() {
     //   - rows were refused          → "N row(s) were not imported"
     //   - a template imported with a field stripped (zero skipped, a note)
     //                                → "Import notes"
-    //   - the INI importer, which reports per-profile WRITE FAILURES in
-    //     `errors` and returns no `skipped`/`skippedRows` at all — those are
-    //     real profiles that did not import, so calling them notes would
-    //     understate them (Codex P2).
+    //   - the INI importer, which returns no row accounting at all and puts
+    //     BOTH per-profile write failures and non-fatal adjustments into the
+    //     same `errors` array. Those two are indistinguishable from out here
+    //     (Codex P2, twice: "no row accounting" is not a failure signal), so
+    //     that shape gets a neutral title rather than one that would either
+    //     understate a failure or accuse a successful import of failing.
+    //     Separating them properly means new response fields on that route.
     const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
     const noRowAccounting = data.skipped === undefined && data.skippedRows === undefined;
     await confirm({
@@ -866,7 +869,7 @@ export default function Home() {
         skippedCount > 0
           ? t("filaments.import.skippedTitle", { count: skippedCount })
           : noRowAccounting
-            ? t("filaments.import.problemsTitle", { count: data.errors?.length ?? 0 })
+            ? t("filaments.import.detailsTitle", { count: data.errors?.length ?? 0 })
             : t("filaments.import.notesTitle"),
       message: report,
       confirmLabel: t("common.close"),
