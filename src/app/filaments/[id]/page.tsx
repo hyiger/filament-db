@@ -2271,7 +2271,15 @@ function FilamentDetail() {
                               {cal.extrusionMultiplier ?? "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.maxVolumetricSpeed ? `${cal.maxVolumetricSpeed}` : "\u2014"}
+                              {/* `?? "—"`, not a truthiness check: a stored 0
+                                  is a real value (the schema and the form both
+                                  accept it), and rendering it as an em-dash
+                                  hid it — which now matters, because the tile
+                                  above suppresses itself on `!= null` and
+                                  would leave a 0 visible nowhere at all.
+                                  Matches extrusionMultiplier / pressureAdvance
+                                  in this same row. */}
+                              {cal.maxVolumetricSpeed ?? "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
                               {cal.pressureAdvance ?? "\u2014"}
