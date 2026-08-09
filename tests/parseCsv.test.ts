@@ -336,3 +336,27 @@ describe("parseCsv — line breaks inside quoted fields (#1115, Codex P2)", () =
     expect(lines).toEqual([1, 2, 5]);
   });
 });
+
+describe("parseCsv — recordLines in header mode (#1115, Codex P2)", () => {
+  it("aligns with the returned DATA rows, excluding the header", () => {
+    const lines: number[] = [];
+    const rows = parseCsv("h\nx\ny\n", { header: true, recordLines: lines }) as Record<
+      string,
+      string
+    >[];
+    expect(rows).toHaveLength(2);
+    expect(rows[0].h).toBe("x");
+    // x is on line 2, y on line 3 — the header's line 1 must not be here.
+    expect(lines).toEqual([2, 3]);
+  });
+
+  it("stays aligned when a data record spans several lines", () => {
+    const lines: number[] = [];
+    const rows = parseCsv('h\n"a\nb"\nz\n', { header: true, recordLines: lines }) as Record<
+      string,
+      string
+    >[];
+    expect(rows).toHaveLength(2);
+    expect(lines).toEqual([2, 4]);
+  });
+});

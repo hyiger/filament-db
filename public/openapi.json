@@ -8101,7 +8101,7 @@
           },
           "errors": {
             "type": "array",
-            "description": "Non-fatal per-row notes for rows that DID import but had something adjusted — e.g. a template target whose echoed color the update stripped (GH #605). Present only when non-empty.",
+            "description": "Per-row messages that are not row-refusals. This schema is shared across import endpoints and the meaning varies by route: the CSV/XLSX importer emits non-fatal adjustments (e.g. a template target whose echoed color the update stripped, GH #605), while /api/filaments/prusaslicer, /api/filaments/import and /api/openprinttag/import also report caught WRITE FAILURES and refused name collisions here. Do not treat a non-empty array as success. Present only when non-empty.",
             "items": { "type": "string" }
           }
         }

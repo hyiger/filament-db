@@ -26,6 +26,9 @@ export interface CsvParseOptions {
    * exports quote them), so a caller deriving a line number from the array
    * index reports every subsequent row too low. The parser is the only place
    * that knows where a record actually began.
+   *
+   * In header mode the header's own entry is removed, so the array stays
+   * aligned with the returned DATA objects.
    */
   recordLines?: number[];
   /** If true (default), the first row is used as column headers and each
@@ -222,6 +225,12 @@ export function parseCsv(
   );
 
   if (!opts.header) return trimmed;
+
+  // Header mode returns DATA objects only, so the header's own entry has to
+  // come off the line array or every association is off by one (Codex P2).
+  // Done here rather than in commitRow because that is the only point where
+  // "the header has been consumed" is known.
+  opts.recordLines?.shift();
 
   if (trimmed.length === 0) return [];
   const headers = trimmed[0];
