@@ -177,12 +177,15 @@ describe("isCalibrationRowReachable", () => {
         ctx({ nozzlesLoaded: false, nozzleOwnership: new Map() }),
       ),
     ).toBe(false);
+    // NOT the printer clause, though: the caller derives relevantPrinterIds
+    // from the nozzle catalog, so with nozzles down an empty list says nothing
+    // about the printers (Codex P2 round 5).
     expect(
       isCalibrationRowReachable(
         calibrationKey(P1, N1, null),
         ctx({ nozzlesLoaded: false, nozzleOwnership: new Map(), relevantPrinterIds: [] }),
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("an unknown bed catalog does not short-circuit the printer checks", () => {

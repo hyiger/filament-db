@@ -139,8 +139,19 @@ export function isCalibrationRowReachable(
   if (bedTypeId !== null && ctx.bedTypesLoaded && !ctx.bedTypeIds.includes(bedTypeId)) {
     return false;
   }
-  // Needs only the printer catalog.
-  if (printerId !== null && ctx.printersLoaded && !ctx.relevantPrinterIds.includes(printerId)) {
+  // Needs the printer catalog AND the nozzle catalog: the caller derives
+  // `relevantPrinterIds` by asking which printers own a compatible nozzle, so
+  // with /api/nozzles down that list is empty for reasons that have nothing to
+  // do with the printers. Judging against it there would orphan every
+  // printer-scoped row — with an active Remove button — on the strength of a
+  // list that only looks authoritative. (The unit tests can construct the two
+  // independently; the form cannot.)
+  if (
+    printerId !== null &&
+    ctx.printersLoaded &&
+    ctx.nozzlesLoaded &&
+    !ctx.relevantPrinterIds.includes(printerId)
+  ) {
     return false;
   }
 
