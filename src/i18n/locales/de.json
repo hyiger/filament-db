@@ -1656,6 +1656,7 @@
   "settings.aiConfigured": "{provider}-Schlüssel konfiguriert",
   "settings.aiNotConfigured": "Kein API-Schlüssel konfiguriert",
   "settings.aiProvider": "KI-Anbieter",
+  "settings.aiProviderSwitchHint": "Aktuell ist {from} eingerichtet. Der Wechsel zu {to} wird wirksam, sobald Sie einen API-Schl\u00fcssel f\u00fcr {to} speichern \u2014 Schl\u00fcssel sind nicht zwischen Anbietern austauschbar.",
   "settings.getKeyFrom": "Erhalten Sie Ihren Schlüssel von",
   "settings.enterApiKey": "API-Schlüssel eingeben",
   "settings.aiKeySaved": "{provider}-Schlüssel gespeichert",
