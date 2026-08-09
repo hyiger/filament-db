@@ -199,7 +199,7 @@
   "dashboard.title": "Dashboard",
   "dashboard.loadError": "Dashboard konnte nicht geladen werden. Bitte erneut versuchen.",
   "dashboard.filaments": "Filamente",
-  "dashboard.filaments.variantHint": "inkl. {count} Farbvariante(n)",
+  "dashboard.filaments.templateHint": "inkl. {count} Vorlage(n), die die Liste gruppiert ausblendet",
   "dashboard.spools": "Aktive Spulen",
   "dashboard.spools.retiredHint": "+{count} ausgemustert",
   "dashboard.totalWeight": "Gesamt verbleibend",

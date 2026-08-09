@@ -98,11 +98,21 @@ export async function GET() {
 
     const filamentCount = filaments.length;
     // GH #1113: the filament list headlines the number of ROWS it renders,
-    // which excludes templates (a template is a grouping header, not a roll).
-    // This counts every record. Both are defensible, but read back to back
-    // they looked like two answers to "how many filaments do I have" — so ship
-    // the variant count alongside and let the tile say which it is.
-    const variantCount = filaments.filter((f) => f.parentId != null).length;
+    // which excludes TEMPLATES — `filaments.filter((f) => !f.hasVariants)` —
+    // because a template is a grouping header, not a roll. This counts every
+    // record. Both are defensible, but read back to back they looked like two
+    // answers to "how many filaments do I have".
+    //
+    // Ship the count of the records the list REMOVES, which is what actually
+    // explains the gap. Counting variants instead (my first attempt) named a
+    // different number: one parent with two variants is 3 here and 2 there,
+    // and the single extra record is the parent, not the variants (Codex P2).
+    const parentIdsWithVariants = new Set(
+      filaments.map((f) => f.parentId && String(f.parentId)).filter(Boolean),
+    );
+    const templateCount = filaments.filter((f) =>
+      parentIdsWithVariants.has(String(f._id)),
+    ).length;
     let totalGrams = 0;
     let spoolCount = 0;
     let retiredSpools = 0;
@@ -253,7 +263,7 @@ export async function GET() {
     return NextResponse.json({
       counts: {
         filaments: filamentCount,
-        filamentVariants: variantCount,
+        filamentTemplates: templateCount,
         nozzles: nozzleCount,
         printers: printerCount,
         bedTypes: bedTypeCount,

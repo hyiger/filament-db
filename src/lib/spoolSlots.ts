@@ -176,6 +176,24 @@ export async function assignSpoolToSlot(
  * may legitimately carry a filament with no spool ("Any spool"), and the spool
  * check has its own one-spool-per-slot rule that does not apply here — the
  * same filament in two slots is fine.
+ *
+ * ## Residual window, stated rather than papered over
+ *
+ * This is check-then-act across two collections: a printer PUT can observe the
+ * filament active, a concurrent DELETE can then clear the slots and set
+ * `_deletedAt`, and the PUT's own write can land afterwards — re-creating the
+ * dangling ref despite both requests succeeding. Closing it properly needs
+ * either a transaction (unavailable on standalone mongod, which this app
+ * supports) or a cross-collection lock spanning two unrelated entities, whose
+ * ordering hazards are exactly what the v1.70 epic declined to take on for the
+ * analogous parent/target case.
+ *
+ * The consequence is bounded and self-healing: the worst outcome is one stale
+ * `filamentId`, which renders as an empty slot, is cleared by the next delete
+ * of that filament, and is repaired in form state by PrinterForm's own
+ * post-fetch pass. That is the same trade-off the surrounding code already
+ * accepts — the guard turns the COMMON case (a stale form saved minutes later)
+ * from silent corruption into a 400.
  */
 export async function findInvalidSlotFilamentRef(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -199,7 +199,7 @@
   "dashboard.title": "Dashboard",
   "dashboard.loadError": "Failed to load the dashboard. Please try again.",
   "dashboard.filaments": "Filaments",
-  "dashboard.filaments.variantHint": "incl. {count} colour variant(s)",
+  "dashboard.filaments.templateHint": "incl. {count} template(s), which the list groups away",
   "dashboard.spools": "Active Spools",
   "dashboard.spools.retiredHint": "+{count} retired",
   "dashboard.totalWeight": "Total Remaining",
