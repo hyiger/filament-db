@@ -2,6 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import FilamentSwatch from "@/components/FilamentSwatch";
+import { deriveArrangement } from "@/lib/filamentColors";
+import { deriveFinish } from "@/lib/filamentFinish";
 
 /**
  * Shared filament picker (#492) used by /compare and /share. Wraps the
@@ -17,7 +20,13 @@ interface PickerFilament {
   name: string;
   vendor: string;
   type: string;
-  color: string;
+  /** Nullable per OpenPrintTag key 19 — a coextruded filament's colors live
+   *  in `secondaryColors`, and since v1.70 a template parent is deliberately
+   *  colorless. Typing this `string` rendered those rows with a transparent
+   *  dot (GH #1120). */
+  color: string | null;
+  secondaryColors?: string[];
+  optTags?: number[];
 }
 
 interface FilamentPickerProps {
@@ -185,6 +194,9 @@ export default function FilamentPicker({
                 className={`flex items-center gap-3 px-3 py-1.5 border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-900 text-sm ${
                   isDisabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
                 }`}
+                // The row is genuinely `disabled`, so the click never reaches
+                // onToggle and the caller can't explain the no-op itself.
+                title={isDisabled ? t("picker.capReached", { max: maxSelections }) : undefined}
               >
                 <input
                   type="checkbox"
@@ -193,11 +205,23 @@ export default function FilamentPicker({
                   disabled={isDisabled}
                   className="w-4 h-4"
                 />
-                <span
-                  className="inline-block w-4 h-4 rounded-full border border-gray-300 flex-shrink-0"
-                  style={{ backgroundColor: f.color }}
-                  aria-hidden="true"
-                />
+                {/* aria-hidden wrapper: FilamentSwatch always emits
+                    role="img" with a colour label, and this sits INSIDE the
+                    checkbox's <label> — so without this the colour becomes
+                    part of every row's accessible name ("#ff0000, Prusament
+                    PLA") in both the compare and share pickers. The colour is
+                    decorative here; the row is identified by its name, vendor
+                    and type. (The compare TABLE avoids this differently, by
+                    placing the swatch outside the link.) */}
+                <span aria-hidden="true" className="flex-shrink-0">
+                  <FilamentSwatch
+                    color={f.color}
+                    secondaryColors={f.secondaryColors}
+                    arrangement={deriveArrangement(f.optTags)}
+                    finish={deriveFinish(f.optTags)}
+                    size={16}
+                  />
+                </span>
                 <span className="flex-1 min-w-0 truncate">{f.name}</span>
                 <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
                   {f.vendor}
@@ -208,6 +232,11 @@ export default function FilamentPicker({
           })
         )}
       </div>
+      {capReached && (
+        <p className="mt-1.5 text-xs text-amber-700 dark:text-amber-400">
+          {t("picker.capReached", { max: maxSelections })}
+        </p>
+      )}
     </div>
   );
 }
