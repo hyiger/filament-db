@@ -382,7 +382,13 @@ function ComparePageInner() {
           while `comparison` still holds the PREVIOUS response, so without this
           the page announces the just-selected filament as "no longer
           available" for the whole request. Only describe a completed one. */}
-      {!loading && comparison.length > 0 && comparison.length < selectedIds.length && (
+      {/* Same settledKey gate as the panel below: adding a filament enlarges
+          selectedIds a frame before the fetch effect runs, so `!loading` alone
+          still briefly claimed the new one was unavailable. */}
+      {!loading &&
+        settledKey === selectedIds.join(",") &&
+        comparison.length > 0 &&
+        comparison.length < selectedIds.length && (
         <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
           {t("compare.someUnavailable", {
             shown: comparison.length,

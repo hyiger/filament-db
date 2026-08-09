@@ -205,14 +205,23 @@ export default function FilamentPicker({
                   disabled={isDisabled}
                   className="w-4 h-4"
                 />
-                <FilamentSwatch
-                  color={f.color}
-                  secondaryColors={f.secondaryColors}
-                  arrangement={deriveArrangement(f.optTags)}
-                  finish={deriveFinish(f.optTags)}
-                  size={16}
-                  className="flex-shrink-0"
-                />
+                {/* aria-hidden wrapper: FilamentSwatch always emits
+                    role="img" with a colour label, and this sits INSIDE the
+                    checkbox's <label> — so without this the colour becomes
+                    part of every row's accessible name ("#ff0000, Prusament
+                    PLA") in both the compare and share pickers. The colour is
+                    decorative here; the row is identified by its name, vendor
+                    and type. (The compare TABLE avoids this differently, by
+                    placing the swatch outside the link.) */}
+                <span aria-hidden="true" className="flex-shrink-0">
+                  <FilamentSwatch
+                    color={f.color}
+                    secondaryColors={f.secondaryColors}
+                    arrangement={deriveArrangement(f.optTags)}
+                    finish={deriveFinish(f.optTags)}
+                    size={16}
+                  />
+                </span>
                 <span className="flex-1 min-w-0 truncate">{f.name}</span>
                 <span className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0">
                   {f.vendor}
