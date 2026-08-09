@@ -40,9 +40,21 @@ export default function BackupSettingsPage() {
       const res = await fetch("/api/snapshot", { method: "POST", body: formData });
       const data = await res.json();
       if (res.ok) {
+        // GH #1104: an older-format snapshot carries only some collections.
+        // Those it omits are now LEFT ALONE rather than wiped — say so, or a
+        // partial restore reads as a full one.
+        const skipped: string[] = Array.isArray(data.skipped) ? data.skipped : [];
         setRestoreResult({
           ok: true,
-          message: t("settings.restoreSuccess", { filaments: data.restored.filaments, nozzles: data.restored.nozzles, printers: data.restored.printers }),
+          message:
+            t("settings.restoreSuccess", {
+              filaments: data.restored.filaments,
+              nozzles: data.restored.nozzles,
+              printers: data.restored.printers,
+            }) +
+            (skipped.length > 0
+              ? ` ${t("settings.restoreSkipped", { collections: skipped.join(", ") })}`
+              : ""),
         });
       } else {
         setRestoreResult({ ok: false, message: data.error || t("settings.restoreFailed") });
