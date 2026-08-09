@@ -97,6 +97,12 @@ export async function GET() {
     ]);
 
     const filamentCount = filaments.length;
+    // GH #1113: the filament list headlines the number of ROWS it renders,
+    // which excludes templates (a template is a grouping header, not a roll).
+    // This counts every record. Both are defensible, but read back to back
+    // they looked like two answers to "how many filaments do I have" — so ship
+    // the variant count alongside and let the tile say which it is.
+    const variantCount = filaments.filter((f) => f.parentId != null).length;
     let totalGrams = 0;
     let spoolCount = 0;
     let retiredSpools = 0;
@@ -247,6 +253,7 @@ export async function GET() {
     return NextResponse.json({
       counts: {
         filaments: filamentCount,
+        filamentVariants: variantCount,
         nozzles: nozzleCount,
         printers: printerCount,
         bedTypes: bedTypeCount,

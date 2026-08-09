@@ -9,7 +9,7 @@ import { GET as spoolCheck } from "@/app/api/filaments/[id]/spool-check/route";
 import { PUT as putSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { POST as scanPublish } from "@/app/api/scan/publish/route";
-import { POST as slicerSync } from "@/app/api/filaments/[id]/route";
+import { POST as slicerSync, DELETE as deleteFilament } from "@/app/api/filaments/[id]/route";
 import { POST as createFilament } from "@/app/api/filaments/route";
 import { POST as orcaSync } from "@/app/api/filaments/[id]/orcaslicer/route";
 import { GET as orcaBulkExport } from "@/app/api/filaments/orcaslicer/route";
@@ -105,6 +105,56 @@ describe("API route correctness", () => {
 
     const fresh = await Printer.findById(printer._id);
     expect(fresh.amsSlots[0].spoolId).toBeNull();
+  });
+
+  // ── #1114: deleting a filament clears filament-level AMS refs ──────
+
+  it("#1114 — deleting a filament clears an \"Any spool\" AMS dedication", async () => {
+    // PrinterForm's default when you pick a filament is "Any spool":
+    // filamentId set, spoolId null. The spool-keyed clear filters on
+    // amsSlots.spoolId, so that shape never matched — the filament went to the
+    // trash and the slot kept pointing at it, re-persisting the stale id on
+    // every printer save and reading as "loaded" again on restore.
+    const f = await Filament.create({ name: "Dedicated", vendor: "T", type: "PLA" });
+    const printer = await Printer.create({
+      name: "MK4 Dedicated",
+      manufacturer: "Prusa",
+      printerModel: "MK4",
+      amsSlots: [{ slotName: "Slot A", filamentId: f._id, spoolId: null }],
+    });
+
+    const res = await deleteFilament(
+      new NextRequest(`http://localhost/api/filaments/${f._id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Printer.findById(printer._id);
+    expect(fresh.amsSlots[0].filamentId).toBeNull();
+    expect(fresh.amsSlots[0].spoolId).toBeNull();
+  });
+
+  it("#1114 — an unrelated filament's slot dedication is untouched", async () => {
+    const keep = await Filament.create({ name: "Keep Loaded", vendor: "T", type: "PLA" });
+    const gone = await Filament.create({ name: "Going Away", vendor: "T", type: "PLA" });
+    const printer = await Printer.create({
+      name: "MK4 Two Slots",
+      manufacturer: "Prusa",
+      printerModel: "MK4",
+      amsSlots: [
+        { slotName: "A", filamentId: keep._id, spoolId: null },
+        { slotName: "B", filamentId: gone._id, spoolId: null },
+      ],
+    });
+
+    await deleteFilament(
+      new NextRequest(`http://localhost/api/filaments/${gone._id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: String(gone._id) }) },
+    );
+
+    const fresh = await Printer.findById(printer._id);
+    expect(String(fresh.amsSlots[0].filamentId)).toBe(String(keep._id));
+    expect(fresh.amsSlots[1].filamentId).toBeNull();
   });
 
   // ── #269: analytics survives a malformed usageHistory date ─────────
