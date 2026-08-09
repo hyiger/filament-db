@@ -53,6 +53,53 @@ const KNOWN_COLLECTION_KEYS = [
   "sharedCatalogs",
 ] as const;
 
+/**
+ * Wipe / insert / rollback order: reference targets before referrers, so
+ * nozzles, printers, bedTypes and locations all exist before the filaments
+ * that point at them via calibrations / spools.locationId.
+ *
+ * Deliberately SEPARATE from KNOWN_COLLECTION_KEYS, which is the order the
+ * validation guards walk (and whose first mismatch names the collection in the
+ * 400). Collapsing the two would change which collection a malformed file is
+ * reported against.
+ */
+const SNAPSHOT_RESTORE_ORDER = [
+  "nozzles",
+  "printers",
+  "bedTypes",
+  "locations",
+  "filaments",
+  "printHistory",
+  "sharedCatalogs",
+] as const;
+
+/**
+ * The slice of a Mongoose model the wipe / rollback needs.
+ *
+ * Declared structurally rather than as a union of the seven model types: TS
+ * resolves a union's `deleteMany` to an intersection of their overloads, which
+ * makes even `deleteMany({})` unassignable. Only these two methods are used
+ * here, and both are called with values this file constructs.
+ */
+interface SnapshotCollectionModel {
+  deleteMany(filter: Record<string, unknown>): Promise<unknown>;
+  insertMany(docs: unknown[], opts: Record<string, unknown>): Promise<unknown[]>;
+}
+
+/** Collection key → model, so the wipe/rollback can be driven by key. */
+const SNAPSHOT_MODELS: Record<
+  (typeof KNOWN_COLLECTION_KEYS)[number],
+  SnapshotCollectionModel
+> = {
+  filaments: Filament as unknown as SnapshotCollectionModel,
+  nozzles: Nozzle as unknown as SnapshotCollectionModel,
+  printers: Printer as unknown as SnapshotCollectionModel,
+  bedTypes: BedType as unknown as SnapshotCollectionModel,
+  locations: Location as unknown as SnapshotCollectionModel,
+  printHistory: PrintHistory as unknown as SnapshotCollectionModel,
+  sharedCatalogs: SharedCatalog as unknown as SnapshotCollectionModel,
+};
+
 const OID_RE = /^[a-f0-9]{24}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const OID_FIELDS = new Set([
@@ -393,6 +440,23 @@ async function restoreSnapshot(request: NextRequest) {
     }
   }
 
+  // GH #1104: which collections this file actually CARRIES, as distinct from
+  // which ones it happens to leave empty. A present-but-empty array is a
+  // deliberate "make this collection empty"; an ABSENT key means the file has
+  // no opinion, and wiping on its behalf is what silently emptied Locations,
+  // PrintHistory and SharedCatalog whenever an older-format snapshot (which
+  // predates those collections entirely) was restored.
+  //
+  // `in` rather than a truthiness check: the validation above already rejected
+  // every present non-array, and JSON.parse cannot produce an `undefined`
+  // value, so present ⇒ array by this point.
+  const present = new Set(
+    KNOWN_COLLECTION_KEYS.filter((k) =>
+      Object.prototype.hasOwnProperty.call(colsRecord, k),
+    ),
+  );
+  const skipped = KNOWN_COLLECTION_KEYS.filter((k) => !present.has(k));
+
   const {
     filaments = [],
     nozzles = [],
@@ -475,16 +539,30 @@ async function restoreSnapshot(request: NextRequest) {
   ]);
 
   try {
-    // Delete all existing documents from each collection
-    await Promise.all([
-      Nozzle.deleteMany({}),
-      Printer.deleteMany({}),
-      Filament.deleteMany({}),
-      BedType.deleteMany({}),
-      Location.deleteMany({}),
-      PrintHistory.deleteMany({}),
-      SharedCatalog.deleteMany({}),
-    ]);
+    // Delete existing documents from each collection the snapshot CARRIES.
+    //
+    // GH #1104: this used to wipe all seven unconditionally and then insert
+    // only the keys the file had. Restoring a v2-era snapshot (filaments /
+    // nozzles / printers / bedTypes — the only collections that existed then)
+    // therefore emptied Locations, PrintHistory and SharedCatalog: every
+    // spool's locationId dangled and every published share link vanished,
+    // under a green "Restored N filament(s), M nozzle(s), P printer(s)" that
+    // never mentioned them. The version guard only fails closed on NEWER
+    // files, and the code comment claimed older ones "still restore cleanly".
+    //
+    // Trade-off, stated plainly: this is better on balance, not strictly
+    // better. A partial restore can leave a surviving document pointing at a
+    // replaced one — _id values ARE preserved, so refs resolve whenever the
+    // target is in the file or in a surviving collection, but e.g. a
+    // nozzles-only file over surviving filaments can strand
+    // `calibrations[].nozzle`. That is recoverable and visible; silently
+    // losing every location and print job is neither. The response names what
+    // was skipped so the user can see it happened.
+    await Promise.all(
+      SNAPSHOT_RESTORE_ORDER.filter((k) => present.has(k)).map((k) =>
+        SNAPSHOT_MODELS[k].deleteMany({}),
+      ),
+    );
 
     // Insert snapshot data (order matters: reference targets before referrers
     // — nozzles, printers, bedTypes, locations all exist before filaments
@@ -567,47 +645,69 @@ async function restoreSnapshot(request: NextRequest) {
     // transient failure leaves the process-local flag false, so the next
     // dbConnect retries (and fails requests until terminal, per the r7
     // posture) — the restore itself already succeeded either way.
-    try {
-      await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
-    } catch (cleanupErr) {
+    //
+    // GH #1104: gated on the snapshot actually CARRYING filaments. This call
+    // has two effects, and both are wrong when it doesn't. For a pre-v5 file
+    // (no provenance flag) it durably INVALIDATES the one-shot marker and
+    // re-runs the cleanup over the live filaments collection — which used to
+    // be safe only because the filaments had just been wiped and replaced.
+    // With the wipe now scoped, an unrelated locations-only restore would
+    // re-judge untouched filaments, and CLAUDE.md's accepted residue ("a user
+    // pin byte-identical to the current derivation IS cleared; re-enter it and
+    // it survives from then on") only holds because the marker is spent. The
+    // v5+ branch has the mirror problem: it would stamp `completed` on a DB
+    // whose filaments were never cleaned, suppressing a legitimate future run.
+    // One gate covers both.
+    if (present.has("filaments")) {
+      try {
+        await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
+      } catch (cleanupErr) {
       // Codex P1 r16: distinguish the two failure shapes. If the DURABLE
       // marker state was never updated, no later dbConnect (or restart) will
       // re-run the cleanup — reporting success would strand restored legacy
       // conditions forever. The restore is idempotent, so fail the request
       // and have the user run it again. A failure AFTER the durable
       // invalidation genuinely retries on the next connect.
-      if (cleanupErr instanceof RestoreCleanupInvalidationError) {
-        console.error("[snapshot] Restore cleanup invalidation failed:", cleanupErr);
-        return NextResponse.json(
-          {
-            error:
-              "Snapshot data was restored, but the legacy nozzle-condition cleanup could not be scheduled. Run the restore again.",
-          },
-          { status: 500 },
+        if (cleanupErr instanceof RestoreCleanupInvalidationError) {
+          console.error("[snapshot] Restore cleanup invalidation failed:", cleanupErr);
+          return NextResponse.json(
+            {
+              error:
+                "Snapshot data was restored, but the legacy nozzle-condition cleanup could not be scheduled. Run the restore again.",
+            },
+            { status: 500 },
+          );
+        }
+        console.error(
+          "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",
+          cleanupErr,
         );
       }
-      console.error(
-        "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",
-        cleanupErr,
-      );
     }
 
     return NextResponse.json({
       message: "Snapshot restored successfully",
       restored: results,
+      // GH #1104: name the collections this file had no opinion about, so a
+      // partial restore can't read as a full one. The UI turns this into a
+      // notice; a scripted client can assert on it.
+      skipped,
     });
   } catch (err) {
     // --- Rollback: attempt to restore the pre-restore data ---
     try {
-      await Promise.all([
-        Nozzle.deleteMany({}),
-        Printer.deleteMany({}),
-        Filament.deleteMany({}),
-        BedType.deleteMany({}),
-        Location.deleteMany({}),
-        PrintHistory.deleteMany({}),
-        SharedCatalog.deleteMany({}),
-      ]);
+      // GH #1104: roll back only what the forward pass touched. Wiping a
+      // collection the restore never wiped, then re-inserting its backup,
+      // would be a no-op in the happy case — but it needlessly destroys and
+      // recreates untouched data inside an error path that is already
+      // handling one failure, and a second failure there reports "database
+      // may be in an inconsistent state" for a collection this restore was
+      // never going to change.
+      await Promise.all(
+        SNAPSHOT_RESTORE_ORDER.filter((k) => present.has(k)).map((k) =>
+          SNAPSHOT_MODELS[k].deleteMany({}),
+        ),
+      );
       // GH #1004 F2(a): `lean: true` — the backup docs came verbatim from
       // THIS database via `.lean()` above and never left the server, so
       // #259's untrusted-input rationale doesn't apply here. Without it,
@@ -631,13 +731,19 @@ async function restoreSnapshot(request: NextRequest) {
           );
         }
       };
-      await rollbackInsert("nozzles", Nozzle, backupNozzles);
-      await rollbackInsert("printers", Printer, backupPrinters);
-      await rollbackInsert("bedTypes", BedType, backupBedTypes);
-      await rollbackInsert("locations", Location, backupLocations);
-      await rollbackInsert("filaments", Filament, backupFilaments);
-      await rollbackInsert("printHistory", PrintHistory, backupPrintHistory);
-      await rollbackInsert("sharedCatalogs", SharedCatalog, backupSharedCatalogs);
+      const backups: Record<(typeof SNAPSHOT_RESTORE_ORDER)[number], unknown[]> = {
+        nozzles: backupNozzles,
+        printers: backupPrinters,
+        bedTypes: backupBedTypes,
+        locations: backupLocations,
+        filaments: backupFilaments,
+        printHistory: backupPrintHistory,
+        sharedCatalogs: backupSharedCatalogs,
+      };
+      for (const key of SNAPSHOT_RESTORE_ORDER) {
+        if (!present.has(key)) continue;
+        await rollbackInsert(key, SNAPSHOT_MODELS[key], backups[key]);
+      }
     } catch (rollbackErr) {
       // Rollback itself failed — report it so the user knows data may be lost
       const detail = err instanceof Error ? err.message : String(err);
