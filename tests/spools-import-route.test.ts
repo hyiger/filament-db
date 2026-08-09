@@ -1332,7 +1332,7 @@ describe("/api/spools/import — legacy roll migration (#1111)", () => {
       spools: [],
     });
     const res = await importSpools(
-      csvRequest("filament,totalWeight\nLegacy Import,900\n"),
+      csvRequest("filament,totalWeight,legacyRoll\nLegacy Import,900,true\n"),
     );
     const body = await res.json();
     expect(body.created).toBe(1);
@@ -1359,6 +1359,26 @@ describe("/api/spools/import — legacy roll migration (#1111)", () => {
 
     const fresh = await Filament.findById(f._id);
     expect(fresh.spools).toHaveLength(2);
+    expect(fresh.totalWeight).toBe(900);
+  });
+
+  it("does NOT clear the weight for an unmarked row — that is a bulk-add, not a migration (Codex P1)", async () => {
+    // This route also accepts hand-written incremental CSVs, so a first-spool
+    // row need not BE the legacy roll. Clearing unconditionally would delete
+    // the existing roll's weight instead of adding a spool alongside it.
+    const f = await Filament.create({
+      name: "Unrelated Add",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 900,
+      spools: [],
+    });
+    await importSpools(csvRequest("filament,totalWeight\nUnrelated Add,300\n"));
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(300);
+    // The legacy roll's weight survives.
     expect(fresh.totalWeight).toBe(900);
   });
 

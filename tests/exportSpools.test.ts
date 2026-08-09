@@ -397,11 +397,12 @@ describe("getSpoolExportRows — legacy single-spool rolls (#1111)", () => {
     expect(rows[0].legacyRoll).toBe(true);
   });
 
-  it("leaves spoolId and instanceId empty — there is no subdocument to name", async () => {
+  it("leaves spoolId empty but carries the roll's identity in instanceId", async () => {
     // spoolId: emitting the filament id would be a lie the importer can't
-    // resolve. instanceId: emitting the filament's would collide with the
-    // importer's carry-over guard and fail the row.
-    await Filament.create({
+    // resolve — there is no subdocument. instanceId: the #732 Phase-1
+    // carry-over IS this roll's durable identity, and what its printed label
+    // and NFC tag encode, so it must survive the migration.
+    const f = await Filament.create({
       name: "Legacy Ids",
       vendor: "V",
       type: "PLA",
@@ -410,7 +411,7 @@ describe("getSpoolExportRows — legacy single-spool rolls (#1111)", () => {
     });
     const row = (await getSpoolExportRows()).find((r) => r.filament === "Legacy Ids")!;
     expect(row.spoolId).toBe("");
-    expect(row.instanceId).toBe("");
+    expect(row.instanceId).toBe(f.instanceId);
   });
 
   it("reads totalWeight from the filament's OWN field, never the parent", async () => {

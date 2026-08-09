@@ -249,14 +249,19 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
         lastDriedAt: null,
         usedGrams: 0,
         createdAt: isoDateTime(filament.createdAt),
-        // Deliberately EMPTY, not the filament's instanceId. The spool
-        // importer treats a create row whose instanceId already belongs to a
-        // spool on that filament as a genuine collision and refuses it
-        // (tests/spools-import-route.test.ts, "rejects a CREATE row whose id
-        // equals an existing spool's id"). Emitting it here would make the
-        // row fail on the second import — and on the first, once the legacy
-        // roll has been migrated to a real spool that adopts that very id.
-        instanceId: "",
+        // #732 Phase-1 carry-over: a legacy roll's durable identity IS the
+        // filament's instanceId — it is what its printed label and NFC tag
+        // encode. Emitting it keeps those resolving to the exact roll after
+        // the migration, instead of the importer minting a new id and leaving
+        // every label to fall back to the filament with matchedSpool: null.
+        //
+        // Honored on import: `isSpoolInstanceIdTaken` excludes the owning
+        // filament, and a legacy filament has no spool holding the id yet
+        // (pinned by "honors a cell equal to the filament's top-level id on
+        // the CREATE path"). The collision guard only fires once a spool
+        // already carries it — i.e. on a re-import after migration, where a
+        // loud refusal is the correct outcome anyway.
+        instanceId: filament.instanceId ?? "",
         filamentId: filament._id.toString(),
         // Deliberately empty: there is no spool subdocument, and putting the
         // filament id here would be an outright lie that the importer would
