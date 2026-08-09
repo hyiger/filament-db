@@ -166,6 +166,25 @@ describe("isCalibrationRowReachable", () => {
     ).toBe(true);
   });
 
+  it("a failed nozzle catalog does not short-circuit the bed or printer checks", () => {
+    // Codex P2 (round 4) on PR #1130: with /api/nozzles down but the other two
+    // catalogs healthy, a row scoped to a deleted bed type (or a printer with
+    // no tab) is still demonstrably unrenderable — it must stay in the orphan
+    // list rather than vanish for the session.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(null, N1, "deletedBed"),
+        ctx({ nozzlesLoaded: false, nozzleOwnership: new Map() }),
+      ),
+    ).toBe(false);
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, null),
+        ctx({ nozzlesLoaded: false, nozzleOwnership: new Map(), relevantPrinterIds: [] }),
+      ),
+    ).toBe(false);
+  });
+
   it("an unknown bed catalog does not short-circuit the printer checks", () => {
     // Codex P2 (round 3) on PR #1130: a blanket `return true` for an unloaded
     // bed catalog hid rows whose PRINTER scope is independently known to be

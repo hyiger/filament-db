@@ -125,28 +125,31 @@ export function isCalibrationRowReachable(
   ctx: CalibrationGridContext,
 ): boolean {
   const { printerId, nozzleId, bedTypeId } = parseCalibrationKey(key);
+
+  // Decide every INDEPENDENTLY-KNOWN negative first, then fail open on what is
+  // genuinely unknown. Ordering matters: an early `return true` for one
+  // unloaded catalog would skip clauses another, healthy catalog can already
+  // answer — leaving a row that the grid demonstrably cannot render out of the
+  // orphan list, i.e. invisible AND without the Remove action, for the rest of
+  // the session. Each clause below is therefore gated on its OWN catalog.
+
+  // Needs no catalog at all — this is form state.
   if (!ctx.compatibleNozzleIds.includes(nozzleId)) return false;
-
-  // Fail open PER CATALOG, and only for the clauses that catalog decides. The
-  // three fetches are independent, so judging a printer- or bed-scoped row
-  // against a catalog that hasn't landed would put a valid calibration in the
-  // orphan list with an ACTIVE Remove button — one click from real data loss.
-  if (!ctx.nozzlesLoaded) return true;
-  const owners = ctx.nozzleOwnership.get(nozzleId);
-  // Nozzle absent from a LOADED catalog → the card loop would `return null`.
-  if (owners === undefined) return false;
-
-  // Each clause fails open INDEPENDENTLY — an unknown bed catalog must not
-  // short-circuit the printer checks. Returning true here would hide a row
-  // whose printer has no tab (or no longer owns the nozzle) from the orphan
-  // list for as long as /api/bed-types stays broken, leaving it invisible AND
-  // without the Remove action, which is the state this list exists to end.
+  // Needs only the bed catalog.
   if (bedTypeId !== null && ctx.bedTypesLoaded && !ctx.bedTypeIds.includes(bedTypeId)) {
     return false;
   }
+  // Needs only the printer catalog.
+  if (printerId !== null && ctx.printersLoaded && !ctx.relevantPrinterIds.includes(printerId)) {
+    return false;
+  }
+
+  // Everything remaining depends on the nozzle catalog.
+  if (!ctx.nozzlesLoaded) return true;
+  const owners = ctx.nozzleOwnership.get(nozzleId);
+  // Absent from a LOADED catalog → the card loop would `return null`.
+  if (owners === undefined) return false;
   if (printerId === null) return true;
-  if (!ctx.printersLoaded) return true;
-  if (!ctx.relevantPrinterIds.includes(printerId)) return false;
   return owners.includes(printerId);
 }
 
