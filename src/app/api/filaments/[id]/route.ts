@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament, { IFilament } from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
@@ -52,6 +53,31 @@ async function clearFilamentSpoolsFromSlots(
       await assignSpoolToSlot(Printer, String(spool._id), null);
     }
   }
+}
+
+/**
+ * GH #1114: also clear slots that reference this FILAMENT without naming a
+ * spool.
+ *
+ * A slot carries two parallel refs, and PrinterForm's default when you pick a
+ * filament is "Any spool" — `filamentId` set, `spoolId` null. The spool-keyed
+ * clear above filters on `amsSlots.spoolId`, so that shape never matched: the
+ * filament went to the trash (or was purged) and the slot kept pointing at it.
+ * PrinterForm then rendered "— empty —" while re-persisting the stale id on
+ * every save, and restoring the filament made the slot silently read as
+ * "loaded" again.
+ *
+ * Both refs are nulled, matching the clear pass in `assignSpoolToSlot` and the
+ * v1.70 promotion remap: leaving `filamentId` behind is exactly what shows a
+ * phantom loaded filament.
+ */
+async function clearFilamentFromSlots(filamentId: string): Promise<void> {
+  const oid = new mongoose.Types.ObjectId(filamentId);
+  await Printer.updateMany(
+    { _deletedAt: null, "amsSlots.filamentId": oid },
+    { $set: { "amsSlots.$[s].filamentId": null, "amsSlots.$[s].spoolId": null } },
+    { arrayFilters: [{ "s.filamentId": oid }] },
+  );
 }
 
 /**
@@ -1630,6 +1656,7 @@ export async function DELETE(
       await clearFilamentSpoolsFromSlots(
         (trashed as { spools?: { _id?: unknown }[] }).spools,
       );
+      await clearFilamentFromSlots(id);
       // Don't physically `deleteOne` here. The hybrid sync engine pairs
       // docs across peers by syncId and treats "missing on one side" as a
       // fresh insert from the other side — so a hard delete on one peer
@@ -1684,6 +1711,7 @@ export async function DELETE(
       await clearFilamentSpoolsFromSlots(
         (filament as { spools?: { _id?: unknown }[] }).spools,
       );
+      await clearFilamentFromSlots(id);
       await Filament.updateOne(
         { _id: id, _deletedAt: null },
         { _deletedAt: new Date() },

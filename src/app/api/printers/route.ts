@@ -3,7 +3,11 @@ import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
-import { clearSpoolsFromOtherPrinters, findInvalidSlotSpoolRef } from "@/lib/spoolSlots";
+import {
+  clearSpoolsFromOtherPrinters,
+  findInvalidSlotSpoolRef,
+  findInvalidSlotFilamentRef,
+} from "@/lib/spoolSlots";
 import Nozzle from "@/models/Nozzle";
 import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
@@ -118,7 +122,12 @@ export async function POST(request: NextRequest) {
     // checks the dedicated assignment route enforces (spool must exist on
     // an active filament; retired spools are out of inventory and not
     // loadable). Validate each non-null slot ref before the create.
-    const slotError = await findInvalidSlotSpoolRef(Filament, body.amsSlots);
+    const slotError =
+        (await findInvalidSlotSpoolRef(Filament, body.amsSlots)) ??
+        // GH #1114: also reject a slot pointing at a deleted filament, which
+        // a stale PrinterForm would otherwise re-persist after the filament
+        // delete cleared it.
+        (await findInvalidSlotFilamentRef(Filament, body.amsSlots));
     if (slotError) {
       return errorResponse(slotError, 400);
     }
