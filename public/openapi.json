@@ -8401,8 +8401,7 @@
           "message",
           "parentName",
           "parentColor",
-          "spoolCount",
-          "variantName"
+          "spoolCount"
         ]
       }
     }

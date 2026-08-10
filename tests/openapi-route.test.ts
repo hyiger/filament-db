@@ -24,3 +24,30 @@ describe("GET /api/openapi", () => {
     expect(second).toEqual(first);
   });
 });
+
+describe("OpenAPI schema invariants", () => {
+  it("no schema requires a property it does not declare", async () => {
+    // GH #1103: `RestoreBlockedByTemplate` kept `variantName` in `required`
+    // after the property was removed, so every real response would have
+    // violated the published contract and generated clients would have
+    // declared a field the route never returns.
+    const spec = JSON.parse(
+      await (await import("node:fs/promises")).readFile(
+        new URL("../public/openapi.json", import.meta.url),
+        "utf-8",
+      ),
+    ) as {
+      components: {
+        schemas: Record<string, { properties?: Record<string, unknown>; required?: string[] }>;
+      };
+    };
+    const offenders: string[] = [];
+    for (const [name, schema] of Object.entries(spec.components.schemas)) {
+      if (!schema.required || !schema.properties) continue;
+      for (const key of schema.required) {
+        if (!(key in schema.properties)) offenders.push(`${name}.${key}`);
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+});
