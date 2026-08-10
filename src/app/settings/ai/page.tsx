@@ -14,7 +14,20 @@ const AI_PROVIDERS: { id: AiProvider; name: string; keyUrl: string }[] = [
 
 export default function AiSettingsPage() {
   const { t } = useTranslation();
+  // GH #1112: the SELECTED provider (what the buttons show) and the CONFIGURED
+  // one (what the server/store actually holds) are different things, and
+  // conflating them is the bug. Clicking a provider only ever mutated local
+  // state, while the single write path — Save Key — is disabled unless a NEW
+  // key is typed. So a user with a key already configured could not switch at
+  // all, and the status line, cost note and key link all claimed a provider
+  // the backend had never heard of.
+  //
+  // They stay separate because an API key is provider-specific: a Gemini key
+  // cannot drive Claude. "Switch provider" therefore genuinely REQUIRES a new
+  // key — the fix is to say so, not to persist a selection that would leave
+  // the app holding one provider's key under another provider's name.
   const [aiProvider, setAiProvider] = useState<AiProvider>("gemini");
+  const [configuredProvider, setConfiguredProvider] = useState<AiProvider | null>(null);
   const [aiKey, setAiKey] = useState("");
   const [aiConfigured, setAiConfigured] = useState(false);
   const [aiSaving, setAiSaving] = useState(false);
@@ -27,13 +40,20 @@ export default function AiSettingsPage() {
     if (api?.getConfig) {
       api.getConfig().then((cfg) => {
         if (controller.signal.aborted) return;
-        if (cfg.aiApiKey || cfg.geminiApiKey) setAiConfigured(true);
-        if (cfg.aiProvider) setAiProvider(cfg.aiProvider as AiProvider);
+        const configured = Boolean(cfg.aiApiKey || cfg.geminiApiKey);
+        setAiConfigured(configured);
+        if (cfg.aiProvider) {
+          setAiProvider(cfg.aiProvider as AiProvider);
+          if (configured) setConfiguredProvider(cfg.aiProvider as AiProvider);
+        }
       }).catch(() => {});
     } else {
       fetch("/api/tds", { signal: controller.signal }).then((r) => r.json()).then((d) => {
         setAiConfigured(d.configured);
-        if (d.provider) setAiProvider(d.provider);
+        if (d.provider) {
+          setAiProvider(d.provider);
+          if (d.configured) setConfiguredProvider(d.provider);
+        }
       }).catch(() => {});
     }
     return () => { controller.abort(); };
@@ -53,7 +73,12 @@ export default function AiSettingsPage() {
           <span className={`inline-block w-2.5 h-2.5 rounded-full ${aiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
           <span className="text-sm text-gray-500 dark:text-gray-400">
             {aiConfigured
-              ? t("settings.aiConfigured", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider })
+              ? t("settings.aiConfigured", {
+                  provider:
+                    AI_PROVIDERS.find((p) => p.id === configuredProvider)?.name ||
+                    configuredProvider ||
+                    "",
+                })
               : t("settings.aiNotConfigured")}
           </span>
         </div>
@@ -85,6 +110,18 @@ export default function AiSettingsPage() {
             ? t("settings.aiCostNote.gemini")
             : t("settings.aiCostNote.paid", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider })}
         </div>
+
+        {/* GH #1112: the switch is only real once a key for the NEW provider is
+            saved, so say that instead of letting the buttons imply it already
+            took effect. */}
+        {aiConfigured && configuredProvider && aiProvider !== configuredProvider && (
+          <p className="mb-3 text-xs px-3 py-2 rounded border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+            {t("settings.aiProviderSwitchHint", {
+              from: AI_PROVIDERS.find((p) => p.id === configuredProvider)?.name || configuredProvider,
+              to: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider,
+            })}
+          </p>
+        )}
 
         {/* API key link */}
         <p className="text-xs text-gray-500 mb-2">
@@ -127,6 +164,7 @@ export default function AiSettingsPage() {
                 if (api?.saveConfig) {
                   await api.saveConfig({ aiApiKey: aiKey.trim(), aiProvider });
                   setAiConfigured(true);
+                  setConfiguredProvider(aiProvider);
                   setAiKey("");
                   setAiResult({ ok: true, message: t("settings.aiKeySaved", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider }) });
                 } else {
@@ -138,6 +176,7 @@ export default function AiSettingsPage() {
                   const data = await res.json();
                   if (res.ok) {
                     setAiConfigured(true);
+                    setConfiguredProvider(aiProvider);
                     setAiKey("");
                     setAiResult({ ok: true, message: t("settings.aiKeySavedValidated", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider }) });
                   } else {
@@ -166,6 +205,9 @@ export default function AiSettingsPage() {
                   await fetch("/api/tds", { method: "DELETE" });
                 }
                 setAiConfigured(false);
+                // Both branches: without this the status line keeps naming a
+                // provider after its key is gone.
+                setConfiguredProvider(null);
                 setAiProvider("gemini");
                 setAiResult({ ok: true, message: t("settings.aiKeyRemoved") });
               }}
