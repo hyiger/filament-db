@@ -2256,3 +2256,24 @@ describe("upsertImportRows — purged tombstones (GH #1004 F1)", () => {
     },
   );
 });
+
+describe("upsertImportRows — source line numbers (#1115)", () => {
+  it("reports the supplied physical lines", async () => {
+    const rows = [
+      { name: "Lines A", vendor: "V", type: "PLA" },
+      { name: "", vendor: "", type: "" },
+    ] as unknown as Parameters<typeof upsertImportRows>[0];
+    const result = await upsertImportRows(rows, [4, 9]);
+    expect(result.skippedRows?.[0].row).toBe(9);
+  });
+
+  it("falls back to the positional number when no lines are supplied", async () => {
+    // Back-compat pin: every other caller (and test) omits the argument.
+    const rows = [
+      { name: "Lines B", vendor: "V", type: "PLA" },
+      { name: "", vendor: "", type: "" },
+    ] as unknown as Parameters<typeof upsertImportRows>[0];
+    const result = await upsertImportRows(rows);
+    expect(result.skippedRows?.[0].row).toBe(3);
+  });
+});

@@ -8097,6 +8097,23 @@
           },
           "skipped": {
             "type": "integer"
+          },
+          "skippedRows": {
+            "type": "array",
+            "description": "Per-row reasons for every row the import refused (GH #1115). `row` is the PHYSICAL source line — the CSV line number or the XLSX sheet row — not an index into the surviving rows.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": { "type": "integer" },
+                "name": { "type": "string", "nullable": true, "description": "The row's Name cell, absent when the row failed before a name was known." },
+                "reason": { "type": "string" }
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "description": "Per-row messages that are not row-refusals. This schema is shared across import endpoints and the meaning varies by route: the CSV/XLSX importer emits non-fatal adjustments (e.g. a template target whose echoed color the update stripped, GH #605), while /api/filaments/prusaslicer, /api/filaments/import and /api/openprinttag/import also report caught WRITE FAILURES and refused name collisions here. Do not treat a non-empty array as success. Present only when non-empty.",
+            "items": { "type": "string" }
           }
         }
       },
