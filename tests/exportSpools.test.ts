@@ -358,3 +358,107 @@ describe("getSpoolExportRows", () => {
     });
   });
 });
+
+/**
+ * GH #1111 — legacy single-spool rolls (empty `spools[]`, stock on the
+ * filament's own `totalWeight`) contributed no rows at all, so they vanished
+ * from the export while /inventory, the dashboard and the home list all
+ * counted them.
+ *
+ * Its own describe on purpose: the suite above carries unfiltered global
+ * `toHaveLength` assertions, which any extra fixture would break.
+ */
+describe("getSpoolExportRows — legacy single-spool rolls (#1111)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    Filament = mongoose.models.Filament;
+  });
+
+  it("emits one row for a legacy roll", async () => {
+    await Filament.create({
+      name: "Legacy PCTG",
+      vendor: "Atomic",
+      type: "PCTG",
+      spoolWeight: 258,
+      netFilamentWeight: 1000,
+      totalWeight: 1258,
+      spools: [],
+    });
+    const rows = (await getSpoolExportRows()).filter((r) => r.filament === "Legacy PCTG");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].totalWeight).toBe(1258);
+    expect(rows[0].spoolWeight).toBe(258);
+    expect(rows[0].legacyRoll).toBe(true);
+  });
+
+  it("leaves spoolId empty but carries the roll's identity in instanceId", async () => {
+    // spoolId: emitting the filament id would be a lie the importer can't
+    // resolve — there is no subdocument. instanceId: the #732 Phase-1
+    // carry-over IS this roll's durable identity, and what its printed label
+    // and NFC tag encode, so it must survive the migration.
+    const f = await Filament.create({
+      name: "Legacy Ids",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 900,
+      spools: [],
+    });
+    const row = (await getSpoolExportRows()).find((r) => r.filament === "Legacy Ids")!;
+    expect(row.spoolId).toBe("");
+    expect(row.instanceId).toBe(f.instanceId);
+  });
+
+  it("reads totalWeight from the filament's OWN field, never the parent", async () => {
+    // totalWeight is in VARIANT_ONLY_FIELDS — a variant must not inherit its
+    // parent's stock figure, or the export would invent inventory.
+    const parent = await Filament.create({
+      name: "Legacy Parent Spec",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      totalWeight: 5555,
+    });
+    await Filament.create({
+      name: "Legacy Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      totalWeight: 700,
+      spools: [],
+    });
+    const row = (await getSpoolExportRows()).find((r) => r.filament === "Legacy Variant")!;
+    expect(row.totalWeight).toBe(700);
+    // ...while the inheritable spec fields DO resolve through the parent.
+    expect(row.spoolWeight).toBe(200);
+    expect(row.netFilamentWeight).toBe(1000);
+  });
+
+  it("emits no row for a filament with neither spools nor a totalWeight", async () => {
+    await Filament.create({ name: "Catalog Only", vendor: "V", type: "PLA", spools: [] });
+    const rows = (await getSpoolExportRows()).filter((r) => r.filament === "Catalog Only");
+    expect(rows).toHaveLength(0);
+  });
+
+  it("emits no synthetic row when the filament has real spools", async () => {
+    // A migrated roll keeps its top-level totalWeight (inert once spools
+    // exist); it must not produce a phantom extra row alongside the real one.
+    await Filament.create({
+      name: "Migrated",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 900,
+      spools: [{ label: "A", totalWeight: 850 }],
+    });
+    const rows = (await getSpoolExportRows()).filter((r) => r.filament === "Migrated");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].legacyRoll).toBe(false);
+    expect(rows[0].label).toBe("A");
+  });
+});

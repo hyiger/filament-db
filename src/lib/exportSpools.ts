@@ -44,7 +44,12 @@ export interface SpoolExportRow {
   createdAt: string | null;
   instanceId: string;
   filamentId: string;
+  /** Empty for a legacy roll — it has no spool subdocument to name. */
   spoolId: string;
+  /** GH #1111: true when this row was synthesized from a legacy single-spool
+   *  filament (empty `spools[]`, stock on the filament's own `totalWeight`)
+   *  rather than read from a real spool subdocument. */
+  legacyRoll: boolean;
   /**
    * Parent/variant relationship surfaced for export clarity — matches the
    * filament-level export columns (see exportFilaments.ts). `parentName`
@@ -80,6 +85,10 @@ export const SPOOL_EXPORT_COLUMNS: { key: keyof SpoolExportRow; header: string }
   { key: "instanceId", header: "instanceId" },
   { key: "filamentId", header: "filamentId" },
   { key: "spoolId", header: "spoolId" },
+  // GH #1111: true for a synthesized legacy single-spool row (no spools[]
+  // subdocument). Export-only — the importer ignores unknown columns — so the
+  // reader can tell a real spool from a filament-level one.
+  { key: "legacyRoll", header: "legacyRoll" },
   // Parent/variant context — matches the filament-level export columns.
   // GH #515.3: header text aligns with exportFilaments.ts's
   // "Parent" / "Variant Count" — pre-fix the spool exporter emitted
@@ -199,6 +208,69 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
         parentName: parentDoc?.name ?? null,
         variantCount:
           variantCountByParent.get(filament._id.toString()) ?? 0,
+        legacyRoll: false,
+      });
+    }
+
+    // GH #1111: a LEGACY single-spool filament — stock tracked on the filament
+    // itself, with no spools[] subdocument — contributed no rows at all, so it
+    // vanished from the export while /inventory, the dashboard and the home
+    // list all counted it. Every other spool surface has this fallback
+    // (inventoryStats, the by-location aggregation, the dashboard); the
+    // exporter was the only holdout.
+    //
+    // It matters more than a missing row: the filament-level export carries no
+    // `totalWeight` column and the filament importer has no `totalWeight`
+    // handling, so before this a legacy roll's remaining weight survived only a
+    // full snapshot. "Export both CSVs, wipe, re-import" lost it silently.
+    if ((filament.spools?.length ?? 0) === 0 && typeof filament.totalWeight === "number") {
+      rows.push({
+        filament: filament.name,
+        vendor: resolved.vendor ?? "",
+        type: resolved.type ?? "",
+        color: filament.color ?? "",
+        label: "",
+        // The filament's OWN field, never `resolved` — totalWeight is in
+        // VARIANT_ONLY_FIELDS and is deliberately not inherited.
+        totalWeight: filament.totalWeight,
+        // These two ARE inheritable, so read them resolved.
+        spoolWeight:
+          typeof resolved.spoolWeight === "number" ? resolved.spoolWeight : null,
+        netFilamentWeight:
+          typeof resolved.netFilamentWeight === "number"
+            ? resolved.netFilamentWeight
+            : null,
+        lotNumber: null,
+        purchaseDate: null,
+        openedDate: null,
+        location: null,
+        retired: false,
+        dryCyclesCount: 0,
+        lastDriedAt: null,
+        usedGrams: 0,
+        createdAt: isoDateTime(filament.createdAt),
+        // #732 Phase-1 carry-over: a legacy roll's durable identity IS the
+        // filament's instanceId — it is what its printed label and NFC tag
+        // encode. Emitting it keeps those resolving to the exact roll after
+        // the migration, instead of the importer minting a new id and leaving
+        // every label to fall back to the filament with matchedSpool: null.
+        //
+        // Honored on import: `isSpoolInstanceIdTaken` excludes the owning
+        // filament, and a legacy filament has no spool holding the id yet
+        // (pinned by "honors a cell equal to the filament's top-level id on
+        // the CREATE path"). The collision guard only fires once a spool
+        // already carries it — i.e. on a re-import after migration, where a
+        // loud refusal is the correct outcome anyway.
+        instanceId: filament.instanceId ?? "",
+        filamentId: filament._id.toString(),
+        // Deliberately empty: there is no spool subdocument, and putting the
+        // filament id here would be an outright lie that the importer would
+        // then fail to resolve.
+        spoolId: "",
+        parentName: parentDoc?.name ?? null,
+        variantCount:
+          variantCountByParent.get(filament._id.toString()) ?? 0,
+        legacyRoll: true,
       });
     }
   }
