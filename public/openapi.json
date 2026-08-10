@@ -301,6 +301,13 @@
                             "type": "string"
                           },
                           "description": "List of field names inherited from parent"
+                        },
+                        "_hasTrashedVariants": {
+                          "type": "boolean",
+                          "description": "GH #1103 — true when this row has non-purged children in the TRASH. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone; this flag lets a client still expose \"Convert to template\", which is the action a refused restore (409 `parent_must_be_template_first`) points at."
+                        },
+                        "_hasOwnOptLink": {
+                          "type": "boolean"
                         }
                       }
                     }

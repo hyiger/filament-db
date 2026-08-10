@@ -81,7 +81,9 @@ Alle vier liefern denselben Body:
 }
 ```
 
-Zum Bestätigen wiederhole die **identische** Anfrage mit `"promoteParent": true` im Body. Es ist ein Steuerflag, nie ein gespeichertes Feld — die Create- und Update-Routen entfernen es aus dem Body, bevor irgendetwas anderes ihn liest; `restore` nimmt historisch überhaupt keinen Body entgegen, ein fehlender oder nicht parsbarer Body bedeutet dort also schlicht `false`.
+Zum Bestätigen wiederhole die **identische** Anfrage mit `"promoteParent": true` im Body. Es ist ein Steuerflag, nie ein gespeichertes Feld — die Create- und Update-Routen entfernen es aus dem Body, bevor irgendetwas anderes ihn liest.
+
+`POST /api/filaments/:id/restore` ist die Ausnahme: Die Route durchläuft dieselbe Sperre, hat aber **keinen Bestätigungspfad** (GH #1103), weil ein Restore Daten *unverändert zurück* verlangt und nicht darum bittet, etwas Neues zu bauen. Sie lehnt mit `409 parent_must_be_template_first` ab und nennt `POST /api/filaments/:id/promote` auf dem Elternfilament, das die ganze Familie in einem bewussten Schritt umwandelt. Die Route nimmt keinen Request-Body entgegen.
 
 Die Sperre greift **zuletzt**, nach jeder anderen Validierung. Ein `409` heißt deshalb: „Diese Anfrage wäre sonst erfolgreich, hat aber eine Nebenwirkung auf ein zweites Dokument, der du ausdrücklich zustimmen musst" — und es wird überhaupt nichts geschrieben. Eine *bestätigte* Anfrage wird **vor** der Umwandlung im Trockenlauf validiert (Namenskollision, Schemavalidierung), sodass ein ungültiger Body weiterhin scheitert und das Elternfilament dabei völlig unangetastet bleibt.
 
@@ -238,7 +240,16 @@ Ablehnung:
 }
 ```
 
-Auch das Wiederherstellen einer **Variante** kann die erste lebende Variante ihres Elternfilaments erzeugen — das Elternfilament kann eine Farbe oder Spulen erhalten haben, während die Variante im Papierkorb lag. Deshalb durchläuft der Restore dieselbe Bestätigungssperre wie der Create-Pfad und lehnt mit `409 parent_promotion_required` ab. Genau dafür akzeptiert die Route einen optionalen JSON-Body: Wiederhole den POST mit `{ "promoteParent": true }`, um zu bestätigen. Ein POST ohne Body (der historische Vertrag) verhält sich in jedem nicht gesperrten Fall wie bisher. Siehe Abschnitt **Filament-Vorlagen** weiter oben.
+Auch das Wiederherstellen einer **Variante** kann die erste lebende Variante ihres Elternfilaments erzeugen — das Elternfilament kann eine Farbe oder Spulen erhalten haben, während die Variante im Papierkorb lag. Deshalb durchläuft der Restore dieselbe Sperre wie der Create-Pfad. **Anders als dieser lehnt er jedoch ab, statt eine Bestätigung anzubieten** (GH #1103), mit `409 parent_must_be_template_first`:
+
+```json
+{
+  "error": "parent_must_be_template_first",
+  "message": "Restoring this variant would make \"Prusament PETG\" a template, but it still holds its own color and 2 spools. …"
+}
+```
+
+Es gibt **kein Bestätigungsflag**, und ein Wiederholen der Anfrage ändert nichts — ein Client, der auf `parent_promotion_required` reagiert und erneut sendet, würde in einer Schleife landen; genau deshalb lautet der Code anders. Eine Variante zu erzeugen heißt, dass der Nutzer etwas Neues baut; dort ist eine Bestätigung im Tausch gegen eine Umstrukturierung ein fairer Handel. Ein Restore verlangt Daten *unverändert zurück* — und ein Sammel-Restore einer Familie aus der Zeit vor #605 beantwortete das früher mit einem Dialog pro Variante, dessen einziges „Ja" die Familie umschrieb und dessen „Nein" die Variante dauerhaft unwiederherstellbar zurückließ. Die Umstrukturierung bleibt verpflichtend und bleibt die Entscheidung des Nutzers — sie wandert nur zu `POST /api/filaments/:id/promote` auf dem Elternfilament, das die ganze Familie auf einmal umwandelt. Die Route nimmt keinen Request-Body entgegen. Siehe Abschnitt **Filament-Vorlagen** weiter oben.
 
 ### POST /api/filaments/:id/promote
 
@@ -263,7 +274,7 @@ curl -X POST http://localhost:3456/api/filaments/64a1b2c3d4e5f6a7b8c9d0e1/promot
 Ablehnungsgründe:
 - `400` — die `{id}` ist keine gültige ObjectId.
 - `404` — kein aktives Filament mit dieser ID.
-- `400 not_a_template` — das Ziel ist selbst eine Variante oder hat keine lebenden Varianten: *„Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."*
+- `400 not_a_template` — das Ziel ist selbst eine Variante oder hatte nie eine Variante, die noch existiert: *„Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."* **Varianten im Papierkorb zählen mit** (GH #1103): Liegen ein Alt-Elternfilament und alle seine Varianten gemeinsam im Papierkorb, lehnt der Restore ab und verweist hierher — diese Route muss das Elternfilament also annehmen, sonst wäre der Hinweis nicht umsetzbar. Endgültig gelöschte (`_purged`) Varianten zählen nicht: Eine permanente Löschung ist ein Einweg-Grabstein, ein solches Elternfilament ist wieder ein eigenständiges Filament.
 - `400 nothing_to_convert` — das Ziel ist eine Vorlage, trägt aber nichts, was auf eine Variante gehört: *„This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight."* Beachte: `spoolWeight` / `netFilamentWeight` allein zählen nicht — sie sind gemeinsame Spezifikation und bleiben auf der Vorlage.
 
 ### GET /api/filaments/export

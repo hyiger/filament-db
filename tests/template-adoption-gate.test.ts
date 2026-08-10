@@ -739,6 +739,36 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     expect(freshParent.spools).toHaveLength(1);
   });
 
+  it("the refusal names what the parent ACTUALLY holds, not always a color (#1103)", async () => {
+    // `needed` is a disjunction of four things. A fixed "its own color and N
+    // spool(s)" reads as plainly false to a user whose parent carries only an
+    // inventory weight — while hiding the one fact they need in order to act.
+    const parent = await Filament.create({
+      name: "Weight Only Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      totalWeight: 850,
+    });
+    const variant = await Filament.create({
+      name: "Weight Only Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await restoreFilament(restoreReq(String(variant._id)), {
+      params: Promise.resolve({ id: String(variant._id) }),
+    });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.message).toContain("an inventory weight");
+    expect(body.message).not.toContain("its own color");
+    expect(body.message).not.toContain("spool");
+  });
+
   it("a promoteParent flag in the restore body is IGNORED, not honoured (#1103)", async () => {
     // The flag used to be the confirmation. A client that still sends it must
     // get the same refusal — otherwise the old confirm-and-retry loop keeps
