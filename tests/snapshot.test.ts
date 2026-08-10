@@ -1255,6 +1255,22 @@ describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => 
     expect(await Location.findById(existing._id)).not.toBeNull();
   });
 
+  it("catches a pair that only collides AFTER the schema cast (#1116, Codex P2)", async () => {
+    // Mongoose casts a String path, so a snapshot holding the number 1 and
+    // the string "1 " passes per-document validation on both — then
+    // insertMany stores both as "1" and E11000s after the wipe.
+    const existing = await Location.create({ name: "Keep me too", kind: "shelf" });
+    const { res, body } = await restore(
+      file([
+        { name: 1, kind: "drybox" },
+        { name: "1 ", kind: "drybox" },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
   it("allows the pair when one of them is trashed — the index is partial", async () => {
     const { res } = await restore(
       file([

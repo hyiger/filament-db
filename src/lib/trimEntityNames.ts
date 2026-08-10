@@ -256,6 +256,21 @@ export function describeTrimResult(result: TrimEntityNamesResult): string | null
  * on `_deletedAt: null`, so a trashed row is free to share a name (that is
  * the whole point of GH #213's name reuse).
  */
+/**
+ * The value Mongoose's `String` SchemaType would store for `raw`, or null
+ * when it wouldn't cast at all.
+ *
+ * Mongoose casts numbers, booleans and anything with a non-default
+ * `toString`; it refuses plain objects and arrays. Null/undefined stay null —
+ * the `required` validator handles those, and a missing name can't collide.
+ */
+export function castNameLikeSchema(raw: unknown): string | null {
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "number") return Number.isFinite(raw) ? String(raw) : null;
+  if (typeof raw === "boolean") return String(raw);
+  return null;
+}
+
 export function findTrimmedNameCollision(
   rows: readonly unknown[],
 ): { name: string; indexes: [number, number] } | null {
@@ -265,8 +280,17 @@ export function findTrimmedNameCollision(
     if (typeof row !== "object" || row === null) continue;
     const record = row as { name?: unknown; _deletedAt?: unknown };
     if (record._deletedAt != null) continue;
-    if (typeof record.name !== "string") continue;
-    const key = record.name.trim();
+    // Key by the value the SCHEMA will store, not the raw JSON (Codex P2).
+    // Mongoose casts a `String` path, so a snapshot holding the number `1`
+    // and the string `"1 "` passes per-document validation on both — and then
+    // `insertMany` casts and trims them to the same `"1"` and raises E11000
+    // AFTER the destructive wipe, which is exactly what this precheck exists
+    // to prevent. `String(...)` mirrors the cast; `.trim()` mirrors the
+    // setter. Anything with no cast (an object, an array) is left to the
+    // per-document validation below, which rejects it with its own message.
+    const cast = castNameLikeSchema(record.name);
+    if (cast === null) continue;
+    const key = cast.trim();
     if (key === "") continue; // caught by the `required` validator instead
     const first = seen.get(key);
     if (first !== undefined) return { name: key, indexes: [first, i] };

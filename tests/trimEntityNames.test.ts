@@ -237,7 +237,24 @@ describe("findTrimmedNameCollision", () => {
   });
 
   it("ignores rows with no usable name", () => {
-    expect(findTrimmedNameCollision([null, 7, { name: 3 }, {}])).toBeNull();
+    expect(findTrimmedNameCollision([null, 7, { name: {} }, {}])).toBeNull();
+  });
+
+  it("keys by the value the SCHEMA will store, not the raw JSON (Codex P2)", () => {
+    // Mongoose casts a String path, so `1` and `"1 "` both validate — and
+    // then insertMany stores both as `"1"` and E11000s AFTER the destructive
+    // wipe, the exact failure this precheck exists to prevent.
+    expect(findTrimmedNameCollision([{ name: 1 }, { name: "1 " }])).toEqual({
+      name: "1",
+      indexes: [0, 1],
+    });
+    expect(findTrimmedNameCollision([{ name: true }, { name: " true" }])).toEqual({
+      name: "true",
+      indexes: [0, 1],
+    });
+    // A value Mongoose would NOT cast is left to the per-document validation,
+    // which rejects it with its own message.
+    expect(findTrimmedNameCollision([{ name: { a: 1 } }, { name: "[object Object]" }])).toBeNull();
   });
 
   it("returns null for a clean file", () => {
