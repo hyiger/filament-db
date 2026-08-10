@@ -242,69 +242,64 @@ export async function POST(request: NextRequest) {
     // `continue`s past any spool it has no entry for — skipping BOTH the
     // weight restore and the usageHistory strip. A spool created afterwards
     // would leave an unrefundable orphan on a rolled-back request.
-    for (let i = 0; i < filaments.length; i++) {
-      const filament = filaments[i];
-      if (filament.spools.length > 0 || filament.totalWeight == null) continue;
-      // UNDER THE FILAMENT'S OWN LOCK, with a fresh in-lock read (Codex P1).
-      // Checking `hasVariants` and pushing outside it is the exact
-      // check-then-write window `spoolTemplateGuard` exists to avoid: a
-      // concurrent first-variant creation holds this key while it snapshots
-      // the parent's carrying state and then clears it in
-      // `completeParentPromotion` — so an unlocked migration could add a spool
-      // between those two steps and have the promotion delete it, after which
-      // the reload below finds an empty template and the job is recorded with
-      // spoolId: null and no debit. Serializing makes the two orderings
-      // well-defined instead.
-      const templateRefusal = await runExclusive(
-        filamentLockKey(filament._id),
-        async () => {
-          // Re-read in-lock: the pass-1 doc was fetched before we held the
-          // key, so its spools/totalWeight may already be stale.
-          const fresh = await Filament.findOne({
-            _id: filament._id,
-            _deletedAt: null,
-          });
-          if (!fresh || fresh.spools.length > 0 || fresh.totalWeight == null) {
-            // Migrated (or emptied) by whoever held the lock first — nothing
-            // to do, and pass 2 reloads inside the transaction anyway.
-            return null;
-          }
-          // #605: inventory belongs on a template's variants, never on the
-          // template. Same contract text the spool routes use, and it names an
-          // action the user can take.
-          if (await hasVariants(Filament, String(fresh._id))) {
-            return TEMPLATE_NO_SPOOLS_BODY.message;
-          }
-          fresh.spools.push({
-            label: "",
-            totalWeight: fresh.totalWeight,
-            // Carry the filament-level id onto the roll it always described
-            // (#732 Phase 1), so a printed label or NFC tag keeps resolving.
-            instanceId: fresh.instanceId ?? generateInstanceId(),
-          } as unknown as Parameters<typeof fresh.spools.push>[0]);
-          // Matches POST /api/filaments, which nulls the legacy field the
-          // moment a real spool exists. Leaving it would let every
-          // `spools.length === 0` fallback resurrect the roll if this spool
-          // were later deleted.
-          fresh.totalWeight = null;
-          // `validateModifiedOnly` like every other persist path here (GH
-          // #905): a full-document validate would reject a legacy record
-          // carrying a value that predates current validators — refusing the
-          // slicer's job over a field this request never touched, on exactly
-          // the old records this change exists to serve.
-          await fresh.save({ validateModifiedOnly: true });
-          // REPLACE the pass-1 document rather than mirroring the spool onto
-          // it: `spoolSnapshots` below and the standalone fallback both reuse
-          // these docs, and the pass-1 copy's `__v` is now one behind the save
-          // we just made — its next `save()` would VersionError into the 409
-          // retry contract on every legacy job. Both handles have to move.
-          filaments[i] = fresh;
-          byId.set(String(fresh._id), fresh);
-          return null;
-        },
-      );
-      if (templateRefusal) return errorResponse(templateRefusal, 400);
-    }
+    // MUST run while the filament's key is HELD, and — for the single-filament
+    // job — the SAME hold that spans the debit (Codex P1 ×2). Two separate
+    // acquisitions are not enough: between releasing the migration's lock and
+    // taking the persist's, a confirmed first-variant creation can move the
+    // just-materialized spool onto the promoted sibling and clear the parent,
+    // after which pass 2 reloads an empty template, selects no spool, and
+    // commits a 201 with spoolId: null and no debit — the exact bug this
+    // change fixes, converted from deterministic into racy. So the caller
+    // decides where this runs; it never acquires the key itself.
+    const migrateLegacyFilamentInLock = async (
+      index: number,
+    ): Promise<string | null> => {
+      const filament = filaments[index];
+      if (!filament) return null;
+      if (filament.spools.length > 0 || filament.totalWeight == null) return null;
+      // Re-read under the key: the pass-1 doc was fetched before we held it,
+      // so its spools/totalWeight may already be stale.
+      const fresh = await Filament.findOne({
+        _id: filament._id,
+        _deletedAt: null,
+      });
+      if (!fresh || fresh.spools.length > 0 || fresh.totalWeight == null) {
+        // Migrated (or emptied) by whoever held the lock first — nothing to
+        // do, and pass 2 reloads inside the transaction anyway.
+        return null;
+      }
+      // #605: inventory belongs on a template's variants, never on the
+      // template. Same contract text the spool routes use, and it names an
+      // action the user can take.
+      if (await hasVariants(Filament, String(fresh._id))) {
+        return TEMPLATE_NO_SPOOLS_BODY.message;
+      }
+      fresh.spools.push({
+        label: "",
+        totalWeight: fresh.totalWeight,
+        // Carry the filament-level id onto the roll it always described
+        // (#732 Phase 1), so a printed label or NFC tag keeps resolving.
+        instanceId: fresh.instanceId ?? generateInstanceId(),
+      } as unknown as Parameters<typeof fresh.spools.push>[0]);
+      // Matches POST /api/filaments, which nulls the legacy field the moment a
+      // real spool exists. Leaving it would let every `spools.length === 0`
+      // fallback resurrect the roll if this spool were later deleted.
+      fresh.totalWeight = null;
+      // `validateModifiedOnly` like every other persist path here (GH #905): a
+      // full-document validate would reject a legacy record carrying a value
+      // that predates current validators — refusing the slicer's job over a
+      // field this request never touched, on exactly the old records this
+      // change exists to serve.
+      await fresh.save({ validateModifiedOnly: true });
+      // REPLACE the pass-1 document rather than mirroring the spool onto it:
+      // the snapshot builder and the standalone fallback both reuse these
+      // docs, and the pass-1 copy's `__v` is now one behind the save we just
+      // made — its next `save()` would VersionError into the 409 retry
+      // contract on every legacy job. Both handles have to move.
+      filaments[index] = fresh;
+      byId.set(String(fresh._id), fresh);
+      return null;
+    };
 
     // GH #224: snapshot every spool's pre-mutation state BEFORE pass 2
     // so the standalone-fallback path can roll back on a mid-loop
@@ -314,21 +309,31 @@ export async function POST(request: NextRequest) {
     // aborts the txn for us — but the fallback runs save() one at a
     // time and would otherwise leak a partial debit if save #2 throws
     // after save #1 committed.
+    //
+    // Rebuildable, because a legacy migration ADDS a spool and the rollback
+    // `continue`s past any spool it has no entry for — skipping both the
+    // weight restore and the usageHistory strip, i.e. leaving an unrefundable
+    // orphan. On the single-filament path the migration now runs inside the
+    // persist's lock hold, so the snapshot has to be (re)built there too.
     type SpoolSnapshot = {
       filamentId: string;
       spoolId: string;
       totalWeight: number | null;
     };
     const spoolSnapshots: SpoolSnapshot[] = [];
-    for (const f of filaments) {
-      for (const s of f.spools) {
-        spoolSnapshots.push({
-          filamentId: String(f._id),
-          spoolId: String(s._id),
-          totalWeight: typeof s.totalWeight === "number" ? s.totalWeight : null,
-        });
+    const buildSpoolSnapshots = () => {
+      spoolSnapshots.length = 0;
+      for (const f of filaments) {
+        for (const s of f.spools) {
+          spoolSnapshots.push({
+            filamentId: String(f._id),
+            spoolId: String(s._id),
+            totalWeight: typeof s.totalWeight === "number" ? s.totalWeight : null,
+          });
+        }
       }
-    }
+    };
+    buildSpoolSnapshots();
 
     // Generate the PrintHistory _id up front so each spool usageHistory
     // entry can carry a jobId pointing back at this job. The undo path
@@ -711,6 +716,15 @@ export async function POST(request: NextRequest) {
       const conflict = await runExclusive(
         filamentLockKey(uniqueIds[0]),
         async (): Promise<NextResponse | null> => {
+          // Inside the hold that spans the debit — see the note on
+          // `migrateLegacyFilamentInLock`. Resolved by id rather than assuming
+          // position 0: pass 1 guarantees one document per unique id, but the
+          // lock is keyed on `uniqueIds[0]` and the two must name the same row.
+          const refusal = await migrateLegacyFilamentInLock(
+            filaments.findIndex((f) => String(f._id) === uniqueIds[0]),
+          );
+          if (refusal) return errorResponse(refusal, 400);
+          buildSpoolSnapshots();
           try {
             await persistWithTransaction();
             return null;
@@ -746,7 +760,21 @@ export async function POST(request: NextRequest) {
     } else {
       // Multi-filament job: sequential per-filament locked saves — see the
       // round-12 lock-discipline note above for why the cross-filament
-      // transaction cannot be used here.
+      // transaction cannot be used here. Each legacy migration takes its own
+      // key, one at a time, exactly like the saves that follow; a continuous
+      // hold is impossible here for the same reason the transaction is (it
+      // would need every touched key at once), so this path keeps the
+      // pre-existing window in which a concurrent promotion can move a spool
+      // out from under a job — the same window an already-spooled filament
+      // has always had on this path.
+      for (let i = 0; i < filaments.length; i++) {
+        const refusal = await runExclusive(
+          filamentLockKey(filaments[i]._id),
+          () => migrateLegacyFilamentInLock(i),
+        );
+        if (refusal) return errorResponse(refusal, 400);
+      }
+      buildSpoolSnapshots();
       const conflict = await persistSequential(true);
       if (conflict) return conflict;
     }

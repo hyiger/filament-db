@@ -1475,6 +1475,40 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
     expect(fresh.spools[0].totalWeight).toBe(900);
   });
 
+  it("migrates every legacy filament in a MULTI-filament job", async () => {
+    // The multi-filament path can't hold a continuous lock (a cross-filament
+    // transaction would need every key at once), so each migration takes its
+    // own key one at a time — like the saves that follow it.
+    const a = await Filament.create({
+      name: "Legacy A", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    const b = await Filament.create({
+      name: "Legacy B", vendor: "V", type: "PETG", totalWeight: 800, spools: [],
+    });
+    const req = new NextRequest("http://localhost/api/print-history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobLabel: "Two rolls",
+        startedAt: new Date().toISOString(),
+        usage: [
+          { filamentId: String(a._id), grams: 100 },
+          { filamentId: String(b._id), grams: 50 },
+        ],
+      }),
+    });
+    const res = await postPrintHistory(req);
+    expect(res.status).toBe(201);
+
+    const freshA = await Filament.findById(a._id);
+    const freshB = await Filament.findById(b._id);
+    expect(freshA.spools).toHaveLength(1);
+    expect(freshA.spools[0].totalWeight).toBe(900);
+    expect(freshA.totalWeight).toBeNull();
+    expect(freshB.spools).toHaveLength(1);
+    expect(freshB.spools[0].totalWeight).toBe(750);
+  });
+
   it("does NOT migrate an all-retired filament — that contract is unchanged (#305)", async () => {
     // A legacy filament has an EMPTY array; an all-retired one has a populated
     // array. Only the former migrates; the latter must still record
