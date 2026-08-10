@@ -4,7 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import Printer from "@/models/Printer";
-import { hasVariants } from "@/lib/resolveFilament";
+import { hasVariantsIncludingTrashed } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import {
   parentPromotionState,
@@ -67,9 +67,24 @@ export async function POST(
         return errorResponse("Not found", 404);
       }
 
-      // Variants can't be templates (no nested inheritance), and a standalone
-      // isn't one yet — both fail the same derived-template test.
-      if (filament.parentId || !(await hasVariants(Filament, id))) {
+      // Variants can't be templates (no nested inheritance), and a filament
+      // that never had a variant isn't one yet — both fail the same test.
+      //
+      // GH #1103: TRASHED variants count here, unlike everywhere else that
+      // asks "is this a template". They have to: when a legacy carrying
+      // parent and all of its variants sit in the trash together, restoring
+      // the first variant hits the #605 gate, and restore now refuses and
+      // points the user at this action. If this route kept requiring a LIVE
+      // variant, that advice would be unactionable and the family would be
+      // unrestorable — the two checks have to agree on what a template is,
+      // and restore's gate is about to become one.
+      //
+      // Converting here is not a workaround for the refusal, it IS the same
+      // decision the confirmation used to bury inside a bulk restore: the
+      // user sees the parent, its color and its spools, and chooses. What
+      // changes is only that they choose with context, once, instead of
+      // per-variant in a modal.
+      if (filament.parentId || !(await hasVariantsIncludingTrashed(Filament, id))) {
         return NextResponse.json(
           {
             error: "not_a_template",
@@ -106,7 +121,32 @@ export async function POST(
       // route is the documented recovery path for exactly that state) —
       // surfaced in the response so clients can tell recovery from a fresh
       // conversion; the end state is identical.
+      // GH #1103: reserve the names of this parent's TRASHED children.
+      //
+      // `resolvePromotionVariantName` resolves against the partial unique
+      // index, which only covers live rows — so a tombstoned `Parent — Green`
+      // reads as free and the promotion copy takes that exact name. Restoring
+      // the original child then fails the restore route's active-name conflict
+      // check, and the conversion this route promised ("convert once and the
+      // whole family comes back") quietly doesn't. Since #1103 that promise is
+      // the ONLY route out of a gated restore, so squatting here strands the
+      // child's spools, calibrations and usage history behind a rename the
+      // user never asked for.
+      //
+      // Scoped to this parent's own non-purged children and passed only from
+      // THIS route — the general "soft-deleted names are free" rule is
+      // unchanged, and the creation path keeps passing its own reservation.
+      const trashedChildren = await Filament.find({
+        parentId: id,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      })
+        .select("name")
+        .lean();
       const { variant, resumed } = await performParentPromotion(Filament, filament, {
+        alsoTakenNames: new Set(
+          trashedChildren.map((c: { name: string }) => c.name),
+        ),
         externalRefs: { printHistory: PrintHistory, printer: Printer },
       });
       const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();

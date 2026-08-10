@@ -69,54 +69,59 @@ export default function TrashPage() {
   };
 
   /**
-   * GH #605 (codex round 4, F6): restoring a trashed VARIANT under a parent
-   * that re-acquired its own color/spools while variant-less would mint the
-   * parent's first live variant — the server 409s
-   * (`parent_promotion_required`) until the client confirms, then promotes
-   * the parent to a template first. Same catch → confirm → retry-with-flag
-   * flow as the create/edit pages. Returns the final response (or null when
-   * the user declined / the request failed at the network level) so both
-   * the single-restore and restore-all paths share it.
+   * GH #605 (codex round 4, F6) / GH #1103: restoring a trashed VARIANT under
+   * a parent that still carries its own color/spools would mint the parent's
+   * first live variant, and the server 409s.
+   *
+   * It used to 409 with `parent_promotion_required` and this page answered
+   * with a confirm-and-retry — which, on "Restore all", meant one modal PER
+   * VARIANT whose only "yes" rewrote the family (a new `— Original` variant,
+   * the parent stripped) and whose "no" left that variant permanently
+   * unrestorable and re-prompted on the next attempt. Restoring a family you
+   * merely deleted and changed your mind about should not restructure it.
+   *
+   * The server now refuses outright with `parent_must_be_template_first` and
+   * a message naming "Convert to template" on the parent — one action that
+   * unblocks the whole family, taken with the parent in front of you. So
+   * there is nothing to confirm here any more; the message is simply shown.
    */
-  const restoreWithPromotionGate = async (
-    item: TrashedFilament,
-  ): Promise<Response | null> => {
-    const post = (payload?: Record<string, unknown>) =>
-      fetch(`/api/filaments/${item._id}/restore`, {
-        method: "POST",
-        ...(payload
-          ? {
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            }
-          : {}),
-      });
+  const restoreFilament = (item: TrashedFilament) =>
+    fetch(`/api/filaments/${item._id}/restore`, { method: "POST" });
 
-    const res = await post();
-    if (res.status !== 409) return res;
-    const conflict = await res.clone().json().catch(() => null);
-    if (conflict?.error !== "parent_promotion_required") return res;
-    const ok = await confirm({
-      title: t("trash.promote.title"),
-      message: t("trash.promote.message", {
-        parent: String(conflict.parentName ?? ""),
-        variant: String(conflict.variantName ?? ""),
-        count: conflict.spoolCount ?? 0,
-      }),
-      confirmLabel: t("trash.promote.confirm"),
-    });
-    if (!ok) return null;
-    return post({ promoteParent: true });
+  /** The sentence to show for a refusal.
+   *
+   *  The GH #1103 template refusal is TRANSLATED here rather than displayed
+   *  verbatim (Codex P2): the server composes its `message` in English, and
+   *  this is the main recovery guidance a user gets — showing it raw would
+   *  regress a German user to English for the one instruction that matters.
+   *  It carries `parentName`, which is all the localized string needs.
+   *
+   *  Everything else falls back to the server's own text, then the machine
+   *  code, then the row's name: the structured 409s put their explanation in
+   *  `message`, while the plain ones only have `error`. */
+  const refusalText = (
+    body: { message?: unknown; error?: unknown; parentName?: unknown } | null,
+  ) => {
+    if (
+      body?.error === "parent_must_be_template_first" &&
+      typeof body.parentName === "string"
+    ) {
+      return t("trash.restoreBlocked", { parent: body.parentName });
+    }
+    return (
+      (typeof body?.message === "string" && body.message) ||
+      (typeof body?.error === "string" && body.error) ||
+      null
+    );
   };
 
   const handleRestore = async (item: TrashedFilament) => {
     markBusy(item._id, true);
     try {
-      const res = await restoreWithPromotionGate(item);
-      if (!res) return; // user declined the promotion confirm
+      const res = await restoreFilament(item);
       const body = await res.json().catch(() => null);
       if (!res.ok) {
-        toast(body?.error || t("trash.restoreError"), "error");
+        toast(refusalText(body) || t("trash.restoreError"), "error");
         return;
       }
       toast(t("trash.restored", { name: item.name }));
@@ -236,18 +241,16 @@ export default function TrashPage() {
       // GH #640: same per-item isolation as handleEmptyTrash — one
       // dropped request must not silently abandon the rest of the batch.
       try {
-        // GH #605 (round 4, F6): a variant whose parent re-acquired carrying
-        // state hits the promotion gate here too — the loop is sequential,
-        // so the confirm dialog appears for that item alone; declining
-        // skips just that item and the batch continues.
-        const res = await restoreWithPromotionGate(item);
-        if (!res) {
-          errors.push(item.name);
-        } else if (res.ok) {
+        // GH #1103: a variant whose parent still carries color/inventory is
+        // refused here, and the refusal SENTENCE is what the user needs (it
+        // names the parent and the action) — the old code pushed `body.error`,
+        // which is a machine code like `parent_must_be_template_first`.
+        const res = await restoreFilament(item);
+        if (res.ok) {
           ok++;
         } else {
           const body = await res.json().catch(() => null);
-          errors.push(body?.error || item.name);
+          errors.push(refusalText(body) || item.name);
         }
       } catch {
         errors.push(item.name);

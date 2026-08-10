@@ -200,16 +200,38 @@ export async function GET(
     const rawSlug = (filament.settings as Record<string, unknown> | undefined)?.openprinttag_slug;
     const _hasOwnOptLink = typeof rawSlug === "string" && rawSlug !== "";
 
+    // GH #1103: does this row have children sitting in the TRASH?
+    //
+    // `_variants` is live-only, and the detail page derives `isParent` from
+    // it — correctly, since template-ness is about live inheritance. But a
+    // parent whose variants are ALL trashed reads as a plain standalone
+    // there, so its "Convert to template" action disappears exactly when the
+    // restore route has started telling users to go and press it. This flag
+    // is the one thing the page can't derive, and it does NOT make the row a
+    // template anywhere else.
+    const _hasTrashedVariants =
+      (await Filament.countDocuments({
+        parentId: id,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      })) > 0;
+
     if (parentSummary) {
       return NextResponse.json({
         ...resolved,
         _variants: variants,
         _parent: parentSummary,
         _hasOwnOptLink,
+        _hasTrashedVariants,
       });
     }
 
-    return NextResponse.json({ ...resolved, _variants: variants, _hasOwnOptLink });
+    return NextResponse.json({
+      ...resolved,
+      _variants: variants,
+      _hasOwnOptLink,
+      _hasTrashedVariants,
+    });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to fetch filament");
   }

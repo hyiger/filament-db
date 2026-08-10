@@ -150,6 +150,12 @@ export interface FilamentDetail {
    *  Gates the "Check for updates" button so an inherited slug on a variant
    *  doesn't show a dead action. */
   _hasOwnOptLink?: boolean;
+  /** GH #1103: this row has children in the TRASH. `_variants` is live-only,
+   *  so a parent whose variants are all trashed reads as a standalone — and
+   *  its "Convert to template" action vanished exactly when the restore route
+   *  started telling users to press it. Gates that action only; it does not
+   *  make the row a template anywhere else. */
+  _hasTrashedVariants?: boolean;
   // GH #955: form-managed schema fields that were missing from the type. Kept
   // client-safe (no import from src/models, which pulls in mongoose) by
   // mirroring IBedTypeTemp locally.

@@ -76,6 +76,13 @@ export interface ParentPromotionState {
   parentColor: string | null;
   /** Number of spools the parent itself carries. */
   spoolCount: number;
+  /** GH #1103: the two remaining triggers, so a refusal can name what is
+   *  ACTUALLY blocking it. `needed` is a disjunction of four things, and a
+   *  message that always says "its own color and N spool(s)" is simply false
+   *  for a colorName-only or totalWeight-only parent — which is the whole
+   *  reason the user can't restore. */
+  hasColorName: boolean;
+  hasInventoryWeight: boolean;
 }
 
 /**
@@ -103,6 +110,8 @@ export function parentPromotionState(parent: FilamentDoc): ParentPromotionState 
       parentColor != null || hasColorName || spoolCount > 0 || parent.totalWeight != null,
     parentColor,
     spoolCount,
+    hasColorName,
+    hasInventoryWeight: parent.totalWeight != null,
   };
 }
 
