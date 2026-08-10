@@ -337,7 +337,15 @@ export function isIndexedRow(
   row: { _deletedAt?: unknown; _purged?: unknown },
   honorsPurged: boolean,
 ): boolean {
-  if (honorsPurged && row._purged === true) return false;
+  // The `_deletedAt == null` half mirrors `normalizePurgedTombstone`'s OWN
+  // condition, and it is load-bearing (Codex P2 round 2). That helper stamps
+  // a tombstone only when `_deletedAt == null` — an EMPTY STRING isn't, so it
+  // survives untouched (`restoreTypes` leaves it alone too, since "" doesn't
+  // match the ISO date pattern) all the way to `insertMany`, where the Date
+  // cast turns it into null and the row inserts ACTIVE. Exempting on
+  // `_purged` alone would therefore wave through a pair that genuinely
+  // collides. Exempt only what will actually be tombstoned.
+  if (honorsPurged && row._purged === true && row._deletedAt == null) return false;
   return isActiveLikeSchema(row._deletedAt);
 }
 

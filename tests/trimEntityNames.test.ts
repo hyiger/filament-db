@@ -296,6 +296,28 @@ describe("findTrimmedNameCollision", () => {
     ).toEqual({ name: "X", indexes: [0, 1] });
   });
 
+  it("exempts a purged row only when it will ACTUALLY be tombstoned (Codex P2)", () => {
+    // normalizePurgedTombstone stamps only when `_deletedAt == null`. An
+    // empty string isn't, so it survives to insertMany, where the Date cast
+    // makes it null and the row inserts ACTIVE — the pair really collides.
+    expect(
+      findTrimmedNameCollision(
+        [{ name: "X" }, { name: "X ", _purged: true, _deletedAt: "" }],
+        true,
+      ),
+    ).toEqual({ name: "X", indexes: [0, 1] });
+    // undefined and an omitted field DO get tombstoned, so they're exempt.
+    expect(
+      findTrimmedNameCollision(
+        [{ name: "Y" }, { name: "Y ", _purged: true, _deletedAt: undefined }],
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      findTrimmedNameCollision([{ name: "Z" }, { name: "Z ", _purged: true }], true),
+    ).toBeNull();
+  });
+
   it("does NOT exempt _purged on the other unique-name collections (Codex P2)", () => {
     // Nozzle / Printer / BedType / Location don't declare `_purged`, so
     // strict mode strips it and the row inserts ACTIVE — and the restore

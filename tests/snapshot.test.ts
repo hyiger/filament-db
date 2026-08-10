@@ -1311,6 +1311,23 @@ describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => 
     expect(body.error).toContain("whitespace");
   });
 
+  it("REFUSES a purged filament twin whose tombstone is an empty string (#1116)", async () => {
+    // normalizePurgedTombstone only stamps `_deletedAt == null`, so "" reaches
+    // insertMany, where the Date cast makes it null and the row inserts
+    // ACTIVE — the pair really does collide.
+    const { res, body } = await restore({
+      version: 7,
+      collections: {
+        filaments: [
+          { name: "Empty Tombstone", vendor: "V", type: "PLA" },
+          { name: "Empty Tombstone ", vendor: "V", type: "PLA", _purged: true, _deletedAt: "" },
+        ],
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+  });
+
   it("still restores a clean file", async () => {
     const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
     expect(res.status).toBe(200);
