@@ -26,15 +26,25 @@
  * the caller surfaces it — a visible, editable duplicate beats a silent
  * automatic merge of records the user may not consider the same thing.
  *
- * ## Why driver-level
+ * ## Why driver-level — this one is not a preference
  *
- * Takes a minimal driver-shaped `db` rather than Mongoose models so the same
- * implementation can run from `dbConnect` and be unit-tested without a live
- * connection — the shape `legacyNozzleConditions` established. It also has to
- * be driver-level for correctness: a Mongoose `updateOne` would re-apply the
- * very setter whose absence created this state, which is harmless but makes
- * the write's intent unreadable, and the collision has to surface as a raw
- * E11000 rather than a cast/validation error.
+ * Mongoose applies a String schema setter to QUERY values, not just writes.
+ * So the moment `name` carries `trim: true`, `Filament.findOne({ name: "X " })`
+ * casts to `"X"` and a stored `"X "` becomes **unreachable through Mongoose by
+ * name at all** — verified against a real connection, not assumed. The rows
+ * this pass exists to repair are exactly those rows.
+ *
+ * A Mongoose-level migration therefore could not even SELECT its targets. The
+ * raw driver does no casting, which is the only reason this works. (It also
+ * means the collision surfaces as a genuine E11000 rather than a cast error,
+ * and that the write's intent stays readable.)
+ *
+ * The same property is why the pass runs EARLY in `dbConnect`: until it
+ * finishes, any name-addressed lookup — the importers, the slicer sync, the
+ * match endpoint — silently misses an untrimmed row.
+ *
+ * Taking a minimal driver-shaped `db` (the shape `legacyNozzleConditions`
+ * established) additionally lets it unit-test without a live connection.
  */
 
 /** Every collection whose `name` is an identity key with a unique index. */
@@ -48,11 +58,32 @@ export const TRIMMABLE_COLLECTIONS = [
 
 export type TrimmableCollection = (typeof TRIMMABLE_COLLECTIONS)[number];
 
+/**
+ * Every character `String.prototype.trim` strips: ECMA-262's WhiteSpace and
+ * LineTerminator productions, plus U+FEFF.
+ *
+ * Spelled out because the MongoDB pre-filter has to select the SAME set
+ * (Codex P2). Mongo's `\s` is PCRE's — ASCII-only in practice — so a name
+ * ending in U+00A0 or U+3000 was never returned by the query, and the JS
+ * re-check below never got the chance to repair it. Which is the worst
+ * possible failure here: the schema setter WOULD trim that name on the
+ * document's next save, so the two halves of the fix disagreed about what a
+ * name is, and the row stayed a silent duplicate until something happened to
+ * touch it.
+ */
+const JS_TRIM_CHARS =
+  "\u0009\u000A\u000B\u000C\u000D\u0020\u00A0\u1680" +
+  "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A" +
+  "\u2028\u2029\u202F\u205F\u3000\uFEFF";
+
+/** The selector for "name has edge whitespace", in MongoDB regex syntax. */
+export const EDGE_WHITESPACE_PATTERN = `^[${JS_TRIM_CHARS}]|[${JS_TRIM_CHARS}]$`;
+
 /** A name with leading or trailing whitespace, in any of the forms JS's
- *  `String.prototype.trim` recognizes (which includes the Unicode space
- *  separators and the line terminators — `trim()` is what the schema setter
- *  uses, so the detector has to agree with it exactly or a row would be
- *  selected and then "trimmed" to itself forever). */
+ *  `String.prototype.trim` recognizes. `trim()` is what the schema setter
+ *  uses, so this is the authoritative test — `EDGE_WHITESPACE_PATTERN` is
+ *  only a pre-filter, and `tests/trimEntityNames.test.ts` pins that the two
+ *  agree character for character. */
 export function hasEdgeWhitespace(name: string): boolean {
   return name !== name.trim();
 }
@@ -72,7 +103,7 @@ export interface TrimEntityNamesResult {
 }
 
 interface MinimalCursor {
-  toArray(): Promise<{ _id: unknown; name?: unknown }[]>;
+  toArray(): Promise<{ _id: unknown; name?: unknown; _deletedAt?: unknown }[]>;
 }
 
 interface MinimalCollection {
@@ -116,12 +147,14 @@ export async function trimEntityNames(
 
   for (const collectionName of TRIMMABLE_COLLECTIONS) {
     const collection = db.collection(collectionName);
-    // Anchored on either edge. `\s` in a MongoDB regex is PCRE's, which is
-    // narrower than JS `trim()`'s whitespace set — so `hasEdgeWhitespace`
-    // re-checks each candidate in JS below, and the query stays a cheap
-    // pre-filter rather than the decision.
+    // Anchored on either edge, over the EXACT set `trim()` strips — see
+    // JS_TRIM_CHARS. `hasEdgeWhitespace` still re-checks each candidate in
+    // JS, so the query stays a pre-filter rather than the decision.
     const docs = await collection
-      .find({ name: { $regex: "^\\s|\\s$" } }, { projection: { name: 1 } })
+      .find(
+        { name: { $regex: EDGE_WHITESPACE_PATTERN } },
+        { projection: { name: 1, _deletedAt: 1 } },
+      )
       .toArray();
 
     for (const doc of docs) {
@@ -134,6 +167,29 @@ export async function trimEntityNames(
         // document fail validation on its owner's next save.
         conflicts.push({ collection: collectionName, name: doc.name });
         continue;
+      }
+      // Check the target name BEFORE writing, rather than relying on the
+      // unique index to report the collision (Codex P1). On a database whose
+      // partial index is missing or stale — precisely the case `dbConnect`'s
+      // `coreModelIndexes` pass exists to repair, and it runs AFTER this one
+      // — both `"X"` and `"X "` would write through as `"X"`, and that later
+      // pass would then hit E11000, deliberately skip rebuilding the index,
+      // and leave two indistinguishable active rows with no uniqueness
+      // enforcement at all. Worse than the duplicate this migration exists to
+      // prevent.
+      //
+      // Only ACTIVE rows collide: every one of these indexes is partial on
+      // `_deletedAt: null`, so a trashed row may freely share a name (GH #213
+      // name reuse). The E11000 catch below stays as the race guard for a
+      // conflicting row created between this check and the write.
+      if (doc._deletedAt == null) {
+        const clash = await collection
+          .find({ name: next, _deletedAt: null }, { projection: { _id: 1 } })
+          .toArray();
+        if (clash.some((c) => String(c._id) !== String(doc._id))) {
+          conflicts.push({ collection: collectionName, name: doc.name });
+          continue;
+        }
       }
       try {
         await collection.updateOne({ _id: doc._id }, { $set: { name: next } });

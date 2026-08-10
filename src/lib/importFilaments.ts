@@ -619,6 +619,11 @@ export async function upsertImportRows(
   // preserves. A whitespace-only name collapses to "" and is then caught by
   // the existing missing-required-field check — the right answer for a name
   // that renders as nothing.
+  //
+  // The trim is what the ROW REPORTING and the create body use; the lookup
+  // below would be trimmed anyway, because Mongoose applies a String schema
+  // setter to query values too. Doing it here means the name we match on, the
+  // name we store, and the name we quote back in a skip reason are one value.
   const rows = inputRows.map((r) =>
     typeof r.name === "string" && r.name !== r.name.trim()
       ? { ...r, name: r.name.trim() }
@@ -643,15 +648,6 @@ export async function upsertImportRows(
   // parentName pointing at a row that's itself a variant.
   const namesToLoad = new Set<string>();
   for (const r of rows) {
-    if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
-  }
-  // GH #1116: ALSO load the untrimmed forms. `trimEntityNames` normalizes the
-  // stored names on connect, but it is best-effort and deliberately skips any
-  // row whose trimmed name would collide with an existing one — so a legacy
-  // `"PLA Basic "` can still be sitting in the DB. Loading it too lets the
-  // trimmed-key index below find it and UPDATE it, instead of creating a
-  // near-identical second row that renders identically in the list.
-  for (const r of inputRows) {
     if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
     if (r.parentName) {
       const trimmed = r.parentName.trim();
@@ -696,11 +692,16 @@ export async function upsertImportRows(
       parentId: doc.parentId ?? null,
       doc,
     };
-    // GH #1116: index by the TRIMMED name so a legacy untrimmed row is found
-    // by a trimmed row key. When both `"X"` and `"X "` survive in the DB (the
-    // migration refuses to merge them — see `trimEntityNames`), the exactly-
-    // named one wins the slot: it is the row every other lookup in the app
-    // already resolves to.
+    // GH #1116: index by the TRIMMED name.
+    //
+    // Belt to the row keys' braces. Mongoose applies a String schema setter
+    // to QUERY values as well as writes, so once `name` carries `trim: true`
+    // the `$in` above is itself trimmed and a stored untrimmed row can no
+    // longer be returned by it at all (verified, not assumed). Keying the map
+    // on the trimmed name keeps this side honest if that lookup ever moves to
+    // the raw driver — several hot paths in this repo already have — and it
+    // costs nothing. When both `"X"` and `"X "` somehow survive, the exactly-
+    // named one wins the slot: it is the row every other lookup resolves to.
     const key = doc.name.trim();
     if (doc._deletedAt == null) {
       if (!activeByName.has(key) || doc.name === key) activeByName.set(key, entry);

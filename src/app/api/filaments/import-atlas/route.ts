@@ -245,7 +245,20 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        const importName = String(filamentData.name ?? "");
+        // GH #1116: normalize the SOURCE name at the boundary.
+        //
+        // Not load-bearing today — Mongoose applies a String schema setter to
+        // QUERY values, so the `findOne` below already casts `"PLA Basic "`
+        // to `"PLA Basic"` and resolves the local row. It is written
+        // explicitly because that behaviour is invisible: this repo moves hot
+        // lookups to the raw driver routinely, and the driver does no
+        // casting, so the day this query moves the trim would silently stop
+        // applying — an older Atlas source holding `"PLA Basic "` would miss
+        // the local row, fall through to create, and E11000 on the setter,
+        // failing the whole selected-filament import. One `.trim()` makes the
+        // identity rule a property of this code rather than of the ORM.
+        const importName = String(filamentData.name ?? "").trim();
+        filamentData.name = importName;
         const existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (existing) {
           preserveLocalSpoolIds(existing.spools);

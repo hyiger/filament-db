@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   TRIMMABLE_COLLECTIONS,
+  EDGE_WHITESPACE_PATTERN,
   hasEdgeWhitespace,
   trimEntityNames,
   describeTrimResult,
@@ -13,8 +14,10 @@ import {
  * constraint on the ACTIVE names so the collision branch is exercised the way
  * the real partial index would exercise it.
  */
-function makeDb(seed: Partial<Record<string, { _id: string; name?: unknown }[]>>) {
-  const store: Record<string, { _id: string; name?: unknown }[]> = {};
+function makeDb(
+  seed: Partial<Record<string, { _id: string; name?: unknown; _deletedAt?: unknown }[]>>,
+) {
+  const store: Record<string, { _id: string; name?: unknown; _deletedAt?: unknown }[]> = {};
   for (const c of TRIMMABLE_COLLECTIONS) store[c] = seed[c] ? [...seed[c]!] : [];
 
   const db: MinimalTrimDb = {
@@ -22,10 +25,16 @@ function makeDb(seed: Partial<Record<string, { _id: string; name?: unknown }[]>>
       const rows = store[name] ?? [];
       return {
         find(filter: Record<string, unknown>) {
-          const spec = (filter.name as { $regex: string }).$regex;
-          const re = new RegExp(spec);
           return {
             async toArray() {
+              // The pre-write collision check queries by exact name.
+              if (typeof filter.name === "string") {
+                return rows.filter(
+                  (r) => r.name === filter.name && (r._deletedAt ?? null) === null,
+                );
+              }
+              const spec = (filter.name as { $regex: string }).$regex;
+              const re = new RegExp(spec, "u");
               return rows.filter(
                 (r) => typeof r.name === "string" && re.test(r.name),
               );
@@ -37,12 +46,23 @@ function makeDb(seed: Partial<Record<string, { _id: string; name?: unknown }[]>>
           update: Record<string, unknown>,
         ) {
           const next = (update.$set as { name: string }).name;
-          if (rows.some((r) => r._id !== f._id && r.name === next)) {
+          // Partial index: it covers ACTIVE rows only, so a trashed row is
+          // neither constrained by it nor able to collide with one.
+          const target = rows.find((r) => r._id === f._id);
+          const targetActive = (target?._deletedAt ?? null) === null;
+          if (
+            targetActive &&
+            rows.some(
+              (r) =>
+                r._id !== f._id &&
+                r.name === next &&
+                (r._deletedAt ?? null) === null,
+            )
+          ) {
             throw Object.assign(new Error("E11000 duplicate key error"), {
               code: 11000,
             });
           }
-          const target = rows.find((r) => r._id === f._id);
           if (target) target.name = next;
           return {};
         },
@@ -217,5 +237,112 @@ describe("findTrimmedNameCollision", () => {
 
   it("returns null for a clean file", () => {
     expect(findTrimmedNameCollision([{ name: "A" }, { name: "B" }])).toBeNull();
+  });
+});
+
+describe("EDGE_WHITESPACE_PATTERN (Codex P2)", () => {
+  it("selects exactly what String.prototype.trim strips", () => {
+    // The pre-filter and the decision MUST agree. Mongo's `\s` is PCRE's —
+    // ASCII-only in practice — so a name ending in U+00A0 or U+3000 was never
+    // returned by the query and the JS re-check never got to repair it, while
+    // the schema setter WOULD trim it on the document's next save.
+    const re = new RegExp(EDGE_WHITESPACE_PATTERN, "u");
+    for (let cp = 0; cp <= 0xffff; cp++) {
+      const ch = String.fromCharCode(cp);
+      const trimStrips = `a${ch}` !== `a${ch}`.trim() || `${ch}a` !== `${ch}a`.trim();
+      expect(re.test(`a${ch}`) || re.test(`${ch}a`)).toBe(trimStrips);
+    }
+  });
+
+  it("covers the non-ASCII cases a PCRE \\s misses", async () => {
+    const { db, store } = makeDb({
+      locations: [
+        { _id: "l1", name: "NBSP\u00A0" },
+        { _id: "l2", name: "\u3000Ideographic" },
+        { _id: "l3", name: "BOM\uFEFF" },
+      ],
+    });
+    expect((await trimEntityNames(db)).trimmed).toBe(3);
+    expect(store.locations.map((r) => r.name)).toEqual([
+      "NBSP",
+      "Ideographic",
+      "BOM",
+    ]);
+  });
+});
+
+describe("pre-write collision check (Codex P1)", () => {
+  it("refuses without writing even when NO unique index reports it", () => {
+    // The fake has no unique constraint at all — the situation on a database
+    // whose partial index is missing or stale, which is exactly what
+    // dbConnect's coreModelIndexes pass (running AFTER this one) repairs.
+    // Relying on E11000 there let both rows write through as "X", and that
+    // later pass would then skip the index rebuild entirely.
+    const store: Record<string, { _id: string; name?: unknown; _deletedAt?: unknown }[]> =
+      {
+        locations: [
+          { _id: "l1", name: "Drybox #1", _deletedAt: null },
+          { _id: "l2", name: "Drybox #1 ", _deletedAt: null },
+        ],
+      };
+    const db: MinimalTrimDb = {
+      collection(name: string) {
+        const rows = store[name] ?? [];
+        return {
+          find(filter: Record<string, unknown>) {
+            return {
+              async toArray() {
+                if (typeof filter.name === "string") {
+                  return rows.filter(
+                    (r) => r.name === filter.name && (r._deletedAt ?? null) === null,
+                  );
+                }
+                const re = new RegExp(EDGE_WHITESPACE_PATTERN, "u");
+                return rows.filter(
+                  (r) => typeof r.name === "string" && re.test(r.name),
+                );
+              },
+            };
+          },
+          // No uniqueness enforcement whatsoever.
+          async updateOne(f: Record<string, unknown>, update: Record<string, unknown>) {
+            const target = rows.find((r) => r._id === f._id);
+            if (target) target.name = (update.$set as { name: string }).name;
+            return {};
+          },
+        };
+      },
+    };
+    return trimEntityNames(db).then((res) => {
+      expect(res.trimmed).toBe(0);
+      expect(res.conflicts).toEqual([
+        { collection: "locations", name: "Drybox #1 " },
+      ]);
+      expect(store.locations[1].name).toBe("Drybox #1 ");
+    });
+  });
+
+  it("still trims when the only same-named row is TRASHED — the index is partial", async () => {
+    const { db, store } = makeDb({
+      locations: [
+        { _id: "l1", name: "Drybox #1", _deletedAt: "2026-01-01" },
+        { _id: "l2", name: "Drybox #1 ", _deletedAt: null },
+      ],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.trimmed).toBe(1);
+    expect(store.locations[1].name).toBe("Drybox #1");
+  });
+
+  it("trims a TRASHED row even though an active one holds the name", async () => {
+    const { db, store } = makeDb({
+      locations: [
+        { _id: "l1", name: "Drybox #1", _deletedAt: null },
+        { _id: "l2", name: "Drybox #1 ", _deletedAt: "2026-01-01" },
+      ],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.trimmed).toBe(1);
+    expect(store.locations[1].name).toBe("Drybox #1");
   });
 });
