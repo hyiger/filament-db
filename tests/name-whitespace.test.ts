@@ -121,6 +121,26 @@ describe("trimEntityNames against a real database (#1116)", () => {
     expect(await Location.findOne({ name: "Indexed Later" })).not.toBeNull();
   });
 
+  it("accepts a LEGACY plain unique name index instead of skipping (Codex P1)", async () => {
+    // A peer upgraded from pre-#303 still carries the plain unique `name_1`.
+    // createIndex then refuses with IndexOptionsConflict — but that index is
+    // STRICTER than the partial one requested, so the pass is serialized and
+    // must carry on. Skipping would be permanent on Atlas, which never runs
+    // the syncIndexes() pass that would replace the legacy index.
+    await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
+    await mongoose.connection.collection("locations").createIndex({ name: 1 }, { unique: true });
+    await mongoose.connection
+      .collection("locations")
+      .insertOne({ name: "Legacy Indexed ", kind: "drybox", _deletedAt: null });
+
+    const res = await trimEntityNames(db());
+
+    expect(res.skipped).toEqual([]);
+    expect(await Location.findOne({ name: "Legacy Indexed" })).not.toBeNull();
+    // The legacy index is left in place — replacing it is coreModelIndexes' job.
+    await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
+  });
+
   it("leaves a colliding pair alone and names it", async () => {
     await Location.create({ name: "Drybox #1", kind: "drybox" });
     await mongoose.connection

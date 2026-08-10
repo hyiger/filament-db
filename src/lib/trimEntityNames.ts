@@ -150,6 +150,9 @@ interface MinimalCollection {
     spec: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<unknown>;
+  /** Optional: used only to accept an ALREADY-adequate index when
+   *  `createIndex` refuses because one exists with different options. */
+  indexes?(): Promise<{ key?: unknown; unique?: unknown }[]>;
   find(
     filter: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -162,6 +165,31 @@ interface MinimalCollection {
 
 export interface MinimalTrimDb {
   collection(name: string): MinimalCollection;
+}
+
+/**
+ * Does a unique index on `name` already exist?
+ *
+ * Any unique `{name: 1}` index serializes the writes this pass makes — the
+ * legacy plain one from before GH #303 is strictly stricter than the partial
+ * one the models now declare, since it also covers soft-deleted rows. The
+ * partialFilterExpression is deliberately NOT compared: this asks "am I
+ * serialized", not "is the index the one I would have built".
+ */
+async function hasUniqueNameIndex(collection: {
+  indexes?(): Promise<{ key?: unknown; unique?: unknown }[]>;
+}): Promise<boolean> {
+  if (!collection.indexes) return false;
+  try {
+    const existing = await collection.indexes();
+    return existing.some(
+      (i) =>
+        i.unique === true &&
+        (i.key as Record<string, unknown> | undefined)?.name === 1,
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** MongoDB's duplicate-key error, however the driver surfaces it. */
@@ -226,11 +254,26 @@ export async function trimEntityNames(
         { unique: true, partialFilterExpression: { _deletedAt: null } },
       );
     } catch (err) {
-      // Do NOT fall back to writing unserialized (Codex P1). That path is
-      // what the index exists to prevent: two writers can each clear the
-      // check and both normalize to the same name, ADDING duplicates on a
-      // database that already has one. Leave the collection alone and say
-      // so; the caller keeps the migration unsettled and retries.
+      // A refusal is not necessarily an absence (Codex P1). A peer upgraded
+      // from the pre-#303 schema still carries the LEGACY plain unique
+      // `name_1`, and `createIndex` rejects a differing
+      // partialFilterExpression with IndexOptionsConflict — while that index
+      // serializes active-name writes at least as strictly as the one being
+      // requested (it covers deleted rows too). Treating that as "unsafe"
+      // would skip the collection forever on the Atlas side, which never
+      // runs the `syncIndexes()` pass that would replace it — and skipping
+      // disables name reconciliation, so an unrelated same-name pair then
+      // E11000s on every cycle.
+      //
+      // So ask what actually exists before giving up.
+      if (await hasUniqueNameIndex(collection)) {
+        // Adequately serialized after all; carry on.
+      } else {
+      // Otherwise do NOT fall back to writing unserialized. That path is what
+      // the index exists to prevent: two writers can each clear the check and
+      // both normalize to the same name, ADDING duplicates on a database that
+      // already has one. Leave the collection alone and say so; the caller
+      // keeps the migration unsettled and retries.
       skipped.push({
         collection: collectionName,
         reason:
@@ -241,6 +284,7 @@ export async function trimEntityNames(
               }`,
       });
       continue;
+      }
     }
     // Anchored on either edge, over the EXACT set `trim()` strips — see
     // JS_TRIM_CHARS. `hasEdgeWhitespace` still re-checks each candidate in
