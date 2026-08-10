@@ -154,18 +154,26 @@ export function restoreBlockedByTemplateBody(
         ? held[0]
         : `${held.slice(0, -1).join(", ")} and ${held[held.length - 1]}`;
 
+  // Deliberately does NOT name the variant the conversion will create, and
+  // deliberately does not echo `variantName` (Codex P2). The gate resolves
+  // that name against ACTIVE rows plus the document being restored, while
+  // /promote resolves it against active rows plus this parent's TRASHED
+  // children — so with a trashed sibling already holding the obvious name the
+  // two disagree, and this message would promise `Parent — Green` where the
+  // conversion actually produces `Parent — Green (2)`. A predicted name is
+  // worth nothing here anyway: the user is about to press a button that shows
+  // them the result.
   return {
     error: "parent_must_be_template_first",
     message:
       `Restoring this variant would make "${info.parentName}" a template, ` +
       `but it still holds ${heldPhrase}. ` +
       `Open "${info.parentName}" and use "Convert to template" — that moves them ` +
-      `to a variant named "${info.variantName}" — then restore. ` +
+      `onto a variant of their own — then restore. ` +
       `Doing it there converts the whole family once, with the parent in front of you.`,
     parentName: info.parentName,
     parentColor: info.parentColor,
     spoolCount: info.spoolCount,
-    variantName: info.variantName,
   };
 }
 

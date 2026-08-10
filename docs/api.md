@@ -273,9 +273,11 @@ Restoring a **variant** can also mint its parent's first live variant — the pa
 ```json
 {
   "error": "parent_must_be_template_first",
-  "message": "Restoring this variant would make \"Prusament PETG\" a template, but it still holds its own color and 2 spool(s). Open \"Prusament PETG\" and use \"Convert to template\" — that moves them to a variant named \"Prusament PETG — Prusa Galaxy Black\" — then restore. Doing it there converts the whole family once, with the parent in front of you."
+  "message": "Restoring this variant would make \"Prusament PETG\" a template, but it still holds its own color and 2 spools. Open \"Prusament PETG\" and use \"Convert to template\" — that moves them onto a variant of their own — then restore. Doing it there converts the whole family once, with the parent in front of you."
 }
 ```
+
+The message deliberately does **not** predict the name of the variant the conversion will create (and the body carries no `variantName`): this gate resolves that name against active rows while `/promote` also reserves the parent's trashed children, so the two can legitimately disagree.
 
 There is no confirmation flag and **repeating the request changes nothing** — a client matching on `parent_promotion_required` and retrying would loop, which is why the code differs. Creating a variant is the user building something new, so trading a confirmation for a restructure is a fair deal there; restore is the user asking for data *back, exactly as it was*, and a bulk "Restore all" over a pre-#605 family used to answer that with one modal per variant whose only "yes" rewrote the family and whose "no" left the variant permanently unrestorable. The restructure is still mandatory and still the user's decision — it just moves to `POST /api/filaments/:id/promote` on the parent, which does the whole family once. The route takes no request body. See *Filament templates* above.
 

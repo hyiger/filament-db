@@ -729,7 +729,11 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     // the only thing the trash page shows the user.
     expect(gatedBody.message).toContain("Reacquired Parent");
     expect(gatedBody.message).toContain("Convert to template");
-    expect(gatedBody.variantName).toBe("Reacquired Parent — Re-Green");
+    // It deliberately does NOT predict the variant's name: the gate resolves
+    // that against active rows while /promote also reserves this parent's
+    // trashed children, so the two can disagree (Codex P2).
+    expect(gatedBody.variantName).toBeUndefined();
+    expect(gatedBody.message).not.toContain("named");
 
     // Nothing written: still trashed, parent untouched.
     const stillTrashed = await Filament.findById(variant._id).lean();

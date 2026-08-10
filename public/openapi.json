@@ -8371,7 +8371,7 @@
       },
       "RestoreBlockedByTemplate": {
         "type": "object",
-        "description": "GH #1103 — the restore route's refusal when reviving a variant would make its parent a template while that parent still carries its own color/spools/inventory. Deliberately NOT `parent_promotion_required`: that code means \"repeat with promoteParent: true\", and here repeating changes nothing. `message` names the parent and the action that unblocks the whole family (Convert to template).",
+        "description": "GH #1103 — the restore route's refusal when reviving a variant would make its parent a template while that parent still carries its own color/spools/inventory. Deliberately NOT `parent_promotion_required`: that code means \"repeat with promoteParent: true\", and here repeating changes nothing. `message` names the parent and the action that unblocks the whole family (Convert to template). It deliberately does NOT predict the name of the variant the conversion will create: this gate resolves that against active rows while `/promote` also reserves the parent's trashed children, so the two can legitimately disagree.",
         "properties": {
           "error": {
             "type": "string",
@@ -8394,10 +8394,6 @@
           "spoolCount": {
             "type": "integer",
             "description": "How many of the parent's spools would move."
-          },
-          "variantName": {
-            "type": "string",
-            "description": "The name the auto-created variant would get: `<parent> — <colorName>`, or `<parent> — Original` when the parent has no color name, de-duplicated with a ` (2)` / ` (3)` suffix when that name is taken. A stored record name, deliberately not translated."
           }
         },
         "required": [

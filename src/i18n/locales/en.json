@@ -1206,7 +1206,7 @@
   "detail.template.convertTitle": "Convert to template?",
   "detail.template.convertHint": "This template still carries its own color or spools from before it became a template.",
   "detail.template.convertAction": "Convert to template",
-  "detail.template.trashedVariantsHint": "This filament has color variants in the trash. They can't be restored while it still holds its own color or spools \u2014 convert it to a template first and those move to a variant of their own.",
+  "detail.template.trashedVariantsHint": "This filament has color variants in the trash. They can't be restored while it still holds anything that belongs on a variant \u2014 its own color, color name, spools or inventory weight. Convert it to a template first and those move onto a variant of their own.",
   "detail.template.convertConfirm": "Move this filament's own color and {count} spool(s) to a new variant? The template itself keeps no color and no spools.",
   "detail.template.converted": "Converted — color and spools moved to a new variant",
   "detail.template.convertFailed": "Failed to convert to template",
