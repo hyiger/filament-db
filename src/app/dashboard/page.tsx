@@ -37,6 +37,10 @@ interface DashboardData {
     spoolLabel: string;
     lastDried: string | null;
   }[];
+  /** #1117(b): the UNCAPPED count. Optional so a client running against an
+   *  older server (or a cached response) still renders — it falls back to the
+   *  list length, which is the pre-fix behaviour rather than a crash. */
+  dryDueTotal?: number;
   recentPrintHistory: {
     _id: string;
     jobLabel: string;
@@ -145,6 +149,12 @@ export default function DashboardPage() {
     );
   }
 
+  // #1117(b): the API caps the dry-due LIST but reports the real total. Fall
+  // back to the list length when the field is absent (older server / cached
+  // response) — that is exactly the pre-fix rendering, not a crash.
+  const dryDueTotal = data.dryDueTotal ?? data.dryDue.length;
+  const dryDueHidden = Math.max(0, dryDueTotal - data.dryDue.length);
+
   const kg = formatNumber(data.totalGrams / 1000, {
     minDecimals: 2,
     maxDecimals: 2,
@@ -234,7 +244,8 @@ export default function DashboardPage() {
       {/* Dry-due */}
       <section className="mb-8">
         <h2 className="text-lg font-semibold mb-2">
-          {t("dashboard.dryDue.title", { count: data.dryDue.length })}
+          {/* #1117(b): the TRUE count, not the capped list length. */}
+          {t("dashboard.dryDue.title", { count: dryDueTotal })}
         </h2>
         {data.dryDue.length === 0 ? (
           <p className="text-sm text-gray-500">{t("dashboard.dryDue.empty")}</p>
@@ -261,6 +272,14 @@ export default function DashboardPage() {
               </li>
             ))}
           </ul>
+        )}
+        {dryDueHidden > 0 && (
+          // Not a link: no page lists dry-due spools, so a link would have
+          // nowhere honest to go. Saying how many are hidden still beats a
+          // silent truncation that reads as a complete list.
+          <p className="text-xs text-gray-500 mt-1">
+            {t("dashboard.dryDue.more", { count: dryDueHidden })}
+          </p>
         )}
       </section>
 

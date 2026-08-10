@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { useToast } from "@/components/Toast";
@@ -22,6 +23,7 @@ import { parseWeightInput, type WeightInputProblem } from "@/lib/parseWeightInpu
 import FilamentSwatch from "@/components/FilamentSwatch";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { deriveFinish } from "@/lib/filamentFinish";
+import { withReturnTo } from "@/lib/returnTo";
 
 // Loaded on demand — the dialog pulls in the TSPL emitter + the qrcode
 // package for its preview, none of which the page needs until a print is
@@ -194,6 +196,11 @@ function loadInventoryPrefs(): InventoryPrefs {
     return DEFAULT_INVENTORY_PREFS;
   }
 }
+
+/** Sentinel `<option>` value for "take me to the create-a-location form"
+ *  (#1117 item h). Shared spelling with the filament list; not a valid
+ *  ObjectId, so it can never collide with a real location id. */
+const NEW_LOCATION_OPTION = "__new_location__";
 
 export default function InventoryPage() {
   const { t } = useTranslation();
@@ -1050,6 +1057,19 @@ function SpoolEditRow({
   const { t } = useTranslation();
   const { formatDate } = useDateFormat();
   const { formatGrams } = useNumberFormat();
+  const router = useRouter();
+  // #1117(h): carry the CURRENT url back, so a detour to create a location
+  // returns to this page with its filters and grouping intact.
+  const newLocationHref = useCallback(
+    () =>
+      withReturnTo(
+        "/locations/new",
+        typeof window === "undefined"
+          ? null
+          : `${window.location.pathname}${window.location.search}`,
+      ),
+    [],
+  );
   const grams = remainingGrams(row);
   const pct = remainingPct(row);
 
@@ -1400,7 +1420,15 @@ function SpoolEditRow({
           <select
             value={row.locationId ?? ""}
             disabled={movePending}
-            onChange={(e) => moveTo(e.target.value)}
+            onChange={(e) => {
+              if (e.target.value === NEW_LOCATION_OPTION) {
+                // Nothing moves; the select is controlled by row.locationId
+                // and snaps back on re-render.
+                router.push(newLocationHref());
+                return;
+              }
+              moveTo(e.target.value);
+            }}
             aria-label={t("inventory.location")}
             title={t("inventory.location")}
             className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
@@ -1411,6 +1439,12 @@ function SpoolEditRow({
                 {loc.name}
               </option>
             ))}
+            {/* #1117(h): same affordance as the filament list — with no
+                locations defined this menu was a single "No location" entry
+                and no route to creating one. */}
+            <option value={NEW_LOCATION_OPTION}>
+              {t("filaments.spools.newLocation")}
+            </option>
           </select>
           <button
             type="button"
