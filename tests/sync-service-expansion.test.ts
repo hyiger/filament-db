@@ -1029,6 +1029,42 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(b!.name).toBe("Fuse Me ");
       const remoteB = await remoteDb.collection("locations").findOne({ name: "Fuse Me" });
       expect(remoteB!.syncId).toBe("loc-B");
+
+      // This file shares its two mongods across tests, and the pair above is
+      // deliberately UNRESOLVABLE — left behind it would keep `locations`
+      // conflicted for every later test, cascade-skipping filaments and
+      // print history. Clean it up rather than coupling the rest of the file
+      // to this one's fixture.
+      await localDb.collection("locations").deleteMany({ syncId: { $in: ["loc-A", "loc-B"] } });
+      await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["loc-A", "loc-B"] } });
+    });
+
+    it("a TOMBSTONE with an untrimmable name does not block the collection (Codex P1)", async () => {
+      // A soft-deleted row whose name is only whitespace can never be
+      // trimmed, can't collide in the partial active-name index, and isn't
+      // reachable in the UI for a purged filament — gating on it would block
+      // filament and print-history sync forever with no way out.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await localDb.collection("filaments").insertOne({
+        name: "   ", vendor: "V", type: "PLA", spools: [],
+        syncId: "fil-tombstone", _deletedAt: now, _purged: true, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "Syncs Fine", vendor: "V", type: "PLA", spools: [],
+        syncId: "fil-normal", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // Asserted on the REASON, not on plain success: this file shares its
+      // mongods, so an unrelated prerequisite could legitimately cascade-skip
+      // filaments. What must never happen is filaments being blocked by the
+      // whitespace gate itself.
+      const filaments = results.find((r) => r.collection === "filaments");
+      expect(filaments?.error ?? "").not.toContain("whitespace");
     });
 
     it("scopes a trim conflict to its own collection + dependents, not the cycle", async () => {

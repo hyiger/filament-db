@@ -127,7 +127,7 @@ describe("trimEntityNames", () => {
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
     expect(res.conflicts).toEqual([
-      { collection: "locations", name: "Drybox #1 " },
+      { collection: "locations", name: "Drybox #1 ", active: true },
     ]);
     // Untouched — still visible and editable in the app.
     expect(store.locations[1].name).toBe("Drybox #1 ");
@@ -137,8 +137,22 @@ describe("trimEntityNames", () => {
     const { db, store } = makeDb({ nozzles: [{ _id: "n1", name: "   " }] });
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
-    expect(res.conflicts).toEqual([{ collection: "nozzles", name: "   " }]);
+    expect(res.conflicts).toEqual([{ collection: "nozzles", name: "   ", active: true }]);
     expect(store.nozzles[0].name).toBe("   ");
+  });
+
+  it("marks a conflict on a SOFT-DELETED row as inactive (Codex P1)", async () => {
+    // The hybrid sync gates on active conflicts only: a tombstone with an
+    // untrimmable name is permanent, can't collide in the partial index, and
+    // isn't visible for the user to fix — gating on it would block that
+    // collection's sync forever.
+    const { db } = makeDb({
+      filaments: [{ _id: "f1", name: "   ", _deletedAt: "2026-01-01" }],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.conflicts).toEqual([
+      { collection: "filaments", name: "   ", active: false },
+    ]);
   });
 
   it("re-checks each candidate in JS — the Mongo regex is only a pre-filter", async () => {
@@ -202,10 +216,21 @@ describe("describeTrimResult", () => {
     expect(describeTrimResult({ trimmed: 0, conflicts: [] })).toBeNull();
   });
 
+  it("logs an INACTIVE conflict too — it just doesn't gate anything", () => {
+    // A soft-deleted row with an untrimmable name is permanent and harmless
+    // (it can't collide in a partial index), so it must not block a sync —
+    // but the log should still say it exists.
+    const line = describeTrimResult({
+      trimmed: 0,
+      conflicts: [{ collection: "filaments", name: "  ", active: false }],
+    });
+    expect(line).toContain('filaments: "  "');
+  });
+
   it("names every conflict, since the user has to resolve them by hand", () => {
     const line = describeTrimResult({
       trimmed: 2,
-      conflicts: [{ collection: "locations", name: "Drybox #1 " }],
+      conflicts: [{ collection: "locations", name: "Drybox #1 ", active: true }],
     });
     expect(line).toContain("trimmed 2");
     expect(line).toContain('locations: "Drybox #1 "');
@@ -432,7 +457,7 @@ describe("pre-write collision check (Codex P1)", () => {
     return trimEntityNames(db).then((res) => {
       expect(res.trimmed).toBe(0);
       expect(res.conflicts).toEqual([
-        { collection: "locations", name: "Drybox #1 " },
+        { collection: "locations", name: "Drybox #1 ", active: true },
       ]);
       expect(store.locations[1].name).toBe("Drybox #1 ");
     });

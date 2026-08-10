@@ -126,7 +126,10 @@ describe("trimEntityNames against a real database (#1116)", () => {
     const res = await trimEntityNames(db());
     expect(res.trimmed).toBe(0);
     expect(res.conflicts).toEqual([
-      { collection: "locations", name: "Drybox #1 " },
+      // `active` distinguishes a conflict that can actually make two hybrid
+      // peers disagree about identity from a permanent, harmless one on a
+      // tombstone — only the former gates a sync (GH #1116, Codex P1).
+      { collection: "locations", name: "Drybox #1 ", active: true },
     ]);
     // Both rows still exist — visible and editable, not silently merged.
     expect(await Location.countDocuments({})).toBe(2);

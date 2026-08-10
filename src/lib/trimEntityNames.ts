@@ -104,6 +104,18 @@ export interface TrimNameConflict {
   collection: TrimmableCollection;
   /** The stored name, untouched. */
   name: string;
+  /**
+   * Was the row ACTIVE — i.e. covered by the partial unique name index?
+   *
+   * Every conflict is worth LOGGING, but only an active one can actually
+   * make two databases disagree about identity, which is what gates the
+   * hybrid sync (Codex P1). A soft-deleted row with a whitespace-only name
+   * is untrimmable and always will be, cannot collide in a partial index and
+   * is never touched by `reconcileByName` — so treating it as a gate would
+   * block that collection's sync forever, with nothing the user can do about
+   * it (a purged filament isn't even visible in the trash).
+   */
+  active: boolean;
 }
 
 export interface TrimEntityNamesResult {
@@ -172,12 +184,16 @@ export async function trimEntityNames(
     for (const doc of docs) {
       if (typeof doc.name !== "string") continue;
       if (!hasEdgeWhitespace(doc.name)) continue;
+      // Matches the partial index exactly. A `_purged` row is tombstoned by
+      // the GH #1004 `purgedZombies` migration before any sync runs, so
+      // `_deletedAt` is the whole test here.
+      const active = doc._deletedAt == null;
       const next = doc.name.trim();
       if (next === "") {
         // `name` is `required`, so a whitespace-only name can't be trimmed
         // into a legal value. Report it rather than writing "" and making the
         // document fail validation on its owner's next save.
-        conflicts.push({ collection: collectionName, name: doc.name });
+        conflicts.push({ collection: collectionName, name: doc.name, active });
         continue;
       }
       // Check the target name BEFORE writing, rather than relying on the
@@ -199,7 +215,7 @@ export async function trimEntityNames(
           .find({ name: next, _deletedAt: null }, { projection: { _id: 1 } })
           .toArray();
         if (clash.some((c) => String(c._id) !== String(doc._id))) {
-          conflicts.push({ collection: collectionName, name: doc.name });
+          conflicts.push({ collection: collectionName, name: doc.name, active });
           continue;
         }
       }
@@ -217,7 +233,7 @@ export async function trimEntityNames(
         trimmed++;
       } catch (err) {
         if (!isDuplicateKeyError(err)) throw err;
-        conflicts.push({ collection: collectionName, name: doc.name });
+        conflicts.push({ collection: collectionName, name: doc.name, active });
       }
     }
   }

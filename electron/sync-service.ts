@@ -416,7 +416,15 @@ export class SyncService extends EventEmitter {
         // two distinct records fused into one, after which LWW overwrites
         // one with the other. Record the affected collections and refuse to
         // reconcile or sync them until a human separates the pair.
-        for (const c of trimResult.conflicts) conflictedCollections.add(c.collection);
+        // ACTIVE conflicts only (Codex P1). An untrimmable name on a
+        // soft-deleted row is permanent, can't collide in the partial index
+        // and is never seen by `reconcileByName` — gating on it would block
+        // that collection's sync forever with no user-accessible fix, since a
+        // purged filament isn't even visible in the trash. It still gets
+        // logged; it just doesn't stop anything.
+        for (const c of trimResult.conflicts) {
+          if (c.active) conflictedCollections.add(c.collection);
+        }
       }
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
