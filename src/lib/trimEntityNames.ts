@@ -132,6 +132,11 @@ interface MinimalCursor {
 }
 
 interface MinimalCollection {
+  /** Optional: absent on the unit-test fakes, which have no index to build. */
+  createIndex?(
+    spec: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
   find(
     filter: Record<string, unknown>,
     options?: Record<string, unknown>,
@@ -183,6 +188,32 @@ export async function trimEntityNames(
     const honorsPurged = collectionName === "filaments";
     const isHidden = (row: { _purged?: unknown }) =>
       honorsPurged && row._purged === true;
+
+    // Establish the constraint this pass RELIES on, before relying on it
+    // (Codex P2). The pre-write clash check exists precisely because the
+    // index may be missing on an upgrading database — but a check and a
+    // write are not atomic, and nothing else serializes them. Two writers
+    // (the app's dbConnect and the Electron sync service both run this, on
+    // the same local DB, over separate connections) can each see a clear
+    // target and both write `"X"`. The later `coreModelIndexes` pass then
+    // hits E11000, deliberately skips the rebuild, and the collection is
+    // left with duplicate active names and NO uniqueness enforcement at all
+    // — worse than the duplicate this migration exists to remove.
+    //
+    // Creating it here is idempotent, matches the spec the models declare,
+    // and cannot itself fail on the whitespace pairs: `"X"` and `"X "` are
+    // still distinct at this point. BEST-EFFORT — a database that already
+    // holds unrelated duplicate active names will refuse the build, and that
+    // is exactly the state `coreModelIndexes` reports with actionable text;
+    // falling back to the unserialized check is no worse than before.
+    try {
+      await collection.createIndex?.(
+        { name: 1 },
+        { unique: true, partialFilterExpression: { _deletedAt: null } },
+      );
+    } catch {
+      /* pre-existing duplicates, or no rights — carry on unserialized */
+    }
     // Anchored on either edge, over the EXACT set `trim()` strips — see
     // JS_TRIM_CHARS. `hasEdgeWhitespace` still re-checks each candidate in
     // JS, so the query stays a pre-filter rather than the decision.

@@ -99,6 +99,28 @@ describe("trimEntityNames against a real database (#1116)", () => {
     expect((await Location.findById(insertedId)).name).toBe("Drybox #1");
   });
 
+  it("creates the partial unique index it relies on, when it is missing (Codex P2)", async () => {
+    // The pre-write clash check and the write are not atomic, so without the
+    // index two concurrent writers can both normalize to the same name — and
+    // the later coreModelIndexes pass then refuses to build it at all,
+    // leaving the collection with NO uniqueness enforcement.
+    await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
+    await mongoose.connection
+      .collection("locations")
+      .insertOne({ name: "Indexed Later ", kind: "drybox", _deletedAt: null });
+
+    await trimEntityNames(db());
+
+    const indexes = await mongoose.connection.collection("locations").indexes();
+    expect(
+      indexes.some(
+        (i) => i.unique && (i.key as Record<string, number>)?.name === 1,
+      ),
+    ).toBe(true);
+    // …and the row was still trimmed.
+    expect(await Location.findOne({ name: "Indexed Later" })).not.toBeNull();
+  });
+
   it("leaves a colliding pair alone and names it", async () => {
     await Location.create({ name: "Drybox #1", kind: "drybox" });
     await mongoose.connection
@@ -106,7 +128,8 @@ describe("trimEntityNames against a real database (#1116)", () => {
       .insertOne({ name: "Drybox #1 ", kind: "drybox", _deletedAt: null });
 
     // The partial unique index has to exist for the collision to surface as
-    // E11000 — dbConnect's coreModelIndexes pass builds it in production.
+    // E11000 — the pass builds it itself now, and dbConnect's
+    // coreModelIndexes pass also does in production.
     // Built with the DRIVER rather than `syncIndexes()`: tests/setup.ts DROPS
     // every collection between tests, which takes its indexes with it, and
     // Mongoose's index-state machinery made rebuilding it order-dependent
