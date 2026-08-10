@@ -272,6 +272,43 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
   });
 
+  it("matches a surviving legacy row even when the IMPORT name is canonical (Codex P1)", async () => {
+    // The predicate has to be on the STORED value. Keying it on the input's
+    // spelling missed the ordinary case: importing a canonical "PLA Canon"
+    // against a surviving "PLA Canon " produced no candidates at all, and the
+    // importer created a second row beside it.
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Canon ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Canon", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(await Filament.countDocuments({})).toBe(1);
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+  });
+
+  it("matches across DIFFERENT edge whitespace on the two sides", async () => {
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "  PLA Both", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Both  ", vendor: "V", type: "PLA", cost: 7 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(await Filament.countDocuments({})).toBe(1);
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+  });
+
   it("a whitespace-only name is reported as a missing required field", async () => {
     const result = await upsertImportRows([
       { name: "   ", vendor: "V", type: "PLA" },

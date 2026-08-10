@@ -671,41 +671,61 @@ export async function upsertImportRows(
     .select(INHERITANCE_PROJECTION)
     .lean();
 
-  // GH #1116 (Codex P1): ALSO look up the raw, untrimmed spellings — with the
-  // RAW DRIVER, which is the only way to see them.
+  // GH #1116 (Codex P1 ×2): ALSO find stored rows whose TRIMMED name matches —
+  // with the RAW DRIVER, which is the only thing that can see them.
   //
   // `trimEntityNames` can legitimately leave a row untrimmed: its normalized
   // name would collide with a live sibling, or its whole collection was
   // skipped because no adequate unique index could be established. Such a row
   // is invisible to every Mongoose query, because a String schema setter
-  // applies to QUERY values too — the `$in` above is itself trimmed, so
-  // `"PLA "` asks for `"PLA"` and never matches the stored `"PLA "`.
+  // applies to QUERY values too — the `$in` above is itself trimmed, so it
+  // asks for `"PLA"` and never matches a stored `"PLA "`.
   //
-  // I removed this load earlier in the PR as "dead code" on exactly that
-  // reasoning. The reachability claim was right; the CONSEQUENCE was not. An
-  // import of `"PLA "` then either updates the canonical `"PLA"` row with the
-  // legacy row's data, or creates a second record while `"PLA "` lingers —
-  // which is the duplicate this whole change exists to stop.
+  // The predicate is on the STORED value, not on the input's spelling. An
+  // earlier version filtered the INPUT for untrimmed names, which missed the
+  // ordinary case entirely: importing a canonical `"PLA"` against a surviving
+  // `"PLA "` produced no candidates at all, and the importer created `"PLA"`
+  // beside it. Whatever whitespace either side happens to carry, the question
+  // is the same one the schema asks — do the trimmed forms match.
+  //
+  // Only names the indexed lookup did NOT already resolve, so the healthy
+  // path adds nothing. `$expr` can't use the index, so this is a scan; it
+  // runs on an explicit, batch, user-initiated import, and the alternative
+  // is a silent duplicate.
   //
   // Collisions resolve explicitly rather than by insertion luck: the index
   // below keys on the TRIMMED name and prefers a row already stored exactly
   // that way, so a canonical row always wins and the untrimmed one is left
   // for the migration to report.
-  const rawOnlyNames = [
-    ...new Set(
-      inputRows
-        .filter((r) => r.name && r.vendor && r.type)
-        .map((r) => r.name as string)
-        .filter((n) => n !== n.trim()),
-    ),
-  ];
-  if (rawOnlyNames.length > 0) {
+  const alreadyFound = new Set(
+    (allExisting as unknown as LeanFilament[]).map((d) => String(d.name ?? "").trim()),
+  );
+  const stillMissing = [...namesToLoad].filter((n) => !alreadyFound.has(n.trim()));
+  if (stillMissing.length > 0) {
     const projection: Record<string, 1> = {};
     for (const field of INHERITANCE_PROJECTION.split(/\s+/)) {
       if (field) projection[field] = 1;
     }
     const untrimmed = (await Filament.collection
-      .find({ name: { $in: rawOnlyNames } }, { projection })
+      .find(
+        {
+          $expr: {
+            $in: [
+              // Guarded: `$trim` errors on a non-string, and legacy data can
+              // hold one — those rows simply don't match.
+              {
+                $trim: {
+                  input: {
+                    $cond: [{ $eq: [{ $type: "$name" }, "string"] }, "$name", ""],
+                  },
+                },
+              },
+              stillMissing.map((n) => n.trim()),
+            ],
+          },
+        },
+        { projection },
+      )
       .toArray()) as unknown as LeanFilament[];
     const seen = new Set(
       (allExisting as unknown as LeanFilament[]).map((d) => String(d._id)),
