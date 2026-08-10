@@ -192,8 +192,18 @@ export default function Home() {
   const { formatGrams } = useNumberFormat();
   const router = useRouter();
   // #1117(h): the create-a-location detour carries the CURRENT url back, so
-  // the user returns to the same list, filters and scroll position instead of
-  // being dropped on /locations with their place gone.
+  // the user lands on this page again rather than being stranded on
+  // /locations.
+  //
+  // What that does and does NOT preserve, stated plainly (Codex P2): the
+  // PAGE and anything already in its query string; plus whatever this page
+  // persists itself (sort key/direction here, and group/sort/retired on
+  // /inventory, both localStorage). What resets is the in-page filter state —
+  // search, type, vendor, the quick-filter chip — because neither list
+  // mirrors those into the URL. That is a pre-existing property of both
+  // pages, not something this option introduces, and putting filter state in
+  // the URL is a product decision (it changes what Back does) rather than
+  // part of adding an affordance. Tracked separately.
   const newLocationHref = useCallback(
     () =>
       withReturnTo(

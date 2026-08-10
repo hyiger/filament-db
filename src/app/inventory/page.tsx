@@ -1059,7 +1059,11 @@ function SpoolEditRow({
   const { formatGrams } = useNumberFormat();
   const router = useRouter();
   // #1117(h): carry the CURRENT url back, so a detour to create a location
-  // returns to this page with its filters and grouping intact.
+  // returns to THIS page rather than stranding the user on /locations. The
+  // query string (`?location=`, `?includeRetired=`) and the localStorage
+  // prefs (group / sort / retired) survive; the in-page search and
+  // kind/type/vendor filters reset, because they aren't mirrored into the
+  // URL. See the matching note on the filament list.
   const newLocationHref = useCallback(
     () =>
       withReturnTo(

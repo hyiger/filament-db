@@ -1,13 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 import LocationForm from "@/app/locations/LocationForm";
 import { useToast } from "@/components/Toast";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { readReturnPath } from "@/lib/returnTo";
+
+const LOCATIONS_FALLBACK = "/locations";
+
+/** Module-level so the reference is stable across renders. */
+const subscribeToNothing = () => () => {};
 
 export default function NewLocation() {
   const { toast } = useToast();
@@ -20,10 +25,22 @@ export default function NewLocation() {
   // for one (the same pattern the detail page uses for `?spool=`). The value
   // is validated as a same-origin path before anything navigates to it; a
   // missing or hostile one falls back to /locations, the pre-#1117 behaviour.
-  const [returnTo] = useState(() =>
-    typeof window === "undefined"
-      ? "/locations"
-      : readReturnPath(window.location.search, "/locations"),
+  // Read through useSyncExternalStore, NOT a lazy `useState` initializer
+  // (Codex P2). This component is still server-rendered, and a
+  // `typeof window` check inside an initializer produces different first
+  // renders on the two sides — the server emits the fallback while the client
+  // emits `/inventory`, a hydration mismatch that can leave the Back link
+  // pointing at the server's target. `getServerSnapshot` makes the two agree
+  // by construction: React renders the fallback through hydration and swaps
+  // in the real value straight after, with no mismatch and no setState in an
+  // effect (which `react-hooks/set-state-in-effect` forbids here anyway).
+  //
+  // `subscribe` is a no-op: `?from=` can only change by navigating here
+  // again, which remounts the page.
+  const returnTo = useSyncExternalStore(
+    subscribeToNothing,
+    () => readReturnPath(window.location.search, LOCATIONS_FALLBACK),
+    () => LOCATIONS_FALLBACK,
   );
 
   const { onDirtyChange, showUnsavedDialog, handleBack, navigate, confirmNav, cancelNav } =
