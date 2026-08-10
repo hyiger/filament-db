@@ -1207,7 +1207,7 @@
   "detail.template.convertHint": "Diese Vorlage trägt noch eine eigene Farbe oder eigene Spulen aus der Zeit, bevor sie zur Vorlage wurde.",
   "detail.template.convertAction": "In Vorlage umwandeln",
   "detail.template.trashedVariantsHint": "Dieses Filament hat Farbvarianten im Papierkorb. Sie k\u00f6nnen nicht wiederhergestellt werden, solange es noch etwas h\u00e4lt, das auf eine Variante geh\u00f6rt \u2014 eine eigene Farbe, einen eigenen Farbnamen, Spulen oder ein Inventargewicht. Wandle es zuerst in eine Vorlage um, dann wandern diese auf eine eigene Variante.",
-  "detail.template.convertConfirm": "Eigene Farbe und {count} Spule(n) dieses Filaments auf eine neue Variante verschieben? Die Vorlage selbst behält weder Farbe noch Spulen.",
+  "detail.template.convertConfirm": "Alles, was auf eine Variante geh\u00f6rt \u2014 eigene Farbe, eigener Farbname, {count} Spule(n) und Inventargewicht \u2014 auf eine neue Variante verschieben? Die Vorlage selbst beh\u00e4lt nichts davon; die gemeinsame Spezifikation (Netto- und Leergewicht, Temperaturen, Trocknung) bleibt auf ihr.",
   "detail.template.converted": "Umgewandelt — Farbe und Spulen wurden auf eine neue Variante verschoben",
   "detail.template.convertFailed": "Umwandlung in Vorlage fehlgeschlagen",
   "detail.spool.confirmRetireOnZero": "Restgewicht ist jetzt 0. Diese Spule auch als ausgemustert markieren? Beim Ausmustern bleibt die Historie (Daten, Trockenzyklen, Verbrauch) erhalten, sie wird aber aus den Inventarsummen ausgeschlossen.",

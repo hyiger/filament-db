@@ -1318,6 +1318,12 @@ function FilamentDetail() {
     if (!filament) return;
     const ok = await confirm({
       title: t("detail.template.convertTitle"),
+      // GH #1103 (Codex P2): the confirmation used to say only "color and N
+      // spools", which is wrong for a parent gated solely by its inventory
+      // weight or color name — and this is the ONE prompt before a family is
+      // restructured. It now names every field /promote actually moves, so
+      // it's accurate for every gating shape without composing i18n
+      // fragments client-side.
       message: t("detail.template.convertConfirm", {
         count: filament.spools?.length ?? 0,
       }),

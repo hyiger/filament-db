@@ -1207,7 +1207,7 @@
   "detail.template.convertHint": "This template still carries its own color or spools from before it became a template.",
   "detail.template.convertAction": "Convert to template",
   "detail.template.trashedVariantsHint": "This filament has color variants in the trash. They can't be restored while it still holds anything that belongs on a variant \u2014 its own color, color name, spools or inventory weight. Convert it to a template first and those move onto a variant of their own.",
-  "detail.template.convertConfirm": "Move this filament's own color and {count} spool(s) to a new variant? The template itself keeps no color and no spools.",
+  "detail.template.convertConfirm": "Move everything that belongs on a variant \u2014 this filament's own color, color name, {count} spool(s) and inventory weight \u2014 onto a new variant? The template itself keeps none of them; the shared spec (net and empty-spool weight, temperatures, drying) stays on it.",
   "detail.template.converted": "Converted — color and spools moved to a new variant",
   "detail.template.convertFailed": "Failed to convert to template",
   "detail.spool.confirmRetireOnZero": "Remaining weight is now 0. Also mark this spool as retired? Retiring keeps its history (dates, dry cycles, usage) but excludes it from inventory totals.",
