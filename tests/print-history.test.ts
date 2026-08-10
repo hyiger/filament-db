@@ -1450,6 +1450,31 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
     expect(await PrintHistory.countDocuments({})).toBe(0);
   });
 
+  it("migrates a record carrying a value that predates current validators (Codex P2)", async () => {
+    // The persist paths here use validateModifiedOnly (GH #905) precisely so a
+    // legacy record isn't rejected over a field the request never touched. The
+    // migration save needs the same option, or the slicer's job is refused on
+    // exactly the old records this change exists to serve.
+    const f = await Filament.create({
+      name: "Legacy Odd Values",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    // Write past the validators, the way a pre-validator record would exist.
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      { $set: { "temperatures.nozzle": 9999 } },
+    );
+
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+  });
+
   it("does NOT migrate an all-retired filament — that contract is unchanged (#305)", async () => {
     // A legacy filament has an EMPTY array; an all-retired one has a populated
     // array. Only the former migrates; the latter must still record
