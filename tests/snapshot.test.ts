@@ -1298,6 +1298,19 @@ describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => 
     expect(res.status).toBe(200);
   });
 
+  it("still REFUSES a purged near-twin on a collection that has no _purged field (#1116)", async () => {
+    // Location doesn't declare `_purged`, so strict mode strips it and the
+    // row inserts ACTIVE — the pair really does collide.
+    const { res, body } = await restore(
+      file([
+        { name: "Not A Zombie", kind: "drybox" },
+        { name: "Not A Zombie ", kind: "drybox", _purged: true, _deletedAt: null },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+  });
+
   it("still restores a clean file", async () => {
     const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
     expect(res.status).toBe(200);

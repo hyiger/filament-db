@@ -323,24 +323,36 @@ export function isActiveLikeSchema(rawDeletedAt: unknown): boolean {
  * `_deletedAt` on a `_purged` zombie — so a legacy snapshot holding an active
  * `"X"` beside a purged `"X "` is perfectly restorable, and rejecting it
  * would refuse a file the existing zombie repair handles correctly.
+ *
+ * `honorsPurged` is REQUIRED rather than defaulted, and that is the point
+ * (Codex P2 round 2). The restore only re-tombstones filaments, printHistory
+ * and sharedCatalogs; `_purged` is not in the Nozzle / Printer / BedType /
+ * Location schemas at all, so strict mode STRIPS it and the row inserts
+ * ACTIVE. Exempting those would suppress a real collision and hand the caller
+ * the E11000-after-the-wipe this precheck exists to replace — the exact
+ * failure, via the guard meant to prevent it. Of the unique-name collections
+ * only `filaments` may pass true, so the caller has to say which it is.
  */
-export function isIndexedRow(row: {
-  _deletedAt?: unknown;
-  _purged?: unknown;
-}): boolean {
-  if (row._purged === true) return false;
+export function isIndexedRow(
+  row: { _deletedAt?: unknown; _purged?: unknown },
+  honorsPurged: boolean,
+): boolean {
+  if (honorsPurged && row._purged === true) return false;
   return isActiveLikeSchema(row._deletedAt);
 }
 
 export function findTrimmedNameCollision(
   rows: readonly unknown[],
+  /** True only for `filaments`, the one unique-name collection whose
+   *  `_purged` rows the restore re-tombstones before inserting. */
+  honorsPurged = false,
 ): { name: string; indexes: [number, number] } | null {
   const seen = new Map<string, number>();
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (typeof row !== "object" || row === null) continue;
     const record = row as { name?: unknown; _deletedAt?: unknown; _purged?: unknown };
-    if (!isIndexedRow(record)) continue;
+    if (!isIndexedRow(record, honorsPurged)) continue;
     // Key by the value the SCHEMA will store, not the raw JSON (Codex P2).
     // Mongoose casts a `String` path, so a snapshot holding the number `1`
     // and the string `"1 "` passes per-document validation on both — and then

@@ -280,19 +280,32 @@ describe("findTrimmedNameCollision", () => {
     expect(castNameLikeSchema(Object.create(null))).toBeNull();
   });
 
-  it("treats a PURGED snapshot row as outside the index (Codex P2)", () => {
+  it("treats a PURGED FILAMENT row as outside the index (Codex P2)", () => {
     // The restore path stamps `_deletedAt` on a `_purged` zombie before
     // inserting, so it never enters the partial unique index. Rejecting the
     // pair would refuse a file the existing zombie repair handles correctly.
+    expect(
+      findTrimmedNameCollision(
+        [{ name: "X" }, { name: "X ", _purged: true, _deletedAt: null }],
+        true,
+      ),
+    ).toBeNull();
+    // Two ACTIVE, non-purged rows still collide.
+    expect(
+      findTrimmedNameCollision([{ name: "X" }, { name: "X ", _purged: false }], true),
+    ).toEqual({ name: "X", indexes: [0, 1] });
+  });
+
+  it("does NOT exempt _purged on the other unique-name collections (Codex P2)", () => {
+    // Nozzle / Printer / BedType / Location don't declare `_purged`, so
+    // strict mode strips it and the row inserts ACTIVE — and the restore
+    // never re-tombstones them. Exempting there would suppress a real
+    // collision and produce the post-wipe E11000 this check replaces.
     expect(
       findTrimmedNameCollision([
         { name: "X" },
         { name: "X ", _purged: true, _deletedAt: null },
       ]),
-    ).toBeNull();
-    // Two ACTIVE, non-purged rows still collide.
-    expect(
-      findTrimmedNameCollision([{ name: "X" }, { name: "X ", _purged: false }]),
     ).toEqual({ name: "X", indexes: [0, 1] });
   });
 

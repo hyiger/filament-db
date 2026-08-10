@@ -507,7 +507,14 @@ async function restoreSnapshot(request: NextRequest) {
     // helper is already a no-op there — the explicit set keeps it that way if
     // one ever gains a non-unique `name`.
     const collision = UNIQUE_NAME_COLLECTIONS.has(colName)
-      ? findTrimmedNameCollision(rows)
+      ? // Only `filaments` gets the `_purged` exemption: it is the one
+        // unique-name collection this route re-tombstones before inserting
+        // (see the normalizePurgedTombstone calls below). The other four
+        // schemas don't declare `_purged` at all, so strict mode strips it
+        // and the row inserts ACTIVE — exempting it there would suppress a
+        // real collision and produce the post-wipe E11000 this check exists
+        // to replace.
+        findTrimmedNameCollision(rows, colName === "filaments")
       : null;
     if (collision) {
       return NextResponse.json(
