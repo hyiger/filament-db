@@ -263,9 +263,36 @@ export async function POST(request: NextRequest) {
         _id: filament._id,
         _deletedAt: null,
       });
-      if (!fresh || fresh.spools.length > 0 || fresh.totalWeight == null) {
-        // Migrated (or emptied) by whoever held the lock first — nothing to
-        // do, and pass 2 reloads inside the transaction anyway.
+      if (!fresh) {
+        // Vanished while we waited. Pass 2's in-transaction reload raises the
+        // same 404 pass 1 would have; leave the stale handle for it to find.
+        return null;
+      }
+      if (fresh.spools.length > 0 || fresh.totalWeight == null) {
+        // Somebody else got here first. Two distinct cases, and the SECOND is
+        // easy to mistake for "nothing to do" (Codex P1 ×2):
+        //
+        //   (a) already migrated — `spools` non-empty. ADOPT the fresh
+        //       document into both handles before returning. The transaction
+        //       path reloads for itself, but the standalone fallback reuses
+        //       these docs, so returning the stale empty-spool copy applied
+        //       the job to a filament with no spools and wrote a SECOND
+        //       spoolId: null history row with no debit.
+        //
+        //   (b) a confirmed first-variant promotion won the key: it moved the
+        //       legacy weight to a sibling and CLEARED the parent, so this
+        //       reads as `spools: []` + `totalWeight: null` — indistinguishable
+        //       from harmless unless we ask. The parent is now a template, and
+        //       recording the job against it would 201 with no debit instead
+        //       of the refusal this route documents.
+        filaments[index] = fresh;
+        byId.set(String(fresh._id), fresh);
+        if (
+          fresh.spools.length === 0 &&
+          (await hasVariants(Filament, String(fresh._id)))
+        ) {
+          return TEMPLATE_NO_SPOOLS_BODY.message;
+        }
         return null;
       }
       // #605: inventory belongs on a template's variants, never on the
@@ -290,7 +317,22 @@ export async function POST(request: NextRequest) {
       // that predates current validators — refusing the slicer's job over a
       // field this request never touched, on exactly the old records this
       // change exists to serve.
-      await fresh.save({ validateModifiedOnly: true });
+      try {
+        await fresh.save({ validateModifiedOnly: true });
+      } catch (err) {
+        // Another writer (a second deployment sharing the DB, the sync
+        // service) touched this document between the in-lock read and this
+        // save. The schema's optimistic concurrency turns that into a
+        // VersionError, which is retryable — surface the route's established
+        // 409 contract rather than letting it fall out as a 500 (Codex P2).
+        if (err instanceof mongoose.Error.VersionError) {
+          throw new JobPreconditionError(
+            "Filament was modified by another request during this job. Please retry.",
+            409,
+          );
+        }
+        throw err;
+      }
       // REPLACE the pass-1 document rather than mirroring the spool onto it:
       // the snapshot builder and the standalone fallback both reuse these
       // docs, and the pass-1 copy's `__v` is now one behind the save we just

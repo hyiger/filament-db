@@ -5,6 +5,7 @@ import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { DELETE as deletePrintHistory, PUT as putPrintHistory } from "@/app/api/print-history/[id]/route";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
 import { MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
+import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * Covers two behaviours added in the v1.11 review round:
@@ -1507,6 +1508,80 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
     expect(freshA.totalWeight).toBeNull();
     expect(freshB.spools).toHaveLength(1);
     expect(freshB.spools[0].totalWeight).toBe(750);
+  });
+
+  it("refuses when a promotion cleared the parent while we waited for the lock (Codex P1)", async () => {
+    // Made deterministic by HOLDING the filament's key while the route queues
+    // behind it — the same technique tests/template-model-races.test.ts uses.
+    //
+    // Pass 1 reads the legacy shape (spools: [], totalWeight: 1000), so the
+    // migration helper is entered. While it waits for the key, a confirmed
+    // first-variant promotion moves the weight to a sibling and CLEARS the
+    // parent. The in-lock read then sees spools: [] + totalWeight: null,
+    // which is indistinguishable from "already handled, nothing to do"
+    // unless the code asks whether the row is now a template. Without that
+    // question the job 201s against an empty template with no debit.
+    const parent = await Filament.create({
+      name: "Cleared By Promotion",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const lockHold = runExclusive(filamentLockKey(parent._id), () => held);
+
+    const resPromise = postJob(String(parent._id), 100);
+    // Let pass 1 run and the migration queue behind our hold.
+    while (lockedKeyCount() === 0) await new Promise((r) => setTimeout(r, 5));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // What the promotion leaves behind: a live variant carrying the weight,
+    // and a parent cleared of it.
+    await Filament.create({
+      name: "Cleared By Promotion — Original",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      spools: [{ label: "moved", totalWeight: 1000 }],
+    });
+    await Filament.updateOne({ _id: parent._id }, { $set: { totalWeight: null } });
+
+    release();
+    await lockHold;
+
+    const res = await resPromise;
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("template");
+    // Nothing was recorded, and the promoted variant keeps its full roll.
+    const moved = await Filament.findOne({ name: "Cleared By Promotion — Original" });
+    expect(moved.spools[0].totalWeight).toBe(1000);
+  });
+
+  it("adopts an already-migrated document so the fallback can't double-write (Codex P1)", async () => {
+    // Whoever held the lock first migrated it. Returning the STALE pass-1
+    // copy left the standalone fallback applying the job to an empty-spool
+    // document — a second spoolId: null history row with no debit.
+    const f = await Filament.create({
+      name: "Migrated By Peer", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    // Simulate the peer's migration landing between pass 1 and the lock.
+    await Filament.updateOne(
+      { _id: f._id },
+      { $set: { totalWeight: null, spools: [{ label: "", totalWeight: 1000 }] } },
+    );
+
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+    const job = await res.json();
+    expect(job.usage[0].spoolId).toBeTruthy();
   });
 
   it("does NOT migrate an all-retired filament — that contract is unchanged (#305)", async () => {
