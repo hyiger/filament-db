@@ -136,6 +136,7 @@ Returns an array of projected filament summaries (not the full documents — hea
 - `search` -- filter by name (case-insensitive regex)
 - `type` -- exact match on filament type (e.g., `PLA`, `PETG`)
 - `vendor` -- exact match on vendor name
+- `family` -- set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants come back too even if their own stored `vendor`/`type` differs (a family can legitimately disagree — both fields are `required` and stamped per row, so they never actually inherit). **Off by default**, because `type` and `vendor` are exact row filters and other callers rely on that literally (`FilamentForm` derives vendor-keyed TDS suggestions from `?vendor=`; `PrusamentImportDialog` treats `?type=` results as material matches). The grouping filament list opts in, so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows.
 
 **Response shape per row** (matches `FilamentSummary` in `src/types/filament.ts` plus a few extras the list / form / picker need):
 

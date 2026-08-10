@@ -125,6 +125,17 @@
               "type": "string"
             },
             "description": "Case-insensitive regex search on filament name"
+          },
+          {
+            "name": "family",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "Set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants are returned too even if their own stored vendor/type differs. Off by default — `type` and `vendor` are exact row filters. The grouping filament list opts in so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows."
           }
         ],
         "responses": {
