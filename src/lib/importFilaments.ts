@@ -671,6 +671,51 @@ export async function upsertImportRows(
     .select(INHERITANCE_PROJECTION)
     .lean();
 
+  // GH #1116 (Codex P1): ALSO look up the raw, untrimmed spellings — with the
+  // RAW DRIVER, which is the only way to see them.
+  //
+  // `trimEntityNames` can legitimately leave a row untrimmed: its normalized
+  // name would collide with a live sibling, or its whole collection was
+  // skipped because no adequate unique index could be established. Such a row
+  // is invisible to every Mongoose query, because a String schema setter
+  // applies to QUERY values too — the `$in` above is itself trimmed, so
+  // `"PLA "` asks for `"PLA"` and never matches the stored `"PLA "`.
+  //
+  // I removed this load earlier in the PR as "dead code" on exactly that
+  // reasoning. The reachability claim was right; the CONSEQUENCE was not. An
+  // import of `"PLA "` then either updates the canonical `"PLA"` row with the
+  // legacy row's data, or creates a second record while `"PLA "` lingers —
+  // which is the duplicate this whole change exists to stop.
+  //
+  // Collisions resolve explicitly rather than by insertion luck: the index
+  // below keys on the TRIMMED name and prefers a row already stored exactly
+  // that way, so a canonical row always wins and the untrimmed one is left
+  // for the migration to report.
+  const rawOnlyNames = [
+    ...new Set(
+      inputRows
+        .filter((r) => r.name && r.vendor && r.type)
+        .map((r) => r.name as string)
+        .filter((n) => n !== n.trim()),
+    ),
+  ];
+  if (rawOnlyNames.length > 0) {
+    const projection: Record<string, 1> = {};
+    for (const field of INHERITANCE_PROJECTION.split(/\s+/)) {
+      if (field) projection[field] = 1;
+    }
+    const untrimmed = (await Filament.collection
+      .find({ name: { $in: rawOnlyNames } }, { projection })
+      .toArray()) as unknown as LeanFilament[];
+    const seen = new Set(
+      (allExisting as unknown as LeanFilament[]).map((d) => String(d._id)),
+    );
+    const extra = untrimmed.filter((doc) => !seen.has(String(doc._id)));
+    if (extra.length > 0) {
+      (allExisting as unknown as LeanFilament[]).push(...extra);
+    }
+  }
+
   // The same map carries existing rows AND filaments created earlier in
   // this same import batch — pass-2 (variant rows) resolves the `Parent`
   // column against it, so an export → reimport works even when the parent

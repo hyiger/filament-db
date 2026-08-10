@@ -235,6 +235,43 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     expect(await Filament.countDocuments({})).toBe(1);
   });
 
+  it("does not CREATE a duplicate when the untrimmed row survived the migration (Codex P1)", async () => {
+    // Reaching this state takes care: `upsertImportRows` calls dbConnect,
+    // whose trim pass would normally repair the row before the import runs.
+    // The reachable survival route is a SKIPPED collection — no adequate
+    // unique name index, so the pass deliberately writes nothing. A plain
+    // NON-unique index on `name` produces exactly that: createIndex conflicts
+    // on the options, and the existing index is not unique, so the pass
+    // refuses to write unserialized.
+    //
+    // Such a row is invisible to every Mongoose query, because a String
+    // schema setter applies to QUERY values too. Without the raw-driver
+    // load the import creates a SECOND record beside it — the duplicate this
+    // whole change exists to stop.
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Legacy ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Legacy ", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(await Filament.countDocuments({})).toBe(1);
+    // Better than merely avoiding the duplicate: the update goes through the
+    // schema setter, so finding the row also REPAIRS its name — the thing the
+    // migration couldn't do without a serializing index.
+    const raw = await mongoose.connection
+      .collection("filaments")
+      .findOne({ name: "PLA Legacy" });
+    expect(raw).not.toBeNull();
+    expect(raw!.cost).toBe(42);
+    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+  });
+
   it("a whitespace-only name is reported as a missing required field", async () => {
     const result = await upsertImportRows([
       { name: "   ", vendor: "V", type: "PLA" },
