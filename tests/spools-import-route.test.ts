@@ -1450,5 +1450,47 @@ describe("/api/spools/import — legacy roll migration (#1111)", () => {
       expect(filament.spools).toHaveLength(1);
       expect(String(filament.spools[0].locationId)).toBe(String(locations[0]._id));
     });
+
+    /**
+     * The case above assumes the pass SUCCEEDED. This is the one that bites
+     * (Codex P1, round 23): `trimEntityNames` skips a collection whose
+     * protective unique index cannot be established — which is exactly what a
+     * database with pre-existing duplicate active names does — and the raw
+     * untrimmed row survives.
+     *
+     * `resolveLocationId` then cannot see it (the setter casts the query),
+     * falls through to `Location.create`, and the create SUCCEEDS because the
+     * two raw strings are distinct so the unique index has no objection. The
+     * user gets a second location rendering identically to the first, and
+     * every imported spool attaches to the twin — the original silently
+     * dropping to zero spools, which is the bug report verbatim.
+     */
+    it("resolves a SURVIVING untrimmed location when the migration never ran", async () => {
+      const locationMod = await import("@/models/Location");
+      if (!mongoose.models.Location) {
+        mongoose.model("Location", locationMod.default.schema);
+      }
+      const LocationModel = mongoose.models.Location;
+
+      const raw = await mongoose.connection.collection("locations").insertOne({
+        name: "Drybox #1 ", kind: "drybox", _deletedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      await Filament.create({ name: "PLA Basic", vendor: "V", type: "PLA" });
+
+      // Deliberately NO trimEntityNames call — the survivor is still there.
+      const res = await importSpools(
+        csvRequest('filament,totalWeight,location\nPLA Basic,1000,"Drybox #1 "\n'),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).imported).toBe(1);
+
+      // No twin was manufactured...
+      const locations = await LocationModel.find({ _deletedAt: null });
+      expect(locations).toHaveLength(1);
+      // ...and the spool attached to the row that was actually there.
+      const filament = await Filament.findOne({ name: "PLA Basic" });
+      expect(String(filament.spools[0].locationId)).toBe(String(raw.insertedId));
+    });
   });
 });

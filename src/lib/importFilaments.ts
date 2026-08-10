@@ -7,7 +7,7 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
-import { JS_TRIM_CHARS } from "@/lib/trimEntityNames";
+import { trimmedNameFilter } from "@/lib/trimmedNameLookup";
 
 export interface ImportRow {
   name?: string;
@@ -715,33 +715,7 @@ export async function upsertImportRows(
       if (field) projection[field] = 1;
     }
     const untrimmed = (await Filament.collection
-      .find(
-        {
-          $expr: {
-            $in: [
-              // Guarded: `$trim` errors on a non-string, and legacy data can
-              // hold one — those rows simply don't match.
-              {
-                $trim: {
-                  input: {
-                    $cond: [{ $eq: [{ $type: "$name" }, "string"] }, "$name", ""],
-                  },
-                  // JS semantics, not MongoDB's (Codex P2). `$trim`'s default
-                  // set is the ASCII one; it does not strip U+00A0, U+FEFF,
-                  // U+3000 and the other separators `String.prototype.trim`
-                  // removes — which is exactly what the schema setter uses,
-                  // so without this the fallback and the schema would
-                  // disagree about the same row. `chars` REPLACES the default
-                  // set, and JS_TRIM_CHARS is the full one.
-                  chars: JS_TRIM_CHARS,
-                },
-              },
-              stillMissing.map((n) => n.trim()),
-            ],
-          },
-        },
-        { projection },
-      )
+      .find(trimmedNameFilter(stillMissing), { projection })
       .toArray()) as unknown as LeanFilament[];
     const seen = new Set(
       (allExisting as unknown as LeanFilament[]).map((d) => String(d._id)),
