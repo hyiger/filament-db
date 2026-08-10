@@ -563,6 +563,35 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
     expect(names).toEqual(["SearchFam"]);
   });
 
+  it("keeps the search predicate on the widened family arm (Codex P2)", async () => {
+    // The list page sends search + type + vendor together. Without the name
+    // predicate on the family arm, `?search=X&vendor=V` was BROADER than
+    // `?search=X` — it returned every child of a search-matched template.
+    const parent = await Filament.create({ name: "SearchFam", vendor: "V", type: "PLA" });
+    await Filament.create({
+      name: "Totally Different",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const names = (await list("?search=SearchFam&vendor=V")).map((f) => f.name);
+    expect(names).toEqual(["SearchFam"]);
+  });
+
+  it("a combined search still widens to same-named variants with a typo'd vendor", async () => {
+    // The widening itself must survive: a variant whose vendor differs is
+    // still pulled in, as long as it matches the name search.
+    const parent = await Filament.create({ name: "ComboFam", vendor: "V", type: "PLA" });
+    await Filament.create({
+      name: "ComboFam Red",
+      vendor: "TypoVendor",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const names = (await list("?search=ComboFam&vendor=V")).map((f) => f.name).sort();
+    expect(names).toEqual(["ComboFam", "ComboFam Red"]);
+  });
+
   it("still filters normally when nothing matches", async () => {
     await seedMismatchedFamily();
     expect(await list("?vendor=NoSuchVendor")).toEqual([]);

@@ -97,13 +97,27 @@ export async function GET(request: NextRequest) {
     // describe a PRODUCT LINE, which is exactly what a family is. Search is
     // left alone: it matches on name, and a name search pulling in
     // differently-named rows would be surprising.
+    //
+    // That last rule has to hold for a COMBINED query too (Codex P2): the
+    // list page sends search + type + vendor together, and a widening arm
+    // that carried only `parentId` would hand back every child of a
+    // search-matched template regardless of its name — quietly making
+    // `?search=X&vendor=V` broader than `?search=X`. So the name predicate
+    // rides the family arm as well. The residue is that a family whose
+    // variants share no name prefix with their template still renders as a
+    // memberless group header under a search, exactly as it already does for
+    // a search with no filter — the same trade-off, applied consistently
+    // rather than only where widening happens to be active.
     let matchStage: Record<string, unknown> = filter;
     if (type || vendor) {
       const matchedIds = await Filament.distinct("_id", filter);
       if (matchedIds.length > 0) {
-        matchStage = {
-          $or: [filter, { _deletedAt: null, parentId: { $in: matchedIds } }],
+        const familyArm: Record<string, unknown> = {
+          _deletedAt: null,
+          parentId: { $in: matchedIds },
         };
+        if (search) familyArm.name = filter.name;
+        matchStage = { $or: [filter, familyArm] };
       }
     }
 
