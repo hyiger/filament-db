@@ -146,6 +146,34 @@ describe("trimEntityNames", () => {
     expect(store.nozzles[0].name).toBe("   ");
   });
 
+  it("honours _purged ONLY on filaments (Codex P2)", async () => {
+    // Nozzle / Printer / BedType / Location don't declare `_purged`, so their
+    // APIs expose rows on `_deletedAt: null` alone — a stray marker from
+    // legacy or raw-synced data leaves the row VISIBLE, hence resolvable,
+    // hence a legitimate gate. Treating it as hidden would let hybrid sync
+    // proceed with two visible colliding names.
+    const { db } = makeDb({
+      locations: [
+        { _id: "z", name: "Shelf", _deletedAt: null, _purged: true },
+        { _id: "v", name: "Shelf ", _deletedAt: null },
+      ],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.conflicts).toEqual([
+      { collection: "locations", name: "Shelf ", active: true },
+    ]);
+  });
+
+  it("a stray _purged on a NON-filament candidate still gates", async () => {
+    const { db } = makeDb({
+      nozzles: [{ _id: "n1", name: "  ", _deletedAt: null, _purged: true }],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.conflicts).toEqual([
+      { collection: "nozzles", name: "  ", active: true },
+    ]);
+  });
+
   it("marks a clash against a hidden ZOMBIE as inactive too (Codex P1)", async () => {
     // Mirror of the case below: here the CANDIDATE is a visible active row
     // and the thing blocking it is an untombstoned purge zombie. Still a real

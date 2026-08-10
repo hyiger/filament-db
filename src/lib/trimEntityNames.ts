@@ -172,6 +172,17 @@ export async function trimEntityNames(
 
   for (const collectionName of TRIMMABLE_COLLECTIONS) {
     const collection = db.collection(collectionName);
+    // `_purged` is a Filament-only concept (Codex P2). The other four schemas
+    // don't declare it, so strict mode strips it and their APIs expose rows on
+    // `_deletedAt: null` alone — a row carrying a stray `_purged` from legacy
+    // or raw-synced data is still VISIBLE there, therefore still resolvable by
+    // a human, therefore still a legitimate gate. Treating it as hidden would
+    // let hybrid sync proceed with two visible colliding names, which ends in
+    // E11000 or cross-peer identity divergence. Same scoping the snapshot
+    // precheck already applies via `honorsPurged`.
+    const honorsPurged = collectionName === "filaments";
+    const isHidden = (row: { _purged?: unknown }) =>
+      honorsPurged && row._purged === true;
     // Anchored on either edge, over the EXACT set `trim()` strips — see
     // JS_TRIM_CHARS. `hasEdgeWhitespace` still re-checks each candidate in
     // JS, so the query stays a pre-filter rather than the decision.
@@ -203,7 +214,7 @@ export async function trimEntityNames(
       // retryable E11000 on that collection — recoverable, and repaired by
       // the zombie migration on the next connect. Being blocked forever with
       // no signal is not.
-      const active = doc._deletedAt == null && doc._purged !== true;
+      const active = doc._deletedAt == null && !isHidden(doc);
       const next = doc.name.trim();
       if (next === "") {
         // `name` is `required`, so a whitespace-only name can't be trimmed
@@ -240,7 +251,7 @@ export async function trimEntityNames(
           // untombstoned zombie, the user has nothing to act on — it isn't in
           // the trash, and the remote never runs the migration that would
           // repair it — so gating would block that collection forever.
-          const resolvableByAHuman = others.some((c) => c._purged !== true);
+          const resolvableByAHuman = others.some((c) => !isHidden(c));
           conflicts.push({
             collection: collectionName,
             name: doc.name,
