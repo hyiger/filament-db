@@ -31,6 +31,28 @@ export interface SkippedRowLike {
  */
 export const MAX_SHOWN_SKIPPED = 10;
 
+/**
+ * Per-fragment character cap.
+ *
+ * The entry cap bounds how many LINES the dialog gets, not how long they are —
+ * and a skip reason interpolates the offending cell verbatim (`Parent "…" not
+ * found`), where a single cell may be close to the route's ~10 MB upload
+ * limit. Ten such lines is still a multi-megabyte message in a dialog that
+ * neither scrolls nor bounds its height, which puts Close out of reach
+ * (Codex P2).
+ *
+ * 160 is comfortably above every reason the importer actually composes, so in
+ * practice this only ever truncates a pathological cell.
+ */
+export const MAX_FRAGMENT_CHARS = 160;
+
+/** Clip a fragment to the cap, marking it so the truncation is visible. */
+function clip(text: string): string {
+  return text.length > MAX_FRAGMENT_CHARS
+    ? `${text.slice(0, MAX_FRAGMENT_CHARS)}…`
+    : text;
+}
+
 export interface SkipReportStrings {
   /** e.g. `row 7 — Prusament PLA: Missing required field(s): vendor` */
   row: (args: { row: number; name: string; reason: string }) => string;
@@ -61,8 +83,8 @@ export function formatSkipReport(
         row: r.row,
         // A row can fail BEFORE its name is known (a missing Name column is
         // itself a skip reason), so never interpolate a bare undefined.
-        name: (r.name ?? "").trim(),
-        reason: r.reason,
+        name: clip((r.name ?? "").trim()),
+        reason: clip(r.reason),
       }),
     );
 
@@ -77,7 +99,7 @@ export function formatSkipReport(
   // P2). The two lists share one budget so the dialog is bounded overall, not
   // per-section.
   const noteBudget = Math.max(0, MAX_SHOWN_SKIPPED - lines.length);
-  lines.push(...extra.slice(0, noteBudget));
+  lines.push(...extra.slice(0, noteBudget).map(clip));
   if (extra.length > noteBudget) {
     lines.push(strings.overflow(extra.length - noteBudget));
   }

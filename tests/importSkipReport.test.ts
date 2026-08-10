@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_FRAGMENT_CHARS,
   MAX_SHOWN_SKIPPED,
   formatSkipReport,
   type SkippedRowLike,
@@ -109,5 +110,41 @@ describe("formatSkipReport — note capping (Codex P2)", () => {
     const out = formatSkipReport([skip(2)], ["one note"], strings)!.split("\n");
     expect(out).toHaveLength(2);
     expect(out[1]).toBe("one note");
+  });
+});
+
+describe("formatSkipReport — text bounds (Codex P2)", () => {
+  it("clips a pathologically long reason", () => {
+    // The entry cap bounds LINE COUNT, not length: a skip reason interpolates
+    // the offending cell verbatim, and a single cell may approach the route's
+    // ~10 MB upload limit. Ten such lines is still a multi-megabyte message in
+    // a dialog that neither scrolls nor bounds its height.
+    const huge = "x".repeat(50_000);
+    const out = formatSkipReport([skip(2, { reason: huge })], undefined, strings)!;
+    expect(out.length).toBeLessThan(MAX_FRAGMENT_CHARS + 100);
+    expect(out).toContain("…");
+  });
+
+  it("clips a pathologically long name", () => {
+    const out = formatSkipReport([skip(2, { name: "y".repeat(50_000) })], undefined, strings)!;
+    expect(out.length).toBeLessThan(MAX_FRAGMENT_CHARS + 100);
+  });
+
+  it("clips a pathologically long note", () => {
+    const out = formatSkipReport([], ["z".repeat(50_000)], strings)!;
+    expect(out.length).toBeLessThan(MAX_FRAGMENT_CHARS + 10);
+  });
+
+  it("bounds the whole message even at the entry cap", () => {
+    // The two caps together are what make the dialog bounded.
+    const rows = Array.from({ length: 40 }, (_, i) => skip(i + 2, { reason: "q".repeat(5_000) }));
+    const out = formatSkipReport(rows, undefined, strings)!;
+    expect(out.length).toBeLessThan(MAX_SHOWN_SKIPPED * (MAX_FRAGMENT_CHARS * 2 + 40) + 200);
+  });
+
+  it("leaves an ordinary reason untouched", () => {
+    const out = formatSkipReport([skip(2)], undefined, strings)!;
+    expect(out).toBe("row 2 — F2: Missing required field(s): vendor");
+    expect(out).not.toContain("…");
   });
 });
