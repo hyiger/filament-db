@@ -462,6 +462,18 @@ export class SyncService extends EventEmitter {
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
+      // GH #1116 (Codex P1): reconcile by name FIRST, like bedtypes,
+      // locations and filaments already do. Nozzle and Printer carry the same
+      // partial-unique `name` index, and the trim above can make two rows
+      // NEWLY equal — one peer's `"0.4 "` and the other's `"0.4"` normalize to
+      // the same name under different syncIds. Without reconciliation
+      // syncCollection treats them as two rows and inserts one beside the
+      // other, straight into the index; that E11000 is not a syncId collision
+      // so it isn't swallowed, and the nozzle failure cascade-skips printers,
+      // filaments and print history on EVERY cycle. Independent creation of
+      // the same nozzle on two desktops has the same shape and was already
+      // possible — the trim just makes it reachable without a typo.
+      if (!this.aborted) await this.reconcileNozzlesByName(localDb, remoteDb);
       results.push(await trySync("nozzles", [], () =>
         this.syncCollection(localDb, remoteDb, "nozzles"),
       ));
@@ -502,6 +514,8 @@ export class SyncService extends EventEmitter {
       // Sync printers (filament calibrations reference them; printers
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
+      // GH #1116 (Codex P1): same reasoning as nozzles above.
+      if (!this.aborted) await this.reconcilePrintersByName(localDb, remoteDb);
       results.push(await trySync("printers", ["nozzles", "bedtypes"], () =>
         this.syncCollection(
           localDb, remoteDb, "printers",
@@ -1330,6 +1344,28 @@ export class SyncService extends EventEmitter {
     remoteDb: ReturnType<MongoClient["db"]>,
   ): Promise<void> {
     await this.reconcileByName(localDb, remoteDb, "filaments");
+  }
+
+  /**
+   * Same name-collision resolver, applied to nozzles (GH #1116). Nozzle has
+   * the partial-unique-on-non-deleted `name` index, and the entity-name trim
+   * that now runs before every cycle can make two independently-created rows
+   * NEWLY equal — so this has to run before the nozzle sync, or the insert
+   * walks into the index and the failure cascade-skips everything downstream.
+   */
+  private async reconcileNozzlesByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "nozzles");
+  }
+
+  /** Same, for printers — identical index and identical exposure. */
+  private async reconcilePrintersByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "printers");
   }
 
   /**

@@ -46,6 +46,11 @@ function makeDb(
           update: Record<string, unknown>,
         ) {
           const next = (update.$set as { name: string }).name;
+          // Honour the conditional filter the helper now sends.
+          const matched = rows.find(
+            (r) => r._id === f._id && (f.name === undefined || r.name === f.name),
+          );
+          if (!matched) return { matchedCount: 0 };
           // Partial index: it covers ACTIVE rows only, so a trashed row is
           // neither constrained by it nor able to collide with one.
           const target = rows.find((r) => r._id === f._id);
@@ -64,7 +69,7 @@ function makeDb(
             });
           }
           if (target) target.name = next;
-          return {};
+          return { matchedCount: 1 };
         },
       };
     },
@@ -306,9 +311,12 @@ describe("pre-write collision check (Codex P1)", () => {
           },
           // No uniqueness enforcement whatsoever.
           async updateOne(f: Record<string, unknown>, update: Record<string, unknown>) {
-            const target = rows.find((r) => r._id === f._id);
-            if (target) target.name = (update.$set as { name: string }).name;
-            return {};
+            const target = rows.find(
+              (r) => r._id === f._id && (f.name === undefined || r.name === f.name),
+            );
+            if (!target) return { matchedCount: 0 };
+            target.name = (update.$set as { name: string }).name;
+            return { matchedCount: 1 };
           },
         };
       },
@@ -344,5 +352,50 @@ describe("pre-write collision check (Codex P1)", () => {
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(1);
     expect(store.locations[1].name).toBe("Drybox #1");
+  });
+});
+
+describe("concurrent rename during the scan (Codex P2)", () => {
+  it("a user rename between the read and the write WINS", async () => {
+    // The pass runs on every hybrid cycle while the app can still write to
+    // either database. Filtering on `_id` alone would stamp the stale
+    // candidate's trimmed value over the user's new name.
+    const rows = [{ _id: "l1", name: "Drybox #1 ", _deletedAt: null }];
+    let scanned = false;
+    const db: MinimalTrimDb = {
+      collection: () => ({
+        find(filter: Record<string, unknown>) {
+          return {
+            async toArray() {
+              if (typeof filter.name === "string") return [];
+              // Hand back the pre-rename candidate, then let the "user"
+              // rename land before the helper writes.
+              const snapshot = rows.map((r) => ({ ...r }));
+              if (!scanned) {
+                scanned = true;
+                rows[0].name = "Renamed By User";
+              }
+              return snapshot.filter(
+                (r) =>
+                  typeof r.name === "string" &&
+                  new RegExp(EDGE_WHITESPACE_PATTERN, "u").test(r.name),
+              );
+            },
+          };
+        },
+        async updateOne(f: Record<string, unknown>) {
+          const target = rows.find(
+            (r) => r._id === f._id && (f.name === undefined || r.name === f.name),
+          );
+          if (!target) return { matchedCount: 0 };
+          target.name = "SHOULD NOT HAPPEN";
+          return { matchedCount: 1 };
+        },
+      }),
+    };
+
+    const res = await trimEntityNames(db);
+    expect(res.trimmed).toBe(0);
+    expect(rows[0].name).toBe("Renamed By User");
   });
 });

@@ -126,7 +126,7 @@ interface MinimalCollection {
   updateOne(
     filter: Record<string, unknown>,
     update: Record<string, unknown>,
-  ): Promise<unknown>;
+  ): Promise<{ matchedCount?: number } | unknown>;
 }
 
 export interface MinimalTrimDb {
@@ -204,7 +204,16 @@ export async function trimEntityNames(
         }
       }
       try {
-        await collection.updateOne({ _id: doc._id }, { $set: { name: next } });
+        // Conditional on the name we SCANNED (Codex P2). This runs on every
+        // hybrid cycle while the app can still write to either database, so a
+        // user rename landing between the read and this write must win —
+        // filtering on `_id` alone would stamp the stale candidate's trimmed
+        // value over their new name. Only a matched write counts as a trim.
+        const res = await collection.updateOne(
+          { _id: doc._id, name: doc.name },
+          { $set: { name: next } },
+        );
+        if ((res as { matchedCount?: number }).matchedCount === 0) continue;
         trimmed++;
       } catch (err) {
         if (!isDuplicateKeyError(err)) throw err;

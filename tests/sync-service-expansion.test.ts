@@ -934,6 +934,65 @@ describe("SyncService — v1.12 sync expansion", () => {
       ).toBe("0.4 Trim Me");
     });
 
+    it("reconciles nozzles/printers made NEWLY equal by the trim, instead of E11000-ing", async () => {
+      // Two peers holding "0.4 " and "0.4" under different syncIds both trim
+      // successfully — and then syncCollection would insert one beside the
+      // other, straight into the partial-unique name index. That E11000 isn't
+      // a syncId collision, so it isn't swallowed: nozzles fail and printers,
+      // filaments and print history cascade-skip on EVERY cycle.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const db of [localDb, remoteDb]) {
+        await db
+          .collection("nozzles")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+        await db
+          .collection("printers")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      }
+      await localDb.collection("nozzles").insertOne({
+        name: "0.4 Newly Equal ", diameter: 0.4, type: "brass",
+        syncId: "noz-side-a", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("nozzles").insertOne({
+        name: "0.4 Newly Equal", diameter: 0.4, type: "brass",
+        syncId: "noz-side-b", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await localDb.collection("printers").insertOne({
+        name: "Equal Printer ", manufacturer: "P", printerModel: "M",
+        syncId: "prn-side-a", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("printers").insertOne({
+        name: "Equal Printer", manufacturer: "P", printerModel: "M",
+        syncId: "prn-side-b", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The pair was UNIFIED onto one syncId, so the later sync treats it as
+      // one row instead of inserting a second beside it.
+      const localNoz = await localDb.collection("nozzles").findOne({ name: "0.4 Newly Equal" });
+      const remoteNoz = await remoteDb.collection("nozzles").findOne({ name: "0.4 Newly Equal" });
+      expect(localNoz!.syncId).toBe(remoteNoz!.syncId);
+      const localPrn = await localDb.collection("printers").findOne({ name: "Equal Printer" });
+      const remotePrn = await remoteDb.collection("printers").findOne({ name: "Equal Printer" });
+      expect(localPrn!.syncId).toBe(remotePrn!.syncId);
+
+      // Still one row per side, and neither collection reported a failure —
+      // a nozzle failure cascade-skips printers, filaments and print history.
+      expect(
+        await localDb.collection("nozzles").countDocuments({ name: "0.4 Newly Equal" }),
+      ).toBe(1);
+      expect(
+        await remoteDb.collection("nozzles").countDocuments({ name: "0.4 Newly Equal" }),
+      ).toBe(1);
+      for (const name of ["nozzles", "printers"]) {
+        expect(results.find((r) => r.collection === name)?.error).toBeUndefined();
+      }
+    });
+
     it("a name it cannot trim is reported, not fatal — the cycle still syncs", async () => {
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
