@@ -211,3 +211,36 @@ export async function hasVariants(
   const count = await FilamentModel.countDocuments({ parentId, _deletedAt: null });
   return count > 0;
 }
+
+/**
+ * Has this filament EVER had a variant that still exists — live or trashed?
+ *
+ * `hasVariants` counts live rows only, which is the right test everywhere the
+ * question is "is this a template right now": a trashed variant contributes
+ * nothing to inheritance, and templateness is derived, not stored.
+ *
+ * GH #1103 needs the other question. When a legacy carrying parent and all of
+ * its variants sit in the trash together, restoring the first variant hits the
+ * #605 first-variant gate — and the only way through it used to be a
+ * confirmation that rewrites the family (a new `— Original` variant, the
+ * parent stripped) in the middle of a bulk restore, for a family the user
+ * merely deleted and changed their mind about. Restore now REFUSES and points
+ * at "Convert to template" instead. That advice is only actionable if
+ * `/promote` will talk to a parent whose variants are all trashed — which is
+ * exactly this predicate.
+ *
+ * `_purged` rows don't count: a permanent delete is a one-way tombstone (GH
+ * #213/#1004 F1), so a family whose variants were all purged really is a
+ * standalone again and must keep the `not_a_template` refusal.
+ */
+export async function hasVariantsIncludingTrashed(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parentId: string,
+): Promise<boolean> {
+  const count = await FilamentModel.countDocuments({
+    parentId,
+    _purged: { $ne: true },
+  });
+  return count > 0;
+}
