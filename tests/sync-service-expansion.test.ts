@@ -1126,6 +1126,54 @@ describe("SyncService — v1.12 sync expansion", () => {
       await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
     });
 
+    it("an untrimmable pair does not stop UNRELATED names from reconciling (audit P1)", async () => {
+      // The gate was keyed by COLLECTION while conflicts are per ROW, so one
+      // whitespace pair disabled reconcileByName for every name in the
+      // collection — including a genuinely unpaired same-name row created
+      // independently on both peers, the v1.11.3 case that helper exists to
+      // fix. Its insert then hit the unique name index, locations errored,
+      // and filaments + print history cascade-skipped, every cycle, with the
+      // surfaced error naming the innocent row.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const db of [localDb, remoteDb]) {
+        await db
+          .collection("locations")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      }
+      // The untrimmable pair this PR targets…
+      await localDb.collection("locations").insertMany([
+        { name: "Blast Radius", kind: "shelf", syncId: "br-a", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Blast Radius ", kind: "shelf", syncId: "br-b", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      // …and a completely unrelated independently-created pair.
+      await localDb.collection("locations").insertOne({
+        name: "Innocent Shelf", kind: "shelf", syncId: "inn-local", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("locations").insertOne({
+        name: "Innocent Shelf", kind: "shelf", syncId: "inn-remote", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The unrelated pair was unified, so no insert collided…
+      const localInn = await localDb.collection("locations").findOne({ name: "Innocent Shelf" });
+      const remoteInn = await remoteDb.collection("locations").findOne({ name: "Innocent Shelf" });
+      expect(localInn!.syncId).toBe(remoteInn!.syncId);
+      // …locations did not fail, so filaments and print history are not
+      // cascade-skipped.
+      expect(results.find((r) => r.collection === "locations")?.error).toBeUndefined();
+      expect(results.find((r) => r.collection === "filaments")?.error).toBeUndefined();
+
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("locations").deleteMany({
+          syncId: { $in: ["br-a", "br-b", "inn-local", "inn-remote"] },
+        });
+      }
+    });
+
     it("gates reconciliation but NOT the copy, so a fix can propagate", async () => {
       // The copy gate was self-perpetuating: in hybrid the app writes only to
       // the LOCAL database, so a user who does what the error says — rename

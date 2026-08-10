@@ -268,13 +268,17 @@ export default async function dbConnect() {
       // block re-enter on every connect (i.e. every request) and this pass is
       // five regex scans. A minute is far below "the user renames a row and
       // gets on with it" and far above per-request.
-      const blocked = result.conflicts.filter((c) => c.active).length;
+      // A SKIPPED collection also means "not done" (Codex P1): its rows were
+      // deliberately left untouched because the unique index couldn't be
+      // established, so the pass must stay retryable until that is resolved.
+      const blocked =
+        result.conflicts.filter((c) => c.active).length + result.skipped.length;
       if (blocked === 0) {
         cached.migrations.trimEntityNames = true;
       } else {
         cached.trimRetryAt = Date.now() + TRIM_RETRY_INTERVAL_MS;
         console.warn(
-          `[migration] GH #1116: ${blocked} name(s) still need separating by hand; ` +
+          `[migration] GH #1116: ${blocked} item(s) still need attention by hand; ` +
             `re-checking in ${Math.round(TRIM_RETRY_INTERVAL_MS / 1000)}s.`,
         );
       }

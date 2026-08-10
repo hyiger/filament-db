@@ -292,7 +292,7 @@ describe("trimEntityNames", () => {
 
 describe("describeTrimResult", () => {
   it("says nothing when there was nothing to do", () => {
-    expect(describeTrimResult({ trimmed: 0, conflicts: [] })).toBeNull();
+    expect(describeTrimResult({ trimmed: 0, conflicts: [], skipped: [] })).toBeNull();
   });
 
   it("logs an INACTIVE conflict too — it just doesn't gate anything", () => {
@@ -302,6 +302,7 @@ describe("describeTrimResult", () => {
     const line = describeTrimResult({
       trimmed: 0,
       conflicts: [{ collection: "filaments", name: "  ", active: false }],
+      skipped: [],
     });
     expect(line).toContain('filaments: "  "');
   });
@@ -310,13 +311,24 @@ describe("describeTrimResult", () => {
     const line = describeTrimResult({
       trimmed: 2,
       conflicts: [{ collection: "locations", name: "Drybox #1 ", active: true }],
+      skipped: [],
     });
     expect(line).toContain("trimmed 2");
     expect(line).toContain('locations: "Drybox #1 "');
   });
 
+  it("names a SKIPPED collection loudly", () => {
+    const line = describeTrimResult({
+      trimmed: 0,
+      conflicts: [],
+      skipped: [{ collection: "locations", reason: "already has duplicate active names" }],
+    });
+    expect(line).toContain("SKIPPED locations");
+    expect(line).toContain("duplicate active names");
+  });
+
   it("reports trims alone", () => {
-    expect(describeTrimResult({ trimmed: 3, conflicts: [] })).toContain("trimmed 3");
+    expect(describeTrimResult({ trimmed: 3, conflicts: [], skipped: [] })).toContain("trimmed 3");
   });
 });
 

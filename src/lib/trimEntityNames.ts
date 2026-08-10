@@ -120,6 +120,19 @@ export interface TrimNameConflict {
 export interface TrimEntityNamesResult {
   /** How many documents were rewritten. */
   trimmed: number;
+  /**
+   * Collections left ENTIRELY untouched because the protective unique index
+   * could not be established (Codex P1).
+   *
+   * Writing without it is not "best effort", it is unsafe: the check and the
+   * write are not atomic, so two writers — the app's dbConnect and the
+   * Electron sync service, on the same local database over separate
+   * connections — can each see a clear target and normalize two distinct rows
+   * to the same name, MANUFACTURING the duplicate this pass exists to remove.
+   * Doing nothing is strictly better; the caller keeps the migration
+   * unsettled so it retries once the blocking duplicates are resolved.
+   */
+  skipped: { collection: TrimmableCollection; reason: string }[];
   /** Rows left alone because trimming them would collide with an existing
    *  row, or would empty the required field. */
   conflicts: TrimNameConflict[];
@@ -174,6 +187,7 @@ export async function trimEntityNames(
 ): Promise<TrimEntityNamesResult> {
   let trimmed = 0;
   const conflicts: TrimNameConflict[] = [];
+  const skipped: TrimEntityNamesResult["skipped"] = [];
 
   for (const collectionName of TRIMMABLE_COLLECTIONS) {
     const collection = db.collection(collectionName);
@@ -211,8 +225,22 @@ export async function trimEntityNames(
         { name: 1 },
         { unique: true, partialFilterExpression: { _deletedAt: null } },
       );
-    } catch {
-      /* pre-existing duplicates, or no rights — carry on unserialized */
+    } catch (err) {
+      // Do NOT fall back to writing unserialized (Codex P1). That path is
+      // what the index exists to prevent: two writers can each clear the
+      // check and both normalize to the same name, ADDING duplicates on a
+      // database that already has one. Leave the collection alone and say
+      // so; the caller keeps the migration unsettled and retries.
+      skipped.push({
+        collection: collectionName,
+        reason:
+          err instanceof Error && /E11000|duplicate key/i.test(err.message)
+            ? "the collection already has duplicate active names — resolve them and restart"
+            : `could not create the unique name index: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+      });
+      continue;
     }
     // Anchored on either edge, over the EXACT set `trim()` strips — see
     // JS_TRIM_CHARS. `hasEdgeWhitespace` still re-checks each candidate in
@@ -310,12 +338,18 @@ export async function trimEntityNames(
     }
   }
 
-  return { trimmed, conflicts };
+  return { trimmed, conflicts, skipped };
 }
 
 /** One log line summarizing a run, or null when there was nothing to say. */
 export function describeTrimResult(result: TrimEntityNamesResult): string | null {
-  if (result.trimmed === 0 && result.conflicts.length === 0) return null;
+  if (
+    result.trimmed === 0 &&
+    result.conflicts.length === 0 &&
+    (result.skipped?.length ?? 0) === 0
+  ) {
+    return null;
+  }
   const parts: string[] = [];
   if (result.trimmed > 0) parts.push(`trimmed ${result.trimmed} entity name(s)`);
   if (result.conflicts.length > 0) {
@@ -325,6 +359,9 @@ export function describeTrimResult(result: TrimEntityNamesResult): string | null
     parts.push(
       `left ${result.conflicts.length} alone (trimming would collide with an existing row, or empty a required name) — ${named}`,
     );
+  }
+  for (const sk of result.skipped ?? []) {
+    parts.push(`SKIPPED ${sk.collection} entirely — ${sk.reason}`);
   }
   return `[migration] GH #1116 name whitespace: ${parts.join("; ")}`;
 }

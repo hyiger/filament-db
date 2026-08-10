@@ -395,6 +395,25 @@ export class SyncService extends EventEmitter {
        * recoverable failure beats a permanent one.
        */
       const conflictedCollections = new Set<string>();
+      /**
+       * Per-collection set of NAMES that must not be paired by name.
+       *
+       * The gate used to be keyed by COLLECTION while the conflicts are
+       * per-ROW, so one untrimmable whitespace pair disabled
+       * `reconcileByName` for every name in the collection — including a
+       * genuinely unpaired same-name row created independently on both peers,
+       * which is the v1.11.3 case that helper exists to fix. That row's
+       * insert then hit the unique name index, and because the module's
+       * `isDuplicateKeyError` only recognizes a `syncId` violation, the
+       * failure propagated: locations errored, filaments and print history
+       * cascade-skipped, every cycle, with the surfaced error naming the
+       * INNOCENT row. A second audit reproduced it end to end against two
+       * live databases.
+       *
+       * The fusion hazard is confined to the conflicting name and its
+       * trimmed form, so that is what gets blocked.
+       */
+      const conflictedNames = new Map<string, Set<string>>();
 
       // GH #1116 — normalize entity names on BOTH sides before any copy.
       //
@@ -447,8 +466,19 @@ export class SyncService extends EventEmitter {
         // purged filament isn't even visible in the trash. It still gets
         // logged; it just doesn't stop anything.
         for (const c of trimResult.conflicts) {
-          if (c.active) conflictedCollections.add(c.collection);
+          if (!c.active) continue;
+          // Block the NAMES, not the collection (second adversarial audit).
+          // Both spellings: the stored one and the trimmed one it would have
+          // become — a pairing can be attempted under either.
+          const set = conflictedNames.get(c.collection) ?? new Set<string>();
+          set.add(c.name);
+          set.add(c.name.trim());
+          conflictedNames.set(c.collection, set);
         }
+        // A collection the pass SKIPPED has un-normalized names by
+        // definition, and it doesn't know WHICH — so that one really is
+        // collection-wide.
+        for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
       }
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
@@ -525,7 +555,7 @@ export class SyncService extends EventEmitter {
       // the same nozzle on two desktops has the same shape and was already
       // possible — the trim just makes it reachable without a typo.
       if (!this.aborted && !conflictedCollections.has("nozzles")) {
-        await this.reconcileNozzlesByName(localDb, remoteDb);
+        await this.reconcileNozzlesByName(localDb, remoteDb, conflictedNames.get("nozzles"));
       }
       results.push(await trySync("nozzles", [], () =>
         this.syncCollection(localDb, remoteDb, "nozzles"),
@@ -553,7 +583,7 @@ export class SyncService extends EventEmitter {
       // the repair passes — after a #823 abort it must stop writing syncId
       // metadata to the about-to-be-abandoned DB.
       if (!this.aborted && !conflictedCollections.has("bedtypes")) {
-        await this.reconcileBedTypesByName(localDb, remoteDb);
+        await this.reconcileBedTypesByName(localDb, remoteDb, conflictedNames.get("bedtypes"));
       }
       results.push(await trySync("bedtypes", [], () =>
         this.syncCollection(localDb, remoteDb, "bedtypes"),
@@ -571,7 +601,7 @@ export class SyncService extends EventEmitter {
       this.updateStatus({ progress: "Syncing printers..." });
       // GH #1116 (Codex P1): same reasoning as nozzles above.
       if (!this.aborted && !conflictedCollections.has("printers")) {
-        await this.reconcilePrintersByName(localDb, remoteDb);
+        await this.reconcilePrintersByName(localDb, remoteDb, conflictedNames.get("printers"));
       }
       results.push(await trySync("printers", ["nozzles", "bedtypes"], () =>
         this.syncCollection(
@@ -604,7 +634,7 @@ export class SyncService extends EventEmitter {
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
       if (!this.aborted && !conflictedCollections.has("locations")) {
-        await this.reconcileLocationsByName(localDb, remoteDb); // GH #904
+        await this.reconcileLocationsByName(localDb, remoteDb, conflictedNames.get("locations")); // GH #904
       }
       results.push(await trySync("locations", [], () =>
         this.syncCollection(localDb, remoteDb, "locations"),
@@ -665,7 +695,7 @@ export class SyncService extends EventEmitter {
       // BEFORE the maps below so parentId remapping sees the unified
       // syncId on both sides.
       if (!this.aborted && !conflictedCollections.has("filaments")) {
-        await this.reconcileFilamentsByName(localDb, remoteDb); // GH #904
+        await this.reconcileFilamentsByName(localDb, remoteDb, conflictedNames.get("filaments")); // GH #904
       }
 
       // Build filament syncId→ID maps for parentId remapping.
@@ -1389,8 +1419,9 @@ export class SyncService extends EventEmitter {
   private async reconcileLocationsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "locations");
+    await this.reconcileByName(localDb, remoteDb, "locations", blockedNames);
   }
 
   /**
@@ -1402,8 +1433,9 @@ export class SyncService extends EventEmitter {
   private async reconcileBedTypesByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "bedtypes");
+    await this.reconcileByName(localDb, remoteDb, "bedtypes", blockedNames);
   }
 
   /**
@@ -1420,8 +1452,9 @@ export class SyncService extends EventEmitter {
   private async reconcileFilamentsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "filaments");
+    await this.reconcileByName(localDb, remoteDb, "filaments", blockedNames);
   }
 
   /**
@@ -1434,16 +1467,18 @@ export class SyncService extends EventEmitter {
   private async reconcileNozzlesByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "nozzles");
+    await this.reconcileByName(localDb, remoteDb, "nozzles", blockedNames);
   }
 
   /** Same, for printers — identical index and identical exposure. */
   private async reconcilePrintersByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "printers");
+    await this.reconcileByName(localDb, remoteDb, "printers", blockedNames);
   }
 
   /**
@@ -1456,6 +1491,10 @@ export class SyncService extends EventEmitter {
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
     collectionName: string,
+    /** Names whose normalization is unresolved, so pairing them by name is
+     *  unsafe. Scoped to those names — a conflict elsewhere in the collection
+     *  must not stop unrelated rows from being unified. */
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
@@ -1467,6 +1506,7 @@ export class SyncService extends EventEmitter {
     for (const local of localActive) {
       const remote = remoteByName.get(local.name as string);
       if (!remote) continue;
+      if (blockedNames?.has(local.name as string)) continue;
 
       const localSyncId = local.syncId as string | undefined;
       const remoteSyncId = remote.syncId as string | undefined;
