@@ -240,6 +240,29 @@ describe("findTrimmedNameCollision", () => {
     expect(findTrimmedNameCollision([null, 7, { name: {} }, {}])).toBeNull();
   });
 
+  it("casts a non-finite JSON number, which the String path stores verbatim", () => {
+    // `JSON.parse("1e400")` yields Infinity, and Mongoose's String cast is
+    // `value.toString()` — so it stores "Infinity". A Number.isFinite gate
+    // skipped exactly that pair and let the E11000 happen after the wipe.
+    expect(findTrimmedNameCollision([{ name: 1e400 }, { name: "Infinity " }])).toEqual({
+      name: "Infinity",
+      indexes: [0, 1],
+    });
+  });
+
+  it("mirrors the Date cast when deciding which rows are ACTIVE (Codex P2)", () => {
+    // Mongoose casts "" on a Date path to null, so this row inserts ACTIVE
+    // and collides — while a raw `!= null` test reads it as deleted and
+    // waves the pair through.
+    expect(
+      findTrimmedNameCollision([{ name: "X", _deletedAt: "" }, { name: "X " }]),
+    ).toEqual({ name: "X", indexes: [0, 1] });
+    // undefined and an omitted field are active too.
+    expect(
+      findTrimmedNameCollision([{ name: "Y", _deletedAt: undefined }, { name: "Y " }]),
+    ).toEqual({ name: "Y", indexes: [0, 1] });
+  });
+
   it("keys by the value the SCHEMA will store, not the raw JSON (Codex P2)", () => {
     // Mongoose casts a String path, so `1` and `"1 "` both validate — and
     // then insertMany stores both as `"1"` and E11000s AFTER the destructive

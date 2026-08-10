@@ -87,4 +87,41 @@ describe("Atlas import agrees with the trimmed identity rule (#1116, Codex P2)",
     expect(fresh.name).toBe("PLA Basic");
     expect(fresh.cost).toBe(42);
   });
+
+  it("does NOT manufacture a name out of a non-castable remote value (Codex P2)", async () => {
+    // The remote document is attacker-influenceable — the caller supplies the
+    // URI. A blanket String(...) turns `["Victim"]` into `Victim`, which then
+    // SELECTS and overwrites the local Victim row; previously the cast error
+    // refused the row outright.
+    const victim = await Filament.create({
+      name: "Victim",
+      vendor: "V",
+      type: "PLA",
+      cost: 10,
+    });
+    const remoteId = new mongoose.Types.ObjectId();
+    await remoteCollection().insertOne({
+      _id: remoteId,
+      name: ["Victim"],
+      vendor: "Attacker",
+      type: "PLA",
+      cost: 999,
+      _deletedAt: null,
+      spools: [],
+    });
+
+    const res = await importAtlas(
+      new NextRequest("http://localhost/api/filaments/import-atlas", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ uri: remoteUri(), filamentIds: [String(remoteId)] }),
+      }),
+    );
+    const body = await res.json();
+    // Whatever the response shape, the local row must be untouched.
+    expect(body.updated ?? 0).toBe(0);
+    const fresh = await Filament.findById(victim._id);
+    expect(fresh.vendor).toBe("V");
+    expect(fresh.cost).toBe(10);
+  });
 });

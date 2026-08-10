@@ -385,19 +385,25 @@ export class SyncService extends EventEmitter {
       // posture (and the same both-sides placement) as the #1021 cleanup
       // above, including the per-side abort re-check.
       //
-      // Best-effort, unlike #1021: a name that can't be trimmed because
-      // trimming would collide is REPORTED, not fatal, and syncing the rest
-      // of the cycle is strictly better than refusing to sync at all.
+      // Per-ROW conflicts are non-fatal — a name that can't be trimmed
+      // because trimming would collide is reported and the cycle continues,
+      // since that pair needs a human either way. A THROWN failure is
+      // different and aborts, for the reason in the loop below.
       for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
         if (this.aborted) break;
-        try {
-          const line = describeTrimResult(
-            await trimEntityNames(dbHandle as unknown as MinimalTrimDb),
-          );
-          if (line) console.log(`[sync] ${side}: ${line}`);
-        } catch (err) {
-          console.error(`[sync] Failed to trim entity names on the ${side} DB:`, err);
-        }
+        // A THROW here aborts the cycle (Codex P1). Swallowing it and syncing
+        // anyway is the worst outcome available: the two spellings are still
+        // different, so `reconcileByName` doesn't pair them, `syncCollection`
+        // copies BOTH to BOTH databases, and the next cycle's trim then finds
+        // a genuine collision on each side and leaves the duplicate
+        // permanently. Failing the cycle costs one retry; continuing costs a
+        // pair of rows a human has to merge by hand. (Per-row conflicts are
+        // still non-fatal — those are REPORTED, not thrown; see
+        // `trimEntityNames`.)
+        const line = describeTrimResult(
+          await trimEntityNames(dbHandle as unknown as MinimalTrimDb),
+        );
+        if (line) console.log(`[sync] ${side}: ${line}`);
       }
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable

@@ -266,9 +266,33 @@ export function describeTrimResult(result: TrimEntityNamesResult): string | null
  */
 export function castNameLikeSchema(raw: unknown): string | null {
   if (typeof raw === "string") return raw;
-  if (typeof raw === "number") return Number.isFinite(raw) ? String(raw) : null;
+  // EVERY number, including the non-finite ones (Codex P2). `JSON.parse`
+  // turns a valid JSON literal like `1e400` into `Infinity`, and Mongoose's
+  // String cast is `value.toString()` — so it stores `"Infinity"`, which
+  // collides with a `"Infinity "` sibling. A `Number.isFinite` gate skipped
+  // exactly that pair and let the E11000 happen after the wipe.
+  if (typeof raw === "number") return String(raw);
   if (typeof raw === "boolean") return String(raw);
   return null;
+}
+
+/**
+ * Would the schema treat this `_deletedAt` as a live row?
+ *
+ * The name indexes are partial on `_deletedAt: null`, so "is this row active"
+ * decides whether it participates in a collision — and the raw JSON value is
+ * not the answer (Codex P2). Mongoose's Date path casts `null`, `undefined`
+ * AND the empty string to `null`, so `{_deletedAt: ""}` inserts as an ACTIVE
+ * row while a `!= null` test reads it as deleted. That mismatch is enough for
+ * `{name: "X", _deletedAt: ""}` and `{name: "X "}` to slip past the precheck
+ * and E11000 after the destructive wipe.
+ *
+ * Anything else is either a real date (deleted) or a value the Date cast
+ * rejects outright — and a row that fails to cast never inserts, so the
+ * per-document validation below refuses the whole restore anyway.
+ */
+export function isActiveLikeSchema(rawDeletedAt: unknown): boolean {
+  return rawDeletedAt == null || rawDeletedAt === "";
 }
 
 export function findTrimmedNameCollision(
@@ -279,7 +303,7 @@ export function findTrimmedNameCollision(
     const row = rows[i];
     if (typeof row !== "object" || row === null) continue;
     const record = row as { name?: unknown; _deletedAt?: unknown };
-    if (record._deletedAt != null) continue;
+    if (!isActiveLikeSchema(record._deletedAt)) continue;
     // Key by the value the SCHEMA will store, not the raw JSON (Codex P2).
     // Mongoose casts a `String` path, so a snapshot holding the number `1`
     // and the string `"1 "` passes per-document validation on both — and then
