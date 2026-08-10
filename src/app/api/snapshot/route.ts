@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { findTrimmedNameCollision } from "@/lib/trimEntityNames";
 import mongoose from "mongoose";
 import dbConnect, {
   rerunLegacyNozzleCleanupAfterRestore,
@@ -476,6 +477,13 @@ async function restoreSnapshot(request: NextRequest) {
   // up front turns that into a clean 400 with the DB untouched; the
   // rollback path below remains reachable only for driver-level errors
   // (duplicate keys inside the snapshot file, BSON limits).
+  const UNIQUE_NAME_COLLECTIONS = new Set([
+    "nozzles",
+    "printers",
+    "bedTypes",
+    "locations",
+    "filaments",
+  ]);
   const preValidate: Array<
     [string, { new (doc: Record<string, unknown>): { validate(): Promise<void> } }, unknown[]]
   > = [
@@ -488,6 +496,27 @@ async function restoreSnapshot(request: NextRequest) {
     ["sharedCatalogs", SharedCatalog, sharedCatalogs],
   ];
   for (const [colName, Model, rows] of preValidate) {
+    // GH #1116: `name` now carries `trim: true`, and Mongoose applies a setter
+    // on insertMany — so a snapshot taken before that (which may legitimately
+    // hold both `X` and `X `) collapses to two identical names and aborts the
+    // ordered batch on E11000, AFTER the wipe. Same posture as the validation
+    // check below: state it up front, change nothing.
+    //
+    // Scoped to the collections whose `name` is actually a UNIQUE key.
+    // `printHistory` and `sharedCatalogs` have no `name` field today, so the
+    // helper is already a no-op there — the explicit set keeps it that way if
+    // one ever gains a non-unique `name`.
+    const collision = UNIQUE_NAME_COLLECTIONS.has(colName)
+      ? findTrimmedNameCollision(rows)
+      : null;
+    if (collision) {
+      return NextResponse.json(
+        {
+          error: `Snapshot failed validation at ${colName}[${collision.indexes[1]}] — nothing was changed. It carries two active records whose names differ only by surrounding whitespace (${JSON.stringify(collision.name)}, also at index ${collision.indexes[0]}), which are now the same name. Rename or remove one and retry.`,
+        },
+        { status: 400 },
+      );
+    }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       // Codex P3 on #1009: a null / non-object element passes the array-shape

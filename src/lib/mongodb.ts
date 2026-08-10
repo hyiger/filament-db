@@ -1,5 +1,10 @@
 import mongoose from "mongoose";
 import { clearLegacyNozzleConditionsOnce, type MinimalDb } from "./legacyNozzleConditions";
+import {
+  trimEntityNames,
+  describeTrimResult,
+  type MinimalTrimDb,
+} from "./trimEntityNames";
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -43,6 +48,8 @@ interface MongooseCache {
      * if re-trashed. Their intended state is gone-forever, so restore
      * `_deletedAt`. Idempotent: matches 0 rows on healthy installs. */
     purgedZombies: boolean;
+    /** GH #1116 — trim edge whitespace off stored entity names. */
+    trimEntityNames: boolean;
     /** GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based
      * `shrinkageXY` values. The pre-#1016 Bambu/Orca importer stored
      * `filament_shrink` RAW, so a stock profile's "98%" (remaining size)
@@ -111,7 +118,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false },
   };
 
   if (!global.mongoose) {
@@ -126,7 +133,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -153,7 +160,8 @@ export default async function dbConnect() {
     cached.migrations.purgedZombies &&
     cached.migrations.legacyShrinkage &&
     cached.migrations.legacyNozzleConditions &&
-    cached.migrations.amsSlotFilamentIds
+    cached.migrations.amsSlotFilamentIds &&
+    cached.migrations.trimEntityNames
   ) {
     return cached.conn;
   }
@@ -206,6 +214,39 @@ export default async function dbConnect() {
     } catch (err) {
       console.error(
         "[migration] Failed to repair purged zombie filaments (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
+  // GH #1116 — trim edge whitespace off stored entity names.
+  //
+  // Nothing normalized a name on write, so `Drybox #1 ` and `Drybox #1` were
+  // two distinct rows that render identically — and the CSV round-trip
+  // manufactured the second one (`csvCell` didn't quote edge whitespace,
+  // `parseCsv` strips it from an unquoted field, so the exported name came
+  // back trimmed, matched nothing, and the spool importer auto-created a
+  // duplicate location and moved every re-imported spool onto it). The schema
+  // now carries `trim: true`; this pass repairs what is already stored.
+  //
+  // Runs EARLY: the filament and spool importers both resolve rows by name,
+  // and their trimmed matching keys only find the right row once the stored
+  // side is normalized. Best-effort like its neighbours — a row whose trimmed
+  // name would collide with an existing one is deliberately LEFT ALONE and
+  // named in the log, because merging two records (re-pointing every
+  // `spools[].locationId`, reconciling two spool arrays) is a decision for a
+  // human, not a migration.
+  if (!cached.migrations.trimEntityNames) {
+    try {
+      const db = mongoose.connection.db;
+      if (!db) throw new Error("no db handle on the mongoose connection");
+      const result = await trimEntityNames(db as unknown as MinimalTrimDb);
+      const line = describeTrimResult(result);
+      if (line) console.log(line);
+      cached.migrations.trimEntityNames = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to trim entity names (will retry on next connect):",
         err,
       );
     }

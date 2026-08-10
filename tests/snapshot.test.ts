@@ -1194,3 +1194,81 @@ describe("snapshot restore — collections the file omits (#1104)", () => {
     expect(await Filament.countDocuments({})).toBe(1);
   });
 });
+
+describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Location: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of [
+      "Filament",
+      "Nozzle",
+      "Printer",
+      "BedType",
+      "Location",
+      "PrintHistory",
+      "SharedCatalog",
+    ]) {
+      delete mongoose.models[m];
+    }
+    await import("@/models/Filament");
+    await import("@/models/Nozzle");
+    await import("@/models/Printer");
+    await import("@/models/BedType");
+    Location = (await import("@/models/Location")).default;
+    await import("@/models/PrintHistory");
+    await import("@/models/SharedCatalog");
+  });
+
+  const restore = async (snapshot: unknown) => {
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    return { res, body: await res.json() };
+  };
+
+  const file = (locations: unknown[]) => ({
+    version: 7,
+    collections: { locations },
+  });
+
+  it("refuses a file whose names collapse to a duplicate, WITHOUT wiping", async () => {
+    // `name` now carries trim: true, and insertMany applies the setter — so a
+    // pre-#1116 backup holding both "X" and "X " aborts the ordered batch on
+    // E11000 after the destructive wipe. Say so up front instead.
+    const existing = await Location.create({ name: "Keep me", kind: "shelf" });
+
+    const { res, body } = await restore(
+      file([
+        { name: "Drybox #1", kind: "drybox" },
+        { name: "Drybox #1 ", kind: "drybox" },
+      ]),
+    );
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    // The DB is untouched — that is the whole point of a pre-check.
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
+  it("allows the pair when one of them is trashed — the index is partial", async () => {
+    const { res } = await restore(
+      file([
+        { name: "Drybox #1", kind: "drybox" },
+        { name: "Drybox #1 ", kind: "drybox", _deletedAt: new Date().toISOString() },
+      ]),
+    );
+    expect(res.status).toBe(200);
+    expect(await Location.countDocuments({})).toBe(2);
+  });
+
+  it("still restores a clean file", async () => {
+    const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
+    expect(res.status).toBe(200);
+    expect((await Location.findOne({}))!.name).toBe("Drybox #1");
+  });
+});

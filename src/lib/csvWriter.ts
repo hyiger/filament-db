@@ -80,7 +80,24 @@ export function csvCell(value: string | number | boolean | null | undefined): st
   // parseCsv (and by spec-compliant readers), splitting the row on
   // round-trip. Leading CR was already neutralized by the formula guard
   // above, but a CR in the middle of a cell slipped through unquoted.
-  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+  // GH #1116: EDGE WHITESPACE must trigger quoting too. `parseCsv` strips
+  // leading/trailing whitespace from an UNQUOTED field — and its comment
+  // already asserts the contract this function has to uphold ("csvCell quoted
+  // it"). It didn't, so a name like `Drybox #1 ` survived export and came back
+  // as `Drybox #1`: the spool importer then found no exact match, auto-created
+  // a SECOND location, and moved every re-imported spool onto it while the
+  // original silently dropped to zero. This is the un-landed other half of GH
+  // #955.1 (PR #963), which only ever worked when a comma forced the quoting.
+  //
+  // Checked AFTER the formula guard: that guard can PREPEND a `'`, so testing
+  // the pre-sanitized string would ask about a value we aren't emitting.
+  if (
+    str.includes(",") ||
+    str.includes('"') ||
+    str.includes("\n") ||
+    str.includes("\r") ||
+    str !== str.trim()
+  ) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;

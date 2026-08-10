@@ -587,7 +587,7 @@ export function pruneInheritedCreateDoc(
 // the full rationale, including why color deliberately doesn't gate).
 
 export async function upsertImportRows(
-  rows: ImportRow[],
+  inputRows: ImportRow[],
   /**
    * GH #1115: the PHYSICAL source line for each entry in `rows`, parallel by
    * index. Both routes strip blank rows before indexing, so deriving the
@@ -602,6 +602,28 @@ export async function upsertImportRows(
 
   /** The line number to report for row `i`. */
   const lineOf = (i: number) => sourceLines?.[i] ?? i + 2;
+
+  // GH #1116: trim the NAME the importer matches on.
+  //
+  // The schema now trims `name` on write, so the stored value is the identity
+  // key every lookup here already assumed it was. The importer has to agree,
+  // or a legacy export re-imported after the migration would miss its own row
+  // and take the CREATE path — producing the duplicate this issue is about,
+  // in the other direction. (`csvCell` now quotes edge whitespace, so an
+  // untrimmed legacy name survives a round-trip verbatim instead of being
+  // silently stripped by `parseCsv`; that fidelity is what makes the trim
+  // here load-bearing rather than cosmetic.)
+  //
+  // Rows are copied rather than mutated: the caller owns the array, and the
+  // two-pass driver plus `sourceLines` both key on INDEX, which a 1:1 map
+  // preserves. A whitespace-only name collapses to "" and is then caught by
+  // the existing missing-required-field check — the right answer for a name
+  // that renders as nothing.
+  const rows = inputRows.map((r) =>
+    typeof r.name === "string" && r.name !== r.name.trim()
+      ? { ...r, name: r.name.trim() }
+      : r,
+  );
 
   let created = 0;
   let updated = 0;
@@ -621,6 +643,15 @@ export async function upsertImportRows(
   // parentName pointing at a row that's itself a variant.
   const namesToLoad = new Set<string>();
   for (const r of rows) {
+    if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
+  }
+  // GH #1116: ALSO load the untrimmed forms. `trimEntityNames` normalizes the
+  // stored names on connect, but it is best-effort and deliberately skips any
+  // row whose trimmed name would collide with an existing one — so a legacy
+  // `"PLA Basic "` can still be sitting in the DB. Loading it too lets the
+  // trimmed-key index below find it and UPDATE it, instead of creating a
+  // near-identical second row that renders identically in the list.
+  for (const r of inputRows) {
     if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
     if (r.parentName) {
       const trimmed = r.parentName.trim();
@@ -665,9 +696,15 @@ export async function upsertImportRows(
       parentId: doc.parentId ?? null,
       doc,
     };
+    // GH #1116: index by the TRIMMED name so a legacy untrimmed row is found
+    // by a trimmed row key. When both `"X"` and `"X "` survive in the DB (the
+    // migration refuses to merge them — see `trimEntityNames`), the exactly-
+    // named one wins the slot: it is the row every other lookup in the app
+    // already resolves to.
+    const key = doc.name.trim();
     if (doc._deletedAt == null) {
-      activeByName.set(doc.name, entry);
-    } else if (doc._purged !== true && !deletedByName.has(doc.name)) {
+      if (!activeByName.has(key) || doc.name === key) activeByName.set(key, entry);
+    } else if (doc._purged !== true && !deletedByName.has(key)) {
       // GH #1004 F1: _purged tombstones land in NEITHER bucket. They are
       // one-way gone-forever markers (see the permanent-delete handler +
       // the sync engine's _purged short-circuit) — resurrecting one via
@@ -676,7 +713,7 @@ export async function upsertImportRows(
       // listing entirely. A purged name simply falls through to the create
       // path, which the partial-unique index (scoped to _deletedAt: null)
       // permits.
-      deletedByName.set(doc.name, entry);
+      deletedByName.set(key, entry);
     }
   }
 

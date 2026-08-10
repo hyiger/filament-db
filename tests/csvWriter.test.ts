@@ -210,3 +210,39 @@ describe("sanitizeFormulaPrefix (GH #627 item 5 — shared with XLSX export)", (
     expect(unsanitizeCsvCell(sanitizeFormulaPrefix("Generic PLA"))).toBe("Generic PLA");
   });
 });
+
+describe("csvCell — edge-whitespace quoting (GH #1116)", () => {
+  // parseCsv strips leading/trailing whitespace from an UNQUOTED field, and
+  // its comment already asserts the contract this function has to uphold
+  // ("csvCell quoted it"). It didn't — so `Drybox #1 ` came back as
+  // `Drybox #1`, matched nothing on re-import, and the spool importer
+  // auto-created a duplicate location.
+  it("quotes a trailing space", () => {
+    expect(csvCell("Drybox #1 ")).toBe('"Drybox #1 "');
+  });
+
+  it("quotes a leading space", () => {
+    expect(csvCell(" PLA Basic")).toBe('" PLA Basic"');
+  });
+
+  it("quotes tabs and newlines at the edges", () => {
+    expect(csvCell("X\t")).toBe('"X\t"');
+  });
+
+  it("leaves interior whitespace unquoted — it round-trips fine", () => {
+    expect(csvCell("Dry box  #1")).toBe("Dry box  #1");
+  });
+
+  it("round-trips through parseCsv", async () => {
+    const { parseCsv } = await import("@/lib/parseCsv");
+    const csv = `Name\n${csvCell("Drybox #1 ")}\n`;
+    const rows = parseCsv(csv) as Record<string, string>[];
+    expect(rows[0].Name).toBe("Drybox #1 ");
+  });
+
+  it("checks the value AFTER the formula guard, which can prepend a quote", () => {
+    // "=cmd " → "'=cmd " — still edge-whitespace, still quoted, and the
+    // emitted string is the sanitized one.
+    expect(csvCell("=cmd ")).toBe(`"'=cmd "`);
+  });
+});
