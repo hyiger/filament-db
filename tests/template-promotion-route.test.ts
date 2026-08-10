@@ -862,7 +862,11 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect((await res.json()).error).toBe("not_a_template");
   });
 
-  it("promote: 400 not_a_template when the only variant is soft-deleted", async () => {
+  it("promote: CONVERTS when the only variant is soft-deleted (#1103)", async () => {
+    // Deliberate reversal of the pre-#1103 pin. Restore now refuses to
+    // restructure a family and points the user here, so this route has to
+    // accept a parent whose variants are all trashed — otherwise the advice
+    // is unactionable and the whole family is unrestorable.
     const parent = await seedCarryingParent();
     await Filament.create({
       name: "Carrying PLA — Gone",
@@ -870,6 +874,28 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       type: "PLA",
       parentId: parent._id,
       _deletedAt: new Date(),
+    });
+    const res = await promoteReq(String(parent._id));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.variant.name).toContain("Carrying PLA — ");
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color ?? null).toBeNull();
+    expect(fresh.spools).toHaveLength(0);
+  });
+
+  it("promote: 400 not_a_template when the only variant was PURGED", async () => {
+    // A permanent delete is a one-way tombstone (GH #213/#1004 F1), so a
+    // parent whose variants were all purged really is a standalone again —
+    // and nothing can restore one, so nothing needs this route to work.
+    const parent = await seedCarryingParent({ name: "Purged Family PLA" });
+    await Filament.create({
+      name: "Purged Family PLA — Gone",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+      _purged: true,
     });
     const res = await promoteReq(String(parent._id));
     expect(res.status).toBe(400);

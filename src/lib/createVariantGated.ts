@@ -70,6 +70,12 @@ export interface PromotionRequiredInfo {
   parentColor: string | null;
   spoolCount: number;
   variantName: string;
+  /** GH #1103: the other two things that make a promotion due, so a message
+   *  can name the one that is actually blocking rather than asserting a color
+   *  the parent may not have. Optional so a caller constructing this shape
+   *  without them still type-checks. */
+  hasColorName?: boolean;
+  hasInventoryWeight?: boolean;
 }
 
 export type GatedVariantCreateResult =
@@ -109,6 +115,65 @@ export function promotionRequired409Body(
     parentColor: info.parentColor,
     spoolCount: info.spoolCount,
     variantName: info.variantName,
+  };
+}
+
+/**
+ * The 409 body RESTORE returns instead (GH #1103).
+ *
+ * Same gate, different verb, so a different answer. Creating a variant is the
+ * user building something new; a confirmation that also restructures the
+ * parent is a fair trade there. Restore is the user asking for data BACK,
+ * exactly as it was — so it refuses and names the one action that unblocks
+ * the whole family at once, rather than prompting per variant in the middle
+ * of a bulk restore (where the only "yes" rewrote the family and "no" left
+ * the variant permanently unrestorable).
+ *
+ * Deliberately NOT the `parent_promotion_required` code: that code means
+ * "repeat with promoteParent: true", and on this route repeating changes
+ * nothing. A client matching on it would loop.
+ */
+export function restoreBlockedByTemplateBody(
+  info: PromotionRequiredInfo,
+): Record<string, unknown> {
+  // Name what is ACTUALLY blocking. `needed` is a disjunction of four things,
+  // and a fixed "its own color and N spool(s)" reads as plainly false to a
+  // user whose parent carries only an inventory weight — while hiding the one
+  // fact they need in order to act.
+  const held: string[] = [];
+  if (info.parentColor) held.push("its own color");
+  if (info.hasColorName && !info.parentColor) held.push("its own color name");
+  if (info.spoolCount > 0) {
+    held.push(`${info.spoolCount} spool${info.spoolCount === 1 ? "" : "s"}`);
+  }
+  if (info.hasInventoryWeight) held.push("an inventory weight");
+  const heldPhrase =
+    held.length === 0
+      ? "per-roll details"
+      : held.length === 1
+        ? held[0]
+        : `${held.slice(0, -1).join(", ")} and ${held[held.length - 1]}`;
+
+  // Deliberately does NOT name the variant the conversion will create, and
+  // deliberately does not echo `variantName` (Codex P2). The gate resolves
+  // that name against ACTIVE rows plus the document being restored, while
+  // /promote resolves it against active rows plus this parent's TRASHED
+  // children — so with a trashed sibling already holding the obvious name the
+  // two disagree, and this message would promise `Parent — Green` where the
+  // conversion actually produces `Parent — Green (2)`. A predicted name is
+  // worth nothing here anyway: the user is about to press a button that shows
+  // them the result.
+  return {
+    error: "parent_must_be_template_first",
+    message:
+      `Restoring this variant would make "${info.parentName}" a template, ` +
+      `but it still holds ${heldPhrase}. ` +
+      `Open "${info.parentName}" and use "Convert to template" — that moves them ` +
+      `onto a variant of their own — then restore. ` +
+      `Doing it there converts the whole family once, with the parent in front of you.`,
+    parentName: info.parentName,
+    parentColor: info.parentColor,
+    spoolCount: info.spoolCount,
   };
 }
 
@@ -213,6 +278,8 @@ async function gateAndPromoteInLock<TAbort>(
         parentName: parent.name,
         parentColor: promoState.parentColor,
         spoolCount: promoState.spoolCount,
+        hasColorName: promoState.hasColorName,
+        hasInventoryWeight: promoState.hasInventoryWeight,
         variantName,
       };
     }
@@ -315,6 +382,8 @@ export async function createVariantGated(
         parentName: gate.parentName,
         parentColor: gate.parentColor,
         spoolCount: gate.spoolCount,
+        hasColorName: gate.hasColorName,
+        hasInventoryWeight: gate.hasInventoryWeight,
         variantName: gate.variantName,
       };
     }
@@ -454,6 +523,8 @@ export async function gateFirstVariantAdoption(
         parentName: gate.parentName,
         parentColor: gate.parentColor,
         spoolCount: gate.spoolCount,
+        hasColorName: gate.hasColorName,
+        hasInventoryWeight: gate.hasInventoryWeight,
         variantName: gate.variantName,
       };
     }

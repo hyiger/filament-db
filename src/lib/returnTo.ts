@@ -23,7 +23,6 @@
  */
 
 /** Characters a browser may strip or normalize before resolving a URL. */
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 
 export function isSafeReturnPath(value: unknown): value is string {
