@@ -1,10 +1,11 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { DELETE as deletePrintHistory, PUT as putPrintHistory } from "@/app/api/print-history/[id]/route";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
 import { MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * Covers two behaviours added in the v1.11 review round:
@@ -1338,4 +1339,459 @@ describe("analytics GET — double-counting regression", () => {
   });
 
 
+});
+
+/**
+ * GH #1121 — a job against a LEGACY single-spool filament (stock on the
+ * filament's own totalWeight, no spools[] subdocument) recorded usage with
+ * spoolId: null and NO debit: analytics reported the grams and cost while the
+ * remaining weight never moved.
+ */
+describe("POST /api/print-history — legacy single-spool filaments (#1121)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let PrintHistory: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of ["Filament", "PrintHistory", "Printer", "Nozzle", "BedType", "Location"]) {
+      delete mongoose.models[m];
+    }
+    Filament = (await import("@/models/Filament")).default;
+    await import("@/models/Printer");
+    await import("@/models/Nozzle");
+    await import("@/models/BedType");
+    await import("@/models/Location");
+    PrintHistory = (await import("@/models/PrintHistory")).default;
+  });
+
+  const postJob = (filamentId: string, grams: number) =>
+    postPrintHistory(
+      new NextRequest("http://localhost/api/print-history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jobLabel: "Legacy job",
+          startedAt: new Date().toISOString(),
+          usage: [{ filamentId, grams }],
+        }),
+      }),
+    );
+
+  it("migrates the legacy roll to a real spool and debits it", async () => {
+    const f = await Filament.create({
+      name: "Legacy Debit",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      totalWeight: 1000,
+      spools: [],
+    });
+    const res = await postJob(String(f._id), 150);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // The whole point: a real spool ref, not the silent spoolId: null.
+    expect(body.usage[0].spoolId).toBeTruthy();
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(850);
+    // The legacy field is cleared, or the fallback would resurrect the roll.
+    expect(fresh.totalWeight).toBeNull();
+    // Carry-over identity preserved for printed labels / NFC tags.
+    expect(fresh.spools[0].instanceId).toBe(f.instanceId);
+  });
+
+  it("round-trips: deleting the job restores the weight", async () => {
+    // This is why migrating beats debiting the top-level field — the refund
+    // works through the existing usageHistory machinery.
+    const f = await Filament.create({
+      name: "Legacy Undo",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    const created = await (await postJob(String(f._id), 250)).json();
+    const mid = await Filament.findById(f._id);
+    expect(mid.spools[0].totalWeight).toBe(750);
+
+    const del = await deletePrintHistory(
+      new NextRequest(`http://localhost/api/print-history/${created._id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: String(created._id) }) },
+    );
+    expect(del.status).toBe(200);
+
+    const after = await Filament.findById(f._id);
+    expect(after.spools[0].totalWeight).toBe(1000);
+    expect(after.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("refuses a legacy TEMPLATE — inventory belongs on its variants (#605)", async () => {
+    const parent = await Filament.create({
+      name: "Legacy Template",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    await Filament.create({
+      name: "Legacy Template Red",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    const res = await postJob(String(parent._id), 100);
+    expect(res.status).toBe(400);
+
+    const fresh = await Filament.findById(parent._id);
+    expect(fresh.spools).toHaveLength(0);
+    expect(fresh.totalWeight).toBe(1000);
+    expect(await PrintHistory.countDocuments({})).toBe(0);
+  });
+
+  it("migrates a record carrying a value that predates current validators (Codex P2)", async () => {
+    // The persist paths here use validateModifiedOnly (GH #905) precisely so a
+    // legacy record isn't rejected over a field the request never touched. The
+    // migration save needs the same option, or the slicer's job is refused on
+    // exactly the old records this change exists to serve.
+    const f = await Filament.create({
+      name: "Legacy Odd Values",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    // Write past the validators, the way a pre-validator record would exist.
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      { $set: { "temperatures.nozzle": 9999 } },
+    );
+
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+  });
+
+  it("migrates every legacy filament in a MULTI-filament job", async () => {
+    // The multi-filament path can't hold a continuous lock (a cross-filament
+    // transaction would need every key at once), so each migration takes its
+    // own key one at a time — like the saves that follow it.
+    const a = await Filament.create({
+      name: "Legacy A", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    const b = await Filament.create({
+      name: "Legacy B", vendor: "V", type: "PETG", totalWeight: 800, spools: [],
+    });
+    const req = new NextRequest("http://localhost/api/print-history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobLabel: "Two rolls",
+        startedAt: new Date().toISOString(),
+        usage: [
+          { filamentId: String(a._id), grams: 100 },
+          { filamentId: String(b._id), grams: 50 },
+        ],
+      }),
+    });
+    const res = await postPrintHistory(req);
+    expect(res.status).toBe(201);
+
+    const freshA = await Filament.findById(a._id);
+    const freshB = await Filament.findById(b._id);
+    expect(freshA.spools).toHaveLength(1);
+    expect(freshA.spools[0].totalWeight).toBe(900);
+    expect(freshA.totalWeight).toBeNull();
+    expect(freshB.spools).toHaveLength(1);
+    expect(freshB.spools[0].totalWeight).toBe(750);
+  });
+
+  /**
+   * Run `body()` at a point where the route has PROVABLY finished pass 1 but
+   * has not yet acquired the filament's key.
+   *
+   * `lockedKeyCount()` cannot express this: the test's own hold makes it
+   * nonzero, and the route waits on the SAME key, so the count never moves.
+   * Sleeping is worse — on a slow runner the mutation lands before pass 1
+   * reads, the route takes an unrelated branch, and the "deterministic"
+   * regression test passes for the wrong reason (Codex P2 ×2).
+   *
+   * So we hold the key and wrap the route's FIRST `Filament.find` — pass 1 —
+   * resolving a promise when its query actually executes. `await query` runs
+   * `exec()`, so wrapping `exec` observes completion rather than issue.
+   */
+  async function whileRouteIsQueued<T>(
+    lockId: mongoose.Types.ObjectId,
+    start: () => Promise<T>,
+    body: () => Promise<void>,
+  ): Promise<T> {
+    let passOneDone!: () => void;
+    const passOne = new Promise<void>((r) => {
+      passOneDone = r;
+    });
+    const origFind = Filament.find.bind(Filament);
+    const spy = vi
+      .spyOn(Filament, "find")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementation((...args: any[]) => {
+        const q = origFind(...args);
+        const origExec = q.exec.bind(q);
+        q.exec = async () => {
+          const r = await origExec();
+          passOneDone();
+          return r;
+        };
+        return q;
+      });
+
+    let release!: () => void;
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const lockHold = runExclusive(filamentLockKey(lockId), () => held);
+
+    try {
+      const pending = start();
+      await passOne;
+      spy.mockRestore();
+      await body();
+      release();
+      await lockHold;
+      return await pending;
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("refuses when a promotion cleared the parent while we waited for the lock (Codex P1)", async () => {
+    // Pass 1 reads the legacy shape (spools: [], totalWeight: 1000), so the
+    // migration helper is entered. While it waits for the key, a confirmed
+    // first-variant promotion moves the weight to a sibling and CLEARS the
+    // parent. The in-lock read then sees spools: [] + totalWeight: null,
+    // which is indistinguishable from "already handled, nothing to do"
+    // unless the code asks whether the row is now a template. Without that
+    // question the job 201s against an empty template with no debit.
+    const parent = await Filament.create({
+      name: "Cleared By Promotion",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+
+    const res = await whileRouteIsQueued(
+      parent._id,
+      () => postJob(String(parent._id), 100),
+      async () => {
+        // What the promotion leaves behind: a live variant carrying the
+        // weight, and a parent cleared of it.
+        await Filament.create({
+          name: "Cleared By Promotion — Original",
+          vendor: "V",
+          type: "PLA",
+          parentId: parent._id,
+          spools: [{ label: "moved", totalWeight: 1000 }],
+        });
+        await Filament.updateOne({ _id: parent._id }, { $set: { totalWeight: null } });
+      },
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("template");
+    // Nothing was recorded, and the promoted variant keeps its full roll.
+    const moved = await Filament.findOne({ name: "Cleared By Promotion — Original" });
+    expect(moved.spools[0].totalWeight).toBe(1000);
+  });
+
+  it("adopts an already-migrated document so the fallback can't double-write (Codex P1)", async () => {
+    // The peer's migration has to land AFTER pass 1, or pass 1 simply loads
+    // the migrated document and the stale-handle branch is never reached —
+    // the test would pass with the adoption removed.
+    const f = await Filament.create({
+      name: "Migrated By Peer",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+
+    const res = await whileRouteIsQueued(
+      f._id,
+      () => postJob(String(f._id), 100),
+      async () => {
+        await Filament.updateOne(
+          { _id: f._id },
+          { $set: { totalWeight: null, spools: [{ label: "", totalWeight: 1000 }] } },
+        );
+      },
+    );
+
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+    const job = await res.json();
+    expect(job.usage[0].spoolId).toBeTruthy();
+  });
+
+  it("migrates every legacy filament in a MULTI-filament job", async () => {
+    // The multi-filament path can't hold a continuous lock (a cross-filament
+    // transaction would need every key at once), so each migration takes its
+    // own key one at a time — like the saves that follow it.
+    const a = await Filament.create({
+      name: "Legacy A", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    const b = await Filament.create({
+      name: "Legacy B", vendor: "V", type: "PETG", totalWeight: 800, spools: [],
+    });
+    const req = new NextRequest("http://localhost/api/print-history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobLabel: "Two rolls",
+        startedAt: new Date().toISOString(),
+        usage: [
+          { filamentId: String(a._id), grams: 100 },
+          { filamentId: String(b._id), grams: 50 },
+        ],
+      }),
+    });
+    const res = await postPrintHistory(req);
+    expect(res.status).toBe(201);
+
+    const freshA = await Filament.findById(a._id);
+    const freshB = await Filament.findById(b._id);
+    expect(freshA.spools).toHaveLength(1);
+    expect(freshA.spools[0].totalWeight).toBe(900);
+    expect(freshA.totalWeight).toBeNull();
+    expect(freshB.spools).toHaveLength(1);
+    expect(freshB.spools[0].totalWeight).toBe(750);
+  });
+
+  it("refuses when a promotion cleared the parent while we waited for the lock (Codex P1)", async () => {
+    // Pass 1 reads the legacy shape (spools: [], totalWeight: 1000), so the
+    // migration helper is entered. While it waits for the key, a confirmed
+    // first-variant promotion moves the weight to a sibling and CLEARS the
+    // parent. The in-lock read then sees spools: [] + totalWeight: null,
+    // which is indistinguishable from "already handled, nothing to do"
+    // unless the code asks whether the row is now a template. Without that
+    // question the job 201s against an empty template with no debit.
+    const parent = await Filament.create({
+      name: "Cleared By Promotion",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+
+    const res = await whileRouteIsQueued(
+      parent._id,
+      () => postJob(String(parent._id), 100),
+      async () => {
+        // What the promotion leaves behind: a live variant carrying the
+        // weight, and a parent cleared of it.
+        await Filament.create({
+          name: "Cleared By Promotion — Original",
+          vendor: "V",
+          type: "PLA",
+          parentId: parent._id,
+          spools: [{ label: "moved", totalWeight: 1000 }],
+        });
+        await Filament.updateOne({ _id: parent._id }, { $set: { totalWeight: null } });
+      },
+    );
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("template");
+    // Nothing was recorded, and the promoted variant keeps its full roll.
+    const moved = await Filament.findOne({ name: "Cleared By Promotion — Original" });
+    expect(moved.spools[0].totalWeight).toBe(1000);
+  });
+
+  it("adopts an already-migrated document so the fallback can't double-write (Codex P1)", async () => {
+    // Whoever held the lock first migrated it. Returning the STALE pass-1
+    // copy left the standalone fallback applying the job to an empty-spool
+    // document — a second spoolId: null history row with no debit.
+    const f = await Filament.create({
+      name: "Migrated By Peer", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    // Simulate the peer's migration landing between pass 1 and the lock.
+    await Filament.updateOne(
+      { _id: f._id },
+      { $set: { totalWeight: null, spools: [{ label: "", totalWeight: 1000 }] } },
+    );
+
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+    const job = await res.json();
+    expect(job.usage[0].spoolId).toBeTruthy();
+  });
+
+  it("leaves an earlier legacy roll untouched when a later target refuses (Codex P2)", async () => {
+    // This route is all-or-nothing, and with a single pass an ordinary legacy
+    // roll listed BEFORE a legacy template had already been rewritten (spool
+    // created, totalWeight nulled) by the time the template's refusal
+    // returned the 400 — no history row, but one filament silently
+    // restructured by a request that failed. The PREFLIGHT is what closes
+    // that: every target is checked read-only before any migration writes.
+    // (There is deliberately no rollback for the residual race — see the note
+    // on the migration helper.)
+    const roll = await Filament.create({
+      name: "Innocent Roll", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
+    });
+    const template = await Filament.create({
+      name: "Legacy Template", vendor: "V", type: "PETG", totalWeight: 800, spools: [],
+    });
+    await Filament.create({
+      name: "Legacy Template — Red", vendor: "V", type: "PETG", parentId: template._id,
+    });
+
+    const req = new NextRequest("http://localhost/api/print-history", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jobLabel: "Mixed",
+        startedAt: new Date().toISOString(),
+        usage: [
+          { filamentId: String(roll._id), grams: 100 },
+          { filamentId: String(template._id), grams: 50 },
+        ],
+      }),
+    });
+    const res = await postPrintHistory(req);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("template");
+
+    // The innocent roll is exactly as it was.
+    const fresh = await Filament.findById(roll._id);
+    expect(fresh.spools).toHaveLength(0);
+    expect(fresh.totalWeight).toBe(1000);
+  });
+
+  it("does NOT migrate an all-retired filament — that contract is unchanged (#305)", async () => {
+    // A legacy filament has an EMPTY array; an all-retired one has a populated
+    // array. Only the former migrates; the latter must still record
+    // spoolId: null with no debit.
+    const f = await Filament.create({
+      name: "All Retired",
+      vendor: "V",
+      type: "PLA",
+      spools: [{ label: "old", totalWeight: 500, retired: true }],
+    });
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.usage[0].spoolId).toBeNull();
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(500);
+  });
 });
