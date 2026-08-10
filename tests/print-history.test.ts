@@ -1735,11 +1735,14 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
   });
 
   it("leaves an earlier legacy roll untouched when a later target refuses (Codex P2)", async () => {
-    // This route is all-or-nothing. With a single pass, an ordinary legacy
+    // This route is all-or-nothing, and with a single pass an ordinary legacy
     // roll listed BEFORE a legacy template had already been rewritten (spool
     // created, totalWeight nulled) by the time the template's refusal
     // returned the 400 — no history row, but one filament silently
-    // restructured by a request that failed.
+    // restructured by a request that failed. The PREFLIGHT is what closes
+    // that: every target is checked read-only before any migration writes.
+    // (There is deliberately no rollback for the residual race — see the note
+    // on the migration helper.)
     const roll = await Filament.create({
       name: "Innocent Roll", vendor: "V", type: "PLA", totalWeight: 1000, spools: [],
     });

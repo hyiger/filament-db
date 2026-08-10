@@ -6,11 +6,6 @@ import { hasVariants } from "@/lib/resolveFilament";
 import { TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 import PrintHistory from "@/models/PrintHistory";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
-import {
-  untouchedMigrationFilter,
-  undoMigrationUpdate,
-  type AppliedLegacyMigration,
-} from "@/lib/legacySpoolRollback";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
@@ -28,14 +23,13 @@ import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUs
  * longer the one the debit runs against — these checks re-assert on the reloaded
  * doc what pass 1 asserted on the original.
  */
-/** A legacy migration this request performed, and the exact state it
- *  replaced — enough to undo precisely that and nothing else (Codex P1). */
-type MigrationApplied = AppliedLegacyMigration & { id: mongoose.Types.ObjectId };
-
-/** What one migration attempt did: refused, created a spool, or neither. */
+/** What one migration attempt decided. `created` records the spool this
+ *  request materialized (as opposed to one it ADOPTED from a peer that
+ *  migrated first) — kept because the distinction is load-bearing for the
+ *  reader even though nothing undoes it any more. */
 interface MigrationResult {
   refusal?: string;
-  created?: MigrationApplied;
+  created?: { id: mongoose.Types.ObjectId; spoolId: unknown; totalWeight: number };
 }
 
 class JobPreconditionError extends Error {
@@ -309,12 +303,7 @@ export async function POST(request: NextRequest) {
           return { refusal: TEMPLATE_NO_SPOOLS_BODY.message };
         }
         // NOTHING was created here — the spool on `fresh` belongs to whoever
-        // migrated first (Codex P1). Inferring "created" from `totalWeight`
-        // going null would attribute a peer's spool to this request, and a
-        // later failure would then delete it. The conditional filter in
-        // legacySpoolRollback would usually refuse anyway (an adopted spool
-        // this job debits carries a usageHistory entry), but that is a second
-        // line of defence, not a reason to report work we did not do.
+        // migrated first, and this request merely adopted it.
         return {};
       }
       // #605: inventory belongs on a template's variants, never on the
@@ -397,43 +386,33 @@ export async function POST(request: NextRequest) {
         : null;
     };
 
-    /**
-     * Undo the migrations this request applied, when a LATER step fails.
-     *
-     * Each migration is exactly one spool push plus one `totalWeight` null,
-     * so the inverse is exact — but only while nothing else has touched that
-     * spool. Between migrating filament A and refusing on filament B this
-     * request holds no key on A, so another print job can debit A's new spool
-     * and record its own history row. An unconditional `$pull` would then
-     * delete a spool in active use, erasing that job's inventory and
-     * usageHistory and orphaning its PrintHistory row (Codex P1).
-     *
-     * So the undo is CONDITIONAL — see src/lib/legacySpoolRollback.ts, which
-     * owns the filter and the reasoning (and is unit-tested; this file has no
-     * such seam). If anything intervened, the row is left alone: a
-     * migrated-but-not-debited filament is a benign representation change,
-     * while deleting a live spool is data loss.
-     *
-     * Best-effort throughout: a failure here must not replace the caller's
-     * honest 400/409 with a 500 about a document they never asked to change.
-     */
-    const rollbackMigrations = async (
-      applied: MigrationApplied[],
-      { locked = true }: { locked?: boolean } = {},
-    ) => {
-      for (const m of applied) {
-        const undo = () =>
-          Filament.updateOne(untouchedMigrationFilter(m), undoMigrationUpdate(m));
-        try {
-          // `locked: false` when the caller ALREADY holds the only relevant
-          // key (the single-filament path) — re-acquiring would self-deadlock
-          // on the chained mutex, the same rule `persistSequential` follows.
-          await (locked ? runExclusive(filamentLockKey(m.id), undo) : undo());
-        } catch (err) {
-          console.error("[print-history] failed to roll back a legacy migration:", err);
-        }
-      }
-    };
+    // NOTE: there is deliberately NO rollback of a migration once a LATER
+    // step fails. That was tried and removed (Codex P1 ×2).
+    //
+    // The undo has to be conditional, because between migrating filament A
+    // and failing on filament B this request holds no key on A and another
+    // request can act on A's new spool. But "has anyone touched it?" is an
+    // OPEN set: the weight and usageHistory are only the beginning — a peer
+    // can rename the spool's label, move its location, retire it, log a dry
+    // cycle, change its instanceId, or attach it to an AMS slot WITHOUT
+    // writing to the filament at all. Every predicate added closes one hole
+    // and leaves the next; the compensation can't be made safe by
+    // enumeration.
+    //
+    // And what it protects is nearly nothing. The migration is a
+    // REPRESENTATION change, not a semantic one: `{spools: [], totalWeight:
+    // 1000}` and `{spools: [{totalWeight: 1000}], totalWeight: null}` are the
+    // same roll with the same grams, both rendered identically by every
+    // surface (see the legacy branches in src/lib/inventoryStats.ts), and the
+    // second is the shape the app already asks users to migrate to. So a
+    // migration left behind by a refused job costs the user nothing, while a
+    // wrong rollback destroys a spool other requests can already see.
+    //
+    // The preflight above is what keeps the DETERMINISTIC case — an ordinary
+    // legacy roll listed before a legacy template — from writing anything at
+    // all. What remains is a promotion landing between the preflight and the
+    // migrate pass, and there the migrated row is simply left in its new,
+    // equivalent shape.
 
     // GH #224: snapshot every spool's pre-mutation state BEFORE pass 2
     // so the standalone-fallback path can roll back on a mid-loop
@@ -858,13 +837,6 @@ export async function POST(request: NextRequest) {
             filaments.findIndex((f) => String(f._id) === uniqueIds[0]),
           );
           if (migration.refusal) return errorResponse(migration.refusal, 400);
-          // Undo the migration on ANY failed exit below, not just a refusal
-          // (Codex P2): a 409 or a thrown error also means no history row and
-          // no debit, so leaving the filament rewritten is the same
-          // inconsistency. `locked: false` — this section already holds the
-          // only relevant key, and re-acquiring self-deadlocks.
-          const applied = migration.created ? [migration.created] : [];
-          const undo = () => rollbackMigrations(applied, { locked: false });
           buildSpoolSnapshots();
           try {
             await persistWithTransaction();
@@ -884,27 +856,16 @@ export async function POST(request: NextRequest) {
             // direct DB writes). The schema-level `optimisticConcurrency:
             // true` setting in src/models/Filament.ts makes this safe.
             if (err instanceof mongoose.Error.VersionError) {
-              await undo();
               return errorResponse(
                 "Filament was modified by another request during this job. Please retry.",
                 409,
               );
             }
-            if (!isTxnUnsupported) {
-              await undo();
-              throw err;
-            }
+            if (!isTxnUnsupported) throw err;
 
             // Fallback path for non-replicated mongod (offline/test) —
             // already inside the single filament's lock hold.
-            try {
-              const fallbackConflict = await persistSequential(false);
-              if (fallbackConflict) await undo();
-              return fallbackConflict;
-            } catch (fallbackErr) {
-              await undo();
-              throw fallbackErr;
-            }
+            return await persistSequential(false);
           }
         },
       );
@@ -933,45 +894,20 @@ export async function POST(request: NextRequest) {
         );
         if (refusal) return errorResponse(refusal, 400);
       }
-      // ...then migrate, rolling back anything this request already changed
-      // if a target turns into a template in the gap above. The pairing is
-      // the same shape `spoolTemplateGuard` uses — a cheap pre-check that
-      // handles the ordinary case without writing-then-undoing, plus a
-      // compensation for the race the check cannot close (a promotion landing
-      // between the two passes). Either alone would satisfy the observable
-      // contract; together the common path never writes work it has to undo,
-      // and the rare one still can't leave a half-rewritten request behind.
-      //
-      // The migration helper REPORTS what it created (Codex P1): inferring it
-      // from `totalWeight` going null would misread a peer's migration —
-      // adopted between pass 1 and the lock — as this request's own work, and
-      // a later refusal would then delete the peer's spool.
-      const migrated: MigrationApplied[] = [];
-      try {
-        for (let i = 0; i < filaments.length; i++) {
-          const migration = await runExclusive(
-            filamentLockKey(filaments[i]._id),
-            () => migrateLegacyFilamentInLock(i),
-          );
-          if (migration.created) migrated.push(migration.created);
-          if (migration.refusal) {
-            await rollbackMigrations(migrated);
-            return errorResponse(migration.refusal, 400);
-          }
-        }
-        buildSpoolSnapshots();
-        const conflict = await persistSequential(true);
-        // Every failed exit compensates, not just a refusal (Codex P2): a
-        // retryable 409 leaves no history row and no debit either, so a
-        // filament rewritten on the way to it is the same inconsistency.
-        if (conflict) {
-          await rollbackMigrations(migrated);
-          return conflict;
-        }
-      } catch (err) {
-        await rollbackMigrations(migrated);
-        throw err;
+      // ...then migrate. A target that turns into a template in the gap
+      // between the two passes still refuses, and any migration already
+      // applied is LEFT IN PLACE — see the note on the migration helper for
+      // why undoing it is worse than keeping it.
+      for (let i = 0; i < filaments.length; i++) {
+        const migration = await runExclusive(
+          filamentLockKey(filaments[i]._id),
+          () => migrateLegacyFilamentInLock(i),
+        );
+        if (migration.refusal) return errorResponse(migration.refusal, 400);
       }
+      buildSpoolSnapshots();
+      const conflict = await persistSequential(true);
+      if (conflict) return conflict;
     }
 
     return NextResponse.json(history, { status: 201 });
