@@ -1318,6 +1318,12 @@ function FilamentDetail() {
     if (!filament) return;
     const ok = await confirm({
       title: t("detail.template.convertTitle"),
+      // GH #1103 (Codex P2): the confirmation used to say only "color and N
+      // spools", which is wrong for a parent gated solely by its inventory
+      // weight or color name — and this is the ONE prompt before a family is
+      // restructured. It now names every field /promote actually moves, so
+      // it's accurate for every gating shape without composing i18n
+      // fragments client-side.
       message: t("detail.template.convertConfirm", {
         count: filament.spools?.length ?? 0,
       }),
@@ -1888,6 +1894,15 @@ function FilamentDetail() {
         const hasSpools = filament.spools?.length > 0;
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 
+        // GH #1103: a parent whose variants are ALL trashed is not a template
+        // (`isParent` is live-only, correctly — nothing inherits from it right
+        // now), so it keeps its normal spool tracker below. But it IS the one
+        // shape the restore route now refuses on, and its refusal tells the
+        // user to come here and convert. Without this the action doesn't
+        // exist, and every gated variant is unrestorable through the app.
+        const canConvertForTrashedVariants =
+          !!filament._hasTrashedVariants && parentPromotionState(filament).needed;
+
         // GH #1099: this used to hand-roll the aggregate, and the hand-rolled
         // loop had no `if (spool.retired) continue`. So a filament whose only
         // spool was retired still headlined "1 spools · 320g total (43%)" while
@@ -1901,6 +1916,20 @@ function FilamentDetail() {
 
         return (
           <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+            {canConvertForTrashedVariants && (
+              <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  {t("detail.template.trashedVariantsHint")}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleConvertToTemplate}
+                  className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
+                >
+                  {t("detail.template.convertAction")}
+                </button>
+              </div>
+            )}
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-medium text-gray-500">{t("detail.section.spoolTracker")}</h2>
               {hasSpools && (

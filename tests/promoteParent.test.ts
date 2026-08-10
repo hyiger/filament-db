@@ -47,21 +47,29 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       needed: true,
       parentColor: "#808080",
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
     expect(parentPromotionState({ color: null, spools: [{}, {}] })).toEqual({
       needed: true,
       parentColor: null,
       spoolCount: 2,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
     expect(parentPromotionState({ color: "#FF0000", spools: [{}] })).toEqual({
       needed: true,
       parentColor: "#FF0000",
       spoolCount: 1,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
     expect(parentPromotionState({ color: null, spools: [] })).toEqual({
       needed: false,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
   });
 
@@ -72,18 +80,24 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       needed: true,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: true,
+      hasInventoryWeight: false,
     });
     // Whitespace-only colorName is not a name.
     expect(parentPromotionState({ color: null, colorName: "   ", spools: [] })).toEqual({
       needed: false,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
     // A legacy inventory totalWeight is inventory — it gates.
     expect(parentPromotionState({ color: null, spools: [], totalWeight: 1250 })).toEqual({
       needed: true,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: true,
     });
   });
 
@@ -96,6 +110,8 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       needed: false,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
   });
 
@@ -108,6 +124,8 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       needed: false,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
   });
 
@@ -116,6 +134,8 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       needed: false,
       parentColor: null,
       spoolCount: 0,
+      hasColorName: false,
+      hasInventoryWeight: false,
     });
   });
 

@@ -62,6 +62,11 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
       parentName: "Gated Parent",
       parentColor: "#336699",
       spoolCount: 2,
+      // GH #1103: the gate now also reports the two remaining triggers, so a
+      // refusal message can name what is ACTUALLY blocking instead of always
+      // asserting a color.
+      hasColorName: false,
+      hasInventoryWeight: false,
       variantName: "Gated Parent — Original",
     });
     expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
@@ -351,6 +356,11 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
       parentName: "Gated Parent",
       parentColor: "#336699",
       spoolCount: 2,
+      // GH #1103: the gate now also reports the two remaining triggers, so a
+      // refusal message can name what is ACTUALLY blocking instead of always
+      // asserting a color.
+      hasColorName: false,
+      hasInventoryWeight: false,
       variantName: "Gated Parent — Original",
     });
     expect(readyRan).toBe(false);

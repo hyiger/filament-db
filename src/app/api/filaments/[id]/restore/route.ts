@@ -5,7 +5,7 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import {
   gateFirstVariantAdoption,
-  promotionRequired409Body,
+  restoreBlockedByTemplateBody,
 } from "@/lib/createVariantGated";
 
 /**
@@ -23,10 +23,31 @@ import {
  * parent's first live variant — and the parent may have re-acquired carrying
  * state (a color, spools, legacy inventory) while it sat variant-less. That
  * is the same restructuring event the create/PUT paths gate, so the restore
- * runs the same adoption gate: 409 `parent_promotion_required` until the
- * caller repeats the request with `{ "promoteParent": true }` in the body,
- * which promotes the parent first. The body is optional — a bare POST (the
- * pre-existing contract) behaves exactly as before for every non-gated case.
+ * runs the same adoption gate.
+ *
+ * GH #1103 — but restore REFUSES rather than offering to promote. The create
+ * and re-parent paths ask the user to build something new, so trading a
+ * confirmation for a restructure is a fair deal there. Restore does not: the
+ * user is asking for data BACK, exactly as it was. Delete a pre-#605 family
+ * (parent + four variants) and hit "Restore all", and the old contract met
+ * them with a modal, per variant, whose only "yes" answer rewrote the family
+ * — five rows where there had been four, the parent stripped — and whose "no"
+ * left that variant permanently unrestorable and re-prompted on every retry.
+ *
+ * Silently allowing it was investigated and is worse: there is no durable
+ * record that the family "used to look like this" (`_deletedAt` is the entire
+ * tombstone), so the same relaxation lets a parent that legitimately
+ * re-acquired a color while variant-less become a carrying template with live
+ * variants — the ambiguous shape #605 exists to prevent, created fresh, with
+ * that color then permanently unclearable (the form hides the editor but
+ * still resubmits the seeded value, and `templateStrip` only lets an explicit
+ * null through).
+ *
+ * So the restructure stays mandatory and stays the user's decision — it just
+ * moves to where they have context: "Convert to template" on the parent's own
+ * page, once for the whole family, instead of mid-bulk-restore per variant.
+ * `POST /api/filaments/{id}/promote` accepts a parent whose variants are all
+ * trashed precisely so that advice is actionable.
  */
 export async function POST(
   request: NextRequest,
@@ -34,16 +55,6 @@ export async function POST(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
-
-  // Optional body: `{ promoteParent: true }` confirms the F6 adoption gate.
-  // Restore historically takes no body, so absent/invalid JSON means false.
-  let promoteParent = false;
-  try {
-    const body = await request.json();
-    promoteParent = (body as { promoteParent?: unknown })?.promoteParent === true;
-  } catch {
-    /* no body — the pre-existing bare-POST contract */
-  }
 
   try {
     await dbConnect();
@@ -107,7 +118,10 @@ export async function POST(
       // it) and lands either before the gate (which then 409s/promotes) or
       // after the restore (where the PUT's template strip catches it).
       const adoption = await gateFirstVariantAdoption(Filament, trashed.parentId, {
-        promoteParent,
+        // GH #1103: never. Restore does not restructure a family — see the
+        // route docblock. A `promoteParent` in the body is ignored (it used to
+        // be the confirmation); the caller converts the parent first.
+        promoteParent: false,
         // The promotion copy must never squat on the reviving doc's name.
         adoptedName: trashed.name,
         onReady: async () => {
@@ -132,7 +146,9 @@ export async function POST(
         return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
       }
       if (adoption.outcome === "promotion_required") {
-        return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
+        return NextResponse.json(restoreBlockedByTemplateBody(adoption), {
+          status: 409,
+        });
       }
 
       return NextResponse.json({ message: "Restored", _id: String(trashed._id) });
