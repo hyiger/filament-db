@@ -7,6 +7,7 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
+import { JS_TRIM_CHARS } from "@/lib/trimEntityNames";
 
 export interface ImportRow {
   name?: string;
@@ -697,8 +698,15 @@ export async function upsertImportRows(
   // below keys on the TRIMMED name and prefers a row already stored exactly
   // that way, so a canonical row always wins and the untrimmed one is left
   // for the migration to report.
+  // ACTIVE matches only (Codex P2). A tombstone is not a match for this
+  // purpose: with the collection skipped, an active `"PLA "` can coexist with
+  // a soft-deleted `"PLA"`, and counting the tombstone as "found" skipped the
+  // scan — so the importer resurrected the tombstone and left TWO active rows
+  // rendering identically, which is the duplicate this exists to prevent.
   const alreadyFound = new Set(
-    (allExisting as unknown as LeanFilament[]).map((d) => String(d.name ?? "").trim()),
+    (allExisting as unknown as LeanFilament[])
+      .filter((d) => d._deletedAt == null)
+      .map((d) => String(d.name ?? "").trim()),
   );
   const stillMissing = [...namesToLoad].filter((n) => !alreadyFound.has(n.trim()));
   if (stillMissing.length > 0) {
@@ -718,6 +726,14 @@ export async function upsertImportRows(
                   input: {
                     $cond: [{ $eq: [{ $type: "$name" }, "string"] }, "$name", ""],
                   },
+                  // JS semantics, not MongoDB's (Codex P2). `$trim`'s default
+                  // set is the ASCII one; it does not strip U+00A0, U+FEFF,
+                  // U+3000 and the other separators `String.prototype.trim`
+                  // removes — which is exactly what the schema setter uses,
+                  // so without this the fallback and the schema would
+                  // disagree about the same row. `chars` REPLACES the default
+                  // set, and JS_TRIM_CHARS is the full one.
+                  chars: JS_TRIM_CHARS,
                 },
               },
               stillMissing.map((n) => n.trim()),

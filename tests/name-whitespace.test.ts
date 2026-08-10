@@ -206,6 +206,30 @@ describe("trimEntityNames against a real database (#1116)", () => {
 });
 
 describe("filament import matches a legacy untrimmed row (#1116)", () => {
+  /**
+   * Reach the condition the raw-driver fallback exists for: an untrimmed row
+   * present at import time.
+   *
+   * Doing that by index manipulation does not work. Mongoose's `autoIndex`
+   * rebuilds the schema's unique `name_1` in the BACKGROUND on first model
+   * use, so a plain index planted here races that build — locally about half
+   * the runs, and it was a real CI failure (IndexKeySpecsConflict, because
+   * MongoDB auto-names both indexes `name_1`).
+   *
+   * So settle the migration instead: one no-op import flips
+   * `cached.migrations.trimEntityNames`, after which the pass does not run
+   * again in this process and a row inserted through the raw driver survives
+   * untrimmed. That models the production states that matter — a row the pass
+   * had to leave alone, or a collection it skipped — without depending on
+   * which one, and without fighting autoIndex.
+   */
+  async function settleTrimMigration() {
+    await upsertImportRows([
+      { name: "Settle Probe", vendor: "V", type: "PLA" },
+    ]);
+    await Filament.deleteMany({ name: "Settle Probe" });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;
 
@@ -248,8 +272,7 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     // schema setter applies to QUERY values too. Without the raw-driver
     // load the import creates a SECOND record beside it — the duplicate this
     // whole change exists to stop.
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
-    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "PLA Legacy ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
     });
@@ -269,7 +292,6 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
       .findOne({ name: "PLA Legacy" });
     expect(raw).not.toBeNull();
     expect(raw!.cost).toBe(42);
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
   });
 
   it("matches a surviving legacy row even when the IMPORT name is canonical (Codex P1)", async () => {
@@ -277,8 +299,7 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     // spelling missed the ordinary case: importing a canonical "PLA Canon"
     // against a surviving "PLA Canon " produced no candidates at all, and the
     // importer created a second row beside it.
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
-    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "PLA Canon ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
     });
@@ -290,12 +311,10 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     expect(result.created).toBe(0);
     expect(result.updated).toBe(1);
     expect(await Filament.countDocuments({})).toBe(1);
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
   });
 
   it("matches across DIFFERENT edge whitespace on the two sides", async () => {
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
-    await mongoose.connection.collection("filaments").createIndex({ name: 1 });
+    await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "  PLA Both", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
     });
@@ -306,7 +325,44 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
 
     expect(result.created).toBe(0);
     expect(await Filament.countDocuments({})).toBe(1);
-    await mongoose.connection.collection("filaments").dropIndexes().catch(() => {});
+  });
+
+  it("scans when the indexed lookup found only a TOMBSTONE (Codex P2)", async () => {
+    // With the collection skipped, an active "PLA Ghost " can coexist with a
+    // soft-deleted "PLA Ghost". Counting the tombstone as "found" skipped the
+    // scan, so the importer resurrected the tombstone and left TWO active
+    // rows rendering identically.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertMany([
+      { name: "PLA Ghost", vendor: "V", type: "PLA", _deletedAt: new Date(), spools: [], cost: 1 },
+      { name: "PLA Ghost ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 2 },
+    ]);
+
+    const result = await upsertImportRows([
+      { name: "PLA Ghost", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    // Exactly one ACTIVE row, and it is the one that was already active.
+    expect(await Filament.countDocuments({ _deletedAt: null })).toBe(1);
+    const active = await Filament.findOne({ _deletedAt: null });
+    expect(active.cost).toBe(42);
+  });
+
+  it("matches a name whose whitespace only JS trim() strips (Codex P2)", async () => {
+    // MongoDB's $trim default set is ASCII; it does not strip U+FEFF, which
+    // String.prototype.trim does — and the schema setter uses the latter.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Bom\uFEFF", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Bom", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(await Filament.countDocuments({ _deletedAt: null })).toBe(1);
   });
 
   it("a whitespace-only name is reported as a missing required field", async () => {
