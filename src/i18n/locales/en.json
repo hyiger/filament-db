@@ -1677,6 +1677,7 @@
   "settings.aiConfigured": "{provider} key configured",
   "settings.aiNotConfigured": "No API key configured",
   "settings.aiProvider": "AI Provider",
+  "settings.aiProviderSwitchHint": "You\u2019re currently set up with {from}. Switching to {to} takes effect once you save an API key for {to} \u2014 keys aren\u2019t interchangeable between providers.",
   "settings.getKeyFrom": "Get your key from",
   "settings.enterApiKey": "Enter API key",
   "settings.aiKeySaved": "{provider} key saved",
