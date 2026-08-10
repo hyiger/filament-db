@@ -136,6 +136,31 @@ export interface TrimEntityNamesResult {
   /** Rows left alone because trimming them would collide with an existing
    *  row, or would empty the required field. */
   conflicts: TrimNameConflict[];
+  /**
+   * Rows whose trim failed for a reason that WILL resolve on its own, so the
+   * caller must keep the migration unsettled and retry (Codex P2).
+   *
+   * The one producer: a peer still carrying the pre-#303 LEGACY plain unique
+   * `name_1`, which — unlike the partial index this repo intends — also covers
+   * DELETED rows. Two trashed rows named `"X"` and `"X "` are legal under the
+   * intended index but collide under the legacy one, so the trim E11000s.
+   *
+   * That conflict is classified INACTIVE (both rows are deleted, so no active
+   * row is involved), and inactive conflicts deliberately do not block — which
+   * meant the migration SETTLED on it. `coreModelIndexes` then replaces the
+   * legacy index with the partial one later in the very same connect, making
+   * the write safe, but nothing ever retried it: the untrimmed tombstone stayed
+   * untrimmed forever, and restoring it (which only touches `_deletedAt`) made
+   * an untrimmed name ACTIVE and unreachable through Mongoose name queries —
+   * GH #1116 itself, resurrected, on a database that had already "completed"
+   * the migration.
+   *
+   * Kept separate from `skipped` on purpose: `skipped` also tells the sync
+   * service to stop reconciling that collection BY NAME, which is a real cost
+   * (an unrelated same-name pair then E11000s every cycle, the v1.11.3 bug).
+   * Nothing here is unsafe to sync — the row simply needs another pass.
+   */
+  deferred: { collection: TrimmableCollection; reason: string }[];
 }
 
 interface MinimalCursor {
@@ -235,6 +260,7 @@ export async function trimEntityNames(
   let trimmed = 0;
   const conflicts: TrimNameConflict[] = [];
   const skipped: TrimEntityNamesResult["skipped"] = [];
+  const deferred: TrimEntityNamesResult["deferred"] = [];
 
   for (const collectionName of TRIMMABLE_COLLECTIONS) {
     const collection = db.collection(collectionName);
@@ -397,11 +423,56 @@ export async function trimEntityNames(
       } catch (err) {
         if (!isDuplicateKeyError(err)) throw err;
         conflicts.push({ collection: collectionName, name: doc.name, active });
+        // A row OUTSIDE the partial index cannot collide under the index this
+        // repo intends — deleted rows may freely share a name (GH #213 name
+        // reuse). So a duplicate key here proves the collection is running
+        // under the LEGACY plain unique `name_1`, which also covers deleted
+        // rows. `coreModelIndexes` replaces that index later in this same
+        // connect, after which the identical write succeeds.
+        //
+        // Keyed on `_deletedAt`, NOT on `active`: an untombstoned `_purged`
+        // zombie is inactive for GATING purposes but its `_deletedAt` is still
+        // null, so it IS in the partial index and its collision is genuine
+        // rather than a legacy-index artifact.
+        if (!isActiveLikeSchema(doc._deletedAt)) {
+          deferred.push({
+            collection: collectionName,
+            reason:
+              `${JSON.stringify(doc.name)} collides only under the legacy ` +
+              `plain unique name index; retrying after it is replaced`,
+          });
+        }
       }
     }
   }
 
-  return { trimmed, conflicts, skipped };
+  return { trimmed, conflicts, skipped, deferred };
+}
+
+/**
+ * How many items keep the migration UNSETTLED, i.e. force another pass.
+ *
+ * Extracted so the decision is testable (Codex P2): it used to be an inline
+ * expression inside `dbConnect`'s migration block, which no test could reach —
+ * so the rule that `deferred` must block was unpinned, and an unpinned rule is
+ * one refactor away from silently reverting.
+ *
+ * Three inputs, three different reasons:
+ *   - `skipped`  — the collection was never touched (no protective index).
+ *   - `conflicts.active` — a real duplicate a human can go and resolve.
+ *   - `deferred` — blocked only by a legacy index this connect will replace.
+ *
+ * INACTIVE conflicts deliberately do NOT block: a whitespace-only or purged
+ * name is untrimmable forever and invisible in the UI, so blocking on it would
+ * keep the migration retrying (and, on the sync path, gate a collection) with
+ * nothing anyone could do about it.
+ */
+export function trimBlockedCount(result: TrimEntityNamesResult): number {
+  return (
+    result.conflicts.filter((c) => c.active).length +
+    (result.skipped?.length ?? 0) +
+    (result.deferred?.length ?? 0)
+  );
 }
 
 /** One log line summarizing a run, or null when there was nothing to say. */

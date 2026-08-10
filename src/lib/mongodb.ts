@@ -3,6 +3,7 @@ import { clearLegacyNozzleConditionsOnce, type MinimalDb } from "./legacyNozzleC
 import {
   trimEntityNames,
   describeTrimResult,
+  trimBlockedCount,
   type MinimalTrimDb,
 } from "./trimEntityNames";
 
@@ -271,8 +272,13 @@ export default async function dbConnect() {
       // A SKIPPED collection also means "not done" (Codex P1): its rows were
       // deliberately left untouched because the unique index couldn't be
       // established, so the pass must stay retryable until that is resolved.
-      const blocked =
-        result.conflicts.filter((c) => c.active).length + result.skipped.length;
+      // `deferred` counts too (Codex P2): those rows failed ONLY because a
+      // legacy plain unique index still covers deleted rows, which
+      // `coreModelIndexes` replaces later in this same connect. Settling on
+      // them would strand an untrimmed tombstone forever — and restoring it
+      // makes an untrimmed name active and unreachable by name, i.e. GH #1116
+      // again on a database that already reported the migration complete.
+      const blocked = trimBlockedCount(result);
       if (blocked === 0) {
         cached.migrations.trimEntityNames = true;
       } else {

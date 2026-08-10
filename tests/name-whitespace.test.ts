@@ -381,4 +381,56 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     expect(result.created).toBe(1);
     expect(await Filament.findOne({ name: "Fresh PLA" })).not.toBeNull();
   });
+
+  /**
+   * GH #1116 (Codex P2, round 22): a peer upgraded from the pre-#303 schema
+   * still carries the LEGACY plain unique `name_1`, which covers DELETED rows
+   * too. Two trashed rows named "X" and "X " are perfectly legal under the
+   * partial index this repo intends, but collide under that one.
+   *
+   * The conflict is classified INACTIVE (no active row is involved) and
+   * inactive conflicts deliberately do not block — so the migration SETTLED on
+   * it. `coreModelIndexes` then replaces the legacy index later in the same
+   * connect, making the write safe, but nothing retried: the tombstone stayed
+   * untrimmed forever, and restoring it (which only touches `_deletedAt`) made
+   * an untrimmed name ACTIVE and unreachable through Mongoose name queries —
+   * GH #1116 itself, on a database that had reported the migration complete.
+   */
+  it("defers a trim that only the legacy plain unique index blocks", async () => {
+    const db = () => mongoose.connection.db as unknown as MinimalTrimDb;
+    const col = mongoose.connection.collection("locations");
+    // Stand up the LEGACY index: plain unique, no partial filter.
+    await col.dropIndexes().catch(() => {});
+    await col.createIndex({ name: 1 }, { unique: true, name: "legacy_name_1" });
+
+    const deletedAt = new Date();
+    await col.insertMany([
+      { name: "Shelf", kind: "shelf", _deletedAt: deletedAt },
+      { name: "Shelf ", kind: "shelf", _deletedAt: deletedAt },
+    ]);
+
+    const res = await trimEntityNames(db());
+
+    // The row could not be trimmed...
+    const stillUntrimmed = await col.findOne({ name: "Shelf " });
+    expect(stillUntrimmed).not.toBeNull();
+    // ...and that MUST be reported as retryable, not settled. Both halves
+    // matter: `active` stays false (nothing for a human to fix), while
+    // `deferred` is what keeps the caller from marking the migration done.
+    expect(res.conflicts.some((c) => c.active)).toBe(false);
+    expect(res.deferred.length).toBeGreaterThan(0);
+    expect(res.deferred[0].collection).toBe("locations");
+
+    // Once the intended partial index is in place the identical pass succeeds,
+    // which is exactly why settling on it was wrong.
+    await col.dropIndex("legacy_name_1");
+    await col.createIndex(
+      { name: 1 },
+      { unique: true, partialFilterExpression: { _deletedAt: null } },
+    );
+    const after = await trimEntityNames(db());
+    expect(after.deferred.length).toBe(0);
+    expect(await col.findOne({ name: "Shelf " })).toBeNull();
+    expect(await col.countDocuments({ name: "Shelf" })).toBe(2);
+  });
 });

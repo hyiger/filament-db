@@ -7,6 +7,7 @@ import {
   trimEntityNames,
   describeTrimResult,
   findTrimmedNameCollision,
+  trimBlockedCount,
   type MinimalTrimDb,
 } from "@/lib/trimEntityNames";
 
@@ -356,7 +357,7 @@ describe("the fallback index check (Codex P1)", () => {
 
 describe("describeTrimResult", () => {
   it("says nothing when there was nothing to do", () => {
-    expect(describeTrimResult({ trimmed: 0, conflicts: [], skipped: [] })).toBeNull();
+    expect(describeTrimResult({ trimmed: 0, conflicts: [], skipped: [], deferred: [] })).toBeNull();
   });
 
   it("logs an INACTIVE conflict too — it just doesn't gate anything", () => {
@@ -366,7 +367,7 @@ describe("describeTrimResult", () => {
     const line = describeTrimResult({
       trimmed: 0,
       conflicts: [{ collection: "filaments", name: "  ", active: false }],
-      skipped: [],
+      skipped: [], deferred: [],
     });
     expect(line).toContain('filaments: "  "');
   });
@@ -375,7 +376,7 @@ describe("describeTrimResult", () => {
     const line = describeTrimResult({
       trimmed: 2,
       conflicts: [{ collection: "locations", name: "Drybox #1 ", active: true }],
-      skipped: [],
+      skipped: [], deferred: [],
     });
     expect(line).toContain("trimmed 2");
     expect(line).toContain('locations: "Drybox #1 "');
@@ -386,13 +387,14 @@ describe("describeTrimResult", () => {
       trimmed: 0,
       conflicts: [],
       skipped: [{ collection: "locations", reason: "already has duplicate active names" }],
+      deferred: [],
     });
     expect(line).toContain("SKIPPED locations");
     expect(line).toContain("duplicate active names");
   });
 
   it("reports trims alone", () => {
-    expect(describeTrimResult({ trimmed: 3, conflicts: [], skipped: [] })).toContain("trimmed 3");
+    expect(describeTrimResult({ trimmed: 3, conflicts: [], skipped: [], deferred: [] })).toContain("trimmed 3");
   });
 });
 
@@ -711,5 +713,54 @@ describe("concurrent rename during the scan (Codex P2)", () => {
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
     expect(rows[0].name).toBe("Renamed By User");
+  });
+});
+
+
+/**
+ * GH #1116 (Codex P2, round 22). The settle rule is what decides whether the
+ * migration ever runs again, and it used to be an unreachable inline
+ * expression inside `dbConnect` — so nothing pinned it.
+ */
+describe("trimBlockedCount", () => {
+  const base = { trimmed: 0, conflicts: [], skipped: [], deferred: [] };
+
+  it("settles a clean pass", () => {
+    expect(trimBlockedCount({ ...base, trimmed: 3 })).toBe(0);
+  });
+
+  it("does NOT settle while a legacy-index trim is deferred", () => {
+    // The whole point: the conflict is inactive (nothing a human can fix), so
+    // only `deferred` keeps this unsettled. Settling here strands an untrimmed
+    // tombstone forever — and restoring it makes an untrimmed name active and
+    // unreachable by name, which is GH #1116 all over again.
+    expect(
+      trimBlockedCount({
+        ...base,
+        conflicts: [{ collection: "locations", name: "Shelf ", active: false }],
+        deferred: [{ collection: "locations", reason: "legacy index" }],
+      }),
+    ).toBe(1);
+  });
+
+  it("blocks on an active conflict and on a skipped collection", () => {
+    expect(
+      trimBlockedCount({
+        ...base,
+        conflicts: [{ collection: "filaments", name: "PLA ", active: true }],
+        skipped: [{ collection: "nozzles", reason: "no index" }],
+      }),
+    ).toBe(2);
+  });
+
+  it("ignores inactive conflicts on their own", () => {
+    // A whitespace-only or purged name is untrimmable forever and invisible in
+    // the UI. Blocking on it would retry (and gate sync) with no way out.
+    expect(
+      trimBlockedCount({
+        ...base,
+        conflicts: [{ collection: "printers", name: "   ", active: false }],
+      }),
+    ).toBe(0);
   });
 });
