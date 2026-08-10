@@ -384,6 +384,32 @@ describe("findTrimmedNameCollision", () => {
     expect(castNameLikeSchema(Object.create(null))).toBeNull();
   });
 
+  it("mirrors the string-`_id` clause of Mongoose's castString (Codex P2)", async () => {
+    // mongoose/lib/cast/string.js checks `typeof value?._id === "string"`
+    // BEFORE the toString clause — the populated-doc case. It is reachable
+    // from plain JSON, so it hits the snapshot precheck too: `{"_id": "X"}`
+    // beside `"X "` both store as "X" and E11000 after the wipe.
+    expect(castNameLikeSchema({ _id: "X" })).toBe("X");
+    // It wins over the toString clause, exactly as in the source.
+    expect(castNameLikeSchema({ _id: "X", toString: () => "Y" })).toBe("X");
+    // A NON-string _id doesn't take that clause; the object then falls to
+    // toString and, being a plain object, is refused.
+    expect(castNameLikeSchema({ _id: 7 })).toBeNull();
+
+    // And the array clause is `!Array.isArray`, not a toString comparison:
+    // an object merely carrying the array method is not an array.
+    const arrayish = { toString: Array.prototype.toString, length: 0 };
+    expect(castNameLikeSchema(arrayish)).toBe(String(arrayish));
+
+    // Sanity: the real caster agrees with all of the above.
+    const mongoose = (await import("mongoose")).default;
+    const Probe = mongoose.models.__CastProbe
+      ?? mongoose.model("__CastProbe", new mongoose.Schema({ name: String }));
+    for (const v of [{ _id: "X" }, { _id: "X", toString: () => "Y" }, arrayish]) {
+      expect(new Probe({ name: v }).name).toBe(castNameLikeSchema(v));
+    }
+  });
+
   it("treats a PURGED FILAMENT row as outside the index (Codex P2)", () => {
     // The restore path stamps `_deletedAt` on a `_purged` zombie before
     // inserting, so it never enters the partial unique index. Rejecting the

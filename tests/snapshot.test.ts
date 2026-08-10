@@ -1328,6 +1328,22 @@ describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => 
     expect(body.error).toContain("whitespace");
   });
 
+  it("catches a `{_id: \"X\"}` name, which the String cast stores as \"X\" (#1116)", async () => {
+    // mongoose castString takes `value._id` when it is a string, before the
+    // toString clause — and that shape is expressible in plain JSON, so a
+    // snapshot can carry it.
+    const existing = await Location.create({ name: "Survivor", kind: "shelf" });
+    const { res, body } = await restore(
+      file([
+        { name: { _id: "Cast Me" }, kind: "drybox" },
+        { name: "Cast Me ", kind: "drybox" },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
   it("still restores a clean file", async () => {
     const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
     expect(res.status).toBe(200);

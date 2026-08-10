@@ -330,22 +330,28 @@ export function castNameLikeSchema(raw: unknown): string | null {
   // exactly that pair and let the E11000 happen after the wipe.
   if (typeof raw === "number") return String(raw);
   if (typeof raw === "boolean") return String(raw);
-  // Objects with a MEANINGFUL `toString` (Codex P2). Mongoose's String cast
-  // accepts them — an ObjectId, a Date, a Buffer — and rejects only plain
-  // objects and arrays, whose `toString` is the inherited one. Returning null
-  // for all objects made this helper disagree with the cast it claims to
-  // mirror: the Atlas route would look up `""`, miss the local row, and then
-  // hand the raw value to `create`, where Mongoose casts it after all and
-  // E11000s against the very row it should have updated.
+  // Transcribed from mongoose/lib/cast/string.js, in ITS order, because
+  // paraphrasing it has now been wrong twice (Codex P2 ×2):
   //
-  // JSON never produces these, so the snapshot precheck is unaffected; the
-  // Atlas path reads real BSON off the driver, where it matters.
+  //   1. a value with a STRING `_id` casts to that `_id` — the populated-doc
+  //      case, and reachable from JSON as plain `{"_id": "X"}`, so it hits
+  //      the snapshot precheck as well as the Atlas path;
+  //   2. otherwise anything with a non-default `toString` that is not an
+  //      array — an ObjectId, a Date, a Buffer;
+  //   3. otherwise the cast THROWS, which is what leaves the value for
+  //      validation to reject rather than something this helper invents.
+  //
+  // Note clause 2 tests `Array.isArray`, not `toString !== Array.prototype
+  // .toString`: an object carrying the array method is not an array, and
+  // Mongoose accepts it. Mirroring the predicate rather than its effect is
+  // the whole point.
   if (typeof raw === "object" && raw !== null) {
-    const toString = (raw as { toString?: unknown }).toString;
+    const withId = raw as { _id?: unknown; toString?: unknown };
+    if (typeof withId._id === "string") return withId._id;
     if (
-      typeof toString === "function" &&
-      toString !== Object.prototype.toString &&
-      toString !== Array.prototype.toString
+      typeof withId.toString === "function" &&
+      withId.toString !== Object.prototype.toString &&
+      !Array.isArray(raw)
     ) {
       return String(raw);
     }
