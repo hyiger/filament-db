@@ -343,6 +343,58 @@ export async function POST(request: NextRequest) {
       return null;
     };
 
+    /**
+     * The migration's REFUSAL decision alone, with no write — the preflight
+     * the multi-filament path runs over every target first. Must hold the
+     * filament's key, like the migration it precedes.
+     */
+    const checkLegacyMigrationAllowed = async (
+      index: number,
+    ): Promise<string | null> => {
+      const filament = filaments[index];
+      if (!filament) return null;
+      if (filament.spools.length > 0 || filament.totalWeight == null) return null;
+      const fresh = await Filament.findOne({
+        _id: filament._id,
+        _deletedAt: null,
+      }).lean();
+      if (!fresh) return null;
+      if (fresh.spools.length > 0) return null;
+      return (await hasVariants(Filament, String(fresh._id)))
+        ? TEMPLATE_NO_SPOOLS_BODY.message
+        : null;
+    };
+
+    /**
+     * Undo the migrations this request already applied, when a later target
+     * refuses. Each is exactly one spool push plus one `totalWeight` null, so
+     * the inverse is exact — and it runs under the same key, so it can't race
+     * a promotion that is mid-flight on the same family.
+     *
+     * Best-effort by design: a failure here would replace the caller's honest
+     * 400 with a 500 about a document they never asked to change.
+     */
+    const rollbackMigrations = async (
+      applied: { id: mongoose.Types.ObjectId; spoolId: unknown; totalWeight: number }[],
+    ) => {
+      for (const m of applied) {
+        try {
+          await runExclusive(filamentLockKey(m.id), () =>
+            Filament.updateOne(
+              { _id: m.id },
+              {
+                $set: { totalWeight: m.totalWeight },
+                $pull: { spools: { _id: m.spoolId } },
+                $inc: { __v: 1 },
+              },
+            ),
+          );
+        } catch (err) {
+          console.error("[print-history] failed to roll back a legacy migration:", err);
+        }
+      }
+    };
+
     // GH #224: snapshot every spool's pre-mutation state BEFORE pass 2
     // so the standalone-fallback path can roll back on a mid-loop
     // failure. Captures the real pre-debit totalWeight so the
@@ -809,12 +861,50 @@ export async function POST(request: NextRequest) {
       // pre-existing window in which a concurrent promotion can move a spool
       // out from under a job — the same window an already-spooled filament
       // has always had on this path.
+      //
+      // PREFLIGHT every target before migrating any of them (Codex P2). This
+      // route is all-or-nothing, and with a single pass an ordinary legacy
+      // roll listed before a legacy TEMPLATE had already been rewritten
+      // (spool created, `totalWeight` nulled) by the time the template's
+      // refusal returned the 400 — no history row, but one filament silently
+      // restructured by a request that failed. The check is read-only and
+      // takes each key exactly as the migration will.
       for (let i = 0; i < filaments.length; i++) {
+        const refusal = await runExclusive(filamentLockKey(filaments[i]._id), () =>
+          checkLegacyMigrationAllowed(i),
+        );
+        if (refusal) return errorResponse(refusal, 400);
+      }
+      // ...then migrate, rolling back anything this request already changed
+      // if a target turns into a template in the gap above. The pairing is
+      // the same shape `spoolTemplateGuard` uses — a cheap pre-check that
+      // handles the ordinary case without writing-then-undoing, plus a
+      // compensation for the race the check cannot close (a promotion landing
+      // between the two passes). Either alone would satisfy the observable
+      // contract; together the common path never writes work it has to undo,
+      // and the rare one still can't leave a half-rewritten request behind.
+      const migrated: { id: mongoose.Types.ObjectId; spoolId: unknown; totalWeight: number }[] = [];
+      for (let i = 0; i < filaments.length; i++) {
+        const before = filaments[i]?.totalWeight;
         const refusal = await runExclusive(
           filamentLockKey(filaments[i]._id),
           () => migrateLegacyFilamentInLock(i),
         );
-        if (refusal) return errorResponse(refusal, 400);
+        if (refusal) {
+          await rollbackMigrations(migrated);
+          return errorResponse(refusal, 400);
+        }
+        const after = filaments[i];
+        if (typeof before === "number" && after?.totalWeight == null) {
+          const created = after.spools[after.spools.length - 1];
+          if (created) {
+            migrated.push({
+              id: after._id as mongoose.Types.ObjectId,
+              spoolId: created._id,
+              totalWeight: before,
+            });
+          }
+        }
       }
       buildSpoolSnapshots();
       const conflict = await persistSequential(true);
