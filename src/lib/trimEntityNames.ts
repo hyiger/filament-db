@@ -105,15 +105,14 @@ export interface TrimNameConflict {
   /** The stored name, untouched. */
   name: string;
   /**
-   * Was the row ACTIVE — i.e. covered by the partial unique name index?
+   * Was the row ACTIVE — i.e. something a human could actually resolve?
    *
    * Every conflict is worth LOGGING, but only an active one can actually
-   * make two databases disagree about identity, which is what gates the
-   * hybrid sync (Codex P1). A soft-deleted row with a whitespace-only name
-   * is untrimmable and always will be, cannot collide in a partial index and
-   * is never touched by `reconcileByName` — so treating it as a gate would
-   * block that collection's sync forever, with nothing the user can do about
-   * it (a purged filament isn't even visible in the trash).
+   * make two databases disagree about identity in a way someone can fix,
+   * which is what gates the hybrid sync (Codex P1). A soft-deleted or
+   * `_purged` row with a whitespace-only name is untrimmable and always will
+   * be, and it is invisible in the UI — so treating it as a gate would block
+   * that collection's sync forever with no user-accessible resolution.
    */
   active: boolean;
 }
@@ -127,7 +126,9 @@ export interface TrimEntityNamesResult {
 }
 
 interface MinimalCursor {
-  toArray(): Promise<{ _id: unknown; name?: unknown; _deletedAt?: unknown }[]>;
+  toArray(): Promise<
+    { _id: unknown; name?: unknown; _deletedAt?: unknown; _purged?: unknown }[]
+  >;
 }
 
 interface MinimalCollection {
@@ -177,17 +178,32 @@ export async function trimEntityNames(
     const docs = await collection
       .find(
         { name: { $regex: EDGE_WHITESPACE_PATTERN } },
-        { projection: { name: 1, _deletedAt: 1 } },
+        { projection: { name: 1, _deletedAt: 1, _purged: 1 } },
       )
       .toArray();
 
     for (const doc of docs) {
       if (typeof doc.name !== "string") continue;
       if (!hasEdgeWhitespace(doc.name)) continue;
-      // Matches the partial index exactly. A `_purged` row is tombstoned by
-      // the GH #1004 `purgedZombies` migration before any sync runs, so
-      // `_deletedAt` is the whole test here.
-      const active = doc._deletedAt == null;
+      // A `_purged` row is NOT active for gating purposes, even when its
+      // `_deletedAt` is still null (Codex P1 round 2).
+      //
+      // The previous version leaned on the `purgedZombies` migration having
+      // re-tombstoned it — which is precisely the assumption
+      // `SyncService.sync()` documents as unsafe: the REMOTE never runs
+      // `dbConnect` at all, and the local side may sync before it does. So an
+      // Atlas zombie (`_purged: true`, `_deletedAt: null`) with an
+      // untrimmable name would permanently block filament and print-history
+      // sync — the same unrecoverable, invisible failure the `active` flag
+      // was introduced to prevent, reached by another door.
+      //
+      // A purge marker is a one-way tombstone the sync engine already
+      // special-cases and the UI hides, so a human cannot resolve it. If such
+      // a row is still in the partial index the worst case is a loud,
+      // retryable E11000 on that collection — recoverable, and repaired by
+      // the zombie migration on the next connect. Being blocked forever with
+      // no signal is not.
+      const active = doc._deletedAt == null && doc._purged !== true;
       const next = doc.name.trim();
       if (next === "") {
         // `name` is `required`, so a whitespace-only name can't be trimmed

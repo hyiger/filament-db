@@ -1047,9 +1047,12 @@ describe("SyncService — v1.12 sync expansion", () => {
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
       const now = new Date();
+      // A zombie exactly as Atlas can hold it: `_purged` set but NOT yet
+      // tombstoned, because the remote never runs dbConnect's purgedZombies
+      // migration (Codex P1 round 2 — the sync must not assume it ran).
       await localDb.collection("filaments").insertOne({
         name: "   ", vendor: "V", type: "PLA", spools: [],
-        syncId: "fil-tombstone", _deletedAt: now, _purged: true, createdAt: now, updatedAt: now,
+        syncId: "fil-tombstone", _deletedAt: null, _purged: true, createdAt: now, updatedAt: now,
       });
       await remoteDb.collection("filaments").insertOne({
         name: "Syncs Fine", vendor: "V", type: "PLA", spools: [],

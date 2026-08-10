@@ -16,9 +16,14 @@ import {
  * the real partial index would exercise it.
  */
 function makeDb(
-  seed: Partial<Record<string, { _id: string; name?: unknown; _deletedAt?: unknown }[]>>,
+  seed: Partial<
+    Record<string, { _id: string; name?: unknown; _deletedAt?: unknown; _purged?: unknown }[]>
+  >,
 ) {
-  const store: Record<string, { _id: string; name?: unknown; _deletedAt?: unknown }[]> = {};
+  const store: Record<
+    string,
+    { _id: string; name?: unknown; _deletedAt?: unknown; _purged?: unknown }[]
+  > = {};
   for (const c of TRIMMABLE_COLLECTIONS) store[c] = seed[c] ? [...seed[c]!] : [];
 
   const db: MinimalTrimDb = {
@@ -139,6 +144,20 @@ describe("trimEntityNames", () => {
     expect(res.trimmed).toBe(0);
     expect(res.conflicts).toEqual([{ collection: "nozzles", name: "   ", active: true }]);
     expect(store.nozzles[0].name).toBe("   ");
+  });
+
+  it("marks a conflict on a PURGED-but-untombstoned row as inactive (Codex P1)", async () => {
+    // An Atlas zombie: `_purged: true` with `_deletedAt` still null, because
+    // the REMOTE never runs dbConnect and so never runs the purgedZombies
+    // migration. Gating on it would block filament + print-history sync
+    // permanently, with the row invisible in the UI.
+    const { db } = makeDb({
+      filaments: [{ _id: "f1", name: "  ", _purged: true, _deletedAt: null }],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.conflicts).toEqual([
+      { collection: "filaments", name: "  ", active: false },
+    ]);
   });
 
   it("marks a conflict on a SOFT-DELETED row as inactive (Codex P1)", async () => {
