@@ -1072,6 +1072,43 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(filaments?.error ?? "").not.toContain("whitespace");
     });
 
+    it("never re-pairs by NAME a row that already has a counterpart by syncId (Codex P1)", async () => {
+      // The second-cycle trap. Asymmetric conflict resolved by renaming local
+      // B "X " -> "Y": the trim now reports nothing, the gate lifts, and
+      // reconcileByName runs BEFORE syncCollection has copied the rename.
+      // Remote B still carries the trimmed "X", which matches local A — so a
+      // name pairing would stamp A's syncId onto remote B and fuse two
+      // distinct records.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await localDb.collection("locations").insertMany([
+        { name: "Pair X", kind: "shelf", syncId: "pair-A", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Renamed Y", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      // Remote holds only B, already trimmed to the name local A uses.
+      const remoteBId = (
+        await remoteDb.collection("locations").insertOne({
+          name: "Pair X", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: now,
+        })
+      ).insertedId;
+
+      sync = makeSync();
+      await sync.sync();
+
+      // Assert on the DOCUMENT, by _id — not on "some row with syncId pair-B
+      // exists", which the copy step recreates and which therefore passes
+      // even when the fusion happened.
+      const remoteB = await remoteDb.collection("locations").findOne({ _id: remoteBId });
+      expect(remoteB!.syncId).toBe("pair-B");
+      // And local A is still its own row under its own syncId.
+      const localA = await localDb.collection("locations").findOne({ syncId: "pair-A" });
+      expect(localA!.name).toBe("Pair X");
+
+      await localDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
+      await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
+    });
+
     it("gates reconciliation but NOT the copy, so a fix can propagate", async () => {
       // The copy gate was self-perpetuating: in hybrid the app writes only to
       // the LOCAL database, so a user who does what the error says — rename

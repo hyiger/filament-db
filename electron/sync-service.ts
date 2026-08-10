@@ -1456,6 +1456,35 @@ export class SyncService extends EventEmitter {
 
       if (localSyncId && remoteSyncId && localSyncId === remoteSyncId) continue;
 
+      // GH #1116 (Codex P1): a row whose syncId ALREADY resolves on the other
+      // peer is paired, and a name match must never override that.
+      //
+      // This helper exists for rows created INDEPENDENTLY on the two sides
+      // before sync reached the collection — neither has a counterpart, so
+      // matching by name is the only way to pair them. Once a counterpart
+      // exists, the name is transient: it can differ simply because the last
+      // rename hasn't been copied across yet. That is exactly what the trim
+      // work makes reachable — local A "X" and local B renamed to "Y", while
+      // remote B still carries the trimmed "X". Pairing by name then hands A
+      // and B the same syncId and LWW overwrites one with the other; spool
+      // locationId maps would resolve to the wrong row on top of that.
+      //
+      // Cheap to check, and it strictly narrows the helper to its own stated
+      // purpose: the first-sync case has no counterparts on either side and
+      // is unaffected.
+      if (localSyncId && (await remoteCol.findOne({ syncId: localSyncId, _id: { $ne: remote._id } }))) {
+        console.warn(
+          `reconcileByName(${collectionName}): "${local.name}" already has a remote counterpart by syncId — not pairing by name`,
+        );
+        continue;
+      }
+      if (remoteSyncId && (await localCol.findOne({ syncId: remoteSyncId, _id: { $ne: local._id } }))) {
+        console.warn(
+          `reconcileByName(${collectionName}): "${local.name}" — the remote row already has a local counterpart by syncId; not pairing by name`,
+        );
+        continue;
+      }
+
       const winningSyncId = localSyncId || remoteSyncId || randomUUID();
 
       if (localSyncId !== winningSyncId) {
