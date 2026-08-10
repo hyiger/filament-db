@@ -17,6 +17,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingDisplay, getRemainingGrams, getSpoolCount } from "@/lib/inventoryStats";
+import { formatSkipReport } from "@/lib/importSkipReport";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -849,6 +850,49 @@ export default function Home() {
     }
   };
 
+  /**
+   * Surface a filament import's per-row skip reasons + notes (GH #1115).
+   * Shared by both file inputs on this page.
+   */
+  const showImportReport = async (data: {
+    skipped?: number;
+    skippedRows?: { row: number; name?: string | null; reason: string }[];
+    errors?: string[];
+  }) => {
+    const report = formatSkipReport(data.skippedRows, data.errors, {
+      row: ({ row, name, reason }) =>
+        name
+          ? t("filaments.import.skippedRow", { row, name, reason })
+          : t("filaments.import.skippedRowUnnamed", { row, reason }),
+      overflow: (count) => t("filaments.import.skippedOverflow", { count }),
+    });
+    if (!report) return;
+    // Three shapes reach here and they must not share a title:
+    //   - rows were refused          → "N row(s) were not imported"
+    //   - a template imported with a field stripped (zero skipped, a note)
+    //                                → "Import notes"
+    //   - the INI importer, which returns no row accounting at all and puts
+    //     BOTH per-profile write failures and non-fatal adjustments into the
+    //     same `errors` array. Those two are indistinguishable from out here
+    //     (Codex P2, twice: "no row accounting" is not a failure signal), so
+    //     that shape gets a neutral title rather than one that would either
+    //     understate a failure or accuse a successful import of failing.
+    //     Separating them properly means new response fields on that route.
+    const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
+    const noRowAccounting = data.skipped === undefined && data.skippedRows === undefined;
+    await confirm({
+      title:
+        skippedCount > 0
+          ? t("filaments.import.skippedTitle", { count: skippedCount })
+          : noRowAccounting
+            ? t("filaments.import.detailsTitle", { count: data.errors?.length ?? 0 })
+            : t("filaments.import.notesTitle"),
+      message: report,
+      confirmLabel: t("common.close"),
+      hideCancel: true,
+    });
+  };
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -872,6 +916,12 @@ export default function Home() {
         toast(data.message);
         fetchFilaments();
         refreshFilterOptions();
+        // GH #1115: the importer has always returned per-row skip reasons and
+        // per-row notes; nothing ever showed them, so the user got a count and
+        // no way to learn WHICH rows failed. Same acknowledge-only dialog the
+        // bulk-delete failures use above — a toast is string-only, length-
+        // capped and auto-dismissing, which a 12-row list can't survive.
+        await showImportReport(data);
       } else {
         toast(t("filaments.importFailed", { error: data.error }), "error");
       }

@@ -588,8 +588,20 @@ export function pruneInheritedCreateDoc(
 
 export async function upsertImportRows(
   rows: ImportRow[],
+  /**
+   * GH #1115: the PHYSICAL source line for each entry in `rows`, parallel by
+   * index. Both routes strip blank rows before indexing, so deriving the
+   * number positionally reported a row short by every blank line above it —
+   * i.e. the row a user was told to fix was not the row that failed.
+   *
+   * Optional so every existing caller (and test) keeps the old derivation.
+   */
+  sourceLines?: number[],
 ): Promise<ImportResult> {
   await dbConnect();
+
+  /** The line number to report for row `i`. */
+  const lineOf = (i: number) => sourceLines?.[i] ?? i + 2;
 
   let created = 0;
   let updated = 0;
@@ -722,7 +734,7 @@ export async function upsertImportRows(
         !row.vendor && "vendor",
         !row.type && "type",
       ].filter(Boolean).join(", ");
-      skippedRows.push({ row: rowIdx + 2, name: row.name, reason: `Missing required field(s): ${missing}` });
+      skippedRows.push({ row: lineOf(rowIdx), name: row.name, reason: `Missing required field(s): ${missing}` });
       skipped++;
       return;
     }
@@ -741,7 +753,7 @@ export async function upsertImportRows(
     if (parentName && !existing) {
       if (parentName === row.name) {
         skippedRows.push({
-          row: rowIdx + 2,
+          row: lineOf(rowIdx),
           name: row.name,
           reason: `Parent cannot reference self`,
         });
@@ -751,7 +763,7 @@ export async function upsertImportRows(
       const parentEntry = activeByName.get(parentName);
       if (!parentEntry) {
         skippedRows.push({
-          row: rowIdx + 2,
+          row: lineOf(rowIdx),
           name: row.name,
           reason: `Parent "${parentName}" not found among active filaments`,
         });
@@ -760,7 +772,7 @@ export async function upsertImportRows(
       }
       if (parentEntry.parentId) {
         skippedRows.push({
-          row: rowIdx + 2,
+          row: lineOf(rowIdx),
           name: row.name,
           reason: `Parent "${parentName}" is itself a variant — variants-of-variants are not allowed`,
         });
@@ -793,7 +805,7 @@ export async function upsertImportRows(
       // accounting rather than the one bad row.
       if (!/^#[0-9A-Fa-f]{6}$/.test(String(row.color))) {
         skippedRows.push({
-          row: rowIdx + 2,
+          row: lineOf(rowIdx),
           name: row.name,
           reason: `Invalid color hex "${row.color}" (expected #RRGGBB)`,
         });
@@ -962,8 +974,8 @@ export async function upsertImportRows(
       );
       if (stripped.length > 0) {
         noteRows.push({
-          row: rowIdx + 2,
-          note: `Row ${rowIdx + 2} "${row.name}": skipped ${stripped.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
+          row: lineOf(rowIdx),
+          note: `Row ${lineOf(rowIdx)} "${row.name}": skipped ${stripped.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
         });
       }
       updated++;
@@ -1117,7 +1129,7 @@ export async function upsertImportRows(
           },
         );
         if (gateReason) {
-          skippedRows.push({ row: rowIdx + 2, name: row.name, reason: gateReason });
+          skippedRows.push({ row: lineOf(rowIdx), name: row.name, reason: gateReason });
           skipped++;
           return;
         }
@@ -1155,7 +1167,7 @@ export async function upsertImportRows(
       await processRow(rowIdx);
     } catch (err) {
       skippedRows.push({
-        row: rowIdx + 2,
+        row: lineOf(rowIdx),
         name: rows[rowIdx].name,
         reason: importErrorReason(err),
       });

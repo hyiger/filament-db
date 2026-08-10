@@ -18,6 +18,19 @@
  */
 
 export interface CsvParseOptions {
+  /**
+   * GH #1115: out-param. When supplied, receives the 1-based PHYSICAL start
+   * line of each emitted record, index-aligned with the returned rows.
+   *
+   * A record is not a line: a quoted field may contain newlines (the app's own
+   * exports quote them), so a caller deriving a line number from the array
+   * index reports every subsequent row too low. The parser is the only place
+   * that knows where a record actually began.
+   *
+   * In header mode the header's own entry is removed, so the array stays
+   * aligned with the returned DATA objects.
+   */
+  recordLines?: number[];
   /** If true (default), the first row is used as column headers and each
    * resulting row is an object keyed by header name. If false, rows are
    * returned as string[] arrays. */
@@ -102,8 +115,14 @@ export function parseCsv(
     if (opts.header && isBlankRow(r)) return; // discard — never buffered
     rows.push(r);
     rowsQuoted.push(q);
+    opts.recordLines?.push(recordStartLine);
     if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
   };
+
+  // 1-based physical line of the character at `i`, and of the record being
+  // accumulated (GH #1115).
+  let physicalLine = 1;
+  let recordStartLine = 1;
 
   let row: string[] = [];
   let rowQuoted: boolean[] = [];
@@ -128,6 +147,15 @@ export function parseCsv(
         inQuotes = false;
         i++;
         continue;
+      }
+      // Count line breaks inside the quoted field too, or every later record
+      // reports a start line that is too low. Bare CR counts (this parser
+      // supports CR-only endings); CRLF must not be counted twice, so the LF
+      // that follows a CR is skipped here (Codex P2).
+      if (ch === "\r") {
+        physicalLine++;
+      } else if (ch === "\n" && input[i - 1] !== "\r") {
+        physicalLine++;
       }
       field += ch;
       i++;
@@ -158,6 +186,8 @@ export function parseCsv(
       i++;
       if (input[i] === "\n") i++;
       commitRow(row, rowQuoted);
+      physicalLine++;
+      recordStartLine = physicalLine;
       row = [];
       rowQuoted = [];
       continue;
@@ -169,6 +199,8 @@ export function parseCsv(
       fieldQuoted = false;
       i++;
       commitRow(row, rowQuoted);
+      physicalLine++;
+      recordStartLine = physicalLine;
       row = [];
       rowQuoted = [];
       continue;
@@ -193,6 +225,12 @@ export function parseCsv(
   );
 
   if (!opts.header) return trimmed;
+
+  // Header mode returns DATA objects only, so the header's own entry has to
+  // come off the line array or every association is off by one (Codex P2).
+  // Done here rather than in commitRow because that is the only point where
+  // "the header has been consumed" is known.
+  opts.recordLines?.shift();
 
   if (trimmed.length === 0) return [];
   const headers = trimmed[0];
