@@ -273,6 +273,26 @@ export function castNameLikeSchema(raw: unknown): string | null {
   // exactly that pair and let the E11000 happen after the wipe.
   if (typeof raw === "number") return String(raw);
   if (typeof raw === "boolean") return String(raw);
+  // Objects with a MEANINGFUL `toString` (Codex P2). Mongoose's String cast
+  // accepts them — an ObjectId, a Date, a Buffer — and rejects only plain
+  // objects and arrays, whose `toString` is the inherited one. Returning null
+  // for all objects made this helper disagree with the cast it claims to
+  // mirror: the Atlas route would look up `""`, miss the local row, and then
+  // hand the raw value to `create`, where Mongoose casts it after all and
+  // E11000s against the very row it should have updated.
+  //
+  // JSON never produces these, so the snapshot precheck is unaffected; the
+  // Atlas path reads real BSON off the driver, where it matters.
+  if (typeof raw === "object" && raw !== null) {
+    const toString = (raw as { toString?: unknown }).toString;
+    if (
+      typeof toString === "function" &&
+      toString !== Object.prototype.toString &&
+      toString !== Array.prototype.toString
+    ) {
+      return String(raw);
+    }
+  }
   return null;
 }
 
@@ -295,6 +315,23 @@ export function isActiveLikeSchema(rawDeletedAt: unknown): boolean {
   return rawDeletedAt == null || rawDeletedAt === "";
 }
 
+/**
+ * Is this snapshot row one the partial unique index will actually cover?
+ *
+ * Active-ness alone isn't the answer for FILAMENTS (Codex P2). The restore
+ * path runs `normalizePurgedTombstone` before inserting, which stamps
+ * `_deletedAt` on a `_purged` zombie — so a legacy snapshot holding an active
+ * `"X"` beside a purged `"X "` is perfectly restorable, and rejecting it
+ * would refuse a file the existing zombie repair handles correctly.
+ */
+export function isIndexedRow(row: {
+  _deletedAt?: unknown;
+  _purged?: unknown;
+}): boolean {
+  if (row._purged === true) return false;
+  return isActiveLikeSchema(row._deletedAt);
+}
+
 export function findTrimmedNameCollision(
   rows: readonly unknown[],
 ): { name: string; indexes: [number, number] } | null {
@@ -302,8 +339,8 @@ export function findTrimmedNameCollision(
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     if (typeof row !== "object" || row === null) continue;
-    const record = row as { name?: unknown; _deletedAt?: unknown };
-    if (!isActiveLikeSchema(record._deletedAt)) continue;
+    const record = row as { name?: unknown; _deletedAt?: unknown; _purged?: unknown };
+    if (!isIndexedRow(record)) continue;
     // Key by the value the SCHEMA will store, not the raw JSON (Codex P2).
     // Mongoose casts a `String` path, so a snapshot holding the number `1`
     // and the string `"1 "` passes per-document validation on both — and then

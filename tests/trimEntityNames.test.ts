@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   TRIMMABLE_COLLECTIONS,
   EDGE_WHITESPACE_PATTERN,
+  castNameLikeSchema,
   hasEdgeWhitespace,
   trimEntityNames,
   describeTrimResult,
@@ -261,6 +262,38 @@ describe("findTrimmedNameCollision", () => {
     expect(
       findTrimmedNameCollision([{ name: "Y", _deletedAt: undefined }, { name: "Y " }]),
     ).toEqual({ name: "Y", indexes: [0, 1] });
+  });
+
+  it("accepts an object with a MEANINGFUL toString, as the String cast does (Codex P2)", async () => {
+    // Mongoose's String cast takes an ObjectId or a Date and rejects only
+    // plain objects and arrays. Returning null for every object made this
+    // helper disagree with the cast it mirrors — and the Atlas route then
+    // looked up "", missed the local row, and E11000'd on create.
+    const mongoose = (await import("mongoose")).default;
+    const oid = new mongoose.Types.ObjectId();
+    expect(castNameLikeSchema(oid)).toBe(String(oid));
+    const d = new Date("2026-01-02T03:04:05.000Z");
+    expect(castNameLikeSchema(d)).toBe(String(d));
+    // …and still refuses the two Mongoose refuses.
+    expect(castNameLikeSchema({ a: 1 })).toBeNull();
+    expect(castNameLikeSchema(["Victim"])).toBeNull();
+    expect(castNameLikeSchema(Object.create(null))).toBeNull();
+  });
+
+  it("treats a PURGED snapshot row as outside the index (Codex P2)", () => {
+    // The restore path stamps `_deletedAt` on a `_purged` zombie before
+    // inserting, so it never enters the partial unique index. Rejecting the
+    // pair would refuse a file the existing zombie repair handles correctly.
+    expect(
+      findTrimmedNameCollision([
+        { name: "X" },
+        { name: "X ", _purged: true, _deletedAt: null },
+      ]),
+    ).toBeNull();
+    // Two ACTIVE, non-purged rows still collide.
+    expect(
+      findTrimmedNameCollision([{ name: "X" }, { name: "X ", _purged: false }]),
+    ).toEqual({ name: "X", indexes: [0, 1] });
   });
 
   it("keys by the value the SCHEMA will store, not the raw JSON (Codex P2)", () => {

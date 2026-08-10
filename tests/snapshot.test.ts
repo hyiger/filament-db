@@ -1282,6 +1282,22 @@ describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => 
     expect(await Location.countDocuments({})).toBe(2);
   });
 
+  it("does NOT refuse an active row beside a PURGED near-twin (#1116, Codex P2)", async () => {
+    // The restore path stamps `_deletedAt` on a `_purged` zombie before
+    // inserting, so it never enters the partial unique index — the pair is
+    // restorable and the existing zombie repair handles it.
+    const { res } = await restore({
+      version: 7,
+      collections: {
+        filaments: [
+          { name: "Zombie Twin", vendor: "V", type: "PLA" },
+          { name: "Zombie Twin ", vendor: "V", type: "PLA", _purged: true, _deletedAt: null },
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+
   it("still restores a clean file", async () => {
     const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
     expect(res.status).toBe(200);
