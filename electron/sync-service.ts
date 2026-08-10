@@ -8,6 +8,11 @@ import {
   LEGACY_NOZZLE_CONDITION_RE,
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
+import {
+  trimEntityNames,
+  describeTrimResult,
+  type MinimalTrimDb,
+} from "../src/lib/trimEntityNames";
 
 /** GH #1021 r25/r26: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
@@ -360,6 +365,38 @@ export class SyncService extends EventEmitter {
           console.log(
             `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
           );
+        }
+      }
+
+      // GH #1116 — normalize entity names on BOTH sides before any copy.
+      //
+      // The copy path is the raw driver (`insertOne`/`replaceOne`), so it
+      // bypasses the `trim: true` setter entirely: an untrimmed name on a
+      // PRE-UPGRADE peer lands here verbatim, and Mongoose then can't find it
+      // by name at ALL (a String schema setter applies to query values too,
+      // so `{ name: "X " }` casts to `"X"` and misses the stored row). The
+      // same-name reconcilers compare raw names, so `"X"` and `"X "` would
+      // also propagate as two separate records — the exact duplicate this
+      // issue is about, manufactured by sync instead of by CSV.
+      //
+      // dbConnect's pass can't cover this: the REMOTE never runs it, and a
+      // pre-upgrade peer keeps producing untrimmed names after any one-shot.
+      // So it runs every cycle, on both sides, ahead of every copy — the same
+      // posture (and the same both-sides placement) as the #1021 cleanup
+      // above, including the per-side abort re-check.
+      //
+      // Best-effort, unlike #1021: a name that can't be trimmed because
+      // trimming would collide is REPORTED, not fatal, and syncing the rest
+      // of the cycle is strictly better than refusing to sync at all.
+      for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+        if (this.aborted) break;
+        try {
+          const line = describeTrimResult(
+            await trimEntityNames(dbHandle as unknown as MinimalTrimDb),
+          );
+          if (line) console.log(`[sync] ${side}: ${line}`);
+        } catch (err) {
+          console.error(`[sync] Failed to trim entity names on the ${side} DB:`, err);
         }
       }
 

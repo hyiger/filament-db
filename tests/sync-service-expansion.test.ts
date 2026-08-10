@@ -892,6 +892,80 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  // ── GH #1116: entity-name trim on both sync sides ────────────────────
+  // The copy path is the raw driver, so it bypasses the `trim: true` setter.
+  // An untrimmed name on a pre-upgrade peer would land here verbatim — and
+  // Mongoose then can't find it by name at all, because a String schema
+  // setter applies to QUERY values too.
+
+  describe("entity-name trim on both sync sides (GH #1116)", () => {
+    it("normalizes names on BOTH DBs before copying, so nothing untrimmed transfers", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // A pre-upgrade peer's untrimmed rows, written past the setter.
+      await remoteDb.collection("locations").insertOne({
+        name: "Drybox #9 ", kind: "drybox",
+        syncId: "loc-untrimmed-remote", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await localDb.collection("nozzles").insertOne({
+        name: " 0.4 Trim Me", diameter: 0.4, type: "brass",
+        syncId: "noz-untrimmed-local", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // Normalized at the source…
+      expect(
+        (await remoteDb.collection("locations").findOne({ syncId: "loc-untrimmed-remote" }))!.name,
+      ).toBe("Drybox #9");
+      expect(
+        (await localDb.collection("nozzles").findOne({ syncId: "noz-untrimmed-local" }))!.name,
+      ).toBe("0.4 Trim Me");
+      // …and therefore trimmed on the side each was copied TO, rather than
+      // arriving as a second, unreachable record.
+      expect(
+        (await localDb.collection("locations").findOne({ syncId: "loc-untrimmed-remote" }))!.name,
+      ).toBe("Drybox #9");
+      expect(
+        (await remoteDb.collection("nozzles").findOne({ syncId: "noz-untrimmed-local" }))!.name,
+      ).toBe("0.4 Trim Me");
+    });
+
+    it("a name it cannot trim is reported, not fatal — the cycle still syncs", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // Both spellings active on the remote, and the unique index present, so
+      // the trim collides. #1021 aborts the cycle on failure; this one must
+      // not — refusing to sync at all is strictly worse than one stale name.
+      await remoteDb
+        .collection("bedtypes")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Smooth PEI", material: "PEI", syncId: "bt-clean", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Smooth PEI ", material: "PEI", syncId: "bt-clash", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      await remoteDb.collection("printers").insertOne({
+        name: "Sync Survivor", manufacturer: "P", printerModel: "M",
+        syncId: "prn-survivor", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The colliding row is untouched, and the rest of the cycle ran.
+      expect(
+        (await remoteDb.collection("bedtypes").findOne({ syncId: "bt-clash" }))!.name,
+      ).toBe("Smooth PEI ");
+      expect(
+        await localDb.collection("printers").findOne({ syncId: "prn-survivor" }),
+      ).not.toBeNull();
+    });
+  });
+
   // ── GH #1021 (Codex P1 ×2 on #1022): legacyNozzleConditions cleanup ──
   // The remote (Atlas) DB never runs dbConnect's startup migrations, and on
   // first hybrid startup the sync can run BEFORE the local dbConnect does —

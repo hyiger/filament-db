@@ -43,6 +43,18 @@
  * finishes, any name-addressed lookup — the importers, the slicer sync, the
  * match endpoint — silently misses an untrimmed row.
  *
+ * ## And why hybrid sync runs it too, every cycle
+ *
+ * `electron/sync-service.ts` copies whole documents with the raw driver, so
+ * it bypasses the setter completely: an untrimmed name on a PRE-UPGRADE peer
+ * lands verbatim on the other side, unreachable by name for the reason above,
+ * and the same-name reconcilers compare raw names so `"X"` and `"X "` would
+ * propagate as two separate records. `dbConnect`'s pass can't cover that —
+ * the REMOTE never runs it, and a pre-upgrade peer keeps producing untrimmed
+ * names after any one-shot. So the sync runs this on BOTH databases ahead of
+ * every copy, best-effort (a collision is reported, never fatal: refusing to
+ * sync at all would be worse than one stale name).
+ *
  * Taking a minimal driver-shaped `db` (the shape `legacyNozzleConditions`
  * established) additionally lets it unit-test without a live connection.
  */
