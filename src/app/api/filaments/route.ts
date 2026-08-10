@@ -80,6 +80,58 @@ export async function GET(request: NextRequest) {
     if (vendor) filter.vendor = vendor;
     if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
+    // GH #1108: a type/vendor filter that matches a TEMPLATE must bring its
+    // variants with it.
+    //
+    // `vendor` and `type` are `required: true` and stamped by every creation
+    // path, so despite being listed as inheritable they never actually
+    // inherit — a family whose template and variants disagree (a typo on one
+    // of them, which the app happily accepts) is filtered per ROW. Filtering
+    // by the template's vendor therefore returned the template alone: the list
+    // rendered it as a group header with no members, its four colours had no
+    // expander and no "N colors" chip and were simply unreachable, and the
+    // summary line read "0 filament(s)" because template rows are excluded
+    // from the count (they are grouping headers, not rolls).
+    //
+    // Widening to the family fixes both halves. Scoped to type/vendor — those
+    // describe a PRODUCT LINE, which is exactly what a family is. Search is
+    // left alone: it matches on name, and a name search pulling in
+    // differently-named rows would be surprising.
+    //
+    // That last rule has to hold for a COMBINED query too (Codex P2): the
+    // list page sends search + type + vendor together, and a widening arm
+    // that carried only `parentId` would hand back every child of a
+    // search-matched template regardless of its name — quietly making
+    // `?search=X&vendor=V` broader than `?search=X`. So the name predicate
+    // rides the family arm as well. The residue is that a family whose
+    // variants share no name prefix with their template still renders as a
+    // memberless group header under a search, exactly as it already does for
+    // a search with no filter — the same trade-off, applied consistently
+    // rather than only where widening happens to be active.
+    //
+    // OPT-IN via `?family=1`, NOT the default (Codex P2 round 2). `type` and
+    // `vendor` are documented as exact row filters (docs/api.md), and other
+    // callers depend on that literally: FilamentForm derives vendor-keyed TDS
+    // suggestions from `?vendor=`, and PrusamentImportDialog treats `?type=`
+    // results as material matches and may auto-select one by name. Widening
+    // by default would offer another vendor's TDS, or attach an imported
+    // spool to a filament whose stored material type doesn't match — the very
+    // mismatched-child data shape this feature exists to surface. The
+    // grouping list asks for it explicitly; everyone else keeps exact rows.
+    const wantFamily = searchParams.get("family") === "1";
+    let matchStage: Record<string, unknown> = filter;
+    if (wantFamily && (type || vendor)) {
+      const matchedIds = await Filament.distinct("_id", filter);
+      if (matchedIds.length > 0) {
+        const familyArm: Record<string, unknown> = {
+          _deletedAt: null,
+          parentId: { $in: matchedIds },
+        };
+        if (search) familyArm.name = filter.name;
+        matchStage = { $or: [filter, familyArm] };
+      }
+    }
+
     // Project to FilamentSummary shape: drop heavy spool subfields
     // (photoDataUrl, usageHistory, dryCycles), keep only the temperatures
     // the list renders, and surface `hasCalibrations` so the noCalibration
@@ -92,7 +144,7 @@ export async function GET(request: NextRequest) {
     // f.tdsUrl off each result. Dropping the field silently empties the
     // suggestion list on create/edit.
     const filaments = await Filament.aggregate([
-      { $match: filter },
+      { $match: matchStage },
       { $sort: { name: 1 } },
       // Look up parent's calibrations so hasCalibrations reflects the
       // *effective* state rather than the variant's own array. Variants
