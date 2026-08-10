@@ -148,3 +148,39 @@ describe("formatSkipReport — text bounds (Codex P2)", () => {
     expect(out).not.toContain("…");
   });
 });
+
+describe("line terminators inside a fragment", () => {
+  it("folds newlines to spaces so a quoted CSV cell can't blow up the dialog height", () => {
+    // ConfirmDialog renders with whitespace-pre-wrap and no height bound, so
+    // 160 characters of "\n" is 160 rendered lines — the cap bounds characters,
+    // not lines, and Close ends up off-screen either way.
+    const out = formatSkipReport(
+      [{ row: 2, name: "a\nb\r\nc", reason: 'Parent "x\ny" not found' }],
+      undefined,
+      strings,
+    );
+    expect(out).not.toBeNull();
+    expect(out).not.toMatch(/[\r\n]/);
+    expect(out).toContain("a b c");
+    expect(out).toContain('Parent "x y" not found');
+  });
+
+  it("folds U+2028/U+2029, which pre-wrap also breaks on", () => {
+    const out = formatSkipReport(
+      [{ row: 2, name: "a\u2028b\u2029c", reason: "r" }],
+      undefined,
+      strings,
+    );
+    expect(out).toContain("a b c");
+    expect(out).not.toMatch(/[\u2028\u2029]/);
+  });
+
+  it("folds BEFORE clipping — a newline-only cell can't survive inside the kept 160 chars", () => {
+    const out = formatSkipReport(
+      [{ row: 2, name: "x".repeat(5), reason: "\n".repeat(400) + "tail" }],
+      undefined,
+      strings,
+    );
+    expect(out).not.toMatch(/[\r\n]/);
+  });
+});

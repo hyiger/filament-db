@@ -46,11 +46,27 @@ export const MAX_SHOWN_SKIPPED = 10;
  */
 export const MAX_FRAGMENT_CHARS = 160;
 
-/** Clip a fragment to the cap, marking it so the truncation is visible. */
+/**
+ * Collapse a fragment to a single line, then clip it to the cap.
+ *
+ * The flattening is not cosmetic. A CSV field may contain literal newlines
+ * (that is what quoting is FOR, and `parseCsv` preserves them), so a Name cell
+ * of `"a\nb\nc\n…"` reaches here as real line breaks — and `ConfirmDialog`
+ * renders its message with `whitespace-pre-wrap`, unbounded in height. The
+ * character cap alone doesn't help: 160 characters of `\n` is 160 RENDERED
+ * LINES, so ten such fragments push the Close button off-screen — the exact
+ * outcome the cap exists to prevent, just reached by a different axis (Codex
+ * P2 round 2). Every Unicode line terminator is folded, not just `\n`, since
+ * `pre-wrap` breaks on U+2028/U+2029 too.
+ *
+ * Order is load-bearing: fold FIRST, then clip. Clipping first would leave
+ * whatever line breaks survived inside the kept 160 characters.
+ */
 function clip(text: string): string {
-  return text.length > MAX_FRAGMENT_CHARS
-    ? `${text.slice(0, MAX_FRAGMENT_CHARS)}…`
-    : text;
+  const flat = text.replace(/[\r\n\u2028\u2029]+/g, " ").trim();
+  return flat.length > MAX_FRAGMENT_CHARS
+    ? `${flat.slice(0, MAX_FRAGMENT_CHARS)}…`
+    : flat;
 }
 
 export interface SkipReportStrings {
