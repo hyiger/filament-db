@@ -1339,3 +1339,134 @@ describe("analytics GET — double-counting regression", () => {
 
 
 });
+
+/**
+ * GH #1121 — a job against a LEGACY single-spool filament (stock on the
+ * filament's own totalWeight, no spools[] subdocument) recorded usage with
+ * spoolId: null and NO debit: analytics reported the grams and cost while the
+ * remaining weight never moved.
+ */
+describe("POST /api/print-history — legacy single-spool filaments (#1121)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let PrintHistory: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of ["Filament", "PrintHistory", "Printer", "Nozzle", "BedType", "Location"]) {
+      delete mongoose.models[m];
+    }
+    Filament = (await import("@/models/Filament")).default;
+    await import("@/models/Printer");
+    await import("@/models/Nozzle");
+    await import("@/models/BedType");
+    await import("@/models/Location");
+    PrintHistory = (await import("@/models/PrintHistory")).default;
+  });
+
+  const postJob = (filamentId: string, grams: number) =>
+    postPrintHistory(
+      new NextRequest("http://localhost/api/print-history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jobLabel: "Legacy job",
+          startedAt: new Date().toISOString(),
+          usage: [{ filamentId, grams }],
+        }),
+      }),
+    );
+
+  it("migrates the legacy roll to a real spool and debits it", async () => {
+    const f = await Filament.create({
+      name: "Legacy Debit",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      totalWeight: 1000,
+      spools: [],
+    });
+    const res = await postJob(String(f._id), 150);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    // The whole point: a real spool ref, not the silent spoolId: null.
+    expect(body.usage[0].spoolId).toBeTruthy();
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(850);
+    // The legacy field is cleared, or the fallback would resurrect the roll.
+    expect(fresh.totalWeight).toBeNull();
+    // Carry-over identity preserved for printed labels / NFC tags.
+    expect(fresh.spools[0].instanceId).toBe(f.instanceId);
+  });
+
+  it("round-trips: deleting the job restores the weight", async () => {
+    // This is why migrating beats debiting the top-level field — the refund
+    // works through the existing usageHistory machinery.
+    const f = await Filament.create({
+      name: "Legacy Undo",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    const created = await (await postJob(String(f._id), 250)).json();
+    const mid = await Filament.findById(f._id);
+    expect(mid.spools[0].totalWeight).toBe(750);
+
+    const del = await deletePrintHistory(
+      new NextRequest(`http://localhost/api/print-history/${created._id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: String(created._id) }) },
+    );
+    expect(del.status).toBe(200);
+
+    const after = await Filament.findById(f._id);
+    expect(after.spools[0].totalWeight).toBe(1000);
+    expect(after.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("refuses a legacy TEMPLATE — inventory belongs on its variants (#605)", async () => {
+    const parent = await Filament.create({
+      name: "Legacy Template",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 1000,
+      spools: [],
+    });
+    await Filament.create({
+      name: "Legacy Template Red",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    const res = await postJob(String(parent._id), 100);
+    expect(res.status).toBe(400);
+
+    const fresh = await Filament.findById(parent._id);
+    expect(fresh.spools).toHaveLength(0);
+    expect(fresh.totalWeight).toBe(1000);
+    expect(await PrintHistory.countDocuments({})).toBe(0);
+  });
+
+  it("does NOT migrate an all-retired filament — that contract is unchanged (#305)", async () => {
+    // A legacy filament has an EMPTY array; an all-retired one has a populated
+    // array. Only the former migrates; the latter must still record
+    // spoolId: null with no debit.
+    const f = await Filament.create({
+      name: "All Retired",
+      vendor: "V",
+      type: "PLA",
+      spools: [{ label: "old", totalWeight: 500, retired: true }],
+    });
+    const res = await postJob(String(f._id), 100);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.usage[0].spoolId).toBeNull();
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(500);
+  });
+});

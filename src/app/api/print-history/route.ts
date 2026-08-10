@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId } from "@/models/Filament";
+import { hasVariants } from "@/lib/resolveFilament";
+import { TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 import PrintHistory from "@/models/PrintHistory";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
@@ -213,6 +215,53 @@ export async function POST(request: NextRequest) {
           );
         }
       }
+    }
+
+    // GH #1121: materialize a LEGACY single-spool filament before anything
+    // else touches it.
+    //
+    // A legacy roll keeps its stock on the filament's own `totalWeight` with
+    // no spools[] subdocument, so pass 2's selection found nothing and the job
+    // was recorded with `spoolId: null` and NO debit — analytics reported the
+    // grams and the cost while the remaining weight never moved.
+    //
+    // Debiting the top-level field instead is not viable: `usageHistory` lives
+    // only on a spool subdocument, so there would be no ledger entry for the
+    // undo path to key on, and GH #621's "refund only when an entry is
+    // actually removed" idempotency would degrade into an unbounded
+    // double-refund on retry. `spoolId: null` is also already spoken for — it
+    // means "every spool retired, deliberately no debit" (GH #305).
+    //
+    // Migrating is what the app already tells users to do (the /inventory row
+    // for a legacy roll links to "Manage on filament →"), and it makes the
+    // debit AND the refund run through existing machinery: a real spoolId, a
+    // real usageHistory entry, `debitedGrams`, all three DELETE matcher tiers.
+    //
+    // ORDER IS LOAD-BEARING: this must land before `spoolSnapshots` is built
+    // below. That snapshot drives the sequential-fallback rollback, which
+    // `continue`s past any spool it has no entry for — skipping BOTH the
+    // weight restore and the usageHistory strip. A spool created afterwards
+    // would leave an unrefundable orphan on a rolled-back request.
+    for (const filament of filaments) {
+      if (filament.spools.length > 0 || filament.totalWeight == null) continue;
+      // #605: inventory belongs on a template's variants, never on the
+      // template. Refuse with the same contract text the spool routes use —
+      // and it names an action the user can take.
+      if (await hasVariants(Filament, String(filament._id))) {
+        return errorResponse(TEMPLATE_NO_SPOOLS_BODY.message, 400);
+      }
+      filament.spools.push({
+        label: "",
+        totalWeight: filament.totalWeight,
+        // Carry the filament-level id onto the roll it always described
+        // (#732 Phase 1), so a printed label or NFC tag keeps resolving to it.
+        instanceId: filament.instanceId ?? generateInstanceId(),
+      } as unknown as Parameters<typeof filament.spools.push>[0]);
+      // Matches POST /api/filaments, which nulls the legacy field the moment a
+      // real spool exists. Leaving it would let every `spools.length === 0`
+      // fallback resurrect the roll if this spool were later deleted.
+      filament.totalWeight = null;
+      await filament.save();
     }
 
     // GH #224: snapshot every spool's pre-mutation state BEFORE pass 2
