@@ -113,6 +113,39 @@ export function promotionRequired409Body(
 }
 
 /**
+ * The 409 body RESTORE returns instead (GH #1103).
+ *
+ * Same gate, different verb, so a different answer. Creating a variant is the
+ * user building something new; a confirmation that also restructures the
+ * parent is a fair trade there. Restore is the user asking for data BACK,
+ * exactly as it was — so it refuses and names the one action that unblocks
+ * the whole family at once, rather than prompting per variant in the middle
+ * of a bulk restore (where the only "yes" rewrote the family and "no" left
+ * the variant permanently unrestorable).
+ *
+ * Deliberately NOT the `parent_promotion_required` code: that code means
+ * "repeat with promoteParent: true", and on this route repeating changes
+ * nothing. A client matching on it would loop.
+ */
+export function restoreBlockedByTemplateBody(
+  info: PromotionRequiredInfo,
+): Record<string, unknown> {
+  return {
+    error: "parent_must_be_template_first",
+    message:
+      `Restoring this variant would make "${info.parentName}" a template, ` +
+      `but it still holds its own color and ${info.spoolCount} spool(s). ` +
+      `Open "${info.parentName}" and use "Convert to template" — that moves them ` +
+      `to a variant named "${info.variantName}" — then restore. ` +
+      `Doing it there converts the whole family once, with the parent in front of you.`,
+    parentName: info.parentName,
+    parentColor: info.parentColor,
+    spoolCount: info.spoolCount,
+    variantName: info.variantName,
+  };
+}
+
+/**
  * The gate+promote core, shared by CREATION (createVariantGated) and
  * ADOPTION (gateFirstVariantAdoption — codex round 4, F2/F6). MUST be called
  * while holding `runExclusive(filamentLockKey(parent._id))`, with a `parent`

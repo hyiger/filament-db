@@ -84,7 +84,9 @@ All four return the same body:
 }
 ```
 
-To confirm, repeat the **identical** request with `"promoteParent": true` in the body. It's a control flag, never a stored field — the create and update routes delete it from the body before anything else reads it; `restore` historically takes no body at all, so an absent or unparseable one simply means `false`.
+To confirm, repeat the **identical** request with `"promoteParent": true` in the body. It's a control flag, never a stored field — the create and update routes delete it from the body before anything else reads it.
+
+`POST /api/filaments/:id/restore` is the exception: it runs the same gate but **has no confirmation path** (GH #1103), because restore is a request for data back exactly as it was rather than a request to build something new. It refuses with `409 parent_must_be_template_first` and names `POST /api/filaments/:id/promote` on the parent, which converts the whole family in one deliberate step. It takes no request body.
 
 The gate runs **last**, after every other validation, so a `409` means "this request would otherwise succeed, but it has a side effect on a second document you must opt into" — and nothing at all is written. A *confirmed* request is dry-run validated (name collision, schema validation) **before** the promotion runs, so an invalid body still fails with the parent completely untouched.
 
@@ -266,7 +268,16 @@ Refusal:
 }
 ```
 
-Restoring a **variant** can also mint its parent's first live variant — the parent may have picked up a color or spools while this one sat in the trash — so the restore runs the same confirmation gate as the create path and refuses with `409 parent_promotion_required`. The route accepts an optional JSON body for exactly that: repeat the POST with `{ "promoteParent": true }` to confirm. A bare POST (the historic contract) behaves as before in every non-gated case. See *Filament templates* above.
+Restoring a **variant** can also mint its parent's first live variant — the parent may have picked up a color or spools while this one sat in the trash — so the restore runs the same gate as the create path. **Unlike the create path it refuses rather than offering a confirmation** (GH #1103), with `409 parent_must_be_template_first`:
+
+```json
+{
+  "error": "parent_must_be_template_first",
+  "message": "Restoring this variant would make \"Prusament PETG\" a template, but it still holds its own color and 2 spool(s). Open \"Prusament PETG\" and use \"Convert to template\" — that moves them to a variant named \"Prusament PETG — Prusa Galaxy Black\" — then restore. Doing it there converts the whole family once, with the parent in front of you."
+}
+```
+
+There is no confirmation flag and **repeating the request changes nothing** — a client matching on `parent_promotion_required` and retrying would loop, which is why the code differs. Creating a variant is the user building something new, so trading a confirmation for a restructure is a fair deal there; restore is the user asking for data *back, exactly as it was*, and a bulk "Restore all" over a pre-#605 family used to answer that with one modal per variant whose only "yes" rewrote the family and whose "no" left the variant permanently unrestorable. The restructure is still mandatory and still the user's decision — it just moves to `POST /api/filaments/:id/promote` on the parent, which does the whole family once. The route takes no request body. See *Filament templates* above.
 
 ### POST /api/filaments/:id/promote
 
@@ -291,7 +302,7 @@ curl -X POST http://localhost:3456/api/filaments/64a1b2c3d4e5f6a7b8c9d0e1/promot
 Refusals:
 - `400` — the `{id}` is not a valid ObjectId.
 - `404` — no active filament with that id.
-- `400 not_a_template` — the target is itself a variant, or it has no live variants: *"Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."*
+- `400 not_a_template` — the target is itself a variant, or it has never had a variant that still exists: *"Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."* **Trashed variants count** (GH #1103): when a legacy carrying parent and all of its variants sit in the trash together, `restore` refuses and points here, so this route has to accept that parent or the advice would be unactionable. Purged variants do not count — a permanent delete is a one-way tombstone, so such a parent really is a standalone again.
 - `400 nothing_to_convert` — the target is a template but carries nothing that belongs on a variant: *"This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight."* Note that `spoolWeight` / `netFilamentWeight` alone don't count — they're shared spec that stays on the template.
 
 ### GET /api/filaments/export

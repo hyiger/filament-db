@@ -6,6 +6,7 @@ import {
   DELETE as deleteFilament,
 } from "@/app/api/filaments/[id]/route";
 import { POST as restoreFilament } from "@/app/api/filaments/[id]/restore/route";
+import { POST as promoteFilament } from "@/app/api/filaments/[id]/promote/route";
 import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
@@ -683,9 +684,15 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     });
   }
 
-  it("restoring a variant under a parent that re-acquired carrying state → 409 until confirmed, then promotes and restores", async () => {
+  it("restoring a variant under a parent that re-acquired carrying state → 409, and REFUSES to promote (#1103)", async () => {
     // Round-3 residue shape: the parent's only variant was trashed, then the
     // parent (variant-less again) re-acquired a color + a spool.
+    //
+    // Pre-#1103 this 409 was a confirmation prompt: repeating with
+    // promoteParent: true restructured the family and restored. It no longer
+    // does — restore is a request for data BACK, not a request to rebuild the
+    // family, and on "Restore all" that prompt fired per variant with a "no"
+    // that left the variant permanently unrestorable.
     const parent = await Filament.create({
       name: "Reacquired Parent",
       vendor: "V",
@@ -711,40 +718,101 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
       },
     );
 
-    // Bare POST (the pre-existing contract) → gated.
     const gated = await restoreFilament(restoreReq(String(variant._id)), {
       params: Promise.resolve({ id: String(variant._id) }),
     });
     expect(gated.status).toBe(409);
     const gatedBody = await gated.json();
-    expect(gatedBody.error).toBe("parent_promotion_required");
-    expect(gatedBody.parentName).toBe("Reacquired Parent");
+    expect(gatedBody.error).toBe("parent_must_be_template_first");
+    // The message has to name BOTH the parent and the action, because it is
+    // the only thing the trash page shows the user.
+    expect(gatedBody.message).toContain("Reacquired Parent");
+    expect(gatedBody.message).toContain("Convert to template");
     expect(gatedBody.variantName).toBe("Reacquired Parent — Re-Green");
-    // Still trashed, parent untouched.
-    let freshVariant = await Filament.findById(variant._id).lean();
-    expect(freshVariant._deletedAt).not.toBeNull();
-    let freshParent = await Filament.findById(parent._id).lean();
-    expect(freshParent.color).toBe("#00AA00");
 
-    // Confirmed → promote first, then revive.
-    const confirmed = await restoreFilament(
+    // Nothing written: still trashed, parent untouched.
+    const stillTrashed = await Filament.findById(variant._id).lean();
+    expect(stillTrashed._deletedAt).not.toBeNull();
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color).toBe("#00AA00");
+    expect(freshParent.spools).toHaveLength(1);
+  });
+
+  it("a promoteParent flag in the restore body is IGNORED, not honoured (#1103)", async () => {
+    // The flag used to be the confirmation. A client that still sends it must
+    // get the same refusal — otherwise the old confirm-and-retry loop keeps
+    // restructuring families through a route that no longer advertises it.
+    const parent = await Filament.create({
+      name: "Ignored Flag Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#00AA00",
+      colorName: "Green",
+    });
+    const variant = await Filament.create({
+      name: "Ignored Flag Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await restoreFilament(
       restoreReq(String(variant._id), { promoteParent: true }),
       { params: Promise.resolve({ id: String(variant._id) }) },
     );
-    expect(confirmed.status).toBe(200);
-    const confirmedBody = await confirmed.json();
-    expect(confirmedBody.message).toBe("Restored");
-    expect(confirmedBody._id).toBe(String(variant._id));
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("parent_must_be_template_first");
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#00AA00");
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(0);
+  });
 
-    freshVariant = await Filament.findById(variant._id).lean();
-    expect(freshVariant._deletedAt).toBeNull();
-    freshParent = await Filament.findById(parent._id).lean();
-    expect(freshParent.color ?? null).toBeNull();
-    expect(freshParent.spools).toHaveLength(0);
-    const promoted = await Filament.findOne({ name: "Reacquired Parent — Re-Green" }).lean();
-    expect(promoted).toBeTruthy();
-    expect(promoted.color).toBe("#00AA00");
-    expect(promoted.spools).toHaveLength(1);
+  it("converting the parent first UNBLOCKS the restore — the refusal's advice works end to end (#1103)", async () => {
+    const parent = await Filament.create({
+      name: "Unblock Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#00AA00",
+      colorName: "Green",
+      spools: [{ label: "roll", totalWeight: 600 }],
+    });
+    const variant = await Filament.create({
+      name: "Unblock Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    // Refused first — this is the state the user is actually in.
+    const blocked = await restoreFilament(restoreReq(String(variant._id)), {
+      params: Promise.resolve({ id: String(variant._id) }),
+    });
+    expect(blocked.status).toBe(409);
+
+    // Take the advice. /promote accepts this parent BECAUSE its only variant
+    // is trashed (#1103) — that is what makes the message actionable.
+    const promoted = await promoteFilament(
+      new NextRequest(`http://localhost/api/filaments/${parent._id}/promote`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ id: String(parent._id) }) },
+    );
+    expect(promoted.status).toBe(200);
+
+    // Now the restore just works, with no prompt and no further restructuring.
+    const ok = await restoreFilament(restoreReq(String(variant._id)), {
+      params: Promise.resolve({ id: String(variant._id) }),
+    });
+    expect(ok.status).toBe(200);
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh._deletedAt).toBeNull();
+    // The family is the four-plus-one shape the conversion promised: the
+    // restored variant plus the one the promotion minted.
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(2);
   });
 
   it("restoring a variant under a clean parent is ungated (bare POST, no body — the pre-existing contract)", async () => {

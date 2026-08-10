@@ -729,30 +729,12 @@
           "Filaments"
         ],
         "summary": "Restore filament from trash",
-        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name — the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed. Restoring a trashed VARIANT can mint its parent's first live variant (the parent may have re-acquired a color or spools while the variant sat in the trash), so it runs the same GH #605 promotion gate as the create and re-parent paths.",
+        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name — the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed. Restoring a trashed VARIANT can mint its parent's first live variant (the parent may have re-acquired a color or spools while the variant sat in the trash), so it runs the same GH #605 gate as the create and re-parent paths — but, unlike those, it REFUSES rather than offering a confirmation (GH #1103). Restore is a request for data back exactly as it was, so it never restructures the family; convert the parent with POST /api/filaments/{id}/promote first, which does the whole family at once, then restore.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
           }
         ],
-        "requestBody": {
-          "required": false,
-          "description": "Optional. Restore historically takes no body, and a bare POST (or unparseable JSON) behaves exactly as before.",
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "promoteParent": {
-                    "type": "boolean",
-                    "default": false,
-                    "description": "GH #605 confirmation flag — see the 409 response. Repeating a refused restore with this set converts the carrying parent to a template first, then revives the variant."
-                  }
-                }
-              }
-            }
-          }
-        },
         "responses": {
           "200": {
             "description": "Restored",
@@ -784,7 +766,7 @@
             }
           },
           "409": {
-            "description": "Name conflict — another active filament already uses this name. Also returned when the filament is a variant whose parent is still in the trash (restore the parent first), and, with the structured `parent_promotion_required` body (GH #605), when reviving this variant would be its parent's first live variant while that parent still carries its own color/spools/inventory — nothing is written until the request is repeated with `promoteParent: true`.",
+            "description": "Name conflict — another active filament already uses this name. Also returned when the filament is a variant whose parent is still in the trash (restore the parent first), and, with the structured `parent_must_be_template_first` body (GH #1103), when reviving this variant would be its parent's first live variant while that parent still carries its own color/spools/inventory. That last one is terminal for this route: there is no confirmation flag, and repeating the request changes nothing — use POST /api/filaments/{id}/promote on the parent, then restore.",
             "content": {
               "application/json": {
                 "schema": {
@@ -793,7 +775,7 @@
                       "$ref": "#/components/schemas/Error"
                     },
                     {
-                      "$ref": "#/components/schemas/ParentPromotionRequired"
+                      "$ref": "#/components/schemas/RestoreBlockedByTemplate"
                     }
                   ]
                 }
@@ -819,7 +801,7 @@
           "Filaments"
         ],
         "summary": "Convert filament to template",
-        "description": "\"Convert to template\" (GH #605). Moves a legacy parent's own `color`, `colorName`, `spools` and inventory `totalWeight` — plus the `lowStockThreshold` that alarms on that inventory — onto a NEW variant named `<parent> — <colorName>` (or `<parent> — Original`), then clears them on the parent. Same copy-first/clear-last promotion the first-variant create path runs behind `promoteParent: true`, here at the user's explicit initiative: enforcement is forward-only, so parents that predate the template model are never migrated in bulk. Only a filament that ALREADY has ≥1 live variant qualifies — a standalone becomes a template implicitly when its first variant is created. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Persisted `(filamentId, spoolId)` references follow the moved spools: print-history usage entries and printer AMS slots are remapped, including filament-only \"any spool\" slot dedications. Takes no request body; two overlapping calls serialize, so the second gets 400 `nothing_to_convert` rather than minting a duplicate copy.",
+        "description": "\"Convert to template\" (GH #605). Moves a legacy parent's own `color`, `colorName`, `spools` and inventory `totalWeight` — plus the `lowStockThreshold` that alarms on that inventory — onto a NEW variant named `<parent> — <colorName>` (or `<parent> — Original`), then clears them on the parent. Same copy-first/clear-last promotion the first-variant create path runs behind `promoteParent: true`, here at the user's explicit initiative: enforcement is forward-only, so parents that predate the template model are never migrated in bulk. Only a filament that ALREADY has at least one variant qualifies — a standalone becomes a template implicitly when its first variant is created. TRASHED variants count (GH #1103): when a legacy carrying parent and all of its variants sit in the trash together, restore refuses and points here, so this route has to accept the parent or that advice would be unactionable. Purged variants do not count — a permanent delete is a one-way tombstone, so such a parent really is a standalone again. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Persisted `(filamentId, spoolId)` references follow the moved spools: print-history usage entries and printer AMS slots are remapped, including filament-only \"any spool\" slot dedications. Takes no request body; two overlapping calls serialize, so the second gets 400 `nothing_to_convert` rather than minting a duplicate copy.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -849,7 +831,7 @@
             }
           },
           "400": {
-            "description": "Invalid filament id, or a structured refusal (distinguish by `error`). `not_a_template` — the target is itself a variant, or has no live variants yet. `nothing_to_convert` — the template already carries nothing that belongs on a variant: no color, no color name, no spools, no inventory weight (the spec fields it legitimately keeps do not count as carrying).",
+            "description": "Invalid filament id, or a structured refusal (distinguish by `error`). `not_a_template` — the target is itself a variant, or has never had a variant that still exists (live or trashed). `nothing_to_convert` — the template already carries nothing that belongs on a variant: no color, no color name, no spools, no inventory weight (the spec fields it legitimately keeps do not count as carrying).",
             "content": {
               "application/json": {
                 "schema": {
@@ -8104,16 +8086,26 @@
             "items": {
               "type": "object",
               "properties": {
-                "row": { "type": "integer" },
-                "name": { "type": "string", "nullable": true, "description": "The row's Name cell, absent when the row failed before a name was known." },
-                "reason": { "type": "string" }
+                "row": {
+                  "type": "integer"
+                },
+                "name": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "The row's Name cell, absent when the row failed before a name was known."
+                },
+                "reason": {
+                  "type": "string"
+                }
               }
             }
           },
           "errors": {
             "type": "array",
             "description": "Per-row messages that are not row-refusals. This schema is shared across import endpoints and the meaning varies by route: the CSV/XLSX importer emits non-fatal adjustments (e.g. a template target whose echoed color the update stripped, GH #605), while /api/filaments/prusaslicer, /api/filaments/import and /api/openprinttag/import also report caught WRITE FAILURES and refused name collisions here. Do not treat a non-empty array as success. Present only when non-empty.",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -8368,6 +8360,46 @@
         "required": [
           "deleted",
           "spoolId"
+        ]
+      },
+      "RestoreBlockedByTemplate": {
+        "type": "object",
+        "description": "GH #1103 — the restore route's refusal when reviving a variant would make its parent a template while that parent still carries its own color/spools/inventory. Deliberately NOT `parent_promotion_required`: that code means \"repeat with promoteParent: true\", and here repeating changes nothing. `message` names the parent and the action that unblocks the whole family (Convert to template).",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "parent_must_be_template_first"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "parentName": {
+            "type": "string",
+            "description": "The parent that would become a template."
+          },
+          "parentColor": {
+            "type": "string",
+            "nullable": true,
+            "description": "The parent's own color, which would move to the new variant."
+          },
+          "spoolCount": {
+            "type": "integer",
+            "description": "How many of the parent's spools would move."
+          },
+          "variantName": {
+            "type": "string",
+            "description": "The name the auto-created variant would get: `<parent> — <colorName>`, or `<parent> — Original` when the parent has no color name, de-duplicated with a ` (2)` / ` (3)` suffix when that name is taken. A stored record name, deliberately not translated."
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "parentName",
+          "parentColor",
+          "spoolCount",
+          "variantName"
         ]
       }
     }
