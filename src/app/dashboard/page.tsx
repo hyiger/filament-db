@@ -11,6 +11,9 @@ import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 interface DashboardData {
   counts: {
     filaments: number;
+    /** GH #1113: how many of `filaments` are TEMPLATES — the records the
+     *  filament list removes from its own headline count. */
+    filamentTemplates: number;
     nozzles: number;
     printers: number;
     bedTypes: number;
@@ -154,7 +157,20 @@ export default function DashboardPage() {
 
       {/* Top metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
-        <Metric label={t("dashboard.filaments")} value={data.counts.filaments} href="/" />
+        <Metric
+          label={t("dashboard.filaments")}
+          value={data.counts.filaments}
+          href="/"
+          // GH #1113: the list headlines the rows it renders (templates
+          // excluded); this counts every record. Naming the EXCLUDED records
+          // is what explains the gap — counting variants would name a
+          // different number.
+          hint={
+            data.counts.filamentTemplates > 0
+              ? t("dashboard.filaments.templateHint", { count: data.counts.filamentTemplates })
+              : undefined
+          }
+        />
         <Metric
           label={t("dashboard.spools")}
           value={data.counts.spools}
