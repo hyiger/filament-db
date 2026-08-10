@@ -1206,6 +1206,7 @@
   "detail.template.convertTitle": "In Vorlage umwandeln?",
   "detail.template.convertHint": "Diese Vorlage trägt noch eine eigene Farbe oder eigene Spulen aus der Zeit, bevor sie zur Vorlage wurde.",
   "detail.template.convertAction": "In Vorlage umwandeln",
+  "detail.template.trashedVariantsHint": "Dieses Filament hat Farbvarianten im Papierkorb. Sie k\u00f6nnen nicht wiederhergestellt werden, solange es noch eine eigene Farbe oder Spulen h\u00e4lt \u2014 wandle es zuerst in eine Vorlage um, dann wandern diese auf eine eigene Variante.",
   "detail.template.convertConfirm": "Eigene Farbe und {count} Spule(n) dieses Filaments auf eine neue Variante verschieben? Die Vorlage selbst behält weder Farbe noch Spulen.",
   "detail.template.converted": "Umgewandelt — Farbe und Spulen wurden auf eine neue Variante verschoben",
   "detail.template.convertFailed": "Umwandlung in Vorlage fehlgeschlagen",

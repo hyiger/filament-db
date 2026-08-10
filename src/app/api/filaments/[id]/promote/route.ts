@@ -121,7 +121,32 @@ export async function POST(
       // route is the documented recovery path for exactly that state) —
       // surfaced in the response so clients can tell recovery from a fresh
       // conversion; the end state is identical.
+      // GH #1103: reserve the names of this parent's TRASHED children.
+      //
+      // `resolvePromotionVariantName` resolves against the partial unique
+      // index, which only covers live rows — so a tombstoned `Parent — Green`
+      // reads as free and the promotion copy takes that exact name. Restoring
+      // the original child then fails the restore route's active-name conflict
+      // check, and the conversion this route promised ("convert once and the
+      // whole family comes back") quietly doesn't. Since #1103 that promise is
+      // the ONLY route out of a gated restore, so squatting here strands the
+      // child's spools, calibrations and usage history behind a rename the
+      // user never asked for.
+      //
+      // Scoped to this parent's own non-purged children and passed only from
+      // THIS route — the general "soft-deleted names are free" rule is
+      // unchanged, and the creation path keeps passing its own reservation.
+      const trashedChildren = await Filament.find({
+        parentId: id,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      })
+        .select("name")
+        .lean();
       const { variant, resumed } = await performParentPromotion(Filament, filament, {
+        alsoTakenNames: new Set(
+          trashedChildren.map((c: { name: string }) => c.name),
+        ),
         externalRefs: { printHistory: PrintHistory, printer: Printer },
       });
       const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();

@@ -7,6 +7,7 @@ import {
 } from "@/app/api/filaments/[id]/route";
 import { POST as restoreFilament } from "@/app/api/filaments/[id]/restore/route";
 import { POST as promoteFilament } from "@/app/api/filaments/[id]/promote/route";
+import { GET as getFilament } from "@/app/api/filaments/[id]/route";
 import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
@@ -767,6 +768,86 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.color).toBe("#00AA00");
     expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(0);
+  });
+
+  it("the detail GET reports trashed children so the UI can offer the conversion (#1103)", async () => {
+    // The refusal tells the user to open the parent and convert. The detail
+    // page derives `isParent` from `_variants`, which is live-only — so a
+    // parent whose variants are ALL trashed showed no such action, and every
+    // gated variant was unrestorable through the app. This flag is the one
+    // thing the page can't derive for itself.
+    const parent = await Filament.create({
+      name: "Flag Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#00AA00",
+      colorName: "Green",
+    });
+    await Filament.create({
+      name: "Flag Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await getFilament(
+      new NextRequest(`http://localhost/api/filaments/${parent._id}`),
+      { params: Promise.resolve({ id: String(parent._id) }) },
+    );
+    const body = await res.json();
+    expect(body._variants).toHaveLength(0);
+    expect(body._hasTrashedVariants).toBe(true);
+
+    // A standalone with no children anywhere reports false, so the action
+    // stays hidden where it would 400 not_a_template.
+    const lone = await Filament.create({ name: "Lone PLA", vendor: "V", type: "PLA" });
+    const loneRes = await getFilament(
+      new NextRequest(`http://localhost/api/filaments/${lone._id}`),
+      { params: Promise.resolve({ id: String(lone._id) }) },
+    );
+    expect((await loneRes.json())._hasTrashedVariants).toBe(false);
+  });
+
+  it("the promotion copy does not squat on a TRASHED sibling's name (#1103)", async () => {
+    // resolvePromotionVariantName resolves against the partial unique index,
+    // which only covers live rows — so a tombstoned `Parent — Green` reads as
+    // free. Taking that name makes the restore fail its active-name conflict
+    // check, i.e. the conversion promises to unblock the family and doesn't.
+    const parent = await Filament.create({
+      name: "Squat Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#00AA00",
+      colorName: "Green",
+    });
+    // Its generated promotion name would be exactly this trashed child's.
+    const child = await Filament.create({
+      name: "Squat Parent — Green",
+      vendor: "V",
+      type: "PLA",
+      color: "#00AA00",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await promoteFilament(
+      new NextRequest(`http://localhost/api/filaments/${parent._id}/promote`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ id: String(parent._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).variant.name).toBe("Squat Parent — Green (2)");
+
+    // And the child restores, which is the point of reserving the name.
+    const restored = await restoreFilament(restoreReq(String(child._id)), {
+      params: Promise.resolve({ id: String(child._id) }),
+    });
+    expect(restored.status).toBe(200);
+    const fresh = await Filament.findById(child._id).lean();
+    expect(fresh._deletedAt).toBeNull();
+    expect(fresh.name).toBe("Squat Parent — Green");
   });
 
   it("converting the parent first UNBLOCKS the restore — the refusal's advice works end to end (#1103)", async () => {
