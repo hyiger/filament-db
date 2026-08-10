@@ -354,6 +354,7 @@ export async function POST(request: NextRequest) {
       if (!isDuplicateKeyError(createErr)) {
         return errorResponseFromCaught(createErr, "Failed to create filament");
       }
+      // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match, so no survivor is involved
       const racing = await Filament.findOne({ name, _deletedAt: null });
       if (!racing) {
         // The winning row was already deleted; bail out with the

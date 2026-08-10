@@ -10,7 +10,7 @@ import { join } from "node:path";
  * A Mongoose String setter applies to QUERY values, so once `name` carries
  * `trim: true` no name-filtered query can select a row whose STORED name is
  * still raw. `trimEntityNames` repairs stored rows but can legitimately leave
- * survivors (a skipped collection, a colliding row).
+ * survivors behind (a skipped collection, a colliding row).
  *
  * Every "resolve by name, then create when missing" path therefore needs the
  * `src/lib/trimmedNameLookup.ts` fallback, or it manufactures a duplicate that
@@ -18,42 +18,47 @@ import { join } from "node:path";
  *
  * That rule was applied at one call site, then found missing at two more a
  * review round later, then at four more the round after that — the same defect
- * class three rounds running, each time discovered by a human reading the diff
- * rather than by anything mechanical. This test is the mechanism.
+ * class three rounds running, every instance found by a human reading the diff.
+ * This test is the mechanism that replaces the human.
  *
- * ## What it does
+ * ## Granularity is the whole point (Codex P1)
  *
- * Any file under `src/` that filters a Mongoose query on a bare `name` must
- * either import the fallback helper, or appear in `EXEMPT` with a reason.
- * It is deliberately coarse: a false positive costs one line of allow-list
- * with an explanation, while a false negative costs a duplicated user record.
+ * The first version of this file asked whether the FILE imported the helper.
+ * That is worthless: one guarded query anywhere exempts every other query in
+ * the same file — and it was already waving through a live bug, the variant
+ * collision check in the OpenPrintTag importer, in a file that used the helper
+ * fifty lines earlier. So the unit of judgement is the QUERY, not the file.
  *
- * The exemptions are the interesting part — read them before adding one.
+ * Each name-filtered query must have, within its immediate neighbourhood,
+ * either a call to the fallback or an explicit
+ *
+ *     // name-lookup-ok: <why this one cannot manufacture a duplicate>
+ *
+ * marker. Writing the reason at the query — rather than in a table at the top
+ * of some other file — is what makes the next reviewer able to check it.
  */
 
-/** Files whose name-filtered queries cannot manufacture a duplicate. */
-const EXEMPT: Record<string, string> = {
-  // Read-only resolution: a miss returns not-found, which is correct and
-  // already the behaviour for a genuinely absent name.
-  "src/lib/matchFilament.ts":
-    "read-only — a miss falls through to the other match tiers, never creates",
-  "src/lib/singleFilamentExport.ts":
-    "read-only export lookup — a miss is a 404",
-  "src/app/api/filaments/[id]/calibration/route.ts":
-    "read-only — slicer asks for calibration by preset name; a miss is a 404",
-  "src/app/api/filaments/[id]/spool-check/route.ts":
-    "read-only — a miss is a 404",
-  "src/app/api/filaments/[id]/orcaslicer/route.ts":
-    "name-addressed sync resolves an EXISTING row; create-on-404 was removed in #867",
-  "src/app/api/filaments/[id]/route.ts":
-    "name-addressed sync + name_taken collision guards; create-on-404 removed in #867",
-  "src/app/api/filaments/[id]/restore/route.ts":
-    "restore-time name conflict guard — refuses, never creates",
+const SRC = "src";
 
-  // The helper and the migration themselves — they document the rule.
-  "src/lib/trimmedNameLookup.ts": "the helper itself",
-  "src/lib/trimEntityNames.ts": "the migration that removes the survivors",
-};
+/** How far from the match to look for a fallback call or a marker. Generous
+ *  on purpose: a guarded query and its fallback are often separated by the
+ *  comment explaining why. */
+const WINDOW_BEFORE = 6;
+const WINDOW_AFTER = 40;
+
+/** `findOne({ name` / `findOneAndUpdate({ name, ...` — a bare `name` key in a
+ *  query filter, not a `name:` nested inside an update document. */
+const NAME_FILTER =
+  /(findOne|findOneAndUpdate|findOneAndDelete|updateOne|deleteOne)\(\s*\{[^}]{0,240}?(^|[\s,{])name\s*[,:]/m;
+const NAME_FILTER_G = new RegExp(NAME_FILTER.source, "gm");
+
+const SATISFIED = /findSurvivorId|findByTrimmedName|trimmedNameFilter|name-lookup-ok:/;
+
+/** A match whose own line is a comment is documentation, not a query. */
+function isCommentLine(line: string): boolean {
+  const t = line.trim();
+  return t.startsWith("*") || t.startsWith("//") || t.startsWith("/*");
+}
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -64,66 +69,106 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** `findOne({ name` / `findOneAndUpdate({ name, ...` — a bare `name` key in a
- *  query filter, not `name:` nested inside some other object. */
-const NAME_FILTER =
-  /(findOne|findOneAndUpdate|findOneAndDelete|updateOne|deleteOne)\(\s*\{[^}]{0,240}?(^|[\s,{])name\s*[,:]/m;
+interface Offender {
+  file: string;
+  line: number;
+  snippet: string;
+}
 
-describe("every name-filtered query is survivor-aware (GH #1116)", () => {
-  const offenders: string[] = [];
-
-  for (const file of walk("src")) {
+function findOffenders(): Offender[] {
+  const offenders: Offender[] = [];
+  for (const file of walk(SRC)) {
     const rel = file.replace(/\\/g, "/");
     const source = readFileSync(file, "utf8");
-    if (!NAME_FILTER.test(source)) continue;
-    if (rel in EXEMPT) continue;
-    if (source.includes("@/lib/trimmedNameLookup")) continue;
-    offenders.push(rel);
+    const lines = source.split("\n");
+    NAME_FILTER_G.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = NAME_FILTER_G.exec(source)) !== null) {
+      const lineIndex = source.slice(0, m.index).split("\n").length - 1;
+      if (isCommentLine(lines[lineIndex] ?? "")) continue;
+      const window = lines
+        .slice(Math.max(0, lineIndex - WINDOW_BEFORE), lineIndex + WINDOW_AFTER)
+        .join("\n");
+      if (SATISFIED.test(window)) continue;
+      offenders.push({
+        file: rel,
+        line: lineIndex + 1,
+        snippet: (lines[lineIndex] ?? "").trim().slice(0, 100),
+      });
+    }
   }
+  return offenders;
+}
 
-  it("has no unreviewed name-filtered query", () => {
+describe("every name-filtered query is survivor-aware (GH #1116)", () => {
+  it("has no unguarded, unexplained name-filtered query", () => {
+    const offenders = findOffenders();
     expect(
-      offenders,
-      `These files filter a Mongoose query on \`name\` but neither use the ` +
-        `survivor fallback (src/lib/trimmedNameLookup.ts) nor appear in EXEMPT.\n\n` +
-        `If the path can CREATE when the lookup misses, it will manufacture a ` +
-        `duplicate against a row the migration could not trim — add the ` +
-        `fallback. If it cannot create, add it to EXEMPT with the reason.\n\n` +
-        offenders.map((f) => `  - ${f}`).join("\n"),
+      offenders.map((o) => `${o.file}:${o.line}  ${o.snippet}`),
+      "Each of these filters a Mongoose query on `name` with no survivor " +
+        "fallback nearby and no explanation.\n\n" +
+        "If the path can CREATE when the lookup misses, it will manufacture a " +
+        "duplicate against a row `trimEntityNames` could not repair — use " +
+        "findSurvivorId/findByTrimmedName from src/lib/trimmedNameLookup.ts.\n\n" +
+        "If it genuinely cannot (a read-only lookup, a guard that only " +
+        "refuses, or a post-E11000 recovery where the index already proved an " +
+        "exact stored-string match), put a\n" +
+        "    // name-lookup-ok: <reason>\n" +
+        "comment on the line above it.",
     ).toEqual([]);
   });
 
-  it("keeps the exemption list honest", () => {
-    // An exemption for a file that no longer has a name-filtered query is
-    // stale, and a stale allow-list is how a real offender gets waved through
-    // later under a name someone recognises.
-    const stale = Object.keys(EXEMPT).filter((rel) => {
-      let source: string;
-      try {
-        source = readFileSync(rel, "utf8");
-      } catch {
-        return true; // file gone
-      }
-      if (rel === "src/lib/trimmedNameLookup.ts" || rel === "src/lib/trimEntityNames.ts") {
-        return false; // self-referential, documented above
-      }
-      return !NAME_FILTER.test(source);
-    });
-    expect(stale, `Stale EXEMPT entries — remove them:\n${stale.join("\n")}`).toEqual([]);
-  });
-
   it("actually detects the pattern it claims to", () => {
-    // Guards the regex itself: a test that silently matches nothing would
-    // pass forever while covering nothing, which is the failure mode this
-    // whole file exists to prevent one level up.
+    // A detector that silently matches nothing passes forever while covering
+    // nothing — which is precisely the failure this file exists to prevent one
+    // level up, so it is asserted rather than assumed.
     expect(NAME_FILTER.test(`await Filament.findOne({ name, _deletedAt: null })`)).toBe(true);
     expect(
       NAME_FILTER.test(`await Filament.findOneAndUpdate({\n  name: importName,\n  vendor,\n})`),
     ).toBe(true);
-    // Not a name filter: addressing by id, or a `name` nested in an update.
+    // Not a name filter: addressed by id, or `name` inside the update doc.
     expect(NAME_FILTER.test(`await Filament.findOne({ _id: id })`)).toBe(false);
-    expect(NAME_FILTER.test(`await Filament.updateOne({ _id: id }, { $set: { x: 1 } })`)).toBe(
-      false,
-    );
+    expect(
+      NAME_FILTER.test(`await Filament.updateOne({ _id: id }, { $set: { name: "x" } })`),
+    ).toBe(false);
+  });
+
+  it("still finds the real call sites — the sweep is not vacuous", () => {
+    // Without this, deleting the regex body or pointing SRC at an empty
+    // directory would turn the suite green. The count is deliberately a floor,
+    // not an equality, so ordinary churn does not fail CI.
+    let total = 0;
+    for (const file of walk(SRC)) {
+      const source = readFileSync(file, "utf8");
+      NAME_FILTER_G.lastIndex = 0;
+      while (NAME_FILTER_G.exec(source) !== null) total++;
+    }
+    expect(total).toBeGreaterThanOrEqual(20);
+  });
+
+  it("treats a marker as scoped to its own query, not the file", () => {
+    // The regression that motivated the rewrite: a guarded query must not
+    // launder an unguarded one elsewhere in the same file.
+    const guarded = [
+      "const a = await Filament.findOne({ name, _deletedAt: null });",
+      "// name-lookup-ok: read-only",
+    ].join("\n");
+    const unguardedFarBelow = [
+      guarded,
+      ...Array.from({ length: WINDOW_AFTER + 10 }, () => "// filler"),
+      "const b = await Filament.findOne({ name, vendor });",
+    ].join("\n");
+    const lines = unguardedFarBelow.split("\n");
+    NAME_FILTER_G.lastIndex = 0;
+    const positions: number[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = NAME_FILTER_G.exec(unguardedFarBelow)) !== null) {
+      positions.push(unguardedFarBelow.slice(0, m.index).split("\n").length - 1);
+    }
+    expect(positions).toHaveLength(2);
+    const windowFor = (i: number) =>
+      lines.slice(Math.max(0, i - WINDOW_BEFORE), i + WINDOW_AFTER).join("\n");
+    expect(SATISFIED.test(windowFor(positions[0]))).toBe(true);
+    expect(SATISFIED.test(windowFor(positions[1]))).toBe(false);
   });
 });

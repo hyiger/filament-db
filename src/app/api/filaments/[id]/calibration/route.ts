@@ -62,6 +62,7 @@ export async function GET(
       : null;
 
     if (!filament) {
+      // name-lookup-ok: read-only; a miss is a 404
       filament = await Filament.findOne({ name: decodedName, _deletedAt: null })
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")

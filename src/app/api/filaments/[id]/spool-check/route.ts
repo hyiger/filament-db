@@ -54,6 +54,7 @@ export async function GET(
       ? await Filament.findOne({ _id: id, _deletedAt: null }).lean()
       : null;
     if (!filament) {
+      // name-lookup-ok: read-only; a miss is a 404
       filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
     }
 

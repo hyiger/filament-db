@@ -367,7 +367,15 @@ export async function upsertIniFilament(
     const byId = await Filament.findOne({ _id: fid, _deletedAt: null })
       .select("_id name")
       .lean();
-    if (byId && byId.name !== name) {
+    // GH #1116 (Codex P1): compare TRIMMED, or this guard fires on the exact
+    // survivor the fallback below exists to repair. `parseIni` trims a section
+    // name, while an `_id` lookup returns the RAW stored value — so a row the
+    // migration could not trim resolves as `"PLA "` against a section named
+    // `"PLA"`, and the ordinary exported-INI round trip threw here before ever
+    // reaching phase 1. Differing only by edge whitespace is not the ambiguity
+    // this guard is about (a renamed preset vs a copied id): it is one
+    // identity, recorded in two spellings, and the update normalizes it.
+    if (byId && String(byId.name ?? "").trim() !== name.trim()) {
       throw new Error(
         `filamentdb_id ${fid} resolves to "${byId.name}", but this section is named ` +
           `"${name}" — not imported (rename the section to match, or resolve the id/name conflict).`,
@@ -533,6 +541,7 @@ export async function upsertIniFilament(
   // created filament is always a root: no inheritance to preserve here, and
   // the nested `temperatures` object rides straight into the create.
   try {
+    // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
     await Filament.create({ ...collapsed });
     return "created";
   } catch (createErr) {
@@ -541,6 +550,7 @@ export async function upsertIniFilament(
     // create. Recompute the update against THAT row (it may be a variant) and
     // apply it as if we'd taken phase 1, so parallel identical imports stay
     // idempotent instead of throwing.
+    // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
     const racing = await Filament.findOne({ name, _deletedAt: null })
       .select(INI_INHERITANCE_PROJECTION)
       .lean();

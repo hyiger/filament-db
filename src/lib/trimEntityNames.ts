@@ -414,6 +414,8 @@ export async function trimEntityNames(
         // user rename landing between the read and this write must win —
         // filtering on `_id` alone would stamp the stale candidate's trimmed
         // value over their new name. Only a matched write counts as a trim.
+        // name-lookup-ok: RAW DRIVER, so the filter is never cast — pinning the
+        // scanned raw `name` here is the point (see the comment above).
         const res = await collection.updateOne(
           { _id: doc._id, name: doc.name },
           { $set: { name: next } },

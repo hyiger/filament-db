@@ -147,6 +147,7 @@ export async function POST(
       ? await Filament.findOne({ _id: id, _deletedAt: null })
       : null;
     if (!filament) {
+      // name-lookup-ok: resolves an EXISTING row; create-on-404 removed in #867
       filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
     }
 

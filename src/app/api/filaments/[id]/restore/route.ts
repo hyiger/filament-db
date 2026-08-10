@@ -74,6 +74,7 @@ export async function POST(
     // Name collision check: if a non-deleted filament now uses this name,
     // restoring would violate the partial unique index. Fail with a useful
     // message so the caller can rename one or the other.
+    // name-lookup-ok: conflict guard that REFUSES; it never creates
     const conflict = await Filament.findOne({
       name: trashed.name,
       _deletedAt: null,

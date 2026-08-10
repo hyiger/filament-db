@@ -890,6 +890,7 @@ export async function POST(
         }
       }
       if (!filament) {
+        // name-lookup-ok: name-addressed sync; create-on-404 removed in #867
         filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
         if (filament) matchedBy = "name";
       }
@@ -904,6 +905,7 @@ export async function POST(
         if (hint && decodedName.endsWith(` ${hint}`)) {
           const baseName = decodedName.slice(0, -(hint.length + 1)).trim();
           if (baseName) {
+            // name-lookup-ok: per-nozzle suffix decode of an existing preset name
             filament = await Filament.findOne({ name: baseName, _deletedAt: null });
             if (filament) matchedBy = "name";
           }
@@ -1407,6 +1409,7 @@ export async function POST(
         // non-deleted index would E11000 on the write anyway; the pre-check turns it
         // into a friendly, actionable 409 (a TOCTOU race still falls back to the
         // E11000 handler below).
+        // name-lookup-ok: name_taken guard that REFUSES; it never creates
         const clash = await Filament.findOne({
           name: sentName,
           _deletedAt: null,
@@ -1536,6 +1539,7 @@ export async function POST(
       if (update.name != null && isDuplicateKeyError(validationErr)) {
         // Look up the winner so the race fallback returns the SAME shape as the
         // pre-check (incl. conflictId); the rename didn't apply.
+        // name-lookup-ok: name_taken guard that REFUSES; it never creates
         const clash = await Filament.findOne({ name: update.name, _deletedAt: null });
         return NextResponse.json(
           {

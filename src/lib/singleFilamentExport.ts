@@ -63,6 +63,7 @@ export async function resolveFilamentForExport(
   }
   if (!filament) {
     filament = (await withPopulate(
+      // name-lookup-ok: read-only export lookup; a miss is a 404
       Filament.findOne({ name: idOrName, _deletedAt: null }),
     ).lean()) as FilamentDoc | null;
   }

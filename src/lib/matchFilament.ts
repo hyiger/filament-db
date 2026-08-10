@@ -218,6 +218,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   //    GH #896 vendor-substring fix.
   if (name) {
     // 1a. Exact-case — a confident match even when a case-variant sibling exists.
+    // name-lookup-ok: read-only match tier; a miss falls through to the next tier
     const exact = await Filament.findOne({ name, _deletedAt: null })
       .select(MATCH_PROJECTION)
       .lean();

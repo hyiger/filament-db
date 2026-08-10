@@ -343,8 +343,13 @@ export async function POST(request: NextRequest) {
 
     // No conditional match — either the name doesn't exist (continue
     // to create) OR the name exists but is over cap. Check which.
+    // GH #1116 (Codex P1): reuse the resolved survivor id. Against a survivor
+    // the guarded push above fails on the cap expression, and this probe --
+    // filtered by a cast `name` -- would then MISS the very row that is over
+    // cap, so the request fell through and created a canonical duplicate
+    // carrying the spool. The cap error is the correct answer.
     const blocked = await Filament.findOne(
-      { name, _deletedAt: null },
+      activeSurvivorId ? { _id: activeSurvivorId } : { name, _deletedAt: null },
       { spools: 1 },
     ).lean();
     if (
@@ -413,7 +418,9 @@ export async function POST(request: NextRequest) {
     // must NOT fall through to create (the new active row would strand
     // the trashed one on the name forever).
     const trashedBlocked = await Filament.findOne(
-      { name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+      trashedSurvivorId
+        ? { _id: trashedSurvivorId }
+        : { name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
       { spools: 1 },
     ).lean();
     if (
@@ -462,6 +469,7 @@ export async function POST(request: NextRequest) {
           bed_temp_range: `${spool.bedTempMin}-${spool.bedTempMax}`,
         },
       });
+    // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
     } catch (createErr) {
       if (!isDuplicateKeyError(createErr)) throw createErr;
       // GH #605 (codex round 3, Finding B): same guard treatment as the
@@ -469,6 +477,7 @@ export async function POST(request: NextRequest) {
       // spool-less row, but nothing stops it from being (or instantly
       // becoming) a template, so the recovery push must not bypass the
       // guard either.
+      // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
       const winner = await Filament.findOne({ name, _deletedAt: null })
         .select("_id")
         .lean();
