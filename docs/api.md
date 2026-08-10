@@ -64,14 +64,15 @@ Three contracts enforce that across the API. Enforcement is **forward-only**: a 
 
 Creating the FIRST live variant of a parent that still *carries* per-roll state restructures a **second** document: the parent becomes a template and that state moves onto a newly created sibling variant. A parent counts as carrying when it has a non-empty stored `color` (including the historical `#808080` default), a non-blank `colorName`, at least one spool, or a non-null `totalWeight`. From the second variant on nothing gates: the gate fires only on the FIRST live variant, and enforcement is forward-only — a legacy parent with two or more variants can still be carrying, which is exactly the state `POST /api/filaments/:id/promote` exists to convert.
 
-Rather than restructure silently, the four interactive routes that can mint a first variant refuse with `409` and describe exactly what a confirmation would do:
+Rather than restructure silently, every interactive route that can mint a first variant refuses with `409`. Three of them offer a confirmation and describe exactly what it would do:
 
 - `POST /api/filaments` — the body carries `parentId`
 - `PUT /api/filaments/:id` — the body introduces or changes `parentId`
-- `POST /api/filaments/:id/restore` — reviving a trashed variant under a parent that re-acquired carrying state
 - `POST /api/openprinttag/import` in variant mode (`parentId`)
 
-All four return the same body:
+`POST /api/filaments/:id/restore` runs the same gate but has **no** confirmation path — see below.
+
+All three return the same body:
 
 ```json
 {

@@ -61,14 +61,15 @@ Drei Verträge setzen das über die gesamte API durch. Die Durchsetzung wirkt **
 
 Das Anlegen der ERSTEN lebenden Variante eines Elternfilaments, das noch rollenspezifischen Zustand *trägt*, strukturiert ein **zweites** Dokument um: Das Elternfilament wird zur Vorlage, und dieser Zustand wandert auf eine neu angelegte Geschwistervariante. Als tragend gilt ein Elternfilament, wenn es eine nicht-leere gespeicherte `color` hat (einschließlich des historischen Standardwerts `#808080`), einen nicht-leeren `colorName`, mindestens eine Spule oder ein `totalWeight` ungleich null. Ab der zweiten Variante sperrt nichts mehr: Die Sperre greift ausschließlich bei der ERSTEN lebenden Variante, und die Durchsetzung wirkt nur nach vorn — ein Alt-Elternfilament mit zwei oder mehr Varianten kann durchaus noch tragen, und genau für diesen Zustand existiert `POST /api/filaments/:id/promote`.
 
-Statt still umzustrukturieren, lehnen die vier interaktiven Routen, die eine erste Variante erzeugen können, mit `409` ab und beschreiben genau, was eine Bestätigung bewirken würde:
+Statt still umzustrukturieren, lehnt jede interaktive Route, die eine erste Variante erzeugen kann, mit `409` ab. Drei davon bieten eine Bestätigung an und beschreiben genau, was sie bewirken würde:
 
 - `POST /api/filaments` — der Body trägt eine `parentId`
 - `PUT /api/filaments/:id` — der Body führt eine `parentId` ein oder ändert sie
-- `POST /api/filaments/:id/restore` — Wiederherstellen einer im Papierkorb liegenden Variante unter einem Elternfilament, das inzwischen wieder tragenden Zustand erworben hat
 - `POST /api/openprinttag/import` im Variantenmodus (`parentId`)
 
-Alle vier liefern denselben Body:
+`POST /api/filaments/:id/restore` durchläuft dieselbe Sperre, hat aber **keinen** Bestätigungspfad — siehe unten.
+
+Alle drei liefern denselben Body:
 
 ```json
 {

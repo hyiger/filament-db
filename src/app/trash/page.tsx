@@ -88,13 +88,32 @@ export default function TrashPage() {
   const restoreFilament = (item: TrashedFilament) =>
     fetch(`/api/filaments/${item._id}/restore`, { method: "POST" });
 
-  /** The human sentence a refusal carries, falling back to the machine code
-   *  and then the row's name — the structured 409s put their explanation in
+  /** The sentence to show for a refusal.
+   *
+   *  The GH #1103 template refusal is TRANSLATED here rather than displayed
+   *  verbatim (Codex P2): the server composes its `message` in English, and
+   *  this is the main recovery guidance a user gets — showing it raw would
+   *  regress a German user to English for the one instruction that matters.
+   *  It carries `parentName`, which is all the localized string needs.
+   *
+   *  Everything else falls back to the server's own text, then the machine
+   *  code, then the row's name: the structured 409s put their explanation in
    *  `message`, while the plain ones only have `error`. */
-  const refusalText = (body: { message?: unknown; error?: unknown } | null) =>
-    (typeof body?.message === "string" && body.message) ||
-    (typeof body?.error === "string" && body.error) ||
-    null;
+  const refusalText = (
+    body: { message?: unknown; error?: unknown; parentName?: unknown } | null,
+  ) => {
+    if (
+      body?.error === "parent_must_be_template_first" &&
+      typeof body.parentName === "string"
+    ) {
+      return t("trash.restoreBlocked", { parent: body.parentName });
+    }
+    return (
+      (typeof body?.message === "string" && body.message) ||
+      (typeof body?.error === "string" && body.error) ||
+      null
+    );
+  };
 
   const handleRestore = async (item: TrashedFilament) => {
     markBusy(item._id, true);
