@@ -46,9 +46,15 @@ export async function POST(request: NextRequest) {
     // cap itself (the old local parser bypassed parseCsv's maxRows). header:false
     // → positional string[][]; row 0 is the header. Positional mode also sidesteps
     // the object-key __proto__ vector (keys come from `mapping`, not the file).
+    /** Physical start line of each parsed record (GH #1115). */
+    const recordLines: number[] = [];
     let parsedRaw: string[][];
     try {
-      parsedRaw = parseCsv(content, { header: false, maxRows: MAX_PHYSICAL_ROWS }) as string[][];
+      parsedRaw = parseCsv(content, {
+        header: false,
+        maxRows: MAX_PHYSICAL_ROWS,
+        recordLines,
+      }) as string[][];
     } catch (err) {
       if (err instanceof CsvRowLimitExceededError) {
         return errorResponse(`Import too large: exceeds the ${MAX_IMPORT_ROWS} row limit.`, 400);
@@ -59,7 +65,19 @@ export async function POST(request: NextRequest) {
     // (only header mode discards them). Drop blanks so a trailing newline /
     // separator line doesn't become a junk data row (the old parser filtered
     // `l.trim() !== ""`).
-    const parsed = parsedRaw.filter((r) => r.some((v) => v.trim() !== ""));
+    // GH #1115: keep each surviving row's PHYSICAL line number. Filtering
+    // blanks before indexing meant every reported "row N" was short by the
+    // number of blank lines above it — so the row a user was told to fix was
+    // not the row that failed.
+    //
+    // The line comes from the PARSER, not the array index: a quoted field may
+    // contain newlines (this app's own export quotes them), so one record can
+    // span several physical lines and an index-derived number would drift
+    // low for everything after it.
+    const parsedWithLines = parsedRaw
+      .map((r, i) => ({ values: r, line: recordLines[i] ?? i + 1 }))
+      .filter(({ values }) => values.some((v) => v.trim() !== ""));
+    const parsed = parsedWithLines.map((p) => p.values);
 
     if (parsed.length < 2) {
       return errorResponse(
@@ -86,15 +104,19 @@ export async function POST(request: NextRequest) {
     }
 
     const rows = parsed.slice(1).map((values) => rowToImport(values, mapping));
+    const sourceLines = parsedWithLines.slice(1).map((p) => p.line);
 
-    const result = await upsertImportRows(rows);
+    const result = await upsertImportRows(rows, sourceLines);
 
     return NextResponse.json({
       // GH #605: `result.errors` (present only when non-empty) carries
       // per-row non-fatal notes — e.g. a template target whose echoed
       // color/colorName the update stripped. Surfaced in the toast via the
       // note count, same wording as the atlas importer.
-      message: `Imported ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
+      // GH #1115: report what was actually imported. `total` is every data row,
+      // and created + updated + skipped === total always, so the old headline
+      // claimed the skipped rows had been imported too.
+      message: `Imported ${result.created + result.updated} of ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
       ...result,
     });
   } catch (err) {

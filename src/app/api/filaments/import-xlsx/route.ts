@@ -133,6 +133,8 @@ export async function POST(request: NextRequest) {
 
     // Read data rows
     const rows = [];
+    /** Physical sheet row for each entry in `rows` (GH #1115). */
+    const sourceLines: number[] = [];
     for (let r = 2; r <= sheet.rowCount; r++) {
       const row = sheet.getRow(r);
       const values: unknown[] = [];
@@ -151,20 +153,26 @@ export async function POST(request: NextRequest) {
       if (values.every((v) => v == null || v === "")) continue;
 
       rows.push(rowToImport(values, mapping));
+      // GH #1115: the sheet row number, so a skip reason names the row the
+      // user is actually looking at rather than one shifted up by every blank
+      // row above it.
+      sourceLines.push(r);
     }
 
     if (rows.length === 0) {
       return errorResponse("No data rows found in the XLSX file", 400);
     }
 
-    const result = await upsertImportRows(rows);
+    const result = await upsertImportRows(rows, sourceLines);
 
     return NextResponse.json({
       // GH #605: `result.errors` (present only when non-empty) carries
       // per-row non-fatal notes — e.g. a template target whose echoed
       // color/colorName the update stripped. Surfaced in the toast via the
       // note count, same wording as the atlas importer.
-      message: `Imported ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
+      // GH #1115: see the matching note in the CSV route — `total` counts
+      // skipped rows, so it never described what was imported.
+      message: `Imported ${result.created + result.updated} of ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
       ...result,
     });
   } catch (err) {
