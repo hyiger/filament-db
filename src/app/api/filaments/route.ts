@@ -80,6 +80,33 @@ export async function GET(request: NextRequest) {
     if (vendor) filter.vendor = vendor;
     if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
+    // GH #1108: a type/vendor filter that matches a TEMPLATE must bring its
+    // variants with it.
+    //
+    // `vendor` and `type` are `required: true` and stamped by every creation
+    // path, so despite being listed as inheritable they never actually
+    // inherit — a family whose template and variants disagree (a typo on one
+    // of them, which the app happily accepts) is filtered per ROW. Filtering
+    // by the template's vendor therefore returned the template alone: the list
+    // rendered it as a group header with no members, its four colours had no
+    // expander and no "N colors" chip and were simply unreachable, and the
+    // summary line read "0 filament(s)" because template rows are excluded
+    // from the count (they are grouping headers, not rolls).
+    //
+    // Widening to the family fixes both halves. Scoped to type/vendor — those
+    // describe a PRODUCT LINE, which is exactly what a family is. Search is
+    // left alone: it matches on name, and a name search pulling in
+    // differently-named rows would be surprising.
+    let matchStage: Record<string, unknown> = filter;
+    if (type || vendor) {
+      const matchedIds = await Filament.distinct("_id", filter);
+      if (matchedIds.length > 0) {
+        matchStage = {
+          $or: [filter, { _deletedAt: null, parentId: { $in: matchedIds } }],
+        };
+      }
+    }
+
     // Project to FilamentSummary shape: drop heavy spool subfields
     // (photoDataUrl, usageHistory, dryCycles), keep only the temperatures
     // the list renders, and surface `hasCalibrations` so the noCalibration
@@ -92,7 +119,7 @@ export async function GET(request: NextRequest) {
     // f.tdsUrl off each result. Dropping the field silently empties the
     // suggestion list on create/edit.
     const filaments = await Filament.aggregate([
-      { $match: filter },
+      { $match: matchStage },
       { $sort: { name: 1 } },
       // Look up parent's calibrations so hasCalibrations reflects the
       // *effective* state rather than the variant's own array. Variants

@@ -488,3 +488,90 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(body).toHaveLength(3);
   });
 });
+
+/**
+ * GH #1108 — `vendor` and `type` are `required: true` and stamped by every
+ * creation path, so despite being listed as inheritable they never actually
+ * inherit. A family whose template and variants disagree (a typo on one of
+ * them, which the app accepts) was filtered per ROW: filtering by the
+ * template's vendor returned the template alone, its colours had no expander
+ * and were unreachable, and the summary line read "0 filament(s)" because
+ * template rows are excluded from the count.
+ */
+describe("GET /api/filaments — type/vendor filters pull in the family (#1108)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const mod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) mongoose.model("Filament", mod.default.schema);
+    Filament = mongoose.models.Filament;
+  });
+
+  const list = async (qs: string) => {
+    const res = await listFilaments(
+      new NextRequest(`http://localhost/api/filaments${qs}`),
+    );
+    return (await res.json()) as { name: string; hasVariants?: boolean }[];
+  };
+
+  async function seedMismatchedFamily() {
+    const parent = await Filament.create({
+      name: "OVV3D Wood",
+      vendor: "OVV3D",
+      type: "PLA",
+    });
+    for (const c of ["Oak", "Birch"]) {
+      await Filament.create({
+        name: `OVV3D Wood ${c}`,
+        // The typo: the variants carry a DIFFERENT vendor.
+        vendor: "OCC3D",
+        type: "PLA",
+        parentId: parent._id,
+      });
+    }
+    return parent;
+  }
+
+  it("returns a matched template's variants even though their vendor differs", async () => {
+    await seedMismatchedFamily();
+    const names = (await list("?vendor=OVV3D")).map((f) => f.name).sort();
+    expect(names).toEqual(["OVV3D Wood", "OVV3D Wood Birch", "OVV3D Wood Oak"]);
+  });
+
+  it("does the same for a type filter", async () => {
+    const parent = await Filament.create({ name: "TypeFam", vendor: "V", type: "PETG" });
+    await Filament.create({
+      name: "TypeFam Red",
+      vendor: "V",
+      type: "PLA", // differs from the parent
+      parentId: parent._id,
+    });
+    const names = (await list("?type=PETG")).map((f) => f.name).sort();
+    expect(names).toEqual(["TypeFam", "TypeFam Red"]);
+  });
+
+  it("does not widen a name SEARCH — that would pull in differently-named rows", async () => {
+    const parent = await Filament.create({ name: "SearchFam", vendor: "V", type: "PLA" });
+    await Filament.create({
+      name: "Totally Different",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const names = (await list("?search=SearchFam")).map((f) => f.name);
+    expect(names).toEqual(["SearchFam"]);
+  });
+
+  it("still filters normally when nothing matches", async () => {
+    await seedMismatchedFamily();
+    expect(await list("?vendor=NoSuchVendor")).toEqual([]);
+  });
+
+  it("does not pull in unrelated filaments that merely share a vendor value", async () => {
+    await seedMismatchedFamily();
+    await Filament.create({ name: "Unrelated OCC3D", vendor: "OCC3D", type: "PLA" });
+    const names = (await list("?vendor=OVV3D")).map((f) => f.name).sort();
+    expect(names).not.toContain("Unrelated OCC3D");
+  });
+});
