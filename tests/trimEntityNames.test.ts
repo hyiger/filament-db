@@ -290,6 +290,70 @@ describe("trimEntityNames", () => {
   });
 });
 
+describe("the fallback index check (Codex P1)", () => {
+  /** A fake whose createIndex always conflicts, so the fallback path runs,
+   *  and whose indexes() we control exactly. */
+  function dbWithIndexes(indexes: Record<string, unknown>[]): MinimalTrimDb {
+    return {
+      collection: () => ({
+        createIndex: async () => {
+          throw Object.assign(new Error("IndexOptionsConflict"), { code: 85 });
+        },
+        indexes: async () => indexes,
+        find: () => ({
+          async toArray() {
+            return [{ _id: "x", name: "Trim Me ", _deletedAt: null }];
+          },
+        }),
+        async updateOne() {
+          return { matchedCount: 1 };
+        },
+      }),
+    };
+  }
+
+  it("accepts the LEGACY plain unique index — no filter, so it covers everything", async () => {
+    const res = await trimEntityNames(dbWithIndexes([{ key: { name: 1 }, unique: true }]));
+    expect(res.skipped).toEqual([]);
+    expect(res.trimmed).toBeGreaterThan(0);
+  });
+
+  it("accepts the exact partial filter the models declare", async () => {
+    const res = await trimEntityNames(
+      dbWithIndexes([
+        { key: { name: 1 }, unique: true, partialFilterExpression: { _deletedAt: null } },
+      ]),
+    );
+    expect(res.skipped).toEqual([]);
+  });
+
+  it("refuses a NARROWER filter that misses rows with the field absent", async () => {
+    const res = await trimEntityNames(
+      dbWithIndexes([
+        {
+          key: { name: 1 },
+          unique: true,
+          partialFilterExpression: { _deletedAt: { $exists: true } },
+        },
+      ]),
+    );
+    expect(res.skipped).toHaveLength(TRIMMABLE_COLLECTIONS.length);
+    expect(res.trimmed).toBe(0);
+  });
+
+  it("refuses a COMPOUND key — unique over the pair, not over the name", async () => {
+    const res = await trimEntityNames(
+      dbWithIndexes([{ key: { name: 1, kind: 1 }, unique: true }]),
+    );
+    expect(res.skipped).toHaveLength(TRIMMABLE_COLLECTIONS.length);
+  });
+
+  it("refuses a NON-unique name index", async () => {
+    const res = await trimEntityNames(dbWithIndexes([{ key: { name: 1 } }]));
+    expect(res.skipped).toHaveLength(TRIMMABLE_COLLECTIONS.length);
+  });
+});
+
 describe("describeTrimResult", () => {
   it("says nothing when there was nothing to do", () => {
     expect(describeTrimResult({ trimmed: 0, conflicts: [], skipped: [] })).toBeNull();

@@ -141,6 +141,32 @@ describe("trimEntityNames against a real database (#1116)", () => {
     await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
   });
 
+  it("REFUSES an index that doesn't cover every active row (Codex P1)", async () => {
+    // A partial filter narrower than `{_deletedAt: null}` — this one misses
+    // legacy rows where the field is absent entirely — leaves precisely the
+    // rows being trimmed unserialized, which is the whole hazard.
+    await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
+    await mongoose.connection
+      .collection("locations")
+      .createIndex(
+        { name: 1 },
+        { unique: true, partialFilterExpression: { _deletedAt: { $exists: true } } },
+      );
+    await mongoose.connection
+      .collection("locations")
+      .insertOne({ name: "Narrow Filter ", kind: "drybox", _deletedAt: null });
+
+    const res = await trimEntityNames(db());
+
+    expect(res.skipped.map((s) => s.collection)).toContain("locations");
+    // Untouched — writing unserialized is what this refuses to do.
+    const raw = await mongoose.connection
+      .collection("locations")
+      .findOne({ name: "Narrow Filter " });
+    expect(raw).not.toBeNull();
+    await mongoose.connection.collection("locations").dropIndexes().catch(() => {});
+  });
+
   it("leaves a colliding pair alone and names it", async () => {
     await Location.create({ name: "Drybox #1", kind: "drybox" });
     await mongoose.connection

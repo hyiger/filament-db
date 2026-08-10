@@ -177,16 +177,35 @@ export interface MinimalTrimDb {
  * serialized", not "is the index the one I would have built".
  */
 async function hasUniqueNameIndex(collection: {
-  indexes?(): Promise<{ key?: unknown; unique?: unknown }[]>;
+  indexes?(): Promise<
+    { key?: unknown; unique?: unknown; partialFilterExpression?: unknown }[]
+  >;
 }): Promise<boolean> {
   if (!collection.indexes) return false;
   try {
     const existing = await collection.indexes();
-    return existing.some(
-      (i) =>
-        i.unique === true &&
-        (i.key as Record<string, unknown> | undefined)?.name === 1,
-    );
+    return existing.some((i) => {
+      if (i.unique !== true) return false;
+
+      // The key must be EXACTLY `{name: 1}` (Codex P1). A compound
+      // `{name: 1, vendor: 1}` is unique over the PAIR and serializes nothing
+      // about `name` on its own.
+      const key = i.key as Record<string, unknown> | undefined;
+      if (!key || key.name !== 1 || Object.keys(key).length !== 1) return false;
+
+      // And it must cover every row this pass treats as active. No partial
+      // filter at all is the legacy plain index — strictly stricter, fine.
+      // Otherwise only the exact filter the models declare qualifies: a
+      // narrower one (say `{_deletedAt: {$exists: true}}`, which misses
+      // legacy rows where the field is absent) would leave precisely the
+      // rows being trimmed unserialized, which is the whole hazard.
+      const filter = i.partialFilterExpression as
+        | Record<string, unknown>
+        | undefined;
+      if (filter === undefined || filter === null) return true;
+      const keys = Object.keys(filter);
+      return keys.length === 1 && keys[0] === "_deletedAt" && filter._deletedAt === null;
+    });
   } catch {
     return false;
   }
