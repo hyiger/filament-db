@@ -993,13 +993,53 @@ describe("SyncService — v1.12 sync expansion", () => {
       }
     });
 
-    it("a name it cannot trim is reported, not fatal — the cycle still syncs", async () => {
+    it("REFUSES to reconcile or sync a collection whose trim conflicted (Codex P1)", async () => {
+      // The dangerous shape: local holds A="X" and B="X " (distinct rows), the
+      // remote holds only B. The local trim can't touch B (it would collide
+      // with A) but the remote trim succeeds, so the two sides now disagree
+      // about which row is "X" — and reconcileByName would pair remote B with
+      // local A by NAME and stamp A's syncId onto B, fusing two records into
+      // one for LWW to then overwrite.
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
       const now = new Date();
-      // Both spellings active on the remote, and the unique index present, so
-      // the trim collides. #1021 aborts the cycle on failure; this one must
-      // not — refusing to sync at all is strictly worse than one stale name.
+      await localDb
+        .collection("locations")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      await localDb.collection("locations").insertMany([
+        { name: "Fuse Me", kind: "shelf", syncId: "loc-A", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Fuse Me ", kind: "shelf", syncId: "loc-B", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      await remoteDb.collection("locations").insertOne({
+        name: "Fuse Me ", kind: "shelf", syncId: "loc-B", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection is refused, loudly, with actionable text…
+      const loc = results.find((r) => r.collection === "locations");
+      expect(loc?.error).toBeTruthy();
+      expect(loc?.error).toContain("whitespace");
+      // …and crucially the two local rows keep their OWN identities: remote B
+      // was not re-keyed onto local A.
+      const a = await localDb.collection("locations").findOne({ syncId: "loc-A" });
+      const b = await localDb.collection("locations").findOne({ syncId: "loc-B" });
+      expect(a!.name).toBe("Fuse Me");
+      expect(b!.name).toBe("Fuse Me ");
+      const remoteB = await remoteDb.collection("locations").findOne({ name: "Fuse Me" });
+      expect(remoteB!.syncId).toBe("loc-B");
+    });
+
+    it("scopes a trim conflict to its own collection + dependents, not the cycle", async () => {
+      // A per-row conflict is fatal for ITS collection (the two databases can
+      // disagree about identity — see the fusion test above) and cascades to
+      // that collection's dependents through the #369 prerequisite chain. It
+      // is NOT fatal for the cycle: unrelated collections still sync, unlike
+      // #1021, which aborts everything.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
       await remoteDb
         .collection("bedtypes")
         .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
@@ -1007,20 +1047,27 @@ describe("SyncService — v1.12 sync expansion", () => {
         { name: "Smooth PEI", material: "PEI", syncId: "bt-clean", _deletedAt: null, createdAt: now, updatedAt: now },
         { name: "Smooth PEI ", material: "PEI", syncId: "bt-clash", _deletedAt: null, createdAt: now, updatedAt: now },
       ]);
-      await remoteDb.collection("printers").insertOne({
-        name: "Sync Survivor", manufacturer: "P", printerModel: "M",
-        syncId: "prn-survivor", _deletedAt: null, createdAt: now, updatedAt: now,
+      // Nozzles don't depend on bedtypes, so they must still sync.
+      await remoteDb.collection("nozzles").insertOne({
+        name: "Unaffected 0.4", diameter: 0.4, type: "brass",
+        syncId: "noz-unaffected", _deletedAt: null, createdAt: now, updatedAt: now,
       });
 
       sync = makeSync();
-      await sync.sync();
+      const results = await sync.sync();
 
-      // The colliding row is untouched, and the rest of the cycle ran.
+      // The colliding row is untouched…
       expect(
         (await remoteDb.collection("bedtypes").findOne({ syncId: "bt-clash" }))!.name,
       ).toBe("Smooth PEI ");
+      // …its own collection is refused, and printers (which depend on it)
+      // cascade-skip…
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toContain("whitespace");
+      expect(results.find((r) => r.collection === "printers")?.error).toBeTruthy();
+      // …while an unrelated collection syncs normally.
+      expect(results.find((r) => r.collection === "nozzles")?.error).toBeUndefined();
       expect(
-        await localDb.collection("printers").findOne({ syncId: "prn-survivor" }),
+        await localDb.collection("nozzles").findOne({ syncId: "noz-unaffected" }),
       ).not.toBeNull();
     });
   });

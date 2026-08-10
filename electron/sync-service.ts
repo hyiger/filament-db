@@ -368,6 +368,10 @@ export class SyncService extends EventEmitter {
         }
       }
 
+      /** Collections where a name couldn't be trimmed on one side or the
+       *  other, so the two databases may now disagree about identity. */
+      const conflictedCollections = new Set<string>();
+
       // GH #1116 — normalize entity names on BOTH sides before any copy.
       //
       // The copy path is the raw driver (`insertOne`/`replaceOne`), so it
@@ -400,10 +404,19 @@ export class SyncService extends EventEmitter {
         // pair of rows a human has to merge by hand. (Per-row conflicts are
         // still non-fatal — those are REPORTED, not thrown; see
         // `trimEntityNames`.)
-        const line = describeTrimResult(
-          await trimEntityNames(dbHandle as unknown as MinimalTrimDb),
-        );
+        const trimResult = await trimEntityNames(dbHandle as unknown as MinimalTrimDb);
+        const line = describeTrimResult(trimResult);
         if (line) console.log(`[sync] ${side}: ${line}`);
+        // A per-row conflict is non-fatal for the CYCLE but it is fatal for
+        // ITS OWN COLLECTION (Codex P1). One side can succeed where the other
+        // couldn't — local holds A="X" and B="X " so B can't be trimmed,
+        // while the remote holds only B and trims it to "X". The two sides
+        // now disagree about which row "X" is, and `reconcileByName` would
+        // pair remote B with local A by NAME and stamp A's syncId onto B:
+        // two distinct records fused into one, after which LWW overwrites
+        // one with the other. Record the affected collections and refuse to
+        // reconcile or sync them until a human separates the pair.
+        for (const c of trimResult.conflicts) conflictedCollections.add(c.collection);
       }
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
@@ -466,6 +479,23 @@ export class SyncService extends EventEmitter {
         }
       }
 
+      /**
+       * Throw for a collection whose names couldn't be normalized (GH #1116).
+       *
+       * Used as the `trySync` body so the failure is REPORTED per collection
+       * and dependents cascade-skip through the existing #369 prerequisite
+       * chain — rather than silently not syncing, or worse, reconciling two
+       * distinct records into one. The message names what the user has to do,
+       * because only they can decide which of the pair to keep.
+       */
+      const refuseConflicted = (name: string): Promise<SyncResult> => {
+        throw new Error(
+          `skipped — two active rows in "${name}" differ only by surrounding whitespace, ` +
+            `so their names can't be normalized on both databases. Rename or remove one ` +
+            `(see the trim conflicts logged above) and sync again.`,
+        );
+      };
+
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
       // GH #1116 (Codex P1): reconcile by name FIRST, like bedtypes,
@@ -479,9 +509,13 @@ export class SyncService extends EventEmitter {
       // filaments and print history on EVERY cycle. Independent creation of
       // the same nozzle on two desktops has the same shape and was already
       // possible — the trim just makes it reachable without a typo.
-      if (!this.aborted) await this.reconcileNozzlesByName(localDb, remoteDb);
+      if (!this.aborted && !conflictedCollections.has("nozzles")) {
+        await this.reconcileNozzlesByName(localDb, remoteDb);
+      }
       results.push(await trySync("nozzles", [], () =>
-        this.syncCollection(localDb, remoteDb, "nozzles"),
+        conflictedCollections.has("nozzles")
+          ? refuseConflicted("nozzles")
+          : this.syncCollection(localDb, remoteDb, "nozzles"),
       ));
 
       // Build nozzle syncId→ID maps for reference remapping.
@@ -505,9 +539,13 @@ export class SyncService extends EventEmitter {
       // GH #904: gate the inline reconcile on the abort flag, like trySync and
       // the repair passes — after a #823 abort it must stop writing syncId
       // metadata to the about-to-be-abandoned DB.
-      if (!this.aborted) await this.reconcileBedTypesByName(localDb, remoteDb);
+      if (!this.aborted && !conflictedCollections.has("bedtypes")) {
+        await this.reconcileBedTypesByName(localDb, remoteDb);
+      }
       results.push(await trySync("bedtypes", [], () =>
-        this.syncCollection(localDb, remoteDb, "bedtypes"),
+        conflictedCollections.has("bedtypes")
+          ? refuseConflicted("bedtypes")
+          : this.syncCollection(localDb, remoteDb, "bedtypes"),
       ));
 
       // Build bedType syncId→ID maps for printer + filament remap.
@@ -521,9 +559,13 @@ export class SyncService extends EventEmitter {
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
       // GH #1116 (Codex P1): same reasoning as nozzles above.
-      if (!this.aborted) await this.reconcilePrintersByName(localDb, remoteDb);
+      if (!this.aborted && !conflictedCollections.has("printers")) {
+        await this.reconcilePrintersByName(localDb, remoteDb);
+      }
       results.push(await trySync("printers", ["nozzles", "bedtypes"], () =>
-        this.syncCollection(
+        conflictedCollections.has("printers")
+          ? refuseConflicted("printers")
+          : this.syncCollection(
           localDb, remoteDb, "printers",
           (doc, direction) => this.remapPrinterRefs(
             doc, direction,
@@ -552,9 +594,13 @@ export class SyncService extends EventEmitter {
       // the entire sync cycle. Pairing matching-name rows and unifying their
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
-      if (!this.aborted) await this.reconcileLocationsByName(localDb, remoteDb); // GH #904
+      if (!this.aborted && !conflictedCollections.has("locations")) {
+        await this.reconcileLocationsByName(localDb, remoteDb); // GH #904
+      }
       results.push(await trySync("locations", [], () =>
-        this.syncCollection(localDb, remoteDb, "locations"),
+        conflictedCollections.has("locations")
+          ? refuseConflicted("locations")
+          : this.syncCollection(localDb, remoteDb, "locations"),
       ));
 
       // Build location syncId→ID maps for spool reference remapping.
@@ -611,7 +657,9 @@ export class SyncService extends EventEmitter {
       // present and only mints when both sides are missing one) and
       // BEFORE the maps below so parentId remapping sees the unified
       // syncId on both sides.
-      if (!this.aborted) await this.reconcileFilamentsByName(localDb, remoteDb); // GH #904
+      if (!this.aborted && !conflictedCollections.has("filaments")) {
+        await this.reconcileFilamentsByName(localDb, remoteDb); // GH #904
+      }
 
       // Build filament syncId→ID maps for parentId remapping.
       // GH #511: project to {_id, syncId, updatedAt} — filament rows carry
@@ -674,7 +722,10 @@ export class SyncService extends EventEmitter {
       results.push(await trySync(
         "filaments",
         ["nozzles", "bedtypes", "printers", "locations"],
-        () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
+        () =>
+          conflictedCollections.has("filaments")
+            ? refuseConflicted("filaments")
+            : this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
       ));
 
       // GH #1021 (Codex r17–r25): the LWW copy is itself an ingestion
