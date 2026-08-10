@@ -228,10 +228,24 @@ export async function trimEntityNames(
       // conflicting row created between this check and the write.
       if (doc._deletedAt == null) {
         const clash = await collection
-          .find({ name: next, _deletedAt: null }, { projection: { _id: 1 } })
+          .find({ name: next, _deletedAt: null }, { projection: { _id: 1, _purged: 1 } })
           .toArray();
-        if (clash.some((c) => String(c._id) !== String(doc._id))) {
-          conflicts.push({ collection: collectionName, name: doc.name, active });
+        const others = clash.filter((c) => String(c._id) !== String(doc._id));
+        if (others.length > 0) {
+          // The clash is real either way — the index covers `_deletedAt: null`
+          // rows including a purge zombie, so the write genuinely can't
+          // succeed. But whether it may GATE A SYNC depends on the CLASHING
+          // row too, not just the candidate (Codex P1, the mirror of the
+          // previous round): if the only thing in the way is a hidden
+          // untombstoned zombie, the user has nothing to act on — it isn't in
+          // the trash, and the remote never runs the migration that would
+          // repair it — so gating would block that collection forever.
+          const resolvableByAHuman = others.some((c) => c._purged !== true);
+          conflicts.push({
+            collection: collectionName,
+            name: doc.name,
+            active: active && resolvableByAHuman,
+          });
           continue;
         }
       }

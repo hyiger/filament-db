@@ -146,6 +146,38 @@ describe("trimEntityNames", () => {
     expect(store.nozzles[0].name).toBe("   ");
   });
 
+  it("marks a clash against a hidden ZOMBIE as inactive too (Codex P1)", async () => {
+    // Mirror of the case below: here the CANDIDATE is a visible active row
+    // and the thing blocking it is an untombstoned purge zombie. Still a real
+    // clash — the index covers it — but nothing a human can act on, since the
+    // zombie isn't in the trash and the remote never runs the migration that
+    // would repair it.
+    const { db } = makeDb({
+      filaments: [
+        { _id: "z", name: "X", _deletedAt: null, _purged: true },
+        { _id: "v", name: "X ", _deletedAt: null },
+      ],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.trimmed).toBe(0);
+    expect(res.conflicts).toEqual([
+      { collection: "filaments", name: "X ", active: false },
+    ]);
+  });
+
+  it("still gates when a VISIBLE row is the one in the way", async () => {
+    const { db } = makeDb({
+      filaments: [
+        { _id: "a", name: "X", _deletedAt: null },
+        { _id: "b", name: "X ", _deletedAt: null },
+      ],
+    });
+    const res = await trimEntityNames(db);
+    expect(res.conflicts).toEqual([
+      { collection: "filaments", name: "X ", active: true },
+    ]);
+  });
+
   it("marks a conflict on a PURGED-but-untombstoned row as inactive (Codex P1)", async () => {
     // An Atlas zombie: `_purged: true` with `_deletedAt` still null, because
     // the REMOTE never runs dbConnect and so never runs the purgedZombies
