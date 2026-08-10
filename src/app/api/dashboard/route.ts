@@ -10,6 +10,10 @@ import { resolveFilament } from "@/lib/resolveFilament";
 import { displayColor } from "@/lib/filamentColors";
 import { sumUsageGrams } from "@/lib/capUsageHistory";
 
+/** How many dry-due spools the dashboard panel lists. The response also
+ *  carries `dryDueTotal`, the uncapped count (#1117(b)). */
+const DRY_DUE_LIMIT = 20;
+
 /**
  * GH #1078 (closing the divergence tracked since v1.60.1/#936): the low-stock
  * swatch color must follow `resolveFilament`'s contract, exactly like the
@@ -277,7 +281,12 @@ export async function GET() {
       },
       totalGrams,
       lowStock,
-      dryDue: dryDue.slice(0, 20), // cap so the dashboard stays readable
+      // #1117(b): the list is capped so the panel stays readable, but the
+      // TRUE count rides alongside it. The heading used to render
+      // `dryDue.length` — i.e. the CAP — so any inventory past 20 due spools
+      // permanently read "Dry cycle due (20)" with no sign that more existed.
+      dryDue: dryDue.slice(0, DRY_DUE_LIMIT),
+      dryDueTotal: dryDue.length,
       recentPrintHistory: recentPrintHistory.map((h) => ({
         _id: String(h._id),
         jobLabel: h.jobLabel,

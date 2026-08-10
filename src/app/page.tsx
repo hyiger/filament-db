@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -12,6 +13,7 @@ import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { deriveFinish } from "@/lib/filamentFinish";
+import { withReturnTo } from "@/lib/returnTo";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -178,11 +180,40 @@ function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
   }
 }
 
+/** Sentinel `<option>` value for "take me to the create-a-location form"
+ *  (#1117 item h). Not a valid ObjectId, so it can never collide with a real
+ *  location id. */
+const NEW_LOCATION_OPTION = "__new_location__";
+
 export default function Home() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
   const { formatDate } = useDateFormat();
   const { formatGrams } = useNumberFormat();
+  const router = useRouter();
+  // #1117(h): the create-a-location detour carries the CURRENT url back, so
+  // the user lands on this page again rather than being stranded on
+  // /locations.
+  //
+  // What that does and does NOT preserve, stated plainly (Codex P2): the
+  // PAGE and anything already in its query string; plus whatever this page
+  // persists itself (sort key/direction here, and group/sort/retired on
+  // /inventory, both localStorage). What resets is the in-page filter state —
+  // search, type, vendor, the quick-filter chip — because neither list
+  // mirrors those into the URL. That is a pre-existing property of both
+  // pages, not something this option introduces, and putting filter state in
+  // the URL is a product decision (it changes what Back does) rather than
+  // part of adding an affordance. Tracked separately.
+  const newLocationHref = useCallback(
+    () =>
+      withReturnTo(
+        "/locations/new",
+        typeof window === "undefined"
+          ? null
+          : `${window.location.pathname}${window.location.search}`,
+      ),
+    [],
+  );
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -1014,7 +1045,16 @@ export default function Home() {
                   <select
                     value={s.locationId ?? ""}
                     disabled={pendingMoves.has(`${f._id}:${s._id}`)}
-                    onChange={(e) => moveSpool(f._id, s._id, e.target.value || null)}
+                    onChange={(e) => {
+                      if (e.target.value === NEW_LOCATION_OPTION) {
+                        // Bounce to the create form and come straight back.
+                        // Nothing is moved — the select is controlled by
+                        // `s.locationId`, so it snaps back on re-render.
+                        router.push(newLocationHref());
+                        return;
+                      }
+                      moveSpool(f._id, s._id, e.target.value || null);
+                    }}
                     aria-label={t("filaments.spools.location")}
                     className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
                   >
@@ -1024,6 +1064,13 @@ export default function Home() {
                         {l.name}
                       </option>
                     ))}
+                    {/* #1117(h): with no locations defined the menu held a
+                        single "No location" entry and nothing else — no way
+                        to discover that locations exist, let alone create
+                        one. */}
+                    <option value={NEW_LOCATION_OPTION}>
+                      {t("filaments.spools.newLocation")}
+                    </option>
                   </select>
                 </label>
               </div>
