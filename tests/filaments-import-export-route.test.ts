@@ -1004,6 +1004,62 @@ filamentdb_nozzle = 0.6 Brass
       expect(res.status).toBe(400);
     });
 
+    it("reports the PHYSICAL line number, not one shifted by blank rows (#1115)", async () => {
+      // Blank rows are stripped before indexing, so the reported row used to
+      // be short by every blank line above it — the row a user was told to fix
+      // was not the row that failed. Here the bad row is on physical line 6.
+      const csv = [
+        "name,vendor,type",
+        "Line2 OK,V,PLA",
+        "",
+        "Line4 OK,V,PLA",
+        ",,",
+        "Line6 Bad,,",
+        "",
+      ].join("\n");
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.skipped).toBe(1);
+      expect(body.skippedRows).toHaveLength(1);
+      expect(body.skippedRows[0].row).toBe(6);
+      expect(body.skippedRows[0].reason).toMatch(/Missing required field/);
+    });
+
+    it("counts a quoted embedded newline as the lines it really spans (#1115)", async () => {
+      // A record is not a line. This app's own export quotes newline-containing
+      // values, so re-importing one would have mis-numbered every later row.
+      // Here the good record spans physical lines 2-3, so the bad one is on 4.
+      const csv =
+        "name,vendor,type\n" +
+        '"Multi\nLine",V,PLA\n' +
+        "Bad Row,,\n";
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      const body = await res.json();
+      expect(body.skippedRows).toHaveLength(1);
+      expect(body.skippedRows[0].row).toBe(4);
+    });
+
+    it("reports what was imported, not the total row count (#1115)", async () => {
+      // created + updated + skipped === total always, so the old headline
+      // claimed the skipped rows had been imported too.
+      const csv = ["name,vendor,type", "Counted OK,V,PLA", "Counted Bad,,"].join("\n");
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      const body = await res.json();
+      expect(body.total).toBe(2);
+      expect(body.skipped).toBe(1);
+      expect(body.message).toContain("Imported 1 of 2");
+    });
+
     it("imports a basic CSV row", async () => {
       const csv = `name,vendor,type,color
 "My CSV PLA",MyVendor,PLA,#ff0000
