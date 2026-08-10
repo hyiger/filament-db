@@ -1049,8 +1049,25 @@ export class SyncService extends EventEmitter {
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
 
-    // Process all unique syncIds from both sides
-    const allSyncIds = new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()]);
+    // Process all unique syncIds from both sides — BOTH-SIDES ROWS FIRST.
+    //
+    // GH #1116 (Codex P1): an INSERT can collide on the partial unique name
+    // index with a row whose own UPDATE would have freed that name. Concrete
+    // shape: local A "X" and local B "Y" (B was just renamed), remote holds
+    // only B, still named "X". Reaching A first inserts "X" beside remote B's
+    // "X" and E11000s, aborting the collection before B's rename is copied —
+    // and the same ordering repeats every cycle, so locations never converge
+    // and filaments + print history stay cascade-skipped. Copying B's rename
+    // first frees the name and A inserts cleanly.
+    //
+    // Ordering only: each row's own LWW decision is unchanged, and the two
+    // groups are independent of each other.
+    const paired: string[] = [];
+    const unpaired: string[] = [];
+    for (const syncId of new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()])) {
+      (localBySyncId.has(syncId) && remoteBySyncId.has(syncId) ? paired : unpaired).push(syncId);
+    }
+    const allSyncIds = [...paired, ...unpaired];
 
     for (const syncId of allSyncIds) {
       const localDoc = localBySyncId.get(syncId);

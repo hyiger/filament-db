@@ -1084,7 +1084,9 @@ describe("SyncService — v1.12 sync expansion", () => {
       const now = new Date();
       await localDb.collection("locations").insertMany([
         { name: "Pair X", kind: "shelf", syncId: "pair-A", _deletedAt: null, createdAt: now, updatedAt: now },
-        { name: "Renamed Y", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: now },
+        // The rename is NEWER than the remote copy — it is the edit the user
+        // just made, and LWW needs that to be true to carry it across.
+        { name: "Renamed Y", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000) },
       ]);
       // Remote holds only B, already trimmed to the name local A uses.
       const remoteBId = (
@@ -1093,17 +1095,32 @@ describe("SyncService — v1.12 sync expansion", () => {
         })
       ).insertedId;
 
-      sync = makeSync();
-      await sync.sync();
+      // The remote's unique name index must be present, or the convergence
+      // half of this test proves nothing.
+      await remoteDb
+        .collection("locations")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
 
-      // Assert on the DOCUMENT, by _id — not on "some row with syncId pair-B
-      // exists", which the copy step recreates and which therefore passes
-      // even when the fusion happened.
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // 1. No fusion. Asserted on the DOCUMENT, by _id — not on "some row with
+      //    syncId pair-B exists", which the copy step recreates and which
+      //    therefore passes even when the fusion happened.
       const remoteB = await remoteDb.collection("locations").findOne({ _id: remoteBId });
       expect(remoteB!.syncId).toBe("pair-B");
-      // And local A is still its own row under its own syncId.
       const localA = await localDb.collection("locations").findOne({ syncId: "pair-A" });
       expect(localA!.name).toBe("Pair X");
+
+      // 2. And the collection CONVERGES (Codex P1). Preventing the fusion is
+      //    worth nothing if locations then fails on the unique index every
+      //    cycle and filaments + print history stay cascade-skipped. The
+      //    rename must reach the remote and A must land beside it.
+      expect(results.find((r) => r.collection === "locations")?.error).toBeUndefined();
+      expect(remoteB!.name).toBe("Renamed Y");
+      expect(
+        await remoteDb.collection("locations").findOne({ syncId: "pair-A" }),
+      ).not.toBeNull();
 
       await localDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
       await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
