@@ -64,8 +64,15 @@ export default function NewLocation() {
   return (
     <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
+        {/* #1117(h) (Codex P2): the href is dynamic, so the LABEL has to be
+            too. Opened from the filament list or Inventory this link goes
+            back there, and "Back to Locations" would then name a destination
+            it doesn't lead to — worst for a screen-reader user, who has only
+            the label. Neutral "Back" whenever `?from=` redirected it. */}
         <Link href={returnTo} className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
-          {t("locations.backToLocations")}
+          {returnTo === LOCATIONS_FALLBACK
+            ? t("locations.backToLocations")
+            : t("common.back")}
         </Link>
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("locations.addNewTitle")}</h1>
