@@ -993,7 +993,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       }
     });
 
-    it("REFUSES to reconcile or sync a collection whose trim conflicted (Codex P1)", async () => {
+    it("REFUSES to RECONCILE a collection whose trim conflicted (Codex P1)", async () => {
       // The dangerous shape: local holds A="X" and B="X " (distinct rows), the
       // remote holds only B. The local trim can't touch B (it would collide
       // with A) but the remote trim succeeds, so the two sides now disagree
@@ -1017,12 +1017,14 @@ describe("SyncService — v1.12 sync expansion", () => {
       sync = makeSync();
       const results = await sync.sync();
 
-      // The collection is refused, loudly, with actionable text…
+      // The collection reports a loud, retryable failure — the copy is NOT
+      // gated any more, so the insert hits the unique index. That is the
+      // recoverable outcome; what must never happen is the silent fusion
+      // below.
       const loc = results.find((r) => r.collection === "locations");
       expect(loc?.error).toBeTruthy();
-      expect(loc?.error).toContain("whitespace");
-      // …and crucially the two local rows keep their OWN identities: remote B
-      // was not re-keyed onto local A.
+      // Crucially the two local rows keep their OWN identities: remote B was
+      // not re-keyed onto local A.
       const a = await localDb.collection("locations").findOne({ syncId: "loc-A" });
       const b = await localDb.collection("locations").findOne({ syncId: "loc-B" });
       expect(a!.name).toBe("Fuse Me");
@@ -1070,12 +1072,16 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(filaments?.error ?? "").not.toContain("whitespace");
     });
 
-    it("scopes a trim conflict to its own collection + dependents, not the cycle", async () => {
-      // A per-row conflict is fatal for ITS collection (the two databases can
-      // disagree about identity — see the fusion test above) and cascades to
-      // that collection's dependents through the #369 prerequisite chain. It
-      // is NOT fatal for the cycle: unrelated collections still sync, unlike
-      // #1021, which aborts everything.
+    it("gates reconciliation but NOT the copy, so a fix can propagate", async () => {
+      // The copy gate was self-perpetuating: in hybrid the app writes only to
+      // the LOCAL database, so a user who does what the error says — rename
+      // the duplicate — clears the local conflict while the REMOTE pair stays
+      // active, and the collection is named on every later cycle. The one
+      // thing that could propagate the fix is a syncId-keyed LWW copy of the
+      // renamed row onto Atlas, which was exactly what was blocked.
+      //
+      // `reconcileByName` stays gated: it matches on the raw name and is the
+      // only path that can fuse two distinct records (see the test above).
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
       const now = new Date();
@@ -1086,7 +1092,6 @@ describe("SyncService — v1.12 sync expansion", () => {
         { name: "Smooth PEI", material: "PEI", syncId: "bt-clean", _deletedAt: null, createdAt: now, updatedAt: now },
         { name: "Smooth PEI ", material: "PEI", syncId: "bt-clash", _deletedAt: null, createdAt: now, updatedAt: now },
       ]);
-      // Nozzles don't depend on bedtypes, so they must still sync.
       await remoteDb.collection("nozzles").insertOne({
         name: "Unaffected 0.4", diameter: 0.4, type: "brass",
         syncId: "noz-unaffected", _deletedAt: null, createdAt: now, updatedAt: now,
@@ -1099,15 +1104,19 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(
         (await remoteDb.collection("bedtypes").findOne({ syncId: "bt-clash" }))!.name,
       ).toBe("Smooth PEI ");
-      // …its own collection is refused, and printers (which depend on it)
-      // cascade-skip…
-      expect(results.find((r) => r.collection === "bedtypes")?.error).toContain("whitespace");
-      expect(results.find((r) => r.collection === "printers")?.error).toBeTruthy();
-      // …while an unrelated collection syncs normally.
+      // …but the COPY still ran, so both rows reached the other peer and a
+      // later local fix has a route to Atlas.
+      expect(
+        await localDb.collection("bedtypes").findOne({ syncId: "bt-clash" }),
+      ).not.toBeNull();
+      // …and unrelated collections are entirely unaffected.
       expect(results.find((r) => r.collection === "nozzles")?.error).toBeUndefined();
       expect(
         await localDb.collection("nozzles").findOne({ syncId: "noz-unaffected" }),
       ).not.toBeNull();
+
+      await remoteDb.collection("bedtypes").deleteMany({ syncId: { $in: ["bt-clean", "bt-clash"] } });
+      await localDb.collection("bedtypes").deleteMany({ syncId: { $in: ["bt-clean", "bt-clash"] } });
     });
   });
 
