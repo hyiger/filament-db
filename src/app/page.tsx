@@ -299,6 +299,12 @@ export default function Home() {
     if (debouncedSearch) params.set("search", debouncedSearch);
     if (typeFilter) params.set("type", typeFilter);
     if (vendorFilter) params.set("vendor", vendorFilter);
+    // GH #1108: this list GROUPS variants under their template, so a
+    // type/vendor filter has to return the whole family or a matched template
+    // renders as a group header with no members (and the summary line counts
+    // zero, since template rows aren't rolls). Opt-in, because `type` and
+    // `vendor` are exact row filters everywhere else — see the route.
+    if (typeFilter || vendorFilter) params.set("family", "1");
 
     try {
       const res = await fetch(`/api/filaments?${params}`, { signal: controller.signal });

@@ -108,8 +108,19 @@ export async function GET(request: NextRequest) {
     // memberless group header under a search, exactly as it already does for
     // a search with no filter — the same trade-off, applied consistently
     // rather than only where widening happens to be active.
+    //
+    // OPT-IN via `?family=1`, NOT the default (Codex P2 round 2). `type` and
+    // `vendor` are documented as exact row filters (docs/api.md), and other
+    // callers depend on that literally: FilamentForm derives vendor-keyed TDS
+    // suggestions from `?vendor=`, and PrusamentImportDialog treats `?type=`
+    // results as material matches and may auto-select one by name. Widening
+    // by default would offer another vendor's TDS, or attach an imported
+    // spool to a filament whose stored material type doesn't match — the very
+    // mismatched-child data shape this feature exists to surface. The
+    // grouping list asks for it explicitly; everyone else keeps exact rows.
+    const wantFamily = searchParams.get("family") === "1";
     let matchStage: Record<string, unknown> = filter;
-    if (type || vendor) {
+    if (wantFamily && (type || vendor)) {
       const matchedIds = await Filament.distinct("_id", filter);
       if (matchedIds.length > 0) {
         const familyArm: Record<string, unknown> = {

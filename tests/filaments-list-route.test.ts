@@ -535,7 +535,7 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
 
   it("returns a matched template's variants even though their vendor differs", async () => {
     await seedMismatchedFamily();
-    const names = (await list("?vendor=OVV3D")).map((f) => f.name).sort();
+    const names = (await list("?vendor=OVV3D&family=1")).map((f) => f.name).sort();
     expect(names).toEqual(["OVV3D Wood", "OVV3D Wood Birch", "OVV3D Wood Oak"]);
   });
 
@@ -547,7 +547,7 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
       type: "PLA", // differs from the parent
       parentId: parent._id,
     });
-    const names = (await list("?type=PETG")).map((f) => f.name).sort();
+    const names = (await list("?type=PETG&family=1")).map((f) => f.name).sort();
     expect(names).toEqual(["TypeFam", "TypeFam Red"]);
   });
 
@@ -574,7 +574,7 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
       type: "PLA",
       parentId: parent._id,
     });
-    const names = (await list("?search=SearchFam&vendor=V")).map((f) => f.name);
+    const names = (await list("?search=SearchFam&vendor=V&family=1")).map((f) => f.name);
     expect(names).toEqual(["SearchFam"]);
   });
 
@@ -588,19 +588,30 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
       type: "PLA",
       parentId: parent._id,
     });
-    const names = (await list("?search=ComboFam&vendor=V")).map((f) => f.name).sort();
+    const names = (await list("?search=ComboFam&vendor=V&family=1")).map((f) => f.name).sort();
     expect(names).toEqual(["ComboFam", "ComboFam Red"]);
+  });
+
+  it("does NOT widen without ?family=1 — type/vendor stay exact row filters", async () => {
+    // FilamentForm derives vendor-keyed TDS suggestions from `?vendor=`, and
+    // PrusamentImportDialog treats `?type=` results as material matches and
+    // may auto-select one by name. Widening by default would hand them a row
+    // whose stored vendor/type doesn't match — the exact mismatched-child
+    // shape this feature exists to surface.
+    await seedMismatchedFamily();
+    const names = (await list("?vendor=OVV3D")).map((f) => f.name);
+    expect(names).toEqual(["OVV3D Wood"]);
   });
 
   it("still filters normally when nothing matches", async () => {
     await seedMismatchedFamily();
-    expect(await list("?vendor=NoSuchVendor")).toEqual([]);
+    expect(await list("?vendor=NoSuchVendor&family=1")).toEqual([]);
   });
 
   it("does not pull in unrelated filaments that merely share a vendor value", async () => {
     await seedMismatchedFamily();
     await Filament.create({ name: "Unrelated OCC3D", vendor: "OCC3D", type: "PLA" });
-    const names = (await list("?vendor=OVV3D")).map((f) => f.name).sort();
+    const names = (await list("?vendor=OVV3D&family=1")).map((f) => f.name).sort();
     expect(names).not.toContain("Unrelated OCC3D");
   });
 });
