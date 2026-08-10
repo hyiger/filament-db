@@ -106,3 +106,29 @@ export async function findByTrimmedName(
   if (trimmed === "") return null;
   return collection.findOne({ ...extraFilter, ...trimmedNameFilter([trimmed]) });
 }
+
+/**
+ * Just the `_id` of a surviving untrimmed row, for the common shape:
+ *
+ * ```ts
+ * let existing = await Filament.findOne({ name, _deletedAt: null }).lean();
+ * if (!existing) {
+ *   const id = await findSurvivorId(Filament.collection, name, { _deletedAt: null });
+ *   if (id) existing = await Filament.findOne({ _id: id }).lean();
+ * }
+ * ```
+ *
+ * Returning the id rather than a document is deliberate: every caller re-reads
+ * through its OWN query — with its own `.lean()`, projection or population —
+ * so the fallback cannot quietly change the shape the caller expects. And an
+ * `_id` re-read is safe where the name re-read was not, because casting can
+ * mangle a name but never an ObjectId.
+ */
+export async function findSurvivorId(
+  collection: MinimalNameCollection,
+  name: string,
+  extraFilter: Record<string, unknown> = {},
+): Promise<unknown | null> {
+  const row = await findByTrimmedName(collection, name, extraFilter);
+  return row ? row._id : null;
+}

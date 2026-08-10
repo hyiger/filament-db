@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  findSurvivorId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
@@ -250,8 +254,21 @@ export async function POST(request: NextRequest) {
           }
         };
 
+        // GH #1116 (Codex P1): a row the migration could not trim is
+        // invisible to a name-filtered query (the setter casts it), so this
+        // atomic upsert would miss it and the create below would mint a
+        // second active row. Pre-resolve the survivor and address it by
+        // `_id`, which is strictly MORE specific than the name filter it
+        // replaces — the atomic write semantics are unchanged.
+        const survivorId = await findSurvivorId(
+          Filament.collection as unknown as MinimalNameCollection,
+          name,
+          { _deletedAt: null, vendor },
+        );
         const existing = await Filament.findOneAndUpdate(
-          { name, _deletedAt: null, vendor },
+          survivorId
+            ? { _id: survivorId, _deletedAt: null, vendor }
+            : { name, _deletedAt: null, vendor },
           { $set: optUpdateFields },
           { returnDocument: "after" },
         );
@@ -261,7 +278,19 @@ export async function POST(request: NextRequest) {
           updated++;
         } else {
           // Check if a filament exists with a different vendor (name collision)
-          const nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
+          let nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
+          if (!nameCollision) {
+            // Same blind spot, and it matters in the opposite direction: a
+            // MISSED collision lets the create proceed into a duplicate.
+            const otherVendorId = await findSurvivorId(
+              Filament.collection as unknown as MinimalNameCollection,
+              name,
+              { _deletedAt: null },
+            );
+            if (otherVendorId) {
+              nameCollision = await Filament.findOne({ _id: otherVendorId }).lean();
+            }
+          }
           if (nameCollision) {
             errors.push(
               `${material.name}: skipped — a filament named "${name}" already exists under vendor "${nameCollision.vendor}"`,

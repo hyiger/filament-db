@@ -1,4 +1,8 @@
 import mongoose from "mongoose";
+import {
+  findSurvivorId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId } from "@/models/Filament";
@@ -286,9 +290,24 @@ export async function POST(request: NextRequest) {
     // that has since become a TEMPLATE must 400, not attach inventory to
     // it. The `name` pin plus the cap ride the guard's extraFilter so the
     // atomic-write semantics of the original single findOneAndUpdate hold.
-    const activeByName = await Filament.findOne({ name, _deletedAt: null })
+    let activeByName = await Filament.findOne({ name, _deletedAt: null })
       .select("_id")
       .lean();
+    // GH #1116 (Codex P1): a row the migration could not trim is invisible to
+    // a name-filtered query (the setter casts it), so this would miss and the
+    // create below would mint a second active row.
+    const activeSurvivorId = activeByName
+      ? null
+      : await findSurvivorId(
+          Filament.collection as unknown as MinimalNameCollection,
+          name,
+          { _deletedAt: null },
+        );
+    if (activeSurvivorId) {
+      activeByName = await Filament.findOne({ _id: activeSurvivorId })
+        .select("_id")
+        .lean();
+    }
     if (activeByName) {
       const guarded = await runExclusive(filamentLockKey(activeByName._id), () =>
         pushSpoolWithTemplateGuard(
@@ -296,7 +315,16 @@ export async function POST(request: NextRequest) {
           String(activeByName._id),
           prusamentSpoolFields,
           hasVariants,
-          { extraFilter: { name, $expr: SPOOL_CAP_EXPR } },
+          {
+            // The `name` pin makes the push atomic against a concurrent
+            // rename. It cannot be used for a SURVIVOR — a cast filter can
+            // never match its raw stored value — so pin the `_id` there,
+            // which is strictly more specific and preserves the same
+            // "still the row we resolved" guarantee.
+            extraFilter: activeSurvivorId
+              ? { _id: activeSurvivorId, $expr: SPOOL_CAP_EXPR }
+              : { name, $expr: SPOOL_CAP_EXPR },
+          },
         ),
       );
       if (guarded.outcome === "template") {
@@ -352,9 +380,18 @@ export async function POST(request: NextRequest) {
     // first-variant create racing the just-revived row serializes behind
     // the promotion gate's own in-lock re-fetch, which then sees (and
     // moves) this spool.
+    // GH #1116: same blind spot as the active branch. A surviving untrimmed
+    // TRASHED row is unreachable by a cast name filter, so this resurrect
+    // would miss and the create below would take the name — stranding the
+    // tombstone, whose restore then 409s on the conflict forever.
+    const trashedSurvivorId = await findSurvivorId(
+      Filament.collection as unknown as MinimalNameCollection,
+      name,
+      { _deletedAt: { $ne: null }, _purged: { $ne: true } },
+    );
     const resurrected = await Filament.findOneAndUpdate(
       {
-        name,
+        ...(trashedSurvivorId ? { _id: trashedSurvivorId } : { name }),
         _deletedAt: { $ne: null },
         _purged: { $ne: true },
         $expr: SPOOL_CAP_EXPR,
