@@ -436,7 +436,16 @@ export default function Home() {
         hasUnlocated = true;
       }
     }
-    return { spools, locations: locations.size + (hasUnlocated ? 1 : 0) };
+    return {
+      spools,
+      locations: locations.size + (hasUnlocated ? 1 : 0),
+      // #1117(g): the synthetic bucket is deliberate (it keeps this in step
+      // with /inventory), but with NO real locations defined it produced
+      // "73 spool(s) in 1 location(s)" against a Locations page showing none
+      // — true by that definition, and a bug to every reader. Surface the
+      // real count so the caller can word that case honestly.
+      realLocations: locations.size,
+    };
   }, [filaments]);
 
   // Group filaments: parents with their variants, standalone filaments as-is
@@ -1361,10 +1370,12 @@ export default function Home() {
             <>
               <span className="text-gray-600">·</span>
               <span>
-                {t("filaments.stats.spoolsLocations", {
-                  spools: spoolStats.spools,
-                  locations: spoolStats.locations,
-                })}
+                {spoolStats.realLocations === 0
+                  ? t("filaments.stats.spoolsNoLocation", { spools: spoolStats.spools })
+                  : t("filaments.stats.spoolsLocations", {
+                      spools: spoolStats.spools,
+                      locations: spoolStats.locations,
+                    })}
               </span>
             </>
           )}

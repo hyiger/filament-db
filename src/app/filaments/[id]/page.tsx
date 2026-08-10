@@ -3230,13 +3230,26 @@ function SpoolCard({
                 {t("detail.spool.logDry")}
               </button>
             </div>
-            {spool.dryCycles && spool.dryCycles.length > 0 && (
-              <p className="text-xs text-gray-400 mt-1">
-                {t("detail.spool.lastDried", {
-                  date: formatDate(spool.dryCycles[spool.dryCycles.length - 1].date),
-                })}
-              </p>
-            )}
+            {spool.dryCycles && spool.dryCycles.length > 0 && (() => {
+              // GH #1119: pick the LATEST date, not the last array entry.
+              // Entries are appended chronologically by this page, but the
+              // mobile app, the API and a snapshot restore can all introduce a
+              // back-dated cycle — and then this line disagreed with
+              // /inventory and the dashboard, which both scan for the max.
+              // (exportSpools already does the max scan too.)
+              let latest: Date | null = null;
+              for (const c of spool.dryCycles) {
+                const d = new Date(c.date);
+                if (Number.isNaN(d.getTime())) continue;
+                if (!latest || d > latest) latest = d;
+              }
+              if (!latest) return null;
+              return (
+                <p className="text-xs text-gray-400 mt-1">
+                  {t("detail.spool.lastDried", { date: formatDate(latest) })}
+                </p>
+              );
+            })()}
           </div>
 
           {/* Log usage */}
