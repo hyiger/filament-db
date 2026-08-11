@@ -146,3 +146,39 @@ export async function findSurvivorId(
   const row = await findByTrimmedName(collection, name, extraFilter);
   return row ? row._id : null;
 }
+
+/**
+ * The mirror problem: a NAME-ADDRESSED request whose name is the addressing
+ * key, where the cast can silently redirect it to a DIFFERENT row.
+ *
+ * The importers above ask "does a row for this name already exist?", and a
+ * miss costs a duplicate. The slicer sync routes ask something stricter — "the
+ * preset is literally called this; give me THAT filament" — and there a cast
+ * costs something worse than a duplicate.
+ *
+ * With both `"X"` and `"X "` active (an unresolved migration), a preset
+ * addressed as `"X "` casts to `"X"` and selects the CANONICAL row. The sync
+ * then writes the preset's settings and calibration onto a filament that is
+ * not the one the slicer was talking about. Before `trim: true` the same query
+ * matched the raw `"X "` exactly, so this is a redirection the schema change
+ * introduced, and no amount of create-on-404 removal makes it safe: nothing is
+ * created, the wrong record is simply overwritten.
+ *
+ * So: when the addressing name carries edge whitespace, look for that EXACT
+ * stored spelling with the raw driver first. A hit is unambiguous — the slicer
+ * named a row that literally exists under that spelling. A miss (including
+ * after the migration has since normalized it) falls through to the ordinary
+ * cast query, which is then correct.
+ *
+ * Returns null when the name has no edge whitespace, because the cast query is
+ * already an exact match and a second round trip would buy nothing.
+ */
+export async function findExactRawNameId(
+  collection: MinimalNameCollection,
+  name: string,
+  extraFilter: Record<string, unknown> = {},
+): Promise<unknown | null> {
+  if (name === name.trim()) return null;
+  const row = await collection.findOne({ ...extraFilter, name });
+  return row ? row._id : null;
+}
