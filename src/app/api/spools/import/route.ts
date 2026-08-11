@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  findByTrimmedName,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
@@ -195,35 +191,10 @@ export async function POST(request: NextRequest) {
       if (!name) return null;
       if (locationCache.has(name)) return locationCache.get(name)!;
       let loc = await Location.findOne({ name, _deletedAt: null });
-      let id: string;
-      if (loc) {
-        id = String(loc._id);
-      } else {
-        // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than a
-        // genuine absence. `name` carries `trim: true`, and a Mongoose setter
-        // casts QUERY values too, so this findOne cannot select a row whose
-        // stored value is still the raw `"Drybox #1 "` — which is exactly what
-        // survives when `trimEntityNames` had to skip the locations collection
-        // (no protective index) or leave that row alone (a collision).
-        //
-        // Creating here would then succeed: the two raw strings are distinct,
-        // so the unique index does not object, and the user gets a second
-        // location that renders identically while every imported spool attaches
-        // to the twin. That IS the bug this whole change exists to remove, and
-        // this route is its original reproduction path.
-        const survivor = await findByTrimmedName(
-          Location.collection as unknown as MinimalNameCollection,
-          name,
-          { _deletedAt: null },
-        );
-        if (survivor) {
-          // Address it by `_id` — the one key casting cannot break.
-          id = String(survivor._id);
-        } else {
-          loc = await Location.create({ name });
-          id = String(loc._id);
-        }
+      if (!loc) {
+        loc = await Location.create({ name });
       }
+      const id = String(loc._id);
       locationCache.set(name, id);
       return id;
     }

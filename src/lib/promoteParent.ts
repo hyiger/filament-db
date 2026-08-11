@@ -1,7 +1,3 @@
-import {
-  survivorNameConflict,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 /**
  * GH #605 — parent/variant template model, Phase 2b: parent promotion.
  *
@@ -197,26 +193,7 @@ export async function resolvePromotionVariantName(
   for (let n = 2; ; n++) {
     const taken =
       alsoTaken?.has(candidate) ||
-      // name-lookup-ok: the survivor check below covers the cast case
-      (await FilamentModel.exists({ name: candidate, _deletedAt: null })) ||
-      // GH #1116 (Codex P1): the GENERATED name needs the survivor check too.
-      // `exists` casts, so against an active survivor stored as
-      // `"PLA — Red "` this picks `"PLA — Red"`, the unique index compares
-      // the two raw strings and permits it, and the promotion lands two
-      // active filaments that render identically — created by the very
-      // sequence meant to tidy the family up.
-      //
-      // Guarded on `.collection` for the same reason `externalRefs: null`
-      // exists in this file: it is model-agnostic by design (client components
-      // import `parentPromotionState`, so a static model import would drag
-      // Mongoose into the client bundle) and its unit tests pass MOCK models
-      // that have no raw collection. Every real Mongoose model has one, so
-      // production always takes the check.
-      (typeof FilamentModel?.collection?.findOne === "function" &&
-        (await survivorNameConflict(
-          FilamentModel.collection as unknown as MinimalNameCollection,
-          candidate,
-        )) !== null);
+      (await FilamentModel.exists({ name: candidate, _deletedAt: null }));
     if (!taken) return candidate;
     candidate = `${baseName} (${n})`;
   }

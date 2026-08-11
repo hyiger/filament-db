@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  survivorNameConflict,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
 import Printer from "@/models/Printer";
@@ -69,22 +65,6 @@ export async function POST(request: NextRequest) {
     delete body.updatedAt;
     delete body.__v;
     delete body.syncId;
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "Smooth PEI" and a surviving
-    // untrimmed "Smooth PEI " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
-    const nameConflict = await survivorNameConflict(
-      BedType.collection as unknown as MinimalNameCollection,
-      body.name,
-    );
-    if (nameConflict) {
-      return errorResponse(
-        `A bed type with that name already exists: "${String(body.name).trim()}"`,
-        409,
-      );
-    }
     const bedType = await BedType.create(body);
     return NextResponse.json(bedType, { status: 201 });
   } catch (err) {

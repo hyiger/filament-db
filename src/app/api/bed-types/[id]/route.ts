@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  survivorNameConflict,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
 import Filament from "@/models/Filament";
@@ -51,21 +47,6 @@ export async function PUT(
     if ("name" in body) update.name = body.name;
     if ("material" in body) update.material = body.material;
     if ("notes" in body) update.notes = body.notes;
-    // GH #1116: a RENAME needs the same trimmed check as the create — the
-    // index compares raw stored strings, so renaming onto a surviving
-    // untrimmed spelling does not collide and leaves two rows rendering
-    // identically. `id` excludes this row itself.
-    const nameConflict = await survivorNameConflict(
-      BedType.collection as unknown as MinimalNameCollection,
-      (body as { name?: unknown }).name,
-      id,
-    );
-    if (nameConflict) {
-      return errorResponse(
-        `A bed type with that name already exists: "${String((body as { name?: unknown }).name).trim()}"`,
-        409,
-      );
-    }
     const bedType = await BedType.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       update,

@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  survivorNameConflict,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
@@ -149,22 +145,6 @@ export async function POST(request: NextRequest) {
         !(typeof body.desiccantChangedAt === "string" &&
           isValidIsoDateString(body.desiccantChangedAt))) {
       return errorResponse("desiccantChangedAt must be an ISO date string or null", 400);
-    }
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "Drybox" and a surviving
-    // untrimmed "Drybox " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
-    const nameConflict = await survivorNameConflict(
-      Location.collection as unknown as MinimalNameCollection,
-      body.name,
-    );
-    if (nameConflict) {
-      return errorResponse(
-        `A location with that name already exists: "${String(body.name).trim()}"`,
-        409,
-      );
     }
     const location = await Location.create(body);
     return NextResponse.json(location, { status: 201 });

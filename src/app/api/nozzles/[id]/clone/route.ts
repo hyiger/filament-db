@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  survivorNameConflict,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
@@ -58,22 +54,6 @@ export async function POST(
       source.name,
       peers.map((p) => p.name),
     );
-
-    // GH #1116 (Codex P1): the GENERATED name needs the survivor check too.
-    // The peer regex above is a raw-name match that misses an untrimmed
-    // survivor, so with an active `"0.4 #2 "` this picks `"0.4 #2"`, the
-    // unique index compares the raw strings and permits it, and the clone is
-    // indistinguishable from the row it failed to see.
-    const nameConflict = await survivorNameConflict(
-      Nozzle.collection as unknown as MinimalNameCollection,
-      newName,
-    );
-    if (nameConflict) {
-      return errorResponse(
-        `A nozzle with that name already exists: "${newName}"`,
-        409,
-      );
-    }
 
     const cloned = await Nozzle.create({
       name: newName,

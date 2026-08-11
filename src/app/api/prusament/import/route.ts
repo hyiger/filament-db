@@ -1,8 +1,4 @@
 import mongoose from "mongoose";
-import {
-  findSurvivorId,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId } from "@/models/Filament";
@@ -290,24 +286,9 @@ export async function POST(request: NextRequest) {
     // that has since become a TEMPLATE must 400, not attach inventory to
     // it. The `name` pin plus the cap ride the guard's extraFilter so the
     // atomic-write semantics of the original single findOneAndUpdate hold.
-    let activeByName = await Filament.findOne({ name, _deletedAt: null })
+    const activeByName = await Filament.findOne({ name, _deletedAt: null })
       .select("_id")
       .lean();
-    // GH #1116 (Codex P1): a row the migration could not trim is invisible to
-    // a name-filtered query (the setter casts it), so this would miss and the
-    // create below would mint a second active row.
-    const activeSurvivorId = activeByName
-      ? null
-      : await findSurvivorId(
-          Filament.collection as unknown as MinimalNameCollection,
-          name,
-          { _deletedAt: null },
-        );
-    if (activeSurvivorId) {
-      activeByName = await Filament.findOne({ _id: activeSurvivorId })
-        .select("_id")
-        .lean();
-    }
     if (activeByName) {
       const guarded = await runExclusive(filamentLockKey(activeByName._id), () =>
         pushSpoolWithTemplateGuard(
@@ -315,16 +296,7 @@ export async function POST(request: NextRequest) {
           String(activeByName._id),
           prusamentSpoolFields,
           hasVariants,
-          {
-            // The `name` pin makes the push atomic against a concurrent
-            // rename. It cannot be used for a SURVIVOR — a cast filter can
-            // never match its raw stored value — so pin the `_id` there,
-            // which is strictly more specific and preserves the same
-            // "still the row we resolved" guarantee.
-            extraFilter: activeSurvivorId
-              ? { _id: activeSurvivorId, $expr: SPOOL_CAP_EXPR }
-              : { name, $expr: SPOOL_CAP_EXPR },
-          },
+          { extraFilter: { name, $expr: SPOOL_CAP_EXPR } },
         ),
       );
       if (guarded.outcome === "template") {
@@ -343,13 +315,8 @@ export async function POST(request: NextRequest) {
 
     // No conditional match — either the name doesn't exist (continue
     // to create) OR the name exists but is over cap. Check which.
-    // GH #1116 (Codex P1): reuse the resolved survivor id. Against a survivor
-    // the guarded push above fails on the cap expression, and this probe --
-    // filtered by a cast `name` -- would then MISS the very row that is over
-    // cap, so the request fell through and created a canonical duplicate
-    // carrying the spool. The cap error is the correct answer.
     const blocked = await Filament.findOne(
-      activeSurvivorId ? { _id: activeSurvivorId } : { name, _deletedAt: null },
+      { name, _deletedAt: null },
       { spools: 1 },
     ).lean();
     if (
@@ -385,47 +352,19 @@ export async function POST(request: NextRequest) {
     // first-variant create racing the just-revived row serializes behind
     // the promotion gate's own in-lock re-fetch, which then sees (and
     // moves) this spool.
-    // GH #1116: same blind spot as the active branch — a surviving untrimmed
-    // TRASHED row is unreachable by a cast name filter, so this resurrect
-    // would miss and the create below would take the name, stranding the
-    // tombstone whose restore then 409s on the conflict forever.
-    //
-    // CANONICAL FIRST, survivor only on a miss (Codex P2). The partial unique
-    // index covers active rows only, so a canonical `"PLA"` tombstone and an
-    // untrimmed `"PLA "` tombstone may BOTH exist — and the scan's `$expr`
-    // matches either with no ordering. Scanning first would resurrect an
-    // arbitrary one of them and attach the spool to it, where the indexed
-    // query deterministically restored the canonical row.
-    const resurrectFilter = {
-      _deletedAt: { $ne: null },
-      _purged: { $ne: true },
-      $expr: SPOOL_CAP_EXPR,
-    };
-    const resurrectUpdate = {
-      $set: { _deletedAt: null },
-      $push: { spools: prusamentSpoolFields },
-    };
-    let resurrected = await Filament.findOneAndUpdate(
-      // name-lookup-ok: canonical attempt; the survivor scan below covers the miss
-      { name, ...resurrectFilter },
-      resurrectUpdate,
+    const resurrected = await Filament.findOneAndUpdate(
+      {
+        name,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+        $expr: SPOOL_CAP_EXPR,
+      },
+      {
+        $set: { _deletedAt: null },
+        $push: { spools: prusamentSpoolFields },
+      },
       { returnDocument: "after" },
     ).lean();
-    let trashedSurvivorId: unknown | null = null;
-    if (!resurrected) {
-      trashedSurvivorId = await findSurvivorId(
-        Filament.collection as unknown as MinimalNameCollection,
-        name,
-        { _deletedAt: { $ne: null }, _purged: { $ne: true } },
-      );
-      if (trashedSurvivorId) {
-        resurrected = await Filament.findOneAndUpdate(
-          { _id: trashedSurvivorId, ...resurrectFilter },
-          resurrectUpdate,
-          { returnDocument: "after" },
-        ).lean();
-      }
-    }
     if (resurrected) {
       return NextResponse.json({
         action: "add-spool",
@@ -437,9 +376,7 @@ export async function POST(request: NextRequest) {
     // must NOT fall through to create (the new active row would strand
     // the trashed one on the name forever).
     const trashedBlocked = await Filament.findOne(
-      trashedSurvivorId
-        ? { _id: trashedSurvivorId }
-        : { name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+      { name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
       { spools: 1 },
     ).lean();
     if (
@@ -488,7 +425,6 @@ export async function POST(request: NextRequest) {
           bed_temp_range: `${spool.bedTempMin}-${spool.bedTempMax}`,
         },
       });
-    // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
     } catch (createErr) {
       if (!isDuplicateKeyError(createErr)) throw createErr;
       // GH #605 (codex round 3, Finding B): same guard treatment as the
@@ -496,7 +432,6 @@ export async function POST(request: NextRequest) {
       // spool-less row, but nothing stops it from being (or instantly
       // becoming) a template, so the recovery push must not bypass the
       // guard either.
-      // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
       const winner = await Filament.findOne({ name, _deletedAt: null })
         .select("_id")
         .lean();

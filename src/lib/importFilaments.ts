@@ -7,7 +7,6 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
-import { trimmedNameFilter } from "@/lib/trimmedNameLookup";
 
 export interface ImportRow {
   name?: string;
@@ -671,60 +670,6 @@ export async function upsertImportRows(
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
     .select(INHERITANCE_PROJECTION)
     .lean();
-
-  // GH #1116 (Codex P1 ×2): ALSO find stored rows whose TRIMMED name matches —
-  // with the RAW DRIVER, which is the only thing that can see them.
-  //
-  // `trimEntityNames` can legitimately leave a row untrimmed: its normalized
-  // name would collide with a live sibling, or its whole collection was
-  // skipped because no adequate unique index could be established. Such a row
-  // is invisible to every Mongoose query, because a String schema setter
-  // applies to QUERY values too — the `$in` above is itself trimmed, so it
-  // asks for `"PLA"` and never matches a stored `"PLA "`.
-  //
-  // The predicate is on the STORED value, not on the input's spelling. An
-  // earlier version filtered the INPUT for untrimmed names, which missed the
-  // ordinary case entirely: importing a canonical `"PLA"` against a surviving
-  // `"PLA "` produced no candidates at all, and the importer created `"PLA"`
-  // beside it. Whatever whitespace either side happens to carry, the question
-  // is the same one the schema asks — do the trimmed forms match.
-  //
-  // Only names the indexed lookup did NOT already resolve, so the healthy
-  // path adds nothing. `$expr` can't use the index, so this is a scan; it
-  // runs on an explicit, batch, user-initiated import, and the alternative
-  // is a silent duplicate.
-  //
-  // Collisions resolve explicitly rather than by insertion luck: the index
-  // below keys on the TRIMMED name and prefers a row already stored exactly
-  // that way, so a canonical row always wins and the untrimmed one is left
-  // for the migration to report.
-  // ACTIVE matches only (Codex P2). A tombstone is not a match for this
-  // purpose: with the collection skipped, an active `"PLA "` can coexist with
-  // a soft-deleted `"PLA"`, and counting the tombstone as "found" skipped the
-  // scan — so the importer resurrected the tombstone and left TWO active rows
-  // rendering identically, which is the duplicate this exists to prevent.
-  const alreadyFound = new Set(
-    (allExisting as unknown as LeanFilament[])
-      .filter((d) => d._deletedAt == null)
-      .map((d) => String(d.name ?? "").trim()),
-  );
-  const stillMissing = [...namesToLoad].filter((n) => !alreadyFound.has(n.trim()));
-  if (stillMissing.length > 0) {
-    const projection: Record<string, 1> = {};
-    for (const field of INHERITANCE_PROJECTION.split(/\s+/)) {
-      if (field) projection[field] = 1;
-    }
-    const untrimmed = (await Filament.collection
-      .find(trimmedNameFilter(stillMissing), { projection })
-      .toArray()) as unknown as LeanFilament[];
-    const seen = new Set(
-      (allExisting as unknown as LeanFilament[]).map((d) => String(d._id)),
-    );
-    const extra = untrimmed.filter((doc) => !seen.has(String(doc._id)));
-    if (extra.length > 0) {
-      (allExisting as unknown as LeanFilament[]).push(...extra);
-    }
-  }
 
   // The same map carries existing rows AND filaments created earlier in
   // this same import batch — pass-2 (variant rows) resolves the `Parent`

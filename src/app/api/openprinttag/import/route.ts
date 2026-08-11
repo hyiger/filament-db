@@ -1,8 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import {
-  findSurvivorId,
-  type MinimalNameCollection,
-} from "@/lib/trimmedNameLookup";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
@@ -254,62 +250,21 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        // CANONICAL FIRST, survivor only on a miss (Codex P2).
-        //
-        // A row the migration could not trim is invisible to a name-filtered
-        // query (the setter casts it), so on its own this atomic upsert would
-        // miss it and the create below would mint a second active row.
-        //
-        // But the scan must not run FIRST. Its `$expr` matches the canonical
-        // and the untrimmed row alike and imposes no ordering, so in exactly
-        // the collision state that produces a survivor — same-vendor `"PLA"`
-        // AND `"PLA "` — a survivor-first lookup would pick either one, and
-        // the import could start updating the legacy row where the indexed
-        // query had deterministically chosen the canonical one. Trying the
-        // cast query first keeps that determinism and reaches the scan only
-        // when there is genuinely nothing canonical to hit.
-        let existing = await Filament.findOneAndUpdate(
+        const existing = await Filament.findOneAndUpdate(
           { name, _deletedAt: null, vendor },
           { $set: optUpdateFields },
           { returnDocument: "after" },
         );
-        if (!existing) {
-          const survivorId = await findSurvivorId(
-            Filament.collection as unknown as MinimalNameCollection,
-            name,
-            { _deletedAt: null, vendor },
-          );
-          if (survivorId) {
-            existing = await Filament.findOneAndUpdate(
-              { _id: survivorId, _deletedAt: null, vendor },
-              { $set: optUpdateFields },
-              { returnDocument: "after" },
-            );
-          }
-        }
 
         if (existing) {
           await applyConditionalDefaults(existing);
           updated++;
         } else {
           // Check if a filament exists with a different vendor (name collision)
-          let nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
-          if (!nameCollision) {
-            // Same blind spot, and it matters in the opposite direction: a
-            // MISSED collision lets the create proceed into a duplicate.
-            const otherVendorId = await findSurvivorId(
-              Filament.collection as unknown as MinimalNameCollection,
-              name,
-              { _deletedAt: null },
-            );
-            if (otherVendorId) {
-              nameCollision = await Filament.findOne({ _id: otherVendorId }).lean();
-            }
-          }
+          const nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
           if (nameCollision) {
             errors.push(
               `${material.name}: skipped — a filament named "${name}" already exists under vendor "${nameCollision.vendor}"`,
-            // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
             );
             continue;
           }
@@ -326,7 +281,6 @@ export async function POST(request: NextRequest) {
           } catch (createErr) {
             if (!isDuplicateKeyError(createErr)) throw createErr;
             const winner = await Filament.findOneAndUpdate(
-              // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
               { name, vendor, _deletedAt: null },
               { $set: optUpdateFields },
               { returnDocument: "after" },
@@ -342,7 +296,6 @@ export async function POST(request: NextRequest) {
             } else {
               // The race winner is in a different vendor — same shape as
               // the pre-create nameCollision branch above.
-              // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
               const racedCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
               if (racedCollision) {
                 errors.push(
@@ -432,21 +385,7 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
 
   // Refuse a name collision rather than updating / re-parenting an existing
   // row — a "create variant" action must never mutate another filament.
-  let collision = await Filament.findOne({ name, _deletedAt: null }).lean();
-  if (!collision) {
-    // GH #1116 (Codex P1): a MISSED collision fails in the dangerous
-    // direction. A row the migration could not trim is invisible to this cast
-    // query, so the refusal below is skipped and the variant is created —
-    // producing exactly the pair of identically-rendering active rows this
-    // guard exists to prevent, with the new one additionally parented.
-    const survivorId = await findSurvivorId(
-      Filament.collection as unknown as MinimalNameCollection,
-      name,
-      { _deletedAt: null },
-    );
-    if (survivorId)
-      collision = await Filament.findOne({ _id: survivorId, _deletedAt: null }).lean();
-  }
+  const collision = await Filament.findOne({ name, _deletedAt: null }).lean();
   if (collision) {
     return NextResponse.json(
       { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
