@@ -898,6 +898,88 @@ describe("SyncService — v1.12 sync expansion", () => {
   // Mongoose then can't find it by name at all, because a String schema
   // setter applies to QUERY values too.
 
+  describe("contended renames are staged, not deadlocked (GH #1142)", () => {
+    /**
+     * The reported repro, verbatim, and it fails on `main`: two rows with the
+     * SAME syncIds on both peers and their names SWAPPED. Whichever paired row
+     * is copied first wants a name the other still holds, the partial-unique
+     * `name` index rejects it, and reversing the order only changes which one
+     * fails — the pair is a cycle.
+     *
+     * It is not transient. It repeats every cycle, and via `trySync` a failure
+     * in a parent collection cascade-skips its dependents, so one swapped pair
+     * stalls most of sync indefinitely.
+     */
+    it("resolves a cross-peer name SWAP instead of erroring forever", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "swap-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "swap-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "swap-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "swap-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection completed instead of aborting on E11000.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+
+      // Local is newer for both, so the remote adopts the swap...
+      const a = await remoteDb.collection("bedtypes").findOne({ syncId: "swap-a" });
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "swap-b" });
+      expect(a!.name).toBe("X");
+      expect(b!.name).toBe("Y");
+
+      // ...and no placeholder was left behind.
+      const leftovers = await remoteDb
+        .collection("bedtypes")
+        .countDocuments({ name: { $regex: "^__sync-staging-" } });
+      expect(leftovers).toBe(0);
+    });
+
+    /**
+     * The unsatisfiable case: a row this pass is NOT moving already holds the
+     * name. Staging cannot help, so it must be reported and BOTH peers left
+     * alone — writing anyway would clobber a record the user still wants.
+     */
+    it("reports an unsatisfiable name conflict without clobbering the holder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      // Local renames its row to "Taken"; the remote already has a DIFFERENT,
+      // unpaired row called "Taken" that this pass will not move.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Taken", material: "PEI", syncId: "unsat-a",
+        _deletedAt: null, createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Original", material: "PEI", syncId: "unsat-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Taken", material: "PEI", syncId: "unsat-squatter", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The squatter is untouched — that is the point.
+      const squatter = await remoteDb.collection("bedtypes").findOne({ syncId: "unsat-squatter" });
+      expect(squatter!.name).toBe("Taken");
+      // And no placeholder was stranded on it.
+      const leftovers = await remoteDb
+        .collection("bedtypes")
+        .countDocuments({ name: { $regex: "^__sync-staging-" } });
+      expect(leftovers).toBe(0);
+    });
+  });
+
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
     /**
      * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
