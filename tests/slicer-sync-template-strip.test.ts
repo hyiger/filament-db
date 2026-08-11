@@ -482,4 +482,27 @@ describe("GH #1116 — a name-addressed sync resolves the EXACT stored spelling"
     expect((await Filament.collection.findOne({ _id: rawId }))!.cost).toBe(42);
     expect((await Filament.collection.findOne({ _id: canonicalId }))!.cost).toBe(1);
   });
+
+  it("the per-nozzle BASE fallback resolves the raw slice, not the trimmed one", async () => {
+    // A per-nozzle preset generated for an unresolved "X " is named
+    // "X  0.4 Brass" (two spaces). Slicing the hint leaves "X ", and both
+    // `.trim()` and the setter's cast land on the canonical "X".
+    const { canonicalId, rawId } = await seedBothSpellings();
+
+    const res = await prusaSync(
+      new NextRequest("http://localhost/api/filaments/x", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Ambiguous PLA  0.4 Brass",
+          config: { filamentdb_nozzle: "0.4 Brass", filament_cost: "42" },
+        }),
+      }),
+      { params: Promise.resolve({ id: "Ambiguous PLA  0.4 Brass" }) },
+    );
+    expect(res.status).toBe(200);
+
+    expect((await Filament.collection.findOne({ _id: rawId }))!.cost).toBe(42);
+    expect((await Filament.collection.findOne({ _id: canonicalId }))!.cost).toBe(1);
+  });
 });

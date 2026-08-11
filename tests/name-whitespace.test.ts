@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
+import { NextRequest } from "next/server";
 import { upsertImportRows } from "@/lib/importFilaments";
 import { trimEntityNames, type MinimalTrimDb } from "@/lib/trimEntityNames";
 
@@ -472,5 +473,83 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     const after = await trimEntityNames(db());
     expect(after.deferred.length).toBe(0);
     expect(await col.findOne({ name: "Bin " })).toBeNull();
+  });
+});
+
+/**
+ * GH #1116 (Codex round 29) — the WRONG-MATCH and MISSED-COLLISION hazards.
+ *
+ * Three distinct ways the cast bites, and the earlier work only covered the
+ * first:
+ *   (A) a MISS then a create  -> a duplicate                (survivor fallback)
+ *   (B) a MISS in a GUARD     -> the guard wrongly permits  (survivor fallback)
+ *   (C) a WRONG MATCH         -> the wrong row is used      (exact-spelling)
+ *
+ * "Read-only" was never a valid exemption for (C): reading the wrong row hands
+ * back another filament's data. "Refuses, never creates" was never valid for
+ * (B): failing to refuse is exactly how the guard creates a duplicate.
+ */
+describe("wrong-match and missed-collision hazards (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+  });
+
+  async function seedBothSpellings() {
+    const canonical = await Filament.collection.insertOne({
+      name: "Amb PLA", vendor: "V", type: "PLA", cost: 1,
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const raw = await Filament.collection.insertOne({
+      name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      _deletedAt: null, spools: [], settings: {},
+    });
+    return { canonicalId: canonical.insertedId, rawId: raw.insertedId };
+  }
+
+  it("(C) matchFilament returns the row actually named, not the canonical one", async () => {
+    const { rawId } = await seedBothSpellings();
+    const { matchFilament } = await import("@/lib/matchFilament");
+
+    const res = await matchFilament({ name: "Amb PLA " });
+    // A confident match, and the RIGHT one — an NFC scan must not
+    // auto-associate the tag with a different filament.
+    expect(res.match).not.toBeNull();
+    expect(String((res.match as { _id: unknown })._id)).toBe(String(rawId));
+  });
+
+  it("(C) a single-filament export exports the row that was addressed", async () => {
+    const { rawId } = await seedBothSpellings();
+    const { resolveFilamentForExport } = await import("@/lib/singleFilamentExport");
+
+    const doc = await resolveFilamentForExport("Amb PLA ");
+    expect(doc).not.toBeNull();
+    expect(String(doc!._id)).toBe(String(rawId));
+  });
+
+  it("(B) a rename onto a surviving untrimmed name is REFUSED", async () => {
+    const { rawId } = await seedBothSpellings();
+    const other = await Filament.create({ name: "Other PLA", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${other._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Amb PLA" }),
+      }),
+      { params: Promise.resolve({ id: String(other._id) }) },
+    );
+
+    // Without the survivor check this returned 200 and left TWO active rows
+    // rendering as "Amb PLA" — the raw index strings differ, so no E11000.
+    expect(res.status).toBe(409);
+    // And nothing was renamed.
+    expect((await Filament.collection.findOne({ _id: other._id }))!.name).toBe("Other PLA");
+    expect((await Filament.collection.findOne({ _id: rawId }))!.name).toBe("Amb PLA ");
   });
 });

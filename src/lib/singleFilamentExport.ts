@@ -14,6 +14,10 @@
  */
 
 import Filament from "@/models/Filament";
+import {
+  findExactRawNameId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
@@ -62,9 +66,20 @@ export async function resolveFilamentForExport(
     ).lean()) as FilamentDoc | null;
   }
   if (!filament) {
+    // GH #1116 (Codex P2): the export is ADDRESSED by this name, so a cast
+    // that lands on a different row hands the user a download containing
+    // another filament's settings — silently, under the name they asked for.
+    // "Read-only" is not the same as harmless.
+    const exactRawId = await findExactRawNameId(
+      Filament.collection as unknown as MinimalNameCollection,
+      idOrName,
+      { _deletedAt: null },
+    );
     filament = (await withPopulate(
-      // name-lookup-ok: read-only export lookup; a miss is a 404
-      Filament.findOne({ name: idOrName, _deletedAt: null }),
+      // name-lookup-ok: exact-spelling resolution above covers the cast case
+      Filament.findOne(
+        exactRawId ? { _id: exactRawId } : { name: idOrName, _deletedAt: null },
+      ),
     ).lean()) as FilamentDoc | null;
   }
 

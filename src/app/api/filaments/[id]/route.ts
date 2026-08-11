@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   findExactRawNameId,
+  findSurvivorId,
   type MinimalNameCollection,
 } from "@/lib/trimmedNameLookup";
 import mongoose from "mongoose";
@@ -650,6 +651,45 @@ export async function PUT(
       adoptionGateCleared = true;
     }
 
+    // GH #1116: refuse a rename onto a SURVIVING untrimmed name.
+    //
+    // The PUT has no name pre-check by design — it lets the write-time E11000
+    // handler produce the 409. That stops working here: renaming to "X" while
+    // an unresolved active "X " survives does NOT trip the unique index (the
+    // raw stored strings differ), so the write succeeds and leaves two active
+    // rows rendering identically. This is the main UI edit path, so it is the
+    // likeliest way a user manufactures the duplicate by hand.
+    //
+    // Trimmed comparison, because that is the question being asked: would the
+    // renamed row be indistinguishable from an existing one?
+    if (typeof body.name === "string" && body.name.trim()) {
+      // Self-exclusion is compared in JS, NOT pushed into the filter.
+      //
+      // This is a RAW-DRIVER query, so nothing casts: `{_id: {$ne: "507f…"}}`
+      // compares an ObjectId against a STRING, never matches, and the row
+      // therefore fails to exclude ITSELF — every save that echoes an
+      // unchanged name would 409. (Which is the same casting asymmetry this
+      // whole change is about, in the opposite direction: there the cast
+      // silently applied where it was not wanted; here it silently did not
+      // apply where it was.)
+      const survivorId = await findSurvivorId(
+        Filament.collection as unknown as MinimalNameCollection,
+        body.name,
+        { _deletedAt: null },
+      );
+      if (survivorId && String(survivorId) !== String(id)) {
+        // Same shape as this route's existing duplicate-key 409
+        // (`handleDuplicateKeyError`), NOT the sync route's structured
+        // `name_taken` envelope. This guard intercepts a case that used to
+        // reach the E11000 handler, so it must answer the way that handler
+        // does or it silently changes a tested response contract (PR #357).
+        return errorResponse(
+          `A filament with that name already exists: "${body.name.trim()}"`,
+          409,
+        );
+      }
+    }
+
     // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
     // carry its own INVENTORY or per-variant color identity. STRIP (don't
     // reject) a non-null write of any of the four per-variant fields —
@@ -920,10 +960,25 @@ export async function POST(
         const hint =
           typeof config.filamentdb_nozzle === "string" ? config.filamentdb_nozzle.trim() : "";
         if (hint && decodedName.endsWith(` ${hint}`)) {
-          const baseName = decodedName.slice(0, -(hint.length + 1)).trim();
+          // GH #1116 (Codex P1): keep the RAW slice as well as the trimmed
+          // one. A per-nozzle preset generated for an unresolved `"X "` is
+          // named `"X  0.4 Brass"`, so slicing the hint leaves `"X "` — and
+          // `.trim()` here, plus the setter's cast, both land on the CANONICAL
+          // `"X"`. The sync would then write the legacy row's preset settings
+          // and calibration onto the bystander. Resolve the raw slice first;
+          // it is unambiguous when it hits, and falls through when it doesn't.
+          const rawBase = decodedName.slice(0, -(hint.length + 1));
+          const baseName = rawBase.trim();
           if (baseName) {
-            // name-lookup-ok: per-nozzle suffix decode of an existing preset name
-            filament = await Filament.findOne({ name: baseName, _deletedAt: null });
+            const baseExactId = await findExactRawNameId(
+              Filament.collection as unknown as MinimalNameCollection,
+              rawBase,
+              { _deletedAt: null },
+            );
+            // name-lookup-ok: exact-spelling resolution above covers the cast case
+            filament = baseExactId
+              ? await Filament.findOne({ _id: baseExactId })
+              : await Filament.findOne({ name: baseName, _deletedAt: null });
             if (filament) matchedBy = "name";
           }
         }
@@ -1426,12 +1481,27 @@ export async function POST(
         // non-deleted index would E11000 on the write anyway; the pre-check turns it
         // into a friendly, actionable 409 (a TOCTOU race still falls back to the
         // E11000 handler below).
-        // name-lookup-ok: name_taken guard that REFUSES; it never creates
-        const clash = await Filament.findOne({
+        // GH #1116: a MISSED clash fails in the dangerous direction. `name`
+        // casts, so renaming to "X" while an unresolved active "X " survives
+        // finds nothing here AND does not E11000 below (the raw strings
+        // differ), leaving two active rows rendering identically. The survivor
+        // lookup compares TRIMMED forms, which is the question the guard is
+        // really asking. ("Refuses, never creates" was the wrong exemption:
+        // failing to refuse is exactly how this one creates a duplicate.)
+        // name-lookup-ok: survivor lookup below covers the cast case
+        let clash: { _id: unknown } | null = await Filament.findOne({
           name: sentName,
           _deletedAt: null,
           _id: { $ne: filament._id },
         });
+        if (!clash) {
+          const survivorId = await findSurvivorId(
+            Filament.collection as unknown as MinimalNameCollection,
+            sentName,
+            { _deletedAt: null, _id: { $ne: filament._id } },
+          );
+          if (survivorId) clash = { _id: survivorId };
+        }
         if (clash) {
           return NextResponse.json(
             {
