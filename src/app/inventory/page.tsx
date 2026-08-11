@@ -1,6 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  parseFilterParams,
+  nextFilterHref,
+  oneOf,
+  boolParam,
+  textParam,
+  type FilterSpec,
+} from "@/lib/listFilterParams";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -16,6 +24,9 @@ import {
   type InventoryGroupBy,
   type InventorySortKey,
   type InventorySortDir,
+  INVENTORY_GROUP_BYS,
+  INVENTORY_SORT_KEYS,
+  INVENTORY_SORT_DIRS,
 } from "@/lib/inventorySort";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
@@ -201,6 +212,45 @@ function loadInventoryPrefs(): InventoryPrefs {
  *  (#1117 item h). Shared spelling with the filament list; not a valid
  *  ObjectId, so it can never collide with a real location id. */
 const NEW_LOCATION_OPTION = "__new_location__";
+
+/**
+ * GH #1141: the filters this page mirrors into the URL, so a filtered view can
+ * be shared, bookmarked and survive a refresh.
+ *
+ * `includeRetired` keeps its existing spelling — `/locations` already links
+ * here with it (`src/app/locations/page.tsx`), and that link is a supported
+ * entry point.
+ *
+ * `location` is deliberately NOT here. It is a one-shot scroll/highlight deep
+ * link encoded into printed dry-box QR stickers, not a filter, and
+ * `serializeFilterParams` preserves it precisely because it is unowned.
+ */
+const INVENTORY_FILTER_SPEC = {
+  search: { param: "q", fallback: "", ...textParam },
+  kind: { param: "kind", fallback: "", ...textParam },
+  type: { param: "type", fallback: "", ...textParam },
+  vendor: { param: "vendor", fallback: "", ...textParam },
+  includeRetired: {
+    param: "includeRetired",
+    fallback: DEFAULT_INVENTORY_PREFS.includeRetired,
+    ...boolParam,
+  },
+  groupBy: {
+    param: "group",
+    fallback: DEFAULT_INVENTORY_PREFS.groupBy,
+    parse: oneOf(INVENTORY_GROUP_BYS),
+  },
+  sortKey: {
+    param: "sort",
+    fallback: DEFAULT_INVENTORY_PREFS.sortKey,
+    parse: oneOf(INVENTORY_SORT_KEYS),
+  },
+  sortDir: {
+    param: "dir",
+    fallback: DEFAULT_INVENTORY_PREFS.sortDir,
+    parse: oneOf(INVENTORY_SORT_DIRS),
+  },
+} satisfies FilterSpec;
 
 export default function InventoryPage() {
   const { t } = useTranslation();
@@ -399,9 +449,26 @@ export default function InventoryPage() {
   // doesn't clobber storage with the defaults before this runs.
   useEffect(() => {
     const p = loadInventoryPrefs();
-    setGroupBy(p.groupBy); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
-    setSortKey(p.sortKey);
-    setSortDir(p.sortDir);
+    // GH #1141: the URL wins over the persisted pref, for the keys it carries.
+    //
+    // Read post-mount, defaults-then-adopt — NOT a lazy `useState` initializer
+    // with a `typeof window` check, which produces different first renders on
+    // the two sides (the Codex P2 recorded in src/app/locations/new/page.tsx).
+    // The server HTML and the first client paint therefore both use the
+    // defaults, and the URL is adopted immediately after.
+    const url = parseFilterParams(window.location.search, INVENTORY_FILTER_SPEC);
+    const hasParam = (key: keyof typeof INVENTORY_FILTER_SPEC) =>
+      new URLSearchParams(window.location.search).has(INVENTORY_FILTER_SPEC[key].param);
+
+    setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
+    setKind(url.kind);
+    setType(url.type);
+    setVendor(url.vendor);
+    // Group/sort fall back to the PERSISTED pref when the URL is silent, so a
+    // bare /inventory still opens the way the user left it.
+    setGroupBy(hasParam("groupBy") ? url.groupBy : p.groupBy);
+    setSortKey(hasParam("sortKey") ? url.sortKey : p.sortKey);
+    setSortDir(hasParam("sortDir") ? url.sortDir : p.sortDir);
     // GH #1106: `?includeRetired=1` overrides the persisted pref for this
     // visit. The /locations "location is still in use" panel links here to
     // show the retired spools that are blocking a delete — without this the
@@ -409,11 +476,42 @@ export default function InventoryPage() {
     // location, and the deep-link handler below toasts "no active spools",
     // i.e. the escape hatch would tell the user the spools don't exist. The
     // persist effect writes it back like any manual toggle, which is right:
-    // the user followed a link asking to see them.
-    const wantRetired = new URLSearchParams(window.location.search).get("includeRetired");
-    setIncludeRetired(wantRetired === "1" || p.includeRetired);
+    // the user followed a link asking to see them. That precedent is kept for
+    // THIS key only — a shared link's other filters apply to the visit but are
+    // not written into the recipient's stored preferences.
+    setIncludeRetired(hasParam("includeRetired") ? url.includeRetired : p.includeRetired);
     prefsLoaded.current = true;
   }, []);
+
+  // GH #1141: mirror the filters into the URL so a view can be shared,
+  // bookmarked and survive a refresh.
+  //
+  // `replaceState`, not `pushState`: a history entry per dropdown change would
+  // make leaving the page take N Back presses. Back still leaves in one.
+  //
+  // It MUST go through the patched `window.history` method — Next copies its
+  // internal `__NA` marker onto the state, and its popstate handler
+  // full-page-reloads an entry without it.
+  //
+  // `nextFilterHref` returns null when nothing would change, so this is a
+  // no-op on the renders that merely recompute the same state. And it MERGES:
+  // `?location=` — encoded into printed dry-box QR stickers — is preserved
+  // because the spec does not own it. Gated on `prefsLoaded` so it cannot run
+  // before the seed above and blank the query string.
+  useEffect(() => {
+    if (!prefsLoaded.current) return;
+    const href = nextFilterHref(window.location, INVENTORY_FILTER_SPEC, {
+      search,
+      kind,
+      type,
+      vendor,
+      includeRetired,
+      groupBy,
+      sortKey,
+      sortDir,
+    });
+    if (href) window.history.replaceState(window.history.state, "", href);
+  }, [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir]);
 
   // Persist prefs whenever they change (after the initial load).
   useEffect(() => {

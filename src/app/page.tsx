@@ -1,6 +1,14 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import {
+  parseFilterParams,
+  nextFilterHref,
+  oneOf,
+  boolParam,
+  textParam,
+  type FilterSpec,
+} from "@/lib/listFilterParams";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
@@ -8,7 +16,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
-import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
+import QuickFilterChips, { QUICK_FILTERS, type QuickFilter } from "@/components/QuickFilterChips";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
@@ -21,7 +29,15 @@ import type { FilamentSummary } from "@/types/filament";
 import { getRemainingDisplay, getRemainingGrams, getSpoolCount } from "@/lib/inventoryStats";
 import { formatSkipReport } from "@/lib/importSkipReport";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
-import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
+import {
+  compareFilaments,
+  nextSortState,
+  earliestSpoolDate,
+  SORT_KEYS,
+  SORT_DIRS,
+  type SortKey,
+  type SortDir,
+} from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
 
@@ -185,6 +201,43 @@ function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
  *  location id. */
 const NEW_LOCATION_OPTION = "__new_location__";
 
+/**
+ * GH #1141: the filters this list mirrors into the URL.
+ *
+ * `family=1` is deliberately absent — it is an outbound API query param
+ * (`/api/filaments?family=1`), never a page URL param, so it is not state to
+ * carry. `?spool=` and friends on other routes are likewise unowned and are
+ * preserved by `serializeFilterParams`.
+ */
+/**
+ * Distinct type + vendor values for the filter dropdowns.
+ *
+ * Shared by the mount effect and the post-import refresh so the two cannot
+ * drift. Cheap distinct queries — the same endpoints /inventory uses.
+ */
+async function fetchFilterOptions(
+  signal: AbortSignal,
+): Promise<{ types: string[]; vendors: string[] }> {
+  const [typeList, vendorList] = await Promise.all([
+    fetch("/api/filaments/types", { signal }).then((r) => (r.ok ? r.json() : [])),
+    fetch("/api/filaments/vendors", { signal }).then((r) => (r.ok ? r.json() : [])),
+  ]);
+  return {
+    types: Array.isArray(typeList) ? typeList : [],
+    vendors: Array.isArray(vendorList) ? vendorList : [],
+  };
+}
+
+const HOME_FILTER_SPEC = {
+  search: { param: "q", fallback: "", ...textParam },
+  typeFilter: { param: "type", fallback: "", ...textParam },
+  vendorFilter: { param: "vendor", fallback: "", ...textParam },
+  quickFilter: { param: "quick", fallback: "all" as QuickFilter, parse: oneOf(QUICK_FILTERS) },
+  showOutOfStock: { param: "oos", fallback: false, ...boolParam },
+  sortKey: { param: "sort", fallback: "name" as SortKey, parse: oneOf(SORT_KEYS) },
+  sortDir: { param: "dir", fallback: "asc" as SortDir, parse: oneOf(SORT_DIRS) },
+} satisfies FilterSpec;
+
 export default function Home() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
@@ -278,10 +331,62 @@ export default function Home() {
   // avoid a hydration mismatch), then persist on change. Mirrors /inventory.
   useEffect(() => {
     const p = loadHomePrefs();
-    setSortKey(p.sortKey); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
-    setSortDir(p.sortDir);
+    // GH #1141: the URL wins over the persisted pref, for the keys it carries.
+    //
+    // Read post-mount, defaults-then-adopt — NOT a lazy `useState` initializer
+    // with a `typeof window` check, which produces different first renders on
+    // the two sides (the Codex P2 in src/app/locations/new/page.tsx).
+    const url = parseFilterParams(window.location.search, HOME_FILTER_SPEC);
+    const present = new URLSearchParams(window.location.search);
+    const hasParam = (key: keyof typeof HOME_FILTER_SPEC) =>
+      present.has(HOME_FILTER_SPEC[key].param);
+
+    setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
+    setDebouncedSearch(url.search);
+    setTypeFilter(url.typeFilter);
+    setVendorFilter(url.vendorFilter);
+    setQuickFilter(url.quickFilter);
+    setShowOutOfStock(url.showOutOfStock);
+    // Sort falls back to the PERSISTED pref when the URL is silent, so a bare
+    // "/" still opens the way the user left it. A shared link's sort applies
+    // to the visit; the persist effect below then stores it, matching how a
+    // manual sort behaves.
+    setSortKey(hasParam("sortKey") ? url.sortKey : p.sortKey);
+    setSortDir(hasParam("sortDir") ? url.sortDir : p.sortDir);
     homePrefsLoaded.current = true;
   }, []);
+
+  // GH #1141: mirror the filters into the URL — shareable, bookmarkable, and
+  // surviving a refresh.
+  //
+  // `replaceState`, not `pushState`: a history entry per dropdown change would
+  // make leaving the page take N Back presses. It must go through the patched
+  // `window.history` method, because Next copies its internal `__NA` marker
+  // onto the state and full-page-reloads a popstate entry without it.
+  //
+  // `nextFilterHref` returns null when nothing would change, and MERGES rather
+  // than rebuilding, so params this page does not own survive.
+  useEffect(() => {
+    if (!homePrefsLoaded.current) return;
+    const href = nextFilterHref(window.location, HOME_FILTER_SPEC, {
+      search: debouncedSearch,
+      typeFilter,
+      vendorFilter,
+      quickFilter,
+      showOutOfStock,
+      sortKey,
+      sortDir,
+    });
+    if (href) window.history.replaceState(window.history.state, "", href);
+  }, [
+    debouncedSearch,
+    typeFilter,
+    vendorFilter,
+    quickFilter,
+    showOutOfStock,
+    sortKey,
+    sortDir,
+  ]);
   useEffect(() => {
     if (!homePrefsLoaded.current) return;
     try {
@@ -347,13 +452,6 @@ export default function Home() {
       }
       const data = await res.json();
       setFilaments(data);
-      // Derive filter options from unfiltered results (initial load / no filters)
-      if (!debouncedSearch && !typeFilter && !vendorFilter) {
-        const typeList = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
-        const vendorList = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
-        setTypes(typeList);
-        setVendors(vendorList);
-      }
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -362,28 +460,49 @@ export default function Home() {
     }
   }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
-  // Refresh the type / vendor filter dropdowns from the full, unfiltered
-  // filament list. fetchFilaments only recomputes these when no filter
-  // is active, so an import performed while a filter is on would leave
-  // the dropdowns stale without this. GH #292: own AbortController so it
-  // doesn't race the main list fetch un-cancellably or setState after
-  // unmount.
+  // GH #795 / #1141: the type + vendor dropdown options come from dedicated
+  // distinct-value endpoints, NOT from the list response.
+  //
+  // They used to be derived from an UNFILTERED list fetch, which made them a
+  // side effect of having no filter active. That breaks the moment a filter is
+  // seeded from the URL (#1141): the seeded fetch is filtered, the derivation
+  // is skipped, and the Type <select> renders with only "All types" — so a
+  // shared /?type=PLA link shows a filter that is invisible AND unclearable.
+  //
+  // These endpoints are cheap distinct queries and are what /inventory already
+  // uses. GH #292: own AbortController so this doesn't race the list fetch
+  // un-cancellably or setState after unmount.
   const refreshFilterOptions = useCallback(async () => {
     filterOptionsAcRef.current?.abort();
     const ac = new AbortController();
     filterOptionsAcRef.current = ac;
     try {
-      const res = await fetch("/api/filaments", { signal: ac.signal });
-      if (!res.ok) return;
-      const all = await res.json();
+      const { types: t1, vendors: v1 } = await fetchFilterOptions(ac.signal);
       if (ac.signal.aborted) return;
-      setTypes([...new Set(all.map((f: Filament) => f.type))].sort() as string[]);
-      setVendors([...new Set(all.map((f: Filament) => f.vendor))].sort() as string[]);
-    } catch (err) {
-      // Non-fatal — the list itself still refreshed via fetchFilaments.
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      setTypes(t1);
+      setVendors(v1);
+    } catch {
+      /* best-effort: the dropdowns keep their current options */
     }
   }, []);
+
+  // Populate them once on mount, independently of the list fetch and of
+  // whatever filter the URL seeded. Fetched inline (rather than calling
+  // `refreshFilterOptions`) so the state updates land in a `.then`, which is
+  // the shape `react-hooks/set-state-in-effect` accepts and the same one
+  // /inventory uses.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchFilterOptions(ac.signal)
+      .then(({ types: t1, vendors: v1 }) => {
+        if (ac.signal.aborted) return;
+        setTypes(t1);
+        setVendors(v1);
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
+
 
   // Close import/export dropdown on outside click
   useEffect(() => {

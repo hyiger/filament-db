@@ -3,7 +3,10 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
-export type QuickFilter = "all" | "lowStock" | "hasSpools" | "noCalibration";
+/** GH #1141: runtime array so a URL-supplied value can be validated; the
+ *  union is derived so the two cannot drift. */
+export const QUICK_FILTERS = ["all", "lowStock", "hasSpools", "noCalibration"] as const;
+export type QuickFilter = (typeof QUICK_FILTERS)[number];
 
 interface Props {
   active: QuickFilter;
