@@ -1013,6 +1013,65 @@ describe("SyncService — v1.12 sync expansion", () => {
         }
       }
     });
+
+    /**
+     * GH #1116 (Codex P1). Holding rows back is only half safe: a DEPENDENT
+     * copied against the resulting partial mapping silently drops the
+     * references it cannot resolve.
+     *
+     * Concretely, a spool's `locationId` becomes null on the target, the copy
+     * carries the SOURCE timestamp, and the repair pass ignores null refs — so
+     * syncing the held-back location on a later cycle never restores it. A
+     * blocked cycle is recoverable; a nulled reference is not.
+     */
+    it("cascade-skips dependents instead of copying against a partial mapping", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("locations").dropIndexes().catch(() => {});
+        await db.collection("locations").createIndex({ name: 1 }, { name: "name_1" });
+      }
+
+      try {
+        // An unpaired location, so the locations copy holds it back...
+        const loc = await localDb.collection("locations").insertOne({
+          name: "Shelf ", kind: "shelf", syncId: "loc-unpaired",
+          _deletedAt: null, createdAt: now, updatedAt: now,
+        });
+        // ...and a filament whose spool references it.
+        await localDb.collection("filaments").insertOne({
+          name: "Ref PLA", vendor: "V", type: "PLA", syncId: "fil-ref",
+          instanceId: "wsdep0001", _deletedAt: null, createdAt: now, updatedAt: now,
+          spools: [{ totalWeight: 1000, locationId: loc.insertedId }],
+        });
+
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // locations reports the hold-back...
+        expect(results.find((r) => r.collection === "locations")?.error).toMatch(/held back/i);
+        // ...and filaments cascade-skips on it rather than copying.
+        expect(results.find((r) => r.collection === "filaments")?.error).toMatch(
+          /prerequisite "locations"/i,
+        );
+
+        // The reference survives on the source — nothing was nulled.
+        const src = await localDb.collection("filaments").findOne({ syncId: "fil-ref" });
+        expect(String(src!.spools[0].locationId)).toBe(String(loc.insertedId));
+        // And no half-mapped copy landed on the remote.
+        expect(await remoteDb.collection("filaments").countDocuments({})).toBe(0);
+      } finally {
+        for (const db of [localDb, remoteDb]) {
+          await db.collection("locations").dropIndexes().catch(() => {});
+          await db.collection("locations").createIndex(
+            { name: 1 },
+            { unique: true, partialFilterExpression: { _deletedAt: null } },
+          ).catch(() => {});
+        }
+      }
+    });
   });
 
   describe("entity-name trim on both sync sides (GH #1116)", () => {

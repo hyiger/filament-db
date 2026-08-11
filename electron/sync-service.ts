@@ -144,9 +144,15 @@ interface SyncResult {
   updated: number;
   deleted: number;
   /**
-   * GH #369: per-collection error. When set, this collection's sync
-   * threw and the count fields are zero. Other collections in the same
-   * cycle may have succeeded.
+   * GH #369: per-collection error. Other collections in the same cycle may
+   * have succeeded, and `trySync` cascade-skips this collection's dependents.
+   *
+   * Usually the sync THREW and the count fields are zero. GH #1116 adds a
+   * second, deliberate producer: a collection whose trim was SKIPPED copies
+   * paired rows only, so the counts are NON-zero while some rows were held
+   * back. That still has to read as a failed prerequisite — a dependent
+   * copied against a partial mapping silently drops the references it could
+   * not resolve.
    */
   error?: string | null;
 }
@@ -1158,11 +1164,12 @@ export class SyncService extends EventEmitter {
       (localBySyncId.has(syncId) && remoteBySyncId.has(syncId) ? paired : unpaired).push(syncId);
     }
     const allSyncIds = pairedOnly ? paired : [...paired, ...unpaired];
-    if (pairedOnly && unpaired.length > 0) {
+    const heldBack = pairedOnly ? unpaired.length : 0;
+    if (heldBack > 0) {
       console.warn(
         `[sync] ${collectionName}: trim skipped this collection — copying ` +
           `${paired.length} paired record(s) only, holding back ` +
-          `${unpaired.length} unpaired one(s) until names can be normalized`,
+          `${heldBack} unpaired one(s) until names can be normalized`,
       );
     }
 
@@ -1331,6 +1338,25 @@ export class SyncService extends EventEmitter {
         }
         // Equal timestamps — no action needed
       }
+    }
+
+    // GH #1116 (Codex P1): a HELD-BACK collection must read as a FAILED
+    // prerequisite, or `trySync` lets its dependents run against a partial
+    // mapping. Concretely: hold back an unpaired location, and
+    // `buildFilamentRefsTransform` cannot resolve a referencing spool's
+    // `locationId` on the target, writes null, and stamps the copy with the
+    // SOURCE timestamp — after which the repair pass (which ignores null
+    // refs) never restores it. Syncing that location on a later cycle does
+    // not undo the loss. A blocked, reported cycle is recoverable; a nulled
+    // reference is not.
+    //
+    // The counts above stay real — the paired copies DID happen, so a user's
+    // rename still propagates and the collection can converge. Only the
+    // dependents wait.
+    if (heldBack > 0) {
+      result.error =
+        `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +
+        `collection, so its names cannot be matched safely yet`;
     }
 
     return result;
