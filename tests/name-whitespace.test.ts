@@ -206,29 +206,6 @@ describe("trimEntityNames against a real database (#1116)", () => {
 });
 
 describe("filament import matches a legacy untrimmed row (#1116)", () => {
-  /**
-   * Reach the condition the raw-driver fallback exists for: an untrimmed row
-   * present at import time.
-   *
-   * Doing that by index manipulation does not work. Mongoose's `autoIndex`
-   * rebuilds the schema's unique `name_1` in the BACKGROUND on first model
-   * use, so a plain index planted here races that build — locally about half
-   * the runs, and it was a real CI failure (IndexKeySpecsConflict, because
-   * MongoDB auto-names both indexes `name_1`).
-   *
-   * So settle the migration instead: one no-op import flips
-   * `cached.migrations.trimEntityNames`, after which the pass does not run
-   * again in this process and a row inserted through the raw driver survives
-   * untrimmed. That models the production states that matter — a row the pass
-   * had to leave alone, or a collection it skipped — without depending on
-   * which one, and without fighting autoIndex.
-   */
-  async function settleTrimMigration() {
-    await upsertImportRows([
-      { name: "Settle Probe", vendor: "V", type: "PLA" },
-    ]);
-    await Filament.deleteMany({ name: "Settle Probe" });
-  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;

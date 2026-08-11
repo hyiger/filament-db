@@ -952,6 +952,69 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("a SKIPPED trim collection copies paired rows only (GH #1116)", () => {
+    /**
+     * When the trim pass cannot establish a protective unique name index it
+     * SKIPS the collection, and the gate then disables `reconcileByName` —
+     * correctly, since that helper compares raw names and would fuse two
+     * records that merely look alike.
+     *
+     * Disabling it WITHOUT restricting the copy is worse than not gating at
+     * all: the pairing that used to fuse an identically-named pair no longer
+     * happens, and the unpaired inserts manufacture the duplicate on the
+     * target instead. Paired updates still flow so repairs propagate — which
+     * is what stops this becoming the self-perpetuating freeze that blocking
+     * the copy outright caused.
+     */
+    it("holds back the unpaired insert instead of manufacturing a duplicate", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // Force the SKIP: replace the partial unique index with a NON-unique
+      // one, which `hasUniqueNameIndex` rejects and `createIndex` conflicts
+      // with, so the collection cannot be normalized.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").dropIndexes().catch(() => {});
+        await db.collection("bedtypes").createIndex({ name: 1 }, { name: "name_1" });
+      }
+
+      // Two DISTINCT records that render the same. Different syncIds, so they
+      // are unpaired and reconcileByName is the only thing that could fuse
+      // them — and it is (correctly) disabled for a skipped collection.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Plate ", material: "PEI", syncId: "bt-local-only",
+        _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Plate", material: "PEI", syncId: "bt-remote-only",
+        _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      try {
+        sync = makeSync();
+        await sync.sync();
+
+        // Neither side gained the other's row: no duplicate was manufactured.
+        expect(await localDb.collection("bedtypes").countDocuments({})).toBe(1);
+        expect(await remoteDb.collection("bedtypes").countDocuments({})).toBe(1);
+      } finally {
+        // `finally`, not trailing statements: this test deliberately installs a
+        // NON-unique name index, and on a failing assertion the trailing form
+        // left it in place — which then broke an unrelated later test that
+        // builds the real one. A test that corrupts shared state when it fails
+        // makes every subsequent failure a red herring.
+        for (const db of [localDb, remoteDb]) {
+          await db.collection("bedtypes").dropIndexes().catch(() => {});
+          await db.collection("bedtypes").createIndex(
+            { name: 1 },
+            { unique: true, partialFilterExpression: { _deletedAt: null } },
+          ).catch(() => {});
+        }
+      }
+    });
+  });
+
   describe("entity-name trim on both sync sides (GH #1116)", () => {
     it("normalizes names on BOTH DBs before copying, so nothing untrimmed transfers", async () => {
       const localDb = localClient.db("filament-db");

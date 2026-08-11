@@ -584,7 +584,7 @@ export class SyncService extends EventEmitter {
         await this.reconcileNozzlesByName(localDb, remoteDb, conflictedNames.get("nozzles"));
       }
       results.push(await trySync("nozzles", [], () =>
-        this.syncCollection(localDb, remoteDb, "nozzles"),
+        this.syncCollection(localDb, remoteDb, "nozzles", undefined, conflictedCollections.has("nozzles")),
       ));
 
       // Build nozzle syncId→ID maps for reference remapping.
@@ -612,7 +612,7 @@ export class SyncService extends EventEmitter {
         await this.reconcileBedTypesByName(localDb, remoteDb, conflictedNames.get("bedtypes"));
       }
       results.push(await trySync("bedtypes", [], () =>
-        this.syncCollection(localDb, remoteDb, "bedtypes"),
+        this.syncCollection(localDb, remoteDb, "bedtypes", undefined, conflictedCollections.has("bedtypes")),
       ));
 
       // Build bedType syncId→ID maps for printer + filament remap.
@@ -637,6 +637,7 @@ export class SyncService extends EventEmitter {
             localNozzleBySyncId, remoteNozzleBySyncId,
             localBedTypeBySyncId, remoteBedTypeBySyncId,
           ),
+          conflictedCollections.has("printers"),
         ),
       ));
 
@@ -663,7 +664,7 @@ export class SyncService extends EventEmitter {
         await this.reconcileLocationsByName(localDb, remoteDb, conflictedNames.get("locations")); // GH #904
       }
       results.push(await trySync("locations", [], () =>
-        this.syncCollection(localDb, remoteDb, "locations"),
+        this.syncCollection(localDb, remoteDb, "locations", undefined, conflictedCollections.has("locations")),
       ));
 
       // Build location syncId→ID maps for spool reference remapping.
@@ -785,7 +786,14 @@ export class SyncService extends EventEmitter {
       results.push(await trySync(
         "filaments",
         ["nozzles", "bedtypes", "printers", "locations"],
-        () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
+        () =>
+          this.syncCollection(
+            localDb,
+            remoteDb,
+            "filaments",
+            filamentTransform,
+            conflictedCollections.has("filaments"),
+          ),
       ));
 
       // GH #1021 (Codex r17–r25): the LWW copy is itself an ingestion
@@ -959,7 +967,14 @@ export class SyncService extends EventEmitter {
       results.push(await trySync(
         "printhistories",
         ["printers", "filaments"],
-        () => this.syncCollection(localDb, remoteDb, "printhistories", printHistoryTransform),
+        () =>
+          this.syncCollection(
+            localDb,
+            remoteDb,
+            "printhistories",
+            printHistoryTransform,
+            conflictedCollections.has("printhistories"),
+          ),
       ));
 
       // Sync shared catalogs. Payload is denormalised at publish time so
@@ -1048,6 +1063,25 @@ export class SyncService extends EventEmitter {
       direction: "toLocal" | "toRemote",
       targetSpoolIds?: (string | undefined)[],
     ) => Document,
+    /**
+     * GH #1116 (Codex P1): restrict this collection to syncIds present on BOTH
+     * peers, skipping every unpaired INSERT.
+     *
+     * Set when the trim pass SKIPPED the collection — no protective unique
+     * name index could be established, so nothing was normalized. In that
+     * state `reconcileByName` is also disabled (it compares raw names and
+     * would fuse two records that merely look alike), and disabling it WITHOUT
+     * restricting the copy is worse than not gating at all: the pairing that
+     * used to fuse an identically-named pair no longer happens, and the
+     * unpaired inserts below then manufacture the duplicate on the target.
+     *
+     * Paired updates still flow, so repairs — including a later successful
+     * trim — propagate normally. That is what keeps this from becoming the
+     * self-perpetuating freeze an earlier revision hit by blocking the copy
+     * outright, which would have stalled locations, filaments and print
+     * history permanently.
+     */
+    pairedOnly = false,
   ): Promise<SyncResult> {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
@@ -1123,7 +1157,14 @@ export class SyncService extends EventEmitter {
     for (const syncId of new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()])) {
       (localBySyncId.has(syncId) && remoteBySyncId.has(syncId) ? paired : unpaired).push(syncId);
     }
-    const allSyncIds = [...paired, ...unpaired];
+    const allSyncIds = pairedOnly ? paired : [...paired, ...unpaired];
+    if (pairedOnly && unpaired.length > 0) {
+      console.warn(
+        `[sync] ${collectionName}: trim skipped this collection — copying ` +
+          `${paired.length} paired record(s) only, holding back ` +
+          `${unpaired.length} unpaired one(s) until names can be normalized`,
+      );
+    }
 
     for (const syncId of allSyncIds) {
       const localDoc = localBySyncId.get(syncId);
