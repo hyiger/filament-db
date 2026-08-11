@@ -432,11 +432,24 @@ export async function trimEntityNames(
         // rows. `coreModelIndexes` replaces that index later in this same
         // connect, after which the identical write succeeds.
         //
-        // Keyed on `_deletedAt`, NOT on `active`: an untombstoned `_purged`
-        // zombie is inactive for GATING purposes but its `_deletedAt` is still
-        // null, so it IS in the partial index and its collision is genuine
-        // rather than a legacy-index artifact.
-        if (!isActiveLikeSchema(doc._deletedAt)) {
+        // The question is INDEX COVERAGE, not schema activeness (Codex P2) —
+        // and conflating the two is what the previous version did.
+        //
+        // `isActiveLikeSchema` treats `_deletedAt: ""` as active, because
+        // Mongoose casts an empty string to null on a Date path. MongoDB does
+        // NOT: a `partialFilterExpression: { _deletedAt: null }` matches null
+        // and missing only, so a stored `""` is OUTSIDE the partial index. A
+        // duplicate key on such a row therefore CANNOT have come from the
+        // intended index — it is the transient legacy-plain-index case, and
+        // recording it is exactly what keeps the migration unsettled until
+        // `coreModelIndexes` replaces that index later in this same connect.
+        //
+        // So test `_deletedAt == null` (null or missing = covered), which is
+        // MongoDB's own predicate. An untombstoned `_purged` zombie still
+        // lands on the covered side: it is inactive for GATING purposes but
+        // its `_deletedAt` is null, so it genuinely is in the partial index
+        // and its collision is real rather than a legacy artifact.
+        if (doc._deletedAt != null) {
           deferred.push({
             collection: collectionName,
             reason:

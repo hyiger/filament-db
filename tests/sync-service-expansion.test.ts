@@ -898,6 +898,60 @@ describe("SyncService — v1.12 sync expansion", () => {
   // Mongoose then can't find it by name at all, because a String schema
   // setter applies to QUERY values too.
 
+  describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
+    /**
+     * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
+     * MongoDB is concerned, so it OCCUPIES the partial unique name index.
+     * Nothing else repairs one on the remote: `SyncService.sync()` never calls
+     * `dbConnect`, and `syncCollection`'s both-purged branch is a no-op.
+     *
+     * The trim deliberately refuses to let a hidden zombie GATE a sync (a user
+     * cannot resolve a row the UI does not show), so a local `"X "` is free to
+     * become `"X"` while a remote zombie still holds `"X"` — after which every
+     * copy of that filament onto the remote fails E11000, permanently, taking
+     * filaments and print-history down the dependency chain with it.
+     */
+    it("tombstones a REMOTE zombie so the local trim can be copied over", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // Remote zombie squatting the name on the partial unique index.
+      await remoteDb.collection("filaments").insertOne({
+        name: "Zombie PLA", vendor: "V", type: "PLA",
+        syncId: "zombie-remote", _purged: true, _deletedAt: null,
+        spools: [], createdAt: now, updatedAt: now,
+      });
+      // Local row that trims INTO that name.
+      await localDb.collection("filaments").insertOne({
+        name: "Zombie PLA ", vendor: "V", type: "PLA",
+        syncId: "victim-local", _deletedAt: null,
+        spools: [], createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection synced instead of erroring on a duplicate key.
+      const filamentResult = results.find((r) => r.collection === "filaments");
+      expect(filamentResult?.error).toBeUndefined();
+
+      // The zombie got the tombstone it should always have had — so it no
+      // longer occupies the active-name index — while staying purged.
+      const zombie = await remoteDb
+        .collection("filaments")
+        .findOne({ syncId: "zombie-remote" });
+      expect(zombie!._purged).toBe(true);
+      expect(zombie!._deletedAt).not.toBeNull();
+
+      // And the trimmed local row reached the remote under its clean name.
+      const copied = await remoteDb
+        .collection("filaments")
+        .findOne({ syncId: "victim-local" });
+      expect(copied!.name).toBe("Zombie PLA");
+    });
+  });
+
   describe("entity-name trim on both sync sides (GH #1116)", () => {
     it("normalizes names on BOTH DBs before copying, so nothing untrimmed transfers", async () => {
       const localDb = localClient.db("filament-db");

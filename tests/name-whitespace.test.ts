@@ -433,4 +433,44 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     expect(await col.findOne({ name: "Shelf " })).toBeNull();
     expect(await col.countDocuments({ name: "Shelf" })).toBe(2);
   });
+
+  /**
+   * GH #1116 (Codex P2, round 27). The deferred test asks about INDEX
+   * COVERAGE, not schema activeness, and the two disagree on exactly one
+   * value: `_deletedAt: ""`.
+   *
+   * Mongoose casts an empty string to null on a Date path, so the schema calls
+   * such a row active. MongoDB does not — a partial filter of
+   * `{ _deletedAt: null }` matches null and missing only, so a stored `""` sits
+   * OUTSIDE the partial index. A duplicate key on it can therefore only have
+   * come from the legacy plain index, which is the retryable case; classifying
+   * it as a real conflict let the migration settle and stranded the row.
+   */
+  it("defers an empty-string tombstone the legacy index blocks", async () => {
+    const db = () => mongoose.connection.db as unknown as MinimalTrimDb;
+    const col = mongoose.connection.collection("locations");
+    await col.dropIndexes().catch(() => {});
+    await col.createIndex({ name: 1 }, { unique: true, name: "legacy_name_1" });
+
+    // `_deletedAt: ""` — the legacy shape. Schema-active, index-uncovered.
+    await col.insertMany([
+      { name: "Bin", kind: "shelf", _deletedAt: "" },
+      { name: "Bin ", kind: "shelf", _deletedAt: "" },
+    ]);
+
+    const res = await trimEntityNames(db());
+
+    expect(await col.findOne({ name: "Bin " })).not.toBeNull();
+    expect(res.deferred.length).toBeGreaterThan(0);
+    expect(res.deferred[0].collection).toBe("locations");
+
+    await col.dropIndex("legacy_name_1");
+    await col.createIndex(
+      { name: 1 },
+      { unique: true, partialFilterExpression: { _deletedAt: null } },
+    );
+    const after = await trimEntityNames(db());
+    expect(after.deferred.length).toBe(0);
+    expect(await col.findOne({ name: "Bin " })).toBeNull();
+  });
 });

@@ -13,6 +13,10 @@ import {
   describeTrimResult,
   type MinimalTrimDb,
 } from "../src/lib/trimEntityNames";
+import {
+  retombstonePurgedZombies,
+  type MinimalZombieCollection,
+} from "../src/lib/purgedZombies";
 
 /** GH #1021 r25/r26: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
@@ -447,6 +451,28 @@ export class SyncService extends EventEmitter {
         // pair of rows a human has to merge by hand. (Per-row conflicts are
         // still non-fatal — those are REPORTED, not thrown; see
         // `trimEntityNames`.)
+        // BEFORE the trim, on BOTH peers (GH #1116, Codex P1). A purge zombie
+        // (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
+        // MongoDB is concerned, so it OCCUPIES the partial unique name index —
+        // and nothing else ever repairs it on the remote, which never runs
+        // `dbConnect` and whose both-purged sync branch is a documented no-op.
+        //
+        // The trim deliberately refuses to let a hidden zombie GATE a sync (a
+        // user cannot resolve a row the UI does not show), so a local `"X "`
+        // is free to become `"X"` while a remote zombie still holds `"X"` —
+        // after which every `replaceOne` of that filament onto the remote
+        // fails E11000, permanently, taking filaments and print-history with
+        // it down the dependency chain. Suppressing the gate was only half the
+        // answer; this is the other half, and it puts the row into the state
+        // it should have been in all along.
+        const zombies = await retombstonePurgedZombies(
+          dbHandle.collection("filaments") as unknown as MinimalZombieCollection,
+        );
+        if (zombies > 0) {
+          console.log(
+            `[sync] ${side}: re-tombstoned ${zombies} purged zombie filament(s) (GH #1004)`,
+          );
+        }
         const trimResult = await trimEntityNames(dbHandle as unknown as MinimalTrimDb);
         const line = describeTrimResult(trimResult);
         if (line) console.log(`[sync] ${side}: ${line}`);

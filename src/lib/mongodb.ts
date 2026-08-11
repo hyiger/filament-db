@@ -6,6 +6,10 @@ import {
   trimBlockedCount,
   type MinimalTrimDb,
 } from "./trimEntityNames";
+import {
+  retombstonePurgedZombies,
+  type MinimalZombieCollection,
+} from "./purgedZombies";
 
 /** GH #1116: how long to wait before re-attempting a trim pass that still
  *  has active conflicts. Bounds the cost of keeping the migration unsettled. */
@@ -214,14 +218,17 @@ export default async function dbConnect() {
   // filter matches nothing on healthy installs.
   if (!cached.migrations.purgedZombies) {
     try {
+      // Shared with the hybrid sync service, which must run the SAME repair
+      // against both peers (GH #1116): the remote never runs dbConnect, and a
+      // remote zombie occupies the partial unique name index, so a local trim
+      // can collide with it forever. One implementation, two callers.
       const { default: Filament } = await import("@/models/Filament");
-      const res = await Filament.updateMany(
-        { _purged: true, _deletedAt: null },
-        { $set: { _deletedAt: new Date() } },
+      const repaired = await retombstonePurgedZombies(
+        Filament.collection as unknown as MinimalZombieCollection,
       );
-      if (res.modifiedCount > 0) {
+      if (repaired > 0) {
         console.log(
-          `[migration] Re-tombstoned ${res.modifiedCount} purged zombie filament(s) (GH #1004)`,
+          `[migration] Re-tombstoned ${repaired} purged zombie filament(s) (GH #1004)`,
         );
       }
       cached.migrations.purgedZombies = true;
