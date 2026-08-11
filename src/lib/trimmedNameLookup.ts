@@ -40,12 +40,26 @@ import { JS_TRIM_CHARS } from "@/lib/trimEntityNames";
  * `EDGE_WHITESPACE_PATTERN` so the migration's scan and this lookup cannot
  * drift apart.
  *
- * ## Cost
+ * ## ALWAYS CANONICAL FIRST — this is correctness, not just cost
  *
- * `$expr` cannot use an index, so this is a collection scan. Every caller
- * therefore runs it only as a FALLBACK — after the ordinary indexed lookup has
- * already missed — and only on explicit, user-initiated import operations. The
- * alternative is a silent duplicate.
+ * Run the ordinary indexed name query first and reach for this only when it
+ * MISSES. Two independent reasons, and the second is the one that bites:
+ *
+ *   1. `$expr` cannot use an index, so this is a collection scan. Keeping it
+ *      on the miss path means the healthy case pays nothing.
+ *
+ *   2. The predicate matches the canonical row and the untrimmed one ALIKE,
+ *      and imposes no ordering. In precisely the state that produces a
+ *      survivor — `"PLA"` and `"PLA "` both present, which the partial unique
+ *      index permits for tombstones and which a skipped migration permits for
+ *      active rows — a survivor-first lookup returns an ARBITRARY one of them.
+ *      The indexed query is deterministic and picks the canonical row; this
+ *      one is not. Scanning first therefore turns a correct, predictable
+ *      update into a coin flip over which of two rows gets written.
+ *
+ * That mistake has been made twice in this codebase (the OpenPrintTag bulk
+ * upsert and the Prusament trashed resurrect), both times while ADDING this
+ * fallback, so it is stated here rather than left to be rediscovered.
  */
 
 /**

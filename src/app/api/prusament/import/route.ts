@@ -385,28 +385,47 @@ export async function POST(request: NextRequest) {
     // first-variant create racing the just-revived row serializes behind
     // the promotion gate's own in-lock re-fetch, which then sees (and
     // moves) this spool.
-    // GH #1116: same blind spot as the active branch. A surviving untrimmed
+    // GH #1116: same blind spot as the active branch — a surviving untrimmed
     // TRASHED row is unreachable by a cast name filter, so this resurrect
-    // would miss and the create below would take the name — stranding the
-    // tombstone, whose restore then 409s on the conflict forever.
-    const trashedSurvivorId = await findSurvivorId(
-      Filament.collection as unknown as MinimalNameCollection,
-      name,
-      { _deletedAt: { $ne: null }, _purged: { $ne: true } },
-    );
-    const resurrected = await Filament.findOneAndUpdate(
-      {
-        ...(trashedSurvivorId ? { _id: trashedSurvivorId } : { name }),
-        _deletedAt: { $ne: null },
-        _purged: { $ne: true },
-        $expr: SPOOL_CAP_EXPR,
-      },
-      {
-        $set: { _deletedAt: null },
-        $push: { spools: prusamentSpoolFields },
-      },
+    // would miss and the create below would take the name, stranding the
+    // tombstone whose restore then 409s on the conflict forever.
+    //
+    // CANONICAL FIRST, survivor only on a miss (Codex P2). The partial unique
+    // index covers active rows only, so a canonical `"PLA"` tombstone and an
+    // untrimmed `"PLA "` tombstone may BOTH exist — and the scan's `$expr`
+    // matches either with no ordering. Scanning first would resurrect an
+    // arbitrary one of them and attach the spool to it, where the indexed
+    // query deterministically restored the canonical row.
+    const resurrectFilter = {
+      _deletedAt: { $ne: null },
+      _purged: { $ne: true },
+      $expr: SPOOL_CAP_EXPR,
+    };
+    const resurrectUpdate = {
+      $set: { _deletedAt: null },
+      $push: { spools: prusamentSpoolFields },
+    };
+    let resurrected = await Filament.findOneAndUpdate(
+      // name-lookup-ok: canonical attempt; the survivor scan below covers the miss
+      { name, ...resurrectFilter },
+      resurrectUpdate,
       { returnDocument: "after" },
     ).lean();
+    let trashedSurvivorId: unknown | null = null;
+    if (!resurrected) {
+      trashedSurvivorId = await findSurvivorId(
+        Filament.collection as unknown as MinimalNameCollection,
+        name,
+        { _deletedAt: { $ne: null }, _purged: { $ne: true } },
+      );
+      if (trashedSurvivorId) {
+        resurrected = await Filament.findOneAndUpdate(
+          { _id: trashedSurvivorId, ...resurrectFilter },
+          resurrectUpdate,
+          { returnDocument: "after" },
+        ).lean();
+      }
+    }
     if (resurrected) {
       return NextResponse.json({
         action: "add-spool",
