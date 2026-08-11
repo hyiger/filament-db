@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   findExactRawNameId,
-  findSurvivorId,
+  survivorNameConflict,
   type MinimalNameCollection,
 } from "@/lib/trimmedNameLookup";
 import mongoose from "mongoose";
@@ -257,18 +257,21 @@ export async function GET(
  * ITSELF — every save echoing an unchanged name would 409.
  */
 async function nameTakenBySurvivor(
-  name: string,
+  name: unknown,
   selfId: string,
 ): Promise<string | null> {
-  if (!name.trim()) return null;
-  const survivorId = await findSurvivorId(
+  // Delegates to the shared helper so the CAST normalization lives in exactly
+  // one place (Codex P2). A local `typeof name === "string"` gate is a hole:
+  // a JSON client can send `7` or `{"_id":"X"}`, Mongoose stores "7" / "X",
+  // and beside a survivor stored as "7 " the raw index admits the duplicate
+  // while the guard never looked. Fixing that in the shared helper and
+  // leaving this copy behind is the same twin-call-site miss this change has
+  // repeatedly made.
+  return survivorNameConflict(
     Filament.collection as unknown as MinimalNameCollection,
     name,
-    { _deletedAt: null },
+    selfId,
   );
-  return survivorId && String(survivorId) !== String(selfId)
-    ? String(survivorId)
-    : null;
 }
 
 export async function PUT(
@@ -701,7 +704,7 @@ export async function PUT(
     // renamed row be indistinguishable from an existing one?
     // The NON-reparent path: the pre-lock check above only runs when this PUT
     // also re-parents. Same rule, same helper, so the two cannot drift.
-    if (typeof body.name === "string" && body.name.trim()) {
+    if (body.name != null) {
       const survivorId = await nameTakenBySurvivor(body.name, id);
       if (survivorId) {
         // Same shape as this route's existing duplicate-key 409
@@ -710,7 +713,7 @@ export async function PUT(
         // reach the E11000 handler, so it must answer the way that handler
         // does or it silently changes a tested response contract (PR #357).
         return errorResponse(
-          `A filament with that name already exists: "${body.name.trim()}"`,
+          `A filament with that name already exists: "${String(body.name).trim()}"`,
           409,
         );
       }
@@ -1521,10 +1524,10 @@ export async function POST(
           _id: { $ne: filament._id },
         });
         if (!clash) {
-          const survivorId = await findSurvivorId(
+          const survivorId = await survivorNameConflict(
             Filament.collection as unknown as MinimalNameCollection,
             sentName,
-            { _deletedAt: null, _id: { $ne: filament._id } },
+            filament._id,
           );
           if (survivorId) clash = { _id: survivorId };
         }

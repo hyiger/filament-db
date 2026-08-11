@@ -414,10 +414,16 @@ describe("GH #1116 — a name-addressed sync resolves the EXACT stored spelling"
   async function seedBothSpellings() {
     const canonical = await Filament.collection.insertOne({
       name: "Ambiguous PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000c",
       _deletedAt: null, spools: [], settings: {},
     });
     const raw = await Filament.collection.insertOne({
       name: "Ambiguous PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000d",
       _deletedAt: null, spools: [], settings: {},
     });
     return { canonicalId: canonical.insertedId, rawId: raw.insertedId };
@@ -451,6 +457,9 @@ describe("GH #1116 — a name-addressed sync resolves the EXACT stored spelling"
     // "X " must fall through to the cast query and find it.
     await Filament.collection.insertOne({
       name: "Settled PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000e",
       _deletedAt: null, spools: [], settings: {},
     });
 

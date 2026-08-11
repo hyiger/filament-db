@@ -276,6 +276,9 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "PLA Legacy ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000001",
     });
 
     const result = await upsertImportRows([
@@ -303,6 +306,9 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "PLA Canon ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000002",
     });
 
     const result = await upsertImportRows([
@@ -318,6 +324,9 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "  PLA Both", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000003",
     });
 
     const result = await upsertImportRows([
@@ -356,6 +365,9 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     await settleTrimMigration();
     await mongoose.connection.collection("filaments").insertOne({
       name: "PLA Bom\uFEFF", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000004",
     });
 
     const result = await upsertImportRows([
@@ -502,10 +514,16 @@ describe("wrong-match and missed-collision hazards (#1116)", () => {
   async function seedBothSpellings() {
     const canonical = await Filament.collection.insertOne({
       name: "Amb PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000005",
       _deletedAt: null, spools: [], settings: {},
     });
     const raw = await Filament.collection.insertOne({
       name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000006",
       _deletedAt: null, spools: [], settings: {},
     });
     return { canonicalId: canonical.insertedId, rawId: raw.insertedId };
@@ -564,11 +582,17 @@ describe("wrong-match and missed-collision hazards (#1116)", () => {
     // against the unfixed code.
     await Filament.collection.insertOne({
       name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000007",
       _deletedAt: null, spools: [], settings: {},
     });
     // A LEGACY carrying parent: has its own color and a spool, no variants yet.
     const parent = await Filament.create({
       name: "Carrier PLA", vendor: "V", type: "PLA", color: "#123456",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000008",
       spools: [{ totalWeight: 1000 }],
     });
     const target = await Filament.create({ name: "Target PLA", vendor: "V", type: "PLA" });
@@ -699,10 +723,16 @@ describe("the create guard covers the gated variant path and cast names (#1116)"
     // the promotion had already moved its color and spools.
     await Filament.collection.insertOne({
       name: "Var PLA ", vendor: "V", type: "PLA",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000009",
       _deletedAt: null, spools: [], settings: {},
     });
     const parent = await Filament.create({
       name: "Carrier", vendor: "V", type: "PLA", color: "#123456",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000a",
       spools: [{ totalWeight: 1000 }],
     });
     const { POST } = await import("@/app/api/filaments/route");
@@ -736,6 +766,9 @@ describe("the create guard covers the gated variant path and cast names (#1116)"
     // `typeof name !== "string"` skip means the guard never looked.
     await Filament.collection.insertOne({
       name: "7 ", vendor: "V", type: "PLA",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000b",
       _deletedAt: null, spools: [], settings: {},
     });
     const { POST } = await import("@/app/api/filaments/route");
@@ -750,5 +783,90 @@ describe("the create guard covers the gated variant path and cast names (#1116)"
 
     expect(res.status).toBe(409);
     expect(await Filament.collection.countDocuments({})).toBe(1);
+  });
+});
+
+/**
+ * GH #1116 (Codex round 33) — GENERATED names need the guard too.
+ *
+ * Both of these compute a name themselves and then create it. Their own
+ * "is it taken?" probes are cast queries (an `exists`, an anchored regex),
+ * so neither can see a survivor, and the raw unique index then permits the
+ * write because the two stored strings differ.
+ */
+describe("generated names are survivor-checked (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let Nozzle: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    const nozMod = await import("@/models/Nozzle");
+    if (!mongoose.models.Nozzle) mongoose.model("Nozzle", nozMod.default.schema);
+    Nozzle = mongoose.models.Nozzle;
+    await Filament.collection.deleteMany({});
+    await Nozzle.collection.deleteMany({});
+  });
+
+  it("the PROMOTION copy's generated name is checked", async () => {
+    // A carrying parent "PLA" with colorName "Red" promotes to a variant
+    // named "PLA — Red". An active survivor already holds "PLA — Red ".
+    await Filament.collection.insertOne({
+      name: "PLA — Red ", vendor: "V", type: "PLA", instanceId: "wsgen0001",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const parent = await Filament.create({
+      name: "PLA", vendor: "V", type: "PLA",
+      color: "#FF0000", colorName: "Red", spools: [{ totalWeight: 1000 }],
+    });
+    const { resolvePromotionVariantName } = await import("@/lib/promoteParent");
+
+    const chosen = await resolvePromotionVariantName(Filament, "PLA — Red");
+    // It must NOT pick the name the survivor already renders as.
+    expect(chosen).not.toBe("PLA — Red");
+    expect(chosen).toBe("PLA — Red (2)");
+    expect(parent.name).toBe("PLA");
+  });
+
+  it("the nozzle CLONE's generated name is checked", async () => {
+    const source = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "brass" });
+    // The clone would generate "0.4 #2"; a survivor already holds "0.4 #2 ".
+    await Nozzle.collection.insertOne({
+      name: "0.4 #2 ", diameter: 0.4, type: "brass", _deletedAt: null,
+    });
+    const { POST } = await import("@/app/api/nozzles/[id]/clone/route");
+
+    const res = await POST(
+      new NextRequest(`http://localhost/api/nozzles/${source._id}/clone`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ id: String(source._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    // Two rows only — the source and the survivor. No indistinguishable clone.
+    expect(await Nozzle.collection.countDocuments({})).toBe(2);
+  });
+
+  it("the filament PUT guard checks a schema-castable NON-STRING name", async () => {
+    await Filament.collection.insertOne({
+      name: "7 ", vendor: "V", type: "PLA", instanceId: "wsgen0002",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const target = await Filament.create({ name: "Target", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${target._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: 7 }),
+      }),
+      { params: Promise.resolve({ id: String(target._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect((await Filament.collection.findOne({ _id: target._id }))!.name).toBe("Target");
   });
 });
