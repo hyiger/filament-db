@@ -679,3 +679,76 @@ describe("ordinary CRUD refuses a name that already exists untrimmed (#1116)", (
     expect(res.status).toBe(200);
   });
 });
+
+/**
+ * GH #1116 (Codex round 32) — the two holes round 31's own guard left.
+ */
+describe("the create guard covers the gated variant path and cast names (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+  });
+
+  it("a VARIANT create onto a survivor 409s, and never promotes the parent", async () => {
+    // The gate RETURNS from the variant path, so a guard placed after it was
+    // unreachable here — the variant was inserted, and for a carrying parent
+    // the promotion had already moved its color and spools.
+    await Filament.collection.insertOne({
+      name: "Var PLA ", vendor: "V", type: "PLA",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const parent = await Filament.create({
+      name: "Carrier", vendor: "V", type: "PLA", color: "#123456",
+      spools: [{ totalWeight: 1000 }],
+    });
+    const { POST } = await import("@/app/api/filaments/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Var PLA",
+          vendor: "V",
+          type: "PLA",
+          parentId: String(parent._id),
+          promoteParent: true,
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    // No variant was inserted...
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    // ...and the carrying parent is untouched.
+    const fresh = await Filament.collection.findOne({ _id: parent._id });
+    expect(fresh!.color).toBe("#123456");
+    expect(fresh!.spools).toHaveLength(1);
+  });
+
+  it("a schema-castable NON-STRING name is checked, not skipped", async () => {
+    // Mongoose stores `7` as "7". Beside a survivor stored as "7 " the raw
+    // index sees different strings and admits the duplicate — while a
+    // `typeof name !== "string"` skip means the guard never looked.
+    await Filament.collection.insertOne({
+      name: "7 ", vendor: "V", type: "PLA",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const { POST } = await import("@/app/api/filaments/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: 7, vendor: "V", type: "PLA" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(await Filament.collection.countDocuments({})).toBe(1);
+  });
+});

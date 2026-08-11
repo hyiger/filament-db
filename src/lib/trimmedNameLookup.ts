@@ -1,4 +1,4 @@
-import { JS_TRIM_CHARS } from "@/lib/trimEntityNames";
+import { JS_TRIM_CHARS, castNameLikeSchema } from "@/lib/trimEntityNames";
 
 /**
  * Find a stored entity by name when the stored side might NOT be trimmed yet
@@ -190,14 +190,23 @@ export async function findSurvivorId(
  * row being renamed; it is compared in JS rather than pushed into the filter,
  * because this is a raw-driver query where an ObjectId never equals a string
  * and the row would fail to exclude itself.
+ *
+ * The incoming value is normalized through `castNameLikeSchema` FIRST (Codex
+ * P2). A bare `typeof name !== "string"` skip is a hole: a JSON client can
+ * send `7` or `{"_id": "X"}`, Mongoose stores those as `"7"` and `"X"`, and
+ * beside a survivor stored as `"7 "` or `"X "` the raw index sees different
+ * strings and admits the duplicate — while the guard, having decided the value
+ * "isn't a name", never looked. Ask what the SCHEMA will store, which is the
+ * same question every other part of this change asks.
  */
 export async function survivorNameConflict(
   collection: MinimalNameCollection,
   name: unknown,
   selfId?: unknown,
 ): Promise<string | null> {
-  if (typeof name !== "string" || !name.trim()) return null;
-  const row = await findByTrimmedName(collection, name, { _deletedAt: null });
+  const cast = castNameLikeSchema(name);
+  if (cast === null || !cast.trim()) return null;
+  const row = await findByTrimmedName(collection, cast, { _deletedAt: null });
   if (!row) return null;
   const id = String(row._id);
   return selfId != null && id === String(selfId) ? null : id;
