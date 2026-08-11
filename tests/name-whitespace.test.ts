@@ -351,6 +351,61 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
   });
 });
 
+/**
+ * GH #1116 (Codex P1, post-split). A legacy NON-unique `name_1` is a
+ * different case from a duplicate-data refusal, and it is the one that cannot
+ * clear on its own: `createIndex` conflicts with it every cycle,
+ * `hasUniqueNameIndex` rejects it, and the hybrid REMOTE never runs
+ * `dbConnect`'s `coreModelIndexes` — so on Atlas the skip would be permanent,
+ * holding unpaired rows and cascade-skipping dependents forever.
+ */
+describe("an inadequate legacy name index is converted, not skipped forever", () => {
+  const db = () => mongoose.connection.db as unknown as MinimalTrimDb;
+  const col = () => mongoose.connection.collection("locations");
 
+  beforeEach(async () => {
+    await col().deleteMany({});
+    await col().dropIndexes().catch(() => {});
+  });
 
+  it("replaces a NON-unique name_1 and then trims", async () => {
+    await col().createIndex({ name: 1 }, { name: "name_1" });
+    await col().insertOne({
+      name: "Shelf ", kind: "shelf", _deletedAt: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
 
+    const res = await trimEntityNames(db());
+
+    // Not skipped — converted, so the row could actually be repaired.
+    expect(res.skipped.map((s) => s.collection)).not.toContain("locations");
+    expect(await col().findOne({ name: "Shelf" })).not.toBeNull();
+    expect(await col().findOne({ name: "Shelf " })).toBeNull();
+
+    // The intended constraint is now in place...
+    const idx = await col().indexes();
+    const active = idx.find(
+      (i) => (i as { unique?: boolean }).unique === true,
+    ) as { key?: Record<string, number>; partialFilterExpression?: unknown } | undefined;
+    expect(active?.key).toEqual({ name: 1 });
+    expect(active?.partialFilterExpression).toEqual({ _deletedAt: null });
+    // ...and the legacy one is gone.
+    expect(idx.some((i) => (i as { name?: string }).name === "name_1")).toBe(false);
+  });
+
+  it("leaves the legacy index alone when the data still forbids the build", async () => {
+    // Two ACTIVE duplicates: the replacement cannot be built, so the
+    // conversion must not drop the protection that exists.
+    await col().createIndex({ name: 1 }, { name: "name_1" });
+    await col().insertMany([
+      { name: "Dup", kind: "shelf", _deletedAt: null },
+      { name: "Dup", kind: "shelf", _deletedAt: null },
+    ]);
+
+    const res = await trimEntityNames(db());
+
+    expect(res.skipped.map((s) => s.collection)).toContain("locations");
+    const idx = await col().indexes();
+    expect(idx.some((i) => (i as { name?: string }).name === "name_1")).toBe(true);
+  });
+});

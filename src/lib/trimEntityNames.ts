@@ -201,6 +201,67 @@ export interface MinimalTrimDb {
  * partialFilterExpression is deliberately NOT compared: this asks "am I
  * serialized", not "is the index the one I would have built".
  */
+/**
+ * Convert a legacy NON-unique `name_1` into the partial-unique index this
+ * repo intends, returning whether the collection now has adequate protection.
+ *
+ * Ordering is the whole safety argument: build the replacement under an
+ * explicit distinct name FIRST, and drop the legacy index only once it
+ * exists. The collection is therefore never left without a name index, and a
+ * failure at any step leaves the pre-existing state untouched.
+ *
+ * (The original attempt collides only because both indexes want the
+ * auto-generated name `name_1` — MongoDB permits the same key pattern under
+ * different names when the options differ.)
+ *
+ * Best-effort by construction: if the data still holds duplicate active names
+ * the build throws, we report false, and the caller takes the ordinary skip
+ * with its actionable message.
+ */
+const ACTIVE_UNIQUE_NAME_INDEX = "name_active_unique";
+
+async function replaceInadequateNameIndex(collection: {
+  createIndex?(
+    spec: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): Promise<unknown>;
+  dropIndex?(name: string): Promise<unknown>;
+  indexes?(): Promise<
+    { name?: unknown; key?: unknown; unique?: unknown }[]
+  >;
+}): Promise<boolean> {
+  if (!collection.createIndex || !collection.dropIndex || !collection.indexes) {
+    return false;
+  }
+  try {
+    const existing = await collection.indexes();
+    // Only a PLAIN `{name: 1}` that is not unique qualifies. A compound index
+    // is someone else's, and a unique one would already have been accepted.
+    const legacy = existing.find((i) => {
+      const key = i.key as Record<string, unknown> | undefined;
+      if (!key || Object.keys(key).length !== 1 || key.name !== 1) return false;
+      return i.unique !== true;
+    });
+    if (!legacy || typeof legacy.name !== "string") return false;
+
+    await collection.createIndex(
+      { name: 1 },
+      {
+        unique: true,
+        partialFilterExpression: { _deletedAt: null },
+        name: ACTIVE_UNIQUE_NAME_INDEX,
+      },
+    );
+    // Only now is it safe to remove the old one.
+    await collection.dropIndex(legacy.name);
+    return true;
+  } catch {
+    // Duplicate active names, insufficient privileges on Atlas, a concurrent
+    // builder — all end the same way: no conversion, ordinary skip.
+    return false;
+  }
+}
+
 async function hasUniqueNameIndex(collection: {
   indexes?(): Promise<
     { key?: unknown; unique?: unknown; partialFilterExpression?: unknown }[]
@@ -313,6 +374,26 @@ export async function trimEntityNames(
       // So ask what actually exists before giving up.
       if (await hasUniqueNameIndex(collection)) {
         // Adequately serialized after all; carry on.
+      } else if (await replaceInadequateNameIndex(collection)) {
+        // GH #1116 (Codex P1): an INADEQUATE index — a legacy NON-unique
+        // `name_1` — is a different case from a duplicate-data refusal, and
+        // it is the one that cannot clear on its own.
+        //
+        // `createIndex` conflicts with it on every cycle and
+        // `hasUniqueNameIndex` rejects it, so the collection is skipped
+        // forever. On the LOCAL side `coreModelIndexes` would eventually
+        // replace it, but the hybrid REMOTE never runs `dbConnect` at all —
+        // so on Atlas this state is permanent. Combined with the paired-only
+        // hold-back and its prerequisite cascade, an unpaired row would be
+        // held and its dependents skipped indefinitely, with no user action
+        // that could resolve it.
+        //
+        // So convert it: build the intended index under an explicit distinct
+        // name FIRST (the earlier attempt only collided because both wanted
+        // the auto-generated `name_1`), and drop the legacy one only once the
+        // replacement exists. The collection is never left unprotected, and
+        // if the data still forbids the build the create throws and we fall
+        // through to the ordinary skip.
       } else {
       // Otherwise do NOT fall back to writing unserialized. That path is what
       // the index exists to prevent: two writers can each clear the check and

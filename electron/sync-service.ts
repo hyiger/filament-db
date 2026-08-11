@@ -479,6 +479,14 @@ export class SyncService extends EventEmitter {
             `[sync] ${side}: re-tombstoned ${zombies} purged zombie filament(s) (GH #1004)`,
           );
         }
+        // Re-check AFTER the zombie repair (Codex P2). `destroy()` can set
+        // `aborted` while that await is in flight, and the trim is a SEPARATE
+        // destructive migration — it creates indexes and rewrites names across
+        // five collections. Resuming into it would work on a database the user
+        // just abandoned by switching connection mode, contrary to the
+        // surrounding contract that only the operation already in flight may
+        // finish.
+        if (this.aborted) break;
         const trimResult = await trimEntityNames(dbHandle as unknown as MinimalTrimDb);
         const line = describeTrimResult(trimResult);
         if (line) console.log(`[sync] ${side}: ${line}`);

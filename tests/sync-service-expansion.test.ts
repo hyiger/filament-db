@@ -974,9 +974,18 @@ describe("SyncService — v1.12 sync expansion", () => {
       // Force the SKIP: replace the partial unique index with a NON-unique
       // one, which `hasUniqueNameIndex` rejects and `createIndex` conflicts
       // with, so the collection cannot be normalized.
+      // Force a skip the index CONVERSION cannot repair. A non-unique
+      // `name_1` alone is no longer enough — `replaceInadequateNameIndex`
+      // upgrades it and the trim then succeeds. Duplicate ACTIVE names block
+      // the replacement build, so the legacy index survives and the
+      // collection is genuinely skipped, which is the state under test.
       for (const db of [localDb, remoteDb]) {
         await db.collection("bedtypes").dropIndexes().catch(() => {});
         await db.collection("bedtypes").createIndex({ name: 1 }, { name: "name_1" });
+        await db.collection("bedtypes").insertMany([
+          { name: "Blocker", material: "PEI", syncId: `blk-a-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+          { name: "Blocker", material: "PEI", syncId: `blk-b-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+        ]);
       }
 
       // Two DISTINCT records that render the same. Different syncIds, so they
@@ -996,8 +1005,9 @@ describe("SyncService — v1.12 sync expansion", () => {
         await sync.sync();
 
         // Neither side gained the other's row: no duplicate was manufactured.
-        expect(await localDb.collection("bedtypes").countDocuments({})).toBe(1);
-        expect(await remoteDb.collection("bedtypes").countDocuments({})).toBe(1);
+        // (2 blockers + its own 1 row on each side — and nothing copied over.)
+        expect(await localDb.collection("bedtypes").countDocuments({ syncId: "bt-remote-only" })).toBe(0);
+        expect(await remoteDb.collection("bedtypes").countDocuments({ syncId: "bt-local-only" })).toBe(0);
       } finally {
         // `finally`, not trailing statements: this test deliberately installs a
         // NON-unique name index, and on a failing assertion the trailing form
@@ -1029,9 +1039,15 @@ describe("SyncService — v1.12 sync expansion", () => {
       const remoteDb = remoteClient.db("filament-db");
       const now = new Date();
 
+      // Same as above: duplicate ACTIVE names block the index conversion, so
+      // the collection is genuinely skipped rather than repaired.
       for (const db of [localDb, remoteDb]) {
         await db.collection("locations").dropIndexes().catch(() => {});
         await db.collection("locations").createIndex({ name: 1 }, { name: "name_1" });
+        await db.collection("locations").insertMany([
+          { name: "Blocker", kind: "shelf", syncId: `lblk-a-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+          { name: "Blocker", kind: "shelf", syncId: `lblk-b-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+        ]);
       }
 
       try {
