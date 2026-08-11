@@ -1194,3 +1194,159 @@ describe("snapshot restore — collections the file omits (#1104)", () => {
     expect(await Filament.countDocuments({})).toBe(1);
   });
 });
+
+describe("snapshot restore — trimmed-name collision pre-check (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Location: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of [
+      "Filament",
+      "Nozzle",
+      "Printer",
+      "BedType",
+      "Location",
+      "PrintHistory",
+      "SharedCatalog",
+    ]) {
+      delete mongoose.models[m];
+    }
+    await import("@/models/Filament");
+    await import("@/models/Nozzle");
+    await import("@/models/Printer");
+    await import("@/models/BedType");
+    Location = (await import("@/models/Location")).default;
+    await import("@/models/PrintHistory");
+    await import("@/models/SharedCatalog");
+  });
+
+  const restore = async (snapshot: unknown) => {
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    return { res, body: await res.json() };
+  };
+
+  const file = (locations: unknown[]) => ({
+    version: 7,
+    collections: { locations },
+  });
+
+  it("refuses a file whose names collapse to a duplicate, WITHOUT wiping", async () => {
+    // `name` now carries trim: true, and insertMany applies the setter — so a
+    // pre-#1116 backup holding both "X" and "X " aborts the ordered batch on
+    // E11000 after the destructive wipe. Say so up front instead.
+    const existing = await Location.create({ name: "Keep me", kind: "shelf" });
+
+    const { res, body } = await restore(
+      file([
+        { name: "Drybox #1", kind: "drybox" },
+        { name: "Drybox #1 ", kind: "drybox" },
+      ]),
+    );
+
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    // The DB is untouched — that is the whole point of a pre-check.
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
+  it("catches a pair that only collides AFTER the schema cast (#1116, Codex P2)", async () => {
+    // Mongoose casts a String path, so a snapshot holding the number 1 and
+    // the string "1 " passes per-document validation on both — then
+    // insertMany stores both as "1" and E11000s after the wipe.
+    const existing = await Location.create({ name: "Keep me too", kind: "shelf" });
+    const { res, body } = await restore(
+      file([
+        { name: 1, kind: "drybox" },
+        { name: "1 ", kind: "drybox" },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
+  it("allows the pair when one of them is trashed — the index is partial", async () => {
+    const { res } = await restore(
+      file([
+        { name: "Drybox #1", kind: "drybox" },
+        { name: "Drybox #1 ", kind: "drybox", _deletedAt: new Date().toISOString() },
+      ]),
+    );
+    expect(res.status).toBe(200);
+    expect(await Location.countDocuments({})).toBe(2);
+  });
+
+  it("does NOT refuse an active row beside a PURGED near-twin (#1116, Codex P2)", async () => {
+    // The restore path stamps `_deletedAt` on a `_purged` zombie before
+    // inserting, so it never enters the partial unique index — the pair is
+    // restorable and the existing zombie repair handles it.
+    const { res } = await restore({
+      version: 7,
+      collections: {
+        filaments: [
+          { name: "Zombie Twin", vendor: "V", type: "PLA" },
+          { name: "Zombie Twin ", vendor: "V", type: "PLA", _purged: true, _deletedAt: null },
+        ],
+      },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it("still REFUSES a purged near-twin on a collection that has no _purged field (#1116)", async () => {
+    // Location doesn't declare `_purged`, so strict mode strips it and the
+    // row inserts ACTIVE — the pair really does collide.
+    const { res, body } = await restore(
+      file([
+        { name: "Not A Zombie", kind: "drybox" },
+        { name: "Not A Zombie ", kind: "drybox", _purged: true, _deletedAt: null },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+  });
+
+  it("REFUSES a purged filament twin whose tombstone is an empty string (#1116)", async () => {
+    // normalizePurgedTombstone only stamps `_deletedAt == null`, so "" reaches
+    // insertMany, where the Date cast makes it null and the row inserts
+    // ACTIVE — the pair really does collide.
+    const { res, body } = await restore({
+      version: 7,
+      collections: {
+        filaments: [
+          { name: "Empty Tombstone", vendor: "V", type: "PLA" },
+          { name: "Empty Tombstone ", vendor: "V", type: "PLA", _purged: true, _deletedAt: "" },
+        ],
+      },
+    });
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+  });
+
+  it("catches a `{_id: \"X\"}` name, which the String cast stores as \"X\" (#1116)", async () => {
+    // mongoose castString takes `value._id` when it is a string, before the
+    // toString clause — and that shape is expressible in plain JSON, so a
+    // snapshot can carry it.
+    const existing = await Location.create({ name: "Survivor", kind: "shelf" });
+    const { res, body } = await restore(
+      file([
+        { name: { _id: "Cast Me" }, kind: "drybox" },
+        { name: "Cast Me ", kind: "drybox" },
+      ]),
+    );
+    expect(res.status).toBe(400);
+    expect(body.error).toContain("whitespace");
+    expect(await Location.findById(existing._id)).not.toBeNull();
+  });
+
+  it("still restores a clean file", async () => {
+    const { res } = await restore(file([{ name: "Drybox #1", kind: "drybox" }]));
+    expect(res.status).toBe(200);
+    expect((await Location.findOne({}))!.name).toBe("Drybox #1");
+  });
+});

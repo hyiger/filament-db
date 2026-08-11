@@ -1,5 +1,19 @@
 import mongoose from "mongoose";
 import { clearLegacyNozzleConditionsOnce, type MinimalDb } from "./legacyNozzleConditions";
+import {
+  trimEntityNames,
+  describeTrimResult,
+  trimBlockedCount,
+  type MinimalTrimDb,
+} from "./trimEntityNames";
+import {
+  retombstonePurgedZombies,
+  type MinimalZombieCollection,
+} from "./purgedZombies";
+
+/** GH #1116: how long to wait before re-attempting a trim pass that still
+ *  has active conflicts. Bounds the cost of keeping the migration unsettled. */
+const TRIM_RETRY_INTERVAL_MS = 60_000;
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -9,6 +23,11 @@ interface MongooseCache {
    *  can't both execute the migration block (the nozzle-split pass would mint
    *  duplicate clones). Null when no run is in progress. */
   migrationsPromise: Promise<void> | null;
+  /** GH #1116: epoch ms before which the (unsettled) trim pass is skipped.
+   *  The migration block re-enters on every connect once any flag is false,
+   *  and the trim pass is five regex scans — without this it would run per
+   *  request for as long as a conflict remains. */
+  trimRetryAt: number;
   /** Per-migration completion flags. Each migration only runs until it
    * succeeds — a transient failure (network blip, MongoDB busy) won't
    * permanently mark the migration done, so the next request will retry
@@ -43,6 +62,10 @@ interface MongooseCache {
      * if re-trashed. Their intended state is gone-forever, so restore
      * `_deletedAt`. Idempotent: matches 0 rows on healthy installs. */
     purgedZombies: boolean;
+    /** GH #1116 — trim edge whitespace off stored entity names. Settles only
+     *  on a pass with NO ACTIVE conflicts, so a pair the user still has to
+     *  separate keeps the pass retryable (throttled by `trimRetryAt`). */
+    trimEntityNames: boolean;
     /** GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based
      * `shrinkageXY` values. The pre-#1016 Bambu/Orca importer stored
      * `filament_shrink` RAW, so a stock profile's "98%" (remaining size)
@@ -111,7 +134,8 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false },
+    trimRetryAt: 0,
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false },
   };
 
   if (!global.mongoose) {
@@ -126,7 +150,8 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false };
+    cached.trimRetryAt = 0;
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -153,7 +178,8 @@ export default async function dbConnect() {
     cached.migrations.purgedZombies &&
     cached.migrations.legacyShrinkage &&
     cached.migrations.legacyNozzleConditions &&
-    cached.migrations.amsSlotFilamentIds
+    cached.migrations.amsSlotFilamentIds &&
+    cached.migrations.trimEntityNames
   ) {
     return cached.conn;
   }
@@ -192,20 +218,87 @@ export default async function dbConnect() {
   // filter matches nothing on healthy installs.
   if (!cached.migrations.purgedZombies) {
     try {
+      // Shared with the hybrid sync service, which must run the SAME repair
+      // against both peers (GH #1116): the remote never runs dbConnect, and a
+      // remote zombie occupies the partial unique name index, so a local trim
+      // can collide with it forever. One implementation, two callers.
       const { default: Filament } = await import("@/models/Filament");
-      const res = await Filament.updateMany(
-        { _purged: true, _deletedAt: null },
-        { $set: { _deletedAt: new Date() } },
+      const repaired = await retombstonePurgedZombies(
+        Filament.collection as unknown as MinimalZombieCollection,
       );
-      if (res.modifiedCount > 0) {
+      if (repaired > 0) {
         console.log(
-          `[migration] Re-tombstoned ${res.modifiedCount} purged zombie filament(s) (GH #1004)`,
+          `[migration] Re-tombstoned ${repaired} purged zombie filament(s) (GH #1004)`,
         );
       }
       cached.migrations.purgedZombies = true;
     } catch (err) {
       console.error(
         "[migration] Failed to repair purged zombie filaments (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
+  // GH #1116 — trim edge whitespace off stored entity names.
+  //
+  // Nothing normalized a name on write, so `Drybox #1 ` and `Drybox #1` were
+  // two distinct rows that render identically — and the CSV round-trip
+  // manufactured the second one (`csvCell` didn't quote edge whitespace,
+  // `parseCsv` strips it from an unquoted field, so the exported name came
+  // back trimmed, matched nothing, and the spool importer auto-created a
+  // duplicate location and moved every re-imported spool onto it). The schema
+  // now carries `trim: true`; this pass repairs what is already stored.
+  //
+  // Runs EARLY: the filament and spool importers both resolve rows by name,
+  // and their trimmed matching keys only find the right row once the stored
+  // side is normalized. Best-effort like its neighbours — a row whose trimmed
+  // name would collide with an existing one is deliberately LEFT ALONE and
+  // named in the log, because merging two records (re-pointing every
+  // `spools[].locationId`, reconciling two spool arrays) is a decision for a
+  // human, not a migration.
+  if (!cached.migrations.trimEntityNames && Date.now() >= cached.trimRetryAt) {
+    try {
+      const db = mongoose.connection.db;
+      if (!db) throw new Error("no db handle on the mongoose connection");
+      const result = await trimEntityNames(db as unknown as MinimalTrimDb);
+      const line = describeTrimResult(result);
+      if (line) console.log(line);
+      // Settle ONLY on a clean pass (Codex P2). A row this pass had to leave
+      // alone — because trimming it would collide with a live sibling — is
+      // unreachable by name for as long as it stays untrimmed: Mongoose
+      // trims query values, so `find({name: "X "})` casts to `"X"` and misses
+      // it, and a name-keyed import will create a duplicate instead. The
+      // moment the user separates the pair, the next pass must repair the
+      // survivor; marking the migration done stranded it until a restart.
+      //
+      // THROTTLED, because leaving the flag false makes the whole migration
+      // block re-enter on every connect (i.e. every request) and this pass is
+      // five regex scans. A minute is far below "the user renames a row and
+      // gets on with it" and far above per-request.
+      // A SKIPPED collection also means "not done" (Codex P1): its rows were
+      // deliberately left untouched because the unique index couldn't be
+      // established, so the pass must stay retryable until that is resolved.
+      // `deferred` counts too (Codex P2): those rows failed ONLY because a
+      // legacy plain unique index still covers deleted rows, which
+      // `coreModelIndexes` replaces later in this same connect. Settling on
+      // them would strand an untrimmed tombstone forever — and restoring it
+      // makes an untrimmed name active and unreachable by name, i.e. GH #1116
+      // again on a database that already reported the migration complete.
+      const blocked = trimBlockedCount(result);
+      if (blocked === 0) {
+        cached.migrations.trimEntityNames = true;
+      } else {
+        cached.trimRetryAt = Date.now() + TRIM_RETRY_INTERVAL_MS;
+        console.warn(
+          `[migration] GH #1116: ${blocked} item(s) still need attention by hand; ` +
+            `re-checking in ${Math.round(TRIM_RETRY_INTERVAL_MS / 1000)}s.`,
+        );
+      }
+    } catch (err) {
+      cached.trimRetryAt = Date.now() + TRIM_RETRY_INTERVAL_MS;
+      console.error(
+        "[migration] Failed to trim entity names (will retry on next connect):",
         err,
       );
     }

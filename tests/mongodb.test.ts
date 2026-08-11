@@ -902,9 +902,14 @@ describe("purgedZombies migration (GH #1004 F1)", () => {
     cached.promise = null;
 
     // Force the zombie repair to throw once (transient blip).
+    //
+    // Spied at `Filament.collection`, not the model: GH #1116 moved the repair
+    // into the shared `retombstonePurgedZombies`, because the hybrid sync
+    // service has to run the SAME rule against a remote peer it has no
+    // Mongoose connection to. The seam moved; what this test asserts did not.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const updateSpy = vi
-      .spyOn(Filament, "updateMany")
+      .spyOn(Filament.collection, "updateMany")
       .mockRejectedValueOnce(new Error("transient"));
     try {
       await dbConnect();

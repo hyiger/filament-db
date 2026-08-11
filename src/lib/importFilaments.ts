@@ -587,7 +587,7 @@ export function pruneInheritedCreateDoc(
 // the full rationale, including why color deliberately doesn't gate).
 
 export async function upsertImportRows(
-  rows: ImportRow[],
+  inputRows: ImportRow[],
   /**
    * GH #1115: the PHYSICAL source line for each entry in `rows`, parallel by
    * index. Both routes strip blank rows before indexing, so deriving the
@@ -602,6 +602,33 @@ export async function upsertImportRows(
 
   /** The line number to report for row `i`. */
   const lineOf = (i: number) => sourceLines?.[i] ?? i + 2;
+
+  // GH #1116: trim the NAME the importer matches on.
+  //
+  // The schema now trims `name` on write, so the stored value is the identity
+  // key every lookup here already assumed it was. The importer has to agree,
+  // or a legacy export re-imported after the migration would miss its own row
+  // and take the CREATE path — producing the duplicate this issue is about,
+  // in the other direction. (`csvCell` now quotes edge whitespace, so an
+  // untrimmed legacy name survives a round-trip verbatim instead of being
+  // silently stripped by `parseCsv`; that fidelity is what makes the trim
+  // here load-bearing rather than cosmetic.)
+  //
+  // Rows are copied rather than mutated: the caller owns the array, and the
+  // two-pass driver plus `sourceLines` both key on INDEX, which a 1:1 map
+  // preserves. A whitespace-only name collapses to "" and is then caught by
+  // the existing missing-required-field check — the right answer for a name
+  // that renders as nothing.
+  //
+  // The trim is what the ROW REPORTING and the create body use; the lookup
+  // below would be trimmed anyway, because Mongoose applies a String schema
+  // setter to query values too. Doing it here means the name we match on, the
+  // name we store, and the name we quote back in a skip reason are one value.
+  const rows = inputRows.map((r) =>
+    typeof r.name === "string" && r.name !== r.name.trim()
+      ? { ...r, name: r.name.trim() }
+      : r,
+  );
 
   let created = 0;
   let updated = 0;
@@ -665,9 +692,20 @@ export async function upsertImportRows(
       parentId: doc.parentId ?? null,
       doc,
     };
+    // GH #1116: index by the TRIMMED name.
+    //
+    // Belt to the row keys' braces. Mongoose applies a String schema setter
+    // to QUERY values as well as writes, so once `name` carries `trim: true`
+    // the `$in` above is itself trimmed and a stored untrimmed row can no
+    // longer be returned by it at all (verified, not assumed). Keying the map
+    // on the trimmed name keeps this side honest if that lookup ever moves to
+    // the raw driver — several hot paths in this repo already have — and it
+    // costs nothing. When both `"X"` and `"X "` somehow survive, the exactly-
+    // named one wins the slot: it is the row every other lookup resolves to.
+    const key = doc.name.trim();
     if (doc._deletedAt == null) {
-      activeByName.set(doc.name, entry);
-    } else if (doc._purged !== true && !deletedByName.has(doc.name)) {
+      if (!activeByName.has(key) || doc.name === key) activeByName.set(key, entry);
+    } else if (doc._purged !== true && !deletedByName.has(key)) {
       // GH #1004 F1: _purged tombstones land in NEITHER bucket. They are
       // one-way gone-forever markers (see the permanent-delete handler +
       // the sync engine's _purged short-circuit) — resurrecting one via
@@ -676,7 +714,7 @@ export async function upsertImportRows(
       // listing entirely. A purged name simply falls through to the create
       // path, which the partial-unique index (scoped to _deletedAt: null)
       // permits.
-      deletedByName.set(doc.name, entry);
+      deletedByName.set(key, entry);
     }
   }
 

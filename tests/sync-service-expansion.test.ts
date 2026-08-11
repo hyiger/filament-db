@@ -892,6 +892,528 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  // ── GH #1116: entity-name trim on both sync sides ────────────────────
+  // The copy path is the raw driver, so it bypasses the `trim: true` setter.
+  // An untrimmed name on a pre-upgrade peer would land here verbatim — and
+  // Mongoose then can't find it by name at all, because a String schema
+  // setter applies to QUERY values too.
+
+  describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
+    /**
+     * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
+     * MongoDB is concerned, so it OCCUPIES the partial unique name index.
+     * Nothing else repairs one on the remote: `SyncService.sync()` never calls
+     * `dbConnect`, and `syncCollection`'s both-purged branch is a no-op.
+     *
+     * The trim deliberately refuses to let a hidden zombie GATE a sync (a user
+     * cannot resolve a row the UI does not show), so a local `"X "` is free to
+     * become `"X"` while a remote zombie still holds `"X"` — after which every
+     * copy of that filament onto the remote fails E11000, permanently, taking
+     * filaments and print-history down the dependency chain with it.
+     */
+    it("tombstones a REMOTE zombie so the local trim can be copied over", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // Remote zombie squatting the name on the partial unique index.
+      await remoteDb.collection("filaments").insertOne({
+        name: "Zombie PLA", vendor: "V", type: "PLA",
+        syncId: "zombie-remote", _purged: true, _deletedAt: null,
+        spools: [], createdAt: now, updatedAt: now,
+      });
+      // Local row that trims INTO that name.
+      await localDb.collection("filaments").insertOne({
+        name: "Zombie PLA ", vendor: "V", type: "PLA",
+        syncId: "victim-local", _deletedAt: null,
+        spools: [], createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection synced instead of erroring on a duplicate key.
+      const filamentResult = results.find((r) => r.collection === "filaments");
+      expect(filamentResult?.error).toBeUndefined();
+
+      // The zombie got the tombstone it should always have had — so it no
+      // longer occupies the active-name index — while staying purged.
+      const zombie = await remoteDb
+        .collection("filaments")
+        .findOne({ syncId: "zombie-remote" });
+      expect(zombie!._purged).toBe(true);
+      expect(zombie!._deletedAt).not.toBeNull();
+
+      // And the trimmed local row reached the remote under its clean name.
+      const copied = await remoteDb
+        .collection("filaments")
+        .findOne({ syncId: "victim-local" });
+      expect(copied!.name).toBe("Zombie PLA");
+    });
+  });
+
+  describe("a SKIPPED trim collection copies paired rows only (GH #1116)", () => {
+    /**
+     * When the trim pass cannot establish a protective unique name index it
+     * SKIPS the collection, and the gate then disables `reconcileByName` —
+     * correctly, since that helper compares raw names and would fuse two
+     * records that merely look alike.
+     *
+     * Disabling it WITHOUT restricting the copy is worse than not gating at
+     * all: the pairing that used to fuse an identically-named pair no longer
+     * happens, and the unpaired inserts manufacture the duplicate on the
+     * target instead. Paired updates still flow so repairs propagate — which
+     * is what stops this becoming the self-perpetuating freeze that blocking
+     * the copy outright caused.
+     */
+    it("holds back the unpaired insert instead of manufacturing a duplicate", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // Force the SKIP: replace the partial unique index with a NON-unique
+      // one, which `hasUniqueNameIndex` rejects and `createIndex` conflicts
+      // with, so the collection cannot be normalized.
+      // Force a skip the index CONVERSION cannot repair. A non-unique
+      // `name_1` alone is no longer enough — `replaceInadequateNameIndex`
+      // upgrades it and the trim then succeeds. Duplicate ACTIVE names block
+      // the replacement build, so the legacy index survives and the
+      // collection is genuinely skipped, which is the state under test.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").dropIndexes().catch(() => {});
+        await db.collection("bedtypes").createIndex({ name: 1 }, { name: "name_1" });
+        await db.collection("bedtypes").insertMany([
+          { name: "Blocker", material: "PEI", syncId: `blk-a-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+          { name: "Blocker", material: "PEI", syncId: `blk-b-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+        ]);
+      }
+
+      // Two DISTINCT records that render the same. Different syncIds, so they
+      // are unpaired and reconcileByName is the only thing that could fuse
+      // them — and it is (correctly) disabled for a skipped collection.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Plate ", material: "PEI", syncId: "bt-local-only",
+        _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Plate", material: "PEI", syncId: "bt-remote-only",
+        _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      try {
+        sync = makeSync();
+        await sync.sync();
+
+        // Neither side gained the other's row: no duplicate was manufactured.
+        // (2 blockers + its own 1 row on each side — and nothing copied over.)
+        expect(await localDb.collection("bedtypes").countDocuments({ syncId: "bt-remote-only" })).toBe(0);
+        expect(await remoteDb.collection("bedtypes").countDocuments({ syncId: "bt-local-only" })).toBe(0);
+      } finally {
+        // `finally`, not trailing statements: this test deliberately installs a
+        // NON-unique name index, and on a failing assertion the trailing form
+        // left it in place — which then broke an unrelated later test that
+        // builds the real one. A test that corrupts shared state when it fails
+        // makes every subsequent failure a red herring.
+        for (const db of [localDb, remoteDb]) {
+          await db.collection("bedtypes").dropIndexes().catch(() => {});
+          await db.collection("bedtypes").createIndex(
+            { name: 1 },
+            { unique: true, partialFilterExpression: { _deletedAt: null } },
+          ).catch(() => {});
+        }
+      }
+    });
+
+    /**
+     * GH #1116 (Codex P1). Holding rows back is only half safe: a DEPENDENT
+     * copied against the resulting partial mapping silently drops the
+     * references it cannot resolve.
+     *
+     * Concretely, a spool's `locationId` becomes null on the target, the copy
+     * carries the SOURCE timestamp, and the repair pass ignores null refs — so
+     * syncing the held-back location on a later cycle never restores it. A
+     * blocked cycle is recoverable; a nulled reference is not.
+     */
+    it("cascade-skips dependents instead of copying against a partial mapping", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // Same as above: duplicate ACTIVE names block the index conversion, so
+      // the collection is genuinely skipped rather than repaired.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("locations").dropIndexes().catch(() => {});
+        await db.collection("locations").createIndex({ name: 1 }, { name: "name_1" });
+        await db.collection("locations").insertMany([
+          { name: "Blocker", kind: "shelf", syncId: `lblk-a-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+          { name: "Blocker", kind: "shelf", syncId: `lblk-b-${db.databaseName}`, _deletedAt: null, createdAt: now, updatedAt: now },
+        ]);
+      }
+
+      try {
+        // An unpaired location, so the locations copy holds it back...
+        const loc = await localDb.collection("locations").insertOne({
+          name: "Shelf ", kind: "shelf", syncId: "loc-unpaired",
+          _deletedAt: null, createdAt: now, updatedAt: now,
+        });
+        // ...and a filament whose spool references it.
+        await localDb.collection("filaments").insertOne({
+          name: "Ref PLA", vendor: "V", type: "PLA", syncId: "fil-ref",
+          instanceId: "wsdep0001", _deletedAt: null, createdAt: now, updatedAt: now,
+          spools: [{ totalWeight: 1000, locationId: loc.insertedId }],
+        });
+
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // locations reports the hold-back...
+        expect(results.find((r) => r.collection === "locations")?.error).toMatch(/held back/i);
+        // ...and filaments cascade-skips on it rather than copying.
+        expect(results.find((r) => r.collection === "filaments")?.error).toMatch(
+          /prerequisite "locations"/i,
+        );
+
+        // The reference survives on the source — nothing was nulled.
+        const src = await localDb.collection("filaments").findOne({ syncId: "fil-ref" });
+        expect(String(src!.spools[0].locationId)).toBe(String(loc.insertedId));
+        // And no half-mapped copy landed on the remote.
+        expect(await remoteDb.collection("filaments").countDocuments({})).toBe(0);
+      } finally {
+        for (const db of [localDb, remoteDb]) {
+          await db.collection("locations").dropIndexes().catch(() => {});
+          await db.collection("locations").createIndex(
+            { name: 1 },
+            { unique: true, partialFilterExpression: { _deletedAt: null } },
+          ).catch(() => {});
+        }
+      }
+    });
+  });
+
+  describe("entity-name trim on both sync sides (GH #1116)", () => {
+    it("normalizes names on BOTH DBs before copying, so nothing untrimmed transfers", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+
+      // A pre-upgrade peer's untrimmed rows, written past the setter.
+      await remoteDb.collection("locations").insertOne({
+        name: "Drybox #9 ", kind: "drybox",
+        syncId: "loc-untrimmed-remote", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await localDb.collection("nozzles").insertOne({
+        name: " 0.4 Trim Me", diameter: 0.4, type: "brass",
+        syncId: "noz-untrimmed-local", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // Normalized at the source…
+      expect(
+        (await remoteDb.collection("locations").findOne({ syncId: "loc-untrimmed-remote" }))!.name,
+      ).toBe("Drybox #9");
+      expect(
+        (await localDb.collection("nozzles").findOne({ syncId: "noz-untrimmed-local" }))!.name,
+      ).toBe("0.4 Trim Me");
+      // …and therefore trimmed on the side each was copied TO, rather than
+      // arriving as a second, unreachable record.
+      expect(
+        (await localDb.collection("locations").findOne({ syncId: "loc-untrimmed-remote" }))!.name,
+      ).toBe("Drybox #9");
+      expect(
+        (await remoteDb.collection("nozzles").findOne({ syncId: "noz-untrimmed-local" }))!.name,
+      ).toBe("0.4 Trim Me");
+    });
+
+    it("reconciles nozzles/printers made NEWLY equal by the trim, instead of E11000-ing", async () => {
+      // Two peers holding "0.4 " and "0.4" under different syncIds both trim
+      // successfully — and then syncCollection would insert one beside the
+      // other, straight into the partial-unique name index. That E11000 isn't
+      // a syncId collision, so it isn't swallowed: nozzles fail and printers,
+      // filaments and print history cascade-skip on EVERY cycle.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const db of [localDb, remoteDb]) {
+        await db
+          .collection("nozzles")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+        await db
+          .collection("printers")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      }
+      await localDb.collection("nozzles").insertOne({
+        name: "0.4 Newly Equal ", diameter: 0.4, type: "brass",
+        syncId: "noz-side-a", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("nozzles").insertOne({
+        name: "0.4 Newly Equal", diameter: 0.4, type: "brass",
+        syncId: "noz-side-b", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await localDb.collection("printers").insertOne({
+        name: "Equal Printer ", manufacturer: "P", printerModel: "M",
+        syncId: "prn-side-a", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("printers").insertOne({
+        name: "Equal Printer", manufacturer: "P", printerModel: "M",
+        syncId: "prn-side-b", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The pair was UNIFIED onto one syncId, so the later sync treats it as
+      // one row instead of inserting a second beside it.
+      const localNoz = await localDb.collection("nozzles").findOne({ name: "0.4 Newly Equal" });
+      const remoteNoz = await remoteDb.collection("nozzles").findOne({ name: "0.4 Newly Equal" });
+      expect(localNoz!.syncId).toBe(remoteNoz!.syncId);
+      const localPrn = await localDb.collection("printers").findOne({ name: "Equal Printer" });
+      const remotePrn = await remoteDb.collection("printers").findOne({ name: "Equal Printer" });
+      expect(localPrn!.syncId).toBe(remotePrn!.syncId);
+
+      // Still one row per side, and neither collection reported a failure —
+      // a nozzle failure cascade-skips printers, filaments and print history.
+      expect(
+        await localDb.collection("nozzles").countDocuments({ name: "0.4 Newly Equal" }),
+      ).toBe(1);
+      expect(
+        await remoteDb.collection("nozzles").countDocuments({ name: "0.4 Newly Equal" }),
+      ).toBe(1);
+      for (const name of ["nozzles", "printers"]) {
+        expect(results.find((r) => r.collection === name)?.error).toBeUndefined();
+      }
+    });
+
+    it("REFUSES to RECONCILE a collection whose trim conflicted (Codex P1)", async () => {
+      // The dangerous shape: local holds A="X" and B="X " (distinct rows), the
+      // remote holds only B. The local trim can't touch B (it would collide
+      // with A) but the remote trim succeeds, so the two sides now disagree
+      // about which row is "X" — and reconcileByName would pair remote B with
+      // local A by NAME and stamp A's syncId onto B, fusing two records into
+      // one for LWW to then overwrite.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await localDb
+        .collection("locations")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      await localDb.collection("locations").insertMany([
+        { name: "Fuse Me", kind: "shelf", syncId: "loc-A", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Fuse Me ", kind: "shelf", syncId: "loc-B", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      await remoteDb.collection("locations").insertOne({
+        name: "Fuse Me ", kind: "shelf", syncId: "loc-B", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection reports a loud, retryable failure — the copy is NOT
+      // gated any more, so the insert hits the unique index. That is the
+      // recoverable outcome; what must never happen is the silent fusion
+      // below.
+      const loc = results.find((r) => r.collection === "locations");
+      expect(loc?.error).toBeTruthy();
+      // Crucially the two local rows keep their OWN identities: remote B was
+      // not re-keyed onto local A.
+      const a = await localDb.collection("locations").findOne({ syncId: "loc-A" });
+      const b = await localDb.collection("locations").findOne({ syncId: "loc-B" });
+      expect(a!.name).toBe("Fuse Me");
+      expect(b!.name).toBe("Fuse Me ");
+      const remoteB = await remoteDb.collection("locations").findOne({ name: "Fuse Me" });
+      expect(remoteB!.syncId).toBe("loc-B");
+
+      // This file shares its two mongods across tests, and the pair above is
+      // deliberately UNRESOLVABLE — left behind it would keep `locations`
+      // conflicted for every later test, cascade-skipping filaments and
+      // print history. Clean it up rather than coupling the rest of the file
+      // to this one's fixture.
+      await localDb.collection("locations").deleteMany({ syncId: { $in: ["loc-A", "loc-B"] } });
+      await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["loc-A", "loc-B"] } });
+    });
+
+    it("a TOMBSTONE with an untrimmable name does not block the collection (Codex P1)", async () => {
+      // A soft-deleted row whose name is only whitespace can never be
+      // trimmed, can't collide in the partial active-name index, and isn't
+      // reachable in the UI for a purged filament — gating on it would block
+      // filament and print-history sync forever with no way out.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // A zombie exactly as Atlas can hold it: `_purged` set but NOT yet
+      // tombstoned, because the remote never runs dbConnect's purgedZombies
+      // migration (Codex P1 round 2 — the sync must not assume it ran).
+      await localDb.collection("filaments").insertOne({
+        name: "   ", vendor: "V", type: "PLA", spools: [],
+        syncId: "fil-tombstone", _deletedAt: null, _purged: true, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "Syncs Fine", vendor: "V", type: "PLA", spools: [],
+        syncId: "fil-normal", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // Asserted on the REASON, not on plain success: this file shares its
+      // mongods, so an unrelated prerequisite could legitimately cascade-skip
+      // filaments. What must never happen is filaments being blocked by the
+      // whitespace gate itself.
+      const filaments = results.find((r) => r.collection === "filaments");
+      expect(filaments?.error ?? "").not.toContain("whitespace");
+    });
+
+    it("never re-pairs by NAME a row that already has a counterpart by syncId (Codex P1)", async () => {
+      // The second-cycle trap. Asymmetric conflict resolved by renaming local
+      // B "X " -> "Y": the trim now reports nothing, the gate lifts, and
+      // reconcileByName runs BEFORE syncCollection has copied the rename.
+      // Remote B still carries the trimmed "X", which matches local A — so a
+      // name pairing would stamp A's syncId onto remote B and fuse two
+      // distinct records.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await localDb.collection("locations").insertMany([
+        { name: "Pair X", kind: "shelf", syncId: "pair-A", _deletedAt: null, createdAt: now, updatedAt: now },
+        // The rename is NEWER than the remote copy — it is the edit the user
+        // just made, and LWW needs that to be true to carry it across.
+        { name: "Renamed Y", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000) },
+      ]);
+      // Remote holds only B, already trimmed to the name local A uses.
+      const remoteBId = (
+        await remoteDb.collection("locations").insertOne({
+          name: "Pair X", kind: "shelf", syncId: "pair-B", _deletedAt: null, createdAt: now, updatedAt: now,
+        })
+      ).insertedId;
+
+      // The remote's unique name index must be present, or the convergence
+      // half of this test proves nothing.
+      await remoteDb
+        .collection("locations")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // 1. No fusion. Asserted on the DOCUMENT, by _id — not on "some row with
+      //    syncId pair-B exists", which the copy step recreates and which
+      //    therefore passes even when the fusion happened.
+      const remoteB = await remoteDb.collection("locations").findOne({ _id: remoteBId });
+      expect(remoteB!.syncId).toBe("pair-B");
+      const localA = await localDb.collection("locations").findOne({ syncId: "pair-A" });
+      expect(localA!.name).toBe("Pair X");
+
+      // 2. And the collection CONVERGES (Codex P1). Preventing the fusion is
+      //    worth nothing if locations then fails on the unique index every
+      //    cycle and filaments + print history stay cascade-skipped. The
+      //    rename must reach the remote and A must land beside it.
+      expect(results.find((r) => r.collection === "locations")?.error).toBeUndefined();
+      expect(remoteB!.name).toBe("Renamed Y");
+      expect(
+        await remoteDb.collection("locations").findOne({ syncId: "pair-A" }),
+      ).not.toBeNull();
+
+      await localDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
+      await remoteDb.collection("locations").deleteMany({ syncId: { $in: ["pair-A", "pair-B"] } });
+    });
+
+    it("an untrimmable pair does not stop UNRELATED names from reconciling (audit P1)", async () => {
+      // The gate was keyed by COLLECTION while conflicts are per ROW, so one
+      // whitespace pair disabled reconcileByName for every name in the
+      // collection — including a genuinely unpaired same-name row created
+      // independently on both peers, the v1.11.3 case that helper exists to
+      // fix. Its insert then hit the unique name index, locations errored,
+      // and filaments + print history cascade-skipped, every cycle, with the
+      // surfaced error naming the innocent row.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const db of [localDb, remoteDb]) {
+        await db
+          .collection("locations")
+          .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      }
+      // The untrimmable pair this PR targets…
+      await localDb.collection("locations").insertMany([
+        { name: "Blast Radius", kind: "shelf", syncId: "br-a", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Blast Radius ", kind: "shelf", syncId: "br-b", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      // …and a completely unrelated independently-created pair.
+      await localDb.collection("locations").insertOne({
+        name: "Innocent Shelf", kind: "shelf", syncId: "inn-local", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("locations").insertOne({
+        name: "Innocent Shelf", kind: "shelf", syncId: "inn-remote", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The unrelated pair was unified, so no insert collided…
+      const localInn = await localDb.collection("locations").findOne({ name: "Innocent Shelf" });
+      const remoteInn = await remoteDb.collection("locations").findOne({ name: "Innocent Shelf" });
+      expect(localInn!.syncId).toBe(remoteInn!.syncId);
+      // …locations did not fail, so filaments and print history are not
+      // cascade-skipped.
+      expect(results.find((r) => r.collection === "locations")?.error).toBeUndefined();
+      expect(results.find((r) => r.collection === "filaments")?.error).toBeUndefined();
+
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("locations").deleteMany({
+          syncId: { $in: ["br-a", "br-b", "inn-local", "inn-remote"] },
+        });
+      }
+    });
+
+    it("gates reconciliation but NOT the copy, so a fix can propagate", async () => {
+      // The copy gate was self-perpetuating: in hybrid the app writes only to
+      // the LOCAL database, so a user who does what the error says — rename
+      // the duplicate — clears the local conflict while the REMOTE pair stays
+      // active, and the collection is named on every later cycle. The one
+      // thing that could propagate the fix is a syncId-keyed LWW copy of the
+      // renamed row onto Atlas, which was exactly what was blocked.
+      //
+      // `reconcileByName` stays gated: it matches on the raw name and is the
+      // only path that can fuse two distinct records (see the test above).
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await remoteDb
+        .collection("bedtypes")
+        .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } });
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Smooth PEI", material: "PEI", syncId: "bt-clean", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Smooth PEI ", material: "PEI", syncId: "bt-clash", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      await remoteDb.collection("nozzles").insertOne({
+        name: "Unaffected 0.4", diameter: 0.4, type: "brass",
+        syncId: "noz-unaffected", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The colliding row is untouched…
+      expect(
+        (await remoteDb.collection("bedtypes").findOne({ syncId: "bt-clash" }))!.name,
+      ).toBe("Smooth PEI ");
+      // …but the COPY still ran, so both rows reached the other peer and a
+      // later local fix has a route to Atlas.
+      expect(
+        await localDb.collection("bedtypes").findOne({ syncId: "bt-clash" }),
+      ).not.toBeNull();
+      // …and unrelated collections are entirely unaffected.
+      expect(results.find((r) => r.collection === "nozzles")?.error).toBeUndefined();
+      expect(
+        await localDb.collection("nozzles").findOne({ syncId: "noz-unaffected" }),
+      ).not.toBeNull();
+
+      await remoteDb.collection("bedtypes").deleteMany({ syncId: { $in: ["bt-clean", "bt-clash"] } });
+      await localDb.collection("bedtypes").deleteMany({ syncId: { $in: ["bt-clean", "bt-clash"] } });
+    });
+  });
+
   // ── GH #1021 (Codex P1 ×2 on #1022): legacyNozzleConditions cleanup ──
   // The remote (Atlas) DB never runs dbConnect's startup migrations, and on
   // first hybrid startup the sync can run BEFORE the local dbConnect does —

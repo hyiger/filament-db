@@ -8,6 +8,15 @@ import {
   LEGACY_NOZZLE_CONDITION_RE,
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
+import {
+  trimEntityNames,
+  describeTrimResult,
+  type MinimalTrimDb,
+} from "../src/lib/trimEntityNames";
+import {
+  retombstonePurgedZombies,
+  type MinimalZombieCollection,
+} from "../src/lib/purgedZombies";
 
 /** GH #1021 r25/r26: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
@@ -135,9 +144,15 @@ interface SyncResult {
   updated: number;
   deleted: number;
   /**
-   * GH #369: per-collection error. When set, this collection's sync
-   * threw and the count fields are zero. Other collections in the same
-   * cycle may have succeeded.
+   * GH #369: per-collection error. Other collections in the same cycle may
+   * have succeeded, and `trySync` cascade-skips this collection's dependents.
+   *
+   * Usually the sync THREW and the count fields are zero. GH #1116 adds a
+   * second, deliberate producer: a collection whose trim was SKIPPED copies
+   * paired rows only, so the counts are NON-zero while some rows were held
+   * back. That still has to read as a failed prerequisite — a dependent
+   * copied against a partial mapping silently drops the references it could
+   * not resolve.
    */
   error?: string | null;
 }
@@ -363,6 +378,149 @@ export class SyncService extends EventEmitter {
         }
       }
 
+      /**
+       * Collections where a name couldn't be trimmed on one side or the
+       * other, so the two peers may now disagree about identity.
+       *
+       * This gates `reconcileByName` ONLY — deliberately NOT `syncCollection`
+       * (adversarial audit, and the narrower reading of the original P1).
+       * `reconcileByName` is the sole path that matches on the raw `name`
+       * string, so it is the sole path that can stamp one record's syncId
+       * onto another and fuse two distinct rows; that is the outcome worth
+       * blocking. `syncCollection` is purely syncId-keyed.
+       *
+       * Blocking the COPY as well made the guard self-perpetuating: in
+       * hybrid mode the app writes only to the LOCAL database, so a user who
+       * does exactly what the error says — rename the duplicate — clears the
+       * local conflict while the REMOTE pair stays active, and the union
+       * below still names the collection on every later cycle. Locations,
+       * filaments and print history would never sync again, and the one
+       * thing that could have propagated the fix (a syncId-keyed LWW copy of
+       * the renamed row onto Atlas) was the thing being blocked.
+       *
+       * The residual case the copy gate did cover — one side trimmed, the
+       * other not, distinct syncIds, so an INSERT hits the unique index — now
+       * surfaces as an E11000 through `trySync`: loud, per-collection,
+       * retried every cycle, and cleared by the next successful trim. A
+       * recoverable failure beats a permanent one.
+       */
+      const conflictedCollections = new Set<string>();
+      /**
+       * Per-collection set of NAMES that must not be paired by name.
+       *
+       * The gate used to be keyed by COLLECTION while the conflicts are
+       * per-ROW, so one untrimmable whitespace pair disabled
+       * `reconcileByName` for every name in the collection — including a
+       * genuinely unpaired same-name row created independently on both peers,
+       * which is the v1.11.3 case that helper exists to fix. That row's
+       * insert then hit the unique name index, and because the module's
+       * `isDuplicateKeyError` only recognizes a `syncId` violation, the
+       * failure propagated: locations errored, filaments and print history
+       * cascade-skipped, every cycle, with the surfaced error naming the
+       * INNOCENT row. A second audit reproduced it end to end against two
+       * live databases.
+       *
+       * The fusion hazard is confined to the conflicting name and its
+       * trimmed form, so that is what gets blocked.
+       */
+      const conflictedNames = new Map<string, Set<string>>();
+
+      // GH #1116 — normalize entity names on BOTH sides before any copy.
+      //
+      // The copy path is the raw driver (`insertOne`/`replaceOne`), so it
+      // bypasses the `trim: true` setter entirely: an untrimmed name on a
+      // PRE-UPGRADE peer lands here verbatim, and Mongoose then can't find it
+      // by name at ALL (a String schema setter applies to query values too,
+      // so `{ name: "X " }` casts to `"X"` and misses the stored row). The
+      // same-name reconcilers compare raw names, so `"X"` and `"X "` would
+      // also propagate as two separate records — the exact duplicate this
+      // issue is about, manufactured by sync instead of by CSV.
+      //
+      // dbConnect's pass can't cover this: the REMOTE never runs it, and a
+      // pre-upgrade peer keeps producing untrimmed names after any one-shot.
+      // So it runs every cycle, on both sides, ahead of every copy — the same
+      // posture (and the same both-sides placement) as the #1021 cleanup
+      // above, including the per-side abort re-check.
+      //
+      // Per-ROW conflicts are non-fatal — a name that can't be trimmed
+      // because trimming would collide is reported and the cycle continues,
+      // since that pair needs a human either way. A THROWN failure is
+      // different and aborts, for the reason in the loop below.
+      for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+        if (this.aborted) break;
+        // A THROW here aborts the cycle (Codex P1). Swallowing it and syncing
+        // anyway is the worst outcome available: the two spellings are still
+        // different, so `reconcileByName` doesn't pair them, `syncCollection`
+        // copies BOTH to BOTH databases, and the next cycle's trim then finds
+        // a genuine collision on each side and leaves the duplicate
+        // permanently. Failing the cycle costs one retry; continuing costs a
+        // pair of rows a human has to merge by hand. (Per-row conflicts are
+        // still non-fatal — those are REPORTED, not thrown; see
+        // `trimEntityNames`.)
+        // BEFORE the trim, on BOTH peers (GH #1116, Codex P1). A purge zombie
+        // (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
+        // MongoDB is concerned, so it OCCUPIES the partial unique name index —
+        // and nothing else ever repairs it on the remote, which never runs
+        // `dbConnect` and whose both-purged sync branch is a documented no-op.
+        //
+        // The trim deliberately refuses to let a hidden zombie GATE a sync (a
+        // user cannot resolve a row the UI does not show), so a local `"X "`
+        // is free to become `"X"` while a remote zombie still holds `"X"` —
+        // after which every `replaceOne` of that filament onto the remote
+        // fails E11000, permanently, taking filaments and print-history with
+        // it down the dependency chain. Suppressing the gate was only half the
+        // answer; this is the other half, and it puts the row into the state
+        // it should have been in all along.
+        const zombies = await retombstonePurgedZombies(
+          dbHandle.collection("filaments") as unknown as MinimalZombieCollection,
+        );
+        if (zombies > 0) {
+          console.log(
+            `[sync] ${side}: re-tombstoned ${zombies} purged zombie filament(s) (GH #1004)`,
+          );
+        }
+        // Re-check AFTER the zombie repair (Codex P2). `destroy()` can set
+        // `aborted` while that await is in flight, and the trim is a SEPARATE
+        // destructive migration — it creates indexes and rewrites names across
+        // five collections. Resuming into it would work on a database the user
+        // just abandoned by switching connection mode, contrary to the
+        // surrounding contract that only the operation already in flight may
+        // finish.
+        if (this.aborted) break;
+        const trimResult = await trimEntityNames(dbHandle as unknown as MinimalTrimDb);
+        const line = describeTrimResult(trimResult);
+        if (line) console.log(`[sync] ${side}: ${line}`);
+        // A per-row conflict is non-fatal for the CYCLE but it is fatal for
+        // ITS OWN COLLECTION (Codex P1). One side can succeed where the other
+        // couldn't — local holds A="X" and B="X " so B can't be trimmed,
+        // while the remote holds only B and trims it to "X". The two sides
+        // now disagree about which row "X" is, and `reconcileByName` would
+        // pair remote B with local A by NAME and stamp A's syncId onto B:
+        // two distinct records fused into one, after which LWW overwrites
+        // one with the other. Record the affected collections and refuse to
+        // reconcile or sync them until a human separates the pair.
+        // ACTIVE conflicts only (Codex P1). An untrimmable name on a
+        // soft-deleted row is permanent, can't collide in the partial index
+        // and is never seen by `reconcileByName` — gating on it would block
+        // that collection's sync forever with no user-accessible fix, since a
+        // purged filament isn't even visible in the trash. It still gets
+        // logged; it just doesn't stop anything.
+        for (const c of trimResult.conflicts) {
+          if (!c.active) continue;
+          // Block the NAMES, not the collection (second adversarial audit).
+          // Both spellings: the stored one and the trimmed one it would have
+          // become — a pairing can be attempted under either.
+          const set = conflictedNames.get(c.collection) ?? new Set<string>();
+          set.add(c.name);
+          set.add(c.name.trim());
+          conflictedNames.set(c.collection, set);
+        }
+        // A collection the pass SKIPPED has un-normalized names by
+        // definition, and it doesn't know WHICH — so that one really is
+        // collection-wide.
+        for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
+      }
+
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
       // transit-clear queues on BOTH databases (a failed local enqueue falls
       // back to the remote queue, r27). A prior cycle's pair-clear that
@@ -425,8 +583,22 @@ export class SyncService extends EventEmitter {
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
+      // GH #1116 (Codex P1): reconcile by name FIRST, like bedtypes,
+      // locations and filaments already do. Nozzle and Printer carry the same
+      // partial-unique `name` index, and the trim above can make two rows
+      // NEWLY equal — one peer's `"0.4 "` and the other's `"0.4"` normalize to
+      // the same name under different syncIds. Without reconciliation
+      // syncCollection treats them as two rows and inserts one beside the
+      // other, straight into the index; that E11000 is not a syncId collision
+      // so it isn't swallowed, and the nozzle failure cascade-skips printers,
+      // filaments and print history on EVERY cycle. Independent creation of
+      // the same nozzle on two desktops has the same shape and was already
+      // possible — the trim just makes it reachable without a typo.
+      if (!this.aborted && !conflictedCollections.has("nozzles")) {
+        await this.reconcileNozzlesByName(localDb, remoteDb, conflictedNames.get("nozzles"));
+      }
       results.push(await trySync("nozzles", [], () =>
-        this.syncCollection(localDb, remoteDb, "nozzles"),
+        this.syncCollection(localDb, remoteDb, "nozzles", undefined, conflictedCollections.has("nozzles")),
       ));
 
       // Build nozzle syncId→ID maps for reference remapping.
@@ -450,9 +622,11 @@ export class SyncService extends EventEmitter {
       // GH #904: gate the inline reconcile on the abort flag, like trySync and
       // the repair passes — after a #823 abort it must stop writing syncId
       // metadata to the about-to-be-abandoned DB.
-      if (!this.aborted) await this.reconcileBedTypesByName(localDb, remoteDb);
+      if (!this.aborted && !conflictedCollections.has("bedtypes")) {
+        await this.reconcileBedTypesByName(localDb, remoteDb, conflictedNames.get("bedtypes"));
+      }
       results.push(await trySync("bedtypes", [], () =>
-        this.syncCollection(localDb, remoteDb, "bedtypes"),
+        this.syncCollection(localDb, remoteDb, "bedtypes", undefined, conflictedCollections.has("bedtypes")),
       ));
 
       // Build bedType syncId→ID maps for printer + filament remap.
@@ -465,6 +639,10 @@ export class SyncService extends EventEmitter {
       // Sync printers (filament calibrations reference them; printers
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
+      // GH #1116 (Codex P1): same reasoning as nozzles above.
+      if (!this.aborted && !conflictedCollections.has("printers")) {
+        await this.reconcilePrintersByName(localDb, remoteDb, conflictedNames.get("printers"));
+      }
       results.push(await trySync("printers", ["nozzles", "bedtypes"], () =>
         this.syncCollection(
           localDb, remoteDb, "printers",
@@ -473,6 +651,7 @@ export class SyncService extends EventEmitter {
             localNozzleBySyncId, remoteNozzleBySyncId,
             localBedTypeBySyncId, remoteBedTypeBySyncId,
           ),
+          conflictedCollections.has("printers"),
         ),
       ));
 
@@ -495,9 +674,11 @@ export class SyncService extends EventEmitter {
       // the entire sync cycle. Pairing matching-name rows and unifying their
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
-      if (!this.aborted) await this.reconcileLocationsByName(localDb, remoteDb); // GH #904
+      if (!this.aborted && !conflictedCollections.has("locations")) {
+        await this.reconcileLocationsByName(localDb, remoteDb, conflictedNames.get("locations")); // GH #904
+      }
       results.push(await trySync("locations", [], () =>
-        this.syncCollection(localDb, remoteDb, "locations"),
+        this.syncCollection(localDb, remoteDb, "locations", undefined, conflictedCollections.has("locations")),
       ));
 
       // Build location syncId→ID maps for spool reference remapping.
@@ -554,7 +735,9 @@ export class SyncService extends EventEmitter {
       // present and only mints when both sides are missing one) and
       // BEFORE the maps below so parentId remapping sees the unified
       // syncId on both sides.
-      if (!this.aborted) await this.reconcileFilamentsByName(localDb, remoteDb); // GH #904
+      if (!this.aborted && !conflictedCollections.has("filaments")) {
+        await this.reconcileFilamentsByName(localDb, remoteDb, conflictedNames.get("filaments")); // GH #904
+      }
 
       // Build filament syncId→ID maps for parentId remapping.
       // GH #511: project to {_id, syncId, updatedAt} — filament rows carry
@@ -617,7 +800,14 @@ export class SyncService extends EventEmitter {
       results.push(await trySync(
         "filaments",
         ["nozzles", "bedtypes", "printers", "locations"],
-        () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
+        () =>
+          this.syncCollection(
+            localDb,
+            remoteDb,
+            "filaments",
+            filamentTransform,
+            conflictedCollections.has("filaments"),
+          ),
       ));
 
       // GH #1021 (Codex r17–r25): the LWW copy is itself an ingestion
@@ -791,7 +981,14 @@ export class SyncService extends EventEmitter {
       results.push(await trySync(
         "printhistories",
         ["printers", "filaments"],
-        () => this.syncCollection(localDb, remoteDb, "printhistories", printHistoryTransform),
+        () =>
+          this.syncCollection(
+            localDb,
+            remoteDb,
+            "printhistories",
+            printHistoryTransform,
+            conflictedCollections.has("printhistories"),
+          ),
       ));
 
       // Sync shared catalogs. Payload is denormalised at publish time so
@@ -880,6 +1077,25 @@ export class SyncService extends EventEmitter {
       direction: "toLocal" | "toRemote",
       targetSpoolIds?: (string | undefined)[],
     ) => Document,
+    /**
+     * GH #1116 (Codex P1): restrict this collection to syncIds present on BOTH
+     * peers, skipping every unpaired INSERT.
+     *
+     * Set when the trim pass SKIPPED the collection — no protective unique
+     * name index could be established, so nothing was normalized. In that
+     * state `reconcileByName` is also disabled (it compares raw names and
+     * would fuse two records that merely look alike), and disabling it WITHOUT
+     * restricting the copy is worse than not gating at all: the pairing that
+     * used to fuse an identically-named pair no longer happens, and the
+     * unpaired inserts below then manufacture the duplicate on the target.
+     *
+     * Paired updates still flow, so repairs — including a later successful
+     * trim — propagate normally. That is what keeps this from becoming the
+     * self-perpetuating freeze an earlier revision hit by blocking the copy
+     * outright, which would have stalled locations, filaments and print
+     * history permanently.
+     */
+    pairedOnly = false,
   ): Promise<SyncResult> {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
@@ -937,8 +1153,33 @@ export class SyncService extends EventEmitter {
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
 
-    // Process all unique syncIds from both sides
-    const allSyncIds = new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()]);
+    // Process all unique syncIds from both sides — BOTH-SIDES ROWS FIRST.
+    //
+    // GH #1116 (Codex P1): an INSERT can collide on the partial unique name
+    // index with a row whose own UPDATE would have freed that name. Concrete
+    // shape: local A "X" and local B "Y" (B was just renamed), remote holds
+    // only B, still named "X". Reaching A first inserts "X" beside remote B's
+    // "X" and E11000s, aborting the collection before B's rename is copied —
+    // and the same ordering repeats every cycle, so locations never converge
+    // and filaments + print history stay cascade-skipped. Copying B's rename
+    // first frees the name and A inserts cleanly.
+    //
+    // Ordering only: each row's own LWW decision is unchanged, and the two
+    // groups are independent of each other.
+    const paired: string[] = [];
+    const unpaired: string[] = [];
+    for (const syncId of new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()])) {
+      (localBySyncId.has(syncId) && remoteBySyncId.has(syncId) ? paired : unpaired).push(syncId);
+    }
+    const allSyncIds = pairedOnly ? paired : [...paired, ...unpaired];
+    const heldBack = pairedOnly ? unpaired.length : 0;
+    if (heldBack > 0) {
+      console.warn(
+        `[sync] ${collectionName}: trim skipped this collection — copying ` +
+          `${paired.length} paired record(s) only, holding back ` +
+          `${heldBack} unpaired one(s) until names can be normalized`,
+      );
+    }
 
     for (const syncId of allSyncIds) {
       const localDoc = localBySyncId.get(syncId);
@@ -1107,6 +1348,25 @@ export class SyncService extends EventEmitter {
       }
     }
 
+    // GH #1116 (Codex P1): a HELD-BACK collection must read as a FAILED
+    // prerequisite, or `trySync` lets its dependents run against a partial
+    // mapping. Concretely: hold back an unpaired location, and
+    // `buildFilamentRefsTransform` cannot resolve a referencing spool's
+    // `locationId` on the target, writes null, and stamps the copy with the
+    // SOURCE timestamp — after which the repair pass (which ignores null
+    // refs) never restores it. Syncing that location on a later cycle does
+    // not undo the loss. A blocked, reported cycle is recoverable; a nulled
+    // reference is not.
+    //
+    // The counts above stay real — the paired copies DID happen, so a user's
+    // rename still propagates and the collection can converge. Only the
+    // dependents wait.
+    if (heldBack > 0) {
+      result.error =
+        `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +
+        `collection, so its names cannot be matched safely yet`;
+    }
+
     return result;
   }
 
@@ -1260,8 +1520,9 @@ export class SyncService extends EventEmitter {
   private async reconcileLocationsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "locations");
+    await this.reconcileByName(localDb, remoteDb, "locations", blockedNames);
   }
 
   /**
@@ -1273,8 +1534,9 @@ export class SyncService extends EventEmitter {
   private async reconcileBedTypesByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "bedtypes");
+    await this.reconcileByName(localDb, remoteDb, "bedtypes", blockedNames);
   }
 
   /**
@@ -1291,8 +1553,33 @@ export class SyncService extends EventEmitter {
   private async reconcileFilamentsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
-    await this.reconcileByName(localDb, remoteDb, "filaments");
+    await this.reconcileByName(localDb, remoteDb, "filaments", blockedNames);
+  }
+
+  /**
+   * Same name-collision resolver, applied to nozzles (GH #1116). Nozzle has
+   * the partial-unique-on-non-deleted `name` index, and the entity-name trim
+   * that now runs before every cycle can make two independently-created rows
+   * NEWLY equal — so this has to run before the nozzle sync, or the insert
+   * walks into the index and the failure cascade-skips everything downstream.
+   */
+  private async reconcileNozzlesByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "nozzles", blockedNames);
+  }
+
+  /** Same, for printers — identical index and identical exposure. */
+  private async reconcilePrintersByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    blockedNames?: ReadonlySet<string>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "printers", blockedNames);
   }
 
   /**
@@ -1305,6 +1592,10 @@ export class SyncService extends EventEmitter {
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
     collectionName: string,
+    /** Names whose normalization is unresolved, so pairing them by name is
+     *  unsafe. Scoped to those names — a conflict elsewhere in the collection
+     *  must not stop unrelated rows from being unified. */
+    blockedNames?: ReadonlySet<string>,
   ): Promise<void> {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
@@ -1316,11 +1607,41 @@ export class SyncService extends EventEmitter {
     for (const local of localActive) {
       const remote = remoteByName.get(local.name as string);
       if (!remote) continue;
+      if (blockedNames?.has(local.name as string)) continue;
 
       const localSyncId = local.syncId as string | undefined;
       const remoteSyncId = remote.syncId as string | undefined;
 
       if (localSyncId && remoteSyncId && localSyncId === remoteSyncId) continue;
+
+      // GH #1116 (Codex P1): a row whose syncId ALREADY resolves on the other
+      // peer is paired, and a name match must never override that.
+      //
+      // This helper exists for rows created INDEPENDENTLY on the two sides
+      // before sync reached the collection — neither has a counterpart, so
+      // matching by name is the only way to pair them. Once a counterpart
+      // exists, the name is transient: it can differ simply because the last
+      // rename hasn't been copied across yet. That is exactly what the trim
+      // work makes reachable — local A "X" and local B renamed to "Y", while
+      // remote B still carries the trimmed "X". Pairing by name then hands A
+      // and B the same syncId and LWW overwrites one with the other; spool
+      // locationId maps would resolve to the wrong row on top of that.
+      //
+      // Cheap to check, and it strictly narrows the helper to its own stated
+      // purpose: the first-sync case has no counterparts on either side and
+      // is unaffected.
+      if (localSyncId && (await remoteCol.findOne({ syncId: localSyncId, _id: { $ne: remote._id } }))) {
+        console.warn(
+          `reconcileByName(${collectionName}): "${local.name}" already has a remote counterpart by syncId — not pairing by name`,
+        );
+        continue;
+      }
+      if (remoteSyncId && (await localCol.findOne({ syncId: remoteSyncId, _id: { $ne: local._id } }))) {
+        console.warn(
+          `reconcileByName(${collectionName}): "${local.name}" — the remote row already has a local counterpart by syncId; not pairing by name`,
+        );
+        continue;
+      }
 
       const winningSyncId = localSyncId || remoteSyncId || randomUUID();
 

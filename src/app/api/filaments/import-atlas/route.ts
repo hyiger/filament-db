@@ -11,6 +11,7 @@ import {
   deriveLegacyNozzleCondition,
   LEGACY_NOZZLE_CONDITION_RE,
 } from "@/lib/legacyNozzleConditions";
+import { castNameLikeSchema } from "@/lib/trimEntityNames";
 
 /**
  * GH #255: explicit ALLOW-LIST of filament fields that may be copied
@@ -245,7 +246,29 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        const importName = String(filamentData.name ?? "");
+        // GH #1116: normalize the SOURCE name at the boundary.
+        //
+        // Not load-bearing today — Mongoose applies a String schema setter to
+        // QUERY values, so the `findOne` below already casts `"PLA Basic "`
+        // to `"PLA Basic"` and resolves the local row. It is written
+        // explicitly because that behaviour is invisible: this repo moves hot
+        // lookups to the raw driver routinely, and the driver does no
+        // casting, so the day this query moves the trim would silently stop
+        // applying — an older Atlas source holding `"PLA Basic "` would miss
+        // the local row, fall through to create, and E11000 on the setter,
+        // failing the whole selected-filament import.
+        //
+        // ONLY values the String schema itself accepts (Codex P2). The remote
+        // document is attacker-influenceable — this route connects to a URI
+        // the caller supplies — and a blanket `String(...)` would MANUFACTURE
+        // a legal name out of one Mongoose would have rejected: an array
+        // `["Victim"]` stringifies to `Victim` and would then select and
+        // overwrite the local `Victim` row, where previously the cast error
+        // refused the row outright. A non-castable name is therefore left
+        // exactly as it arrived, for the update/create below to reject.
+        const castName = castNameLikeSchema(filamentData.name);
+        const importName = castName === null ? "" : castName.trim();
+        if (castName !== null) filamentData.name = importName;
         const existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
