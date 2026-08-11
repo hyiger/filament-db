@@ -595,3 +595,87 @@ describe("wrong-match and missed-collision hazards (#1116)", () => {
     expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
   });
 });
+
+/**
+ * GH #1116 (Codex P1, round 31) — the ordinary CRUD writes.
+ *
+ * These leaned entirely on the partial unique index to reject a duplicate
+ * name. That stops working against a survivor: the index compares RAW stored
+ * strings, so "Drybox" and a surviving "Drybox " are two different keys and
+ * the write succeeds. Before `trim: true` the submitted spelling reached the
+ * index unchanged and collided as the user expected; now it is cast first and
+ * the collision evaporates.
+ */
+describe("ordinary CRUD refuses a name that already exists untrimmed (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Location: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const [name, mod] of [
+      ["Location", await import("@/models/Location")],
+    ] as const) {
+      if (!mongoose.models[name]) {
+        mongoose.model(name, (mod as { default: { schema: mongoose.Schema } }).default.schema);
+      }
+    }
+    Location = mongoose.models.Location;
+    await Location.collection.deleteMany({});
+  });
+
+  it("POST refuses to create beside a surviving untrimmed row", async () => {
+    await Location.collection.insertOne({
+      name: "Drybox ", kind: "drybox", _deletedAt: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const { POST } = await import("@/app/api/locations/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/locations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Drybox", kind: "drybox" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/already exists/i);
+    expect(await Location.collection.countDocuments({})).toBe(1);
+  });
+
+  it("PUT refuses to rename onto a surviving untrimmed row", async () => {
+    await Location.collection.insertOne({
+      name: "Drybox ", kind: "drybox", _deletedAt: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const other = await Location.create({ name: "Shelf", kind: "shelf" });
+    const { PUT } = await import("@/app/api/locations/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/locations/${other._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Drybox" }),
+      }),
+      { params: Promise.resolve({ id: String(other._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect((await Location.collection.findOne({ _id: other._id }))!.name).toBe("Shelf");
+  });
+
+  it("a no-op save that echoes the row's OWN name still succeeds", async () => {
+    // Self-exclusion: the guard must not 409 the ordinary form echo.
+    const loc = await Location.create({ name: "Shelf", kind: "shelf" });
+    const { PUT } = await import("@/app/api/locations/[id]/route");
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/locations/${loc._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Shelf", notes: "touched" }),
+      }),
+      { params: Promise.resolve({ id: String(loc._id) }) },
+    );
+    expect(res.status).toBe(200);
+  });
+});

@@ -173,6 +173,36 @@ export async function findSurvivorId(
  * Returns null when the name has no edge whitespace, because the cast query is
  * already an exact match and a second round trip would buy nothing.
  */
+/**
+ * Would writing `name` produce a row indistinguishable from an existing one?
+ *
+ * The ordinary CRUD creates and renames leaned entirely on the partial unique
+ * index to reject a duplicate name, and that stops working against a survivor:
+ * the index compares the RAW stored strings, so `"Drybox"` and a surviving
+ * `"Drybox "` are two different keys and the write succeeds. Before
+ * `trim: true` the submitted spelling reached the index unchanged and collided
+ * as the user expected; now it is cast first, and the collision evaporates.
+ *
+ * So the guard has to ask the question the index can no longer answer — do the
+ * TRIMMED forms match — before the create or the rename.
+ *
+ * Returns the conflicting row's id as a string, or null. `selfId` excludes the
+ * row being renamed; it is compared in JS rather than pushed into the filter,
+ * because this is a raw-driver query where an ObjectId never equals a string
+ * and the row would fail to exclude itself.
+ */
+export async function survivorNameConflict(
+  collection: MinimalNameCollection,
+  name: unknown,
+  selfId?: unknown,
+): Promise<string | null> {
+  if (typeof name !== "string" || !name.trim()) return null;
+  const row = await findByTrimmedName(collection, name, { _deletedAt: null });
+  if (!row) return null;
+  const id = String(row._id);
+  return selfId != null && id === String(selfId) ? null : id;
+}
+
 export async function findExactRawNameId(
   collection: MinimalNameCollection,
   name: string,

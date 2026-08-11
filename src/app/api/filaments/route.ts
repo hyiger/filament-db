@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
@@ -704,6 +708,20 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // GH #1116: the create needs the trimmed check too — the partial unique
+    // index compares RAW stored strings, so a submitted "PLA" and a surviving
+    // untrimmed "PLA " are different keys and this create succeeds, producing
+    // the indistinguishable pair the change exists to remove.
+    const nameConflict = await survivorNameConflict(
+      Filament.collection as unknown as MinimalNameCollection,
+      body.name,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A filament with that name already exists: "${String(body.name).trim()}"`,
+        409,
+      );
+    }
     const filament = await Filament.create(body);
     return NextResponse.json(filament, { status: 201 });
   } catch (err: unknown) {
