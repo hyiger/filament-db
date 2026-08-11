@@ -717,3 +717,82 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
     });
   });
 });
+
+/**
+ * GH #1116 (Codex P1, round 24). `trimEntityNames` can leave a raw untrimmed
+ * row behind — a skipped collection, or a row whose trim would collide. The
+ * INI importer then cannot see it (the `trim: true` setter casts the query),
+ * falls through all three phases, and CREATES a second active filament that
+ * renders identically to the one it failed to find.
+ *
+ * Two halves have to work, and the second is easy to miss: fixing only the
+ * LOOKUP leaves the fix completely inert, because the phase-1 write filter
+ * re-pins `name` (the GH #951 rename guard) and that clause is cast too — so
+ * the by-`_id` update would miss and fall through to the create anyway.
+ */
+describe("upsertIniFilament — a surviving untrimmed row (GH #1116)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  const section = (name: string): CollapsedFilamentData => ({
+    name,
+    vendor: "Acme",
+    type: "PLA",
+    color: "#808080",
+    cost: 25,
+    density: 1.24,
+    diameter: 1.75,
+    temperatures: { nozzle: 210, nozzleFirstLayer: null, bed: 60, bedFirstLayer: null },
+    maxVolumetricSpeed: null,
+    inherits: null,
+    settings: {},
+  });
+
+  it("updates the survivor in place instead of creating a twin", async () => {
+    // Raw driver on purpose — a Mongoose create would trim it.
+    await Filament.collection.insertOne({
+      name: "Survivor PLA ",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 1,
+      _deletedAt: null,
+      spools: [],
+    });
+
+    const outcome = await upsertIniFilament(section("Survivor PLA"));
+    expect(outcome).toBe("updated");
+
+    // One row, not two — and the write landed on the row that was there.
+    const rows = await Filament.collection.find({}).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cost).toBe(25);
+    // The update also normalizes the stored name, because `name` rides the
+    // $set and the setter trims it on the way in.
+    expect(rows[0].name).toBe("Survivor PLA");
+  });
+
+  it("resurrects a surviving untrimmed TRASHED row rather than stranding it", async () => {
+    // Left behind, this strands the tombstone: the new active row owns the
+    // name, so the trashed row's restore 409s forever (GH #297).
+    await Filament.collection.insertOne({
+      name: "Trashed Survivor ",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 1,
+      _deletedAt: new Date(),
+      spools: [],
+    });
+
+    const outcome = await upsertIniFilament(section("Trashed Survivor"));
+    expect(outcome).toBe("updated");
+
+    const rows = await Filament.collection.find({}).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]._deletedAt).toBeNull();
+    expect(rows[0].name).toBe("Trashed Survivor");
+  });
+});

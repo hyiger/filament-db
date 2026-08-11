@@ -384,3 +384,134 @@ describe("GH #605 — slicer sync template strip", () => {
     });
   });
 });
+
+/**
+ * GH #1116 (Codex P1, round 28) — a name-addressed sync must reach the row the
+ * slicer actually named.
+ *
+ * `name` carries `trim: true`, and a Mongoose String setter casts QUERY values.
+ * So with both "X" and "X " active — the state an unresolved trim migration
+ * leaves — a preset addressed as "X " casts to "X" and selects the CANONICAL
+ * row. The sync then writes the preset's settings onto a DIFFERENT filament.
+ *
+ * Before the setter this query matched "X " exactly, so the redirection is
+ * introduced by the schema change; removing create-on-404 does not help,
+ * because nothing is created — the wrong record is simply overwritten.
+ */
+describe("GH #1116 — a name-addressed sync resolves the EXACT stored spelling", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
+    Filament = mongoose.models.Filament;
+    await Filament.collection.deleteMany({});
+  });
+
+  /** Both spellings active — what a skipped/blocked trim pass leaves behind.
+   *  Written with the raw driver, because the setter would trim the second. */
+  async function seedBothSpellings() {
+    const canonical = await Filament.collection.insertOne({
+      name: "Ambiguous PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000c",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const raw = await Filament.collection.insertOne({
+      name: "Ambiguous PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000d",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    return { canonicalId: canonical.insertedId, rawId: raw.insertedId };
+  }
+
+  it("PrusaSlicer sync writes to the untrimmed row it addressed, not the canonical one", async () => {
+    const { canonicalId, rawId } = await seedBothSpellings();
+
+    const res = await prusaSync(
+      new NextRequest("http://localhost/api/filaments/Ambiguous%20PLA%20", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Ambiguous PLA ",
+          config: { filament_cost: "42" },
+        }),
+      }),
+      { params: Promise.resolve({ id: "Ambiguous PLA " }) },
+    );
+    expect(res.status).toBe(200);
+
+    const raw = await Filament.collection.findOne({ _id: rawId });
+    const canonical = await Filament.collection.findOne({ _id: canonicalId });
+    expect(raw!.cost).toBe(42);
+    // The bystander is untouched — that is the whole point.
+    expect(canonical!.cost).toBe(1);
+  });
+
+  it("still resolves normally once the migration has normalized the row", async () => {
+    // Only the canonical row exists now. An old preset still addressed as
+    // "X " must fall through to the cast query and find it.
+    await Filament.collection.insertOne({
+      name: "Settled PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000e",
+      _deletedAt: null, spools: [], settings: {},
+    });
+
+    const res = await prusaSync(
+      new NextRequest("http://localhost/api/filaments/Settled%20PLA%20", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Settled PLA ", config: { filament_cost: "7" } }),
+      }),
+      { params: Promise.resolve({ id: "Settled PLA " }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.collection.findOne({ name: "Settled PLA" }))!.cost).toBe(7);
+  });
+
+  it("OrcaSlicer sync has the same resolution", async () => {
+    const { canonicalId, rawId } = await seedBothSpellings();
+
+    const res = await orcaSync(
+      new NextRequest("http://localhost/api/filaments/Ambiguous%20PLA%20/orcaslicer", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cost: 42 }),
+      }),
+      { params: Promise.resolve({ id: "Ambiguous PLA " }) },
+    );
+    expect(res.status).toBe(200);
+
+    expect((await Filament.collection.findOne({ _id: rawId }))!.cost).toBe(42);
+    expect((await Filament.collection.findOne({ _id: canonicalId }))!.cost).toBe(1);
+  });
+
+  it("the per-nozzle BASE fallback resolves the raw slice, not the trimmed one", async () => {
+    // A per-nozzle preset generated for an unresolved "X " is named
+    // "X  0.4 Brass" (two spaces). Slicing the hint leaves "X ", and both
+    // `.trim()` and the setter's cast land on the canonical "X".
+    const { canonicalId, rawId } = await seedBothSpellings();
+
+    const res = await prusaSync(
+      new NextRequest("http://localhost/api/filaments/x", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Ambiguous PLA  0.4 Brass",
+          config: { filamentdb_nozzle: "0.4 Brass", filament_cost: "42" },
+        }),
+      }),
+      { params: Promise.resolve({ id: "Ambiguous PLA  0.4 Brass" }) },
+    );
+    expect(res.status).toBe(200);
+
+    expect((await Filament.collection.findOne({ _id: rawId }))!.cost).toBe(42);
+    expect((await Filament.collection.findOne({ _id: canonicalId }))!.cost).toBe(1);
+  });
+});

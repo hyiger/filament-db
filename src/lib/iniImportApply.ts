@@ -27,6 +27,10 @@
  */
 
 import Filament from "@/models/Filament";
+import {
+  findSurvivorId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
@@ -363,7 +367,15 @@ export async function upsertIniFilament(
     const byId = await Filament.findOne({ _id: fid, _deletedAt: null })
       .select("_id name")
       .lean();
-    if (byId && byId.name !== name) {
+    // GH #1116 (Codex P1): compare TRIMMED, or this guard fires on the exact
+    // survivor the fallback below exists to repair. `parseIni` trims a section
+    // name, while an `_id` lookup returns the RAW stored value — so a row the
+    // migration could not trim resolves as `"PLA "` against a section named
+    // `"PLA"`, and the ordinary exported-INI round trip threw here before ever
+    // reaching phase 1. Differing only by edge whitespace is not the ambiguity
+    // this guard is about (a renamed preset vs a copied id): it is one
+    // identity, recorded in two spellings, and the update normalizes it.
+    if (byId && String(byId.name ?? "").trim() !== name.trim()) {
       throw new Error(
         `filamentdb_id ${fid} resolves to "${byId.name}", but this section is named ` +
           `"${name}" — not imported (rename the section to match, or resolve the id/name conflict).`,
@@ -372,9 +384,27 @@ export async function upsertIniFilament(
   }
 
   // Phase 1 — update an existing ACTIVE row.
-  const existingActive = await Filament.findOne({ name, _deletedAt: null })
+  let existingActive = await Filament.findOne({ name, _deletedAt: null })
     .select(INI_INHERITANCE_PROJECTION)
     .lean();
+  let activeIsSurvivor = false;
+  if (!existingActive) {
+    // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
+    // absence — the setter casts this query, so it cannot select a row whose
+    // stored name is still raw. Re-read through the SAME projection so the
+    // shape the caller depends on is unchanged.
+    const survivorId = await findSurvivorId(
+      Filament.collection as unknown as MinimalNameCollection,
+      name,
+      { _deletedAt: null },
+    );
+    if (survivorId) {
+      existingActive = await Filament.findOne({ _id: survivorId, _deletedAt: null })
+        .select(INI_INHERITANCE_PROJECTION)
+        .lean();
+      activeIsSurvivor = existingActive != null;
+    }
+  }
   if (existingActive) {
     const update = await buildIniUpdate(collapsed, existingActive);
     // GH #605 (codex P2, slicer-sync sweep): the name-matched target may be a
@@ -400,7 +430,17 @@ export async function upsertIniFilament(
           // `name` re-checked so a concurrent rename in the read→write window
           // misses here and falls through (rather than the by-id write reverting
           // the rename via the `name` in `$set`). GH #951 (Codex).
-          { _id: existingActive._id, name, _deletedAt: null },
+          // GH #1116: the `name` clause CANNOT be used against a survivor —
+          // it is Mongoose-cast, so it asks for the trimmed form and can never
+          // match the raw stored value. Left in, the by-`_id` write would miss
+          // and fall straight through to the phase-3 create, making the
+          // survivor lookup above completely inert. `_id` + `_deletedAt` still
+          // pin the row we resolved and its liveness; only the #951
+          // concurrent-rename check is given up, and only for a row that is
+          // already in the degraded state the migration reports.
+          activeIsSurvivor
+            ? { _id: existingActive._id, _deletedAt: null }
+            : { _id: existingActive._id, name, _deletedAt: null },
           update,
           { runValidators: true, context: "query", returnDocument: "after" },
         );
@@ -417,13 +457,31 @@ export async function upsertIniFilament(
   // Phase 2 — resurrect a TRASHED (non-purged) row of the same name rather
   // than creating a duplicate that would strand the trashed record (its
   // restore would 409 forever on the name conflict). GH #297.
-  const existingTrashed = await Filament.findOne({
+  let existingTrashed = await Filament.findOne({
     name,
     _deletedAt: { $ne: null },
     _purged: { $ne: true },
   })
     .select(INI_INHERITANCE_PROJECTION)
     .lean();
+  let trashedIsSurvivor = false;
+  if (!existingTrashed) {
+    const survivorId = await findSurvivorId(
+      Filament.collection as unknown as MinimalNameCollection,
+      name,
+      { _deletedAt: { $ne: null }, _purged: { $ne: true } },
+    );
+    if (survivorId) {
+      existingTrashed = await Filament.findOne({
+        _id: survivorId,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      })
+        .select(INI_INHERITANCE_PROJECTION)
+        .lean();
+      trashedIsSurvivor = existingTrashed != null;
+    }
+  }
   if (existingTrashed) {
     const update = await buildIniUpdate(collapsed, existingTrashed);
     // GH #605: no template strip on the resurrect — a TRASHED doc cannot have
@@ -451,7 +509,9 @@ export async function upsertIniFilament(
     const doResurrect = () =>
       Filament.findOneAndUpdate(
         // `name` re-checked for the same rename-race reason as phase 1.
-        { _id: existingTrashed._id, name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+        trashedIsSurvivor
+          ? { _id: existingTrashed._id, _deletedAt: { $ne: null }, _purged: { $ne: true } }
+          : { _id: existingTrashed._id, name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
         update,
         { runValidators: true, context: "query", returnDocument: "after" },
       );
@@ -485,6 +545,7 @@ export async function upsertIniFilament(
   // created filament is always a root: no inheritance to preserve here, and
   // the nested `temperatures` object rides straight into the create.
   try {
+    // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
     await Filament.create({ ...collapsed });
     return "created";
   } catch (createErr) {
@@ -493,6 +554,7 @@ export async function upsertIniFilament(
     // create. Recompute the update against THAT row (it may be a variant) and
     // apply it as if we'd taken phase 1, so parallel identical imports stay
     // idempotent instead of throwing.
+    // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
     const racing = await Filament.findOne({ name, _deletedAt: null })
       .select(INI_INHERITANCE_PROJECTION)
       .lean();

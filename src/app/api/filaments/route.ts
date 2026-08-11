@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
@@ -680,6 +684,31 @@ export async function POST(request: NextRequest) {
     // with the OpenPrintTag variant import so no secondary entry point can
     // mint the first variant of a carrying parent without this exact
     // confirmation contract. See src/lib/createVariantGated.ts.
+    // GH #1116 (Codex P1): BEFORE the gated variant path, not after it.
+    //
+    // The partial unique index compares RAW stored strings, so a submitted
+    // "PLA" and a surviving untrimmed "PLA " are different keys and the create
+    // succeeds — producing the indistinguishable pair this change exists to
+    // remove. `createVariantGated` has the same blind spot: its own duplicate
+    // probe is a cast Mongoose query.
+    //
+    // Placed here it covers BOTH exits. Below the gate it covered only the
+    // standalone create, and worse: the gate RETURNS from the variant path, so
+    // a variant named onto a survivor was inserted without ever reaching the
+    // check — and for a confirmed carrying parent the promotion (which moves
+    // the parent's color and spools) would already have happened. Fail-fast
+    // before the irreversible bit, the same ordering the PUT needed.
+    const nameConflict = await survivorNameConflict(
+      Filament.collection as unknown as MinimalNameCollection,
+      body.name,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A filament with that name already exists: "${String(body.name).trim()}"`,
+        409,
+      );
+    }
+
     if (variantParent) {
       const result = await createVariantGated(Filament, variantParent._id, body, promoteParent);
       switch (result.outcome) {
