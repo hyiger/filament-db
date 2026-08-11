@@ -399,7 +399,7 @@ export async function upsertIniFilament(
       { _deletedAt: null },
     );
     if (survivorId) {
-      existingActive = await Filament.findOne({ _id: survivorId })
+      existingActive = await Filament.findOne({ _id: survivorId, _deletedAt: null })
         .select(INI_INHERITANCE_PROJECTION)
         .lean();
       activeIsSurvivor = existingActive != null;
@@ -472,7 +472,11 @@ export async function upsertIniFilament(
       { _deletedAt: { $ne: null }, _purged: { $ne: true } },
     );
     if (survivorId) {
-      existingTrashed = await Filament.findOne({ _id: survivorId })
+      existingTrashed = await Filament.findOne({
+        _id: survivorId,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      })
         .select(INI_INHERITANCE_PROJECTION)
         .lean();
       trashedIsSurvivor = existingTrashed != null;

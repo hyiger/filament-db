@@ -242,6 +242,35 @@ export async function GET(
   }
 }
 
+/**
+ * Is `name` already taken by a DIFFERENT active filament — including one the
+ * trim migration could not repair? (GH #1116)
+ *
+ * The ordinary `Filament.exists({ name })` casts, so it cannot see a stored
+ * raw `"X "`; renaming onto it therefore passes the check AND does not trip
+ * the unique index (the raw strings differ), leaving two active rows that
+ * render identically.
+ *
+ * Self-exclusion is compared in JS, not pushed into the filter: this is a
+ * RAW-DRIVER query, where nothing casts, so `{_id: {$ne: "507f…"}}` compares
+ * an ObjectId against a string, never matches, and the row fails to exclude
+ * ITSELF — every save echoing an unchanged name would 409.
+ */
+async function nameTakenBySurvivor(
+  name: string,
+  selfId: string,
+): Promise<string | null> {
+  if (!name.trim()) return null;
+  const survivorId = await findSurvivorId(
+    Filament.collection as unknown as MinimalNameCollection,
+    name,
+    { _deletedAt: null },
+  );
+  return survivorId && String(survivorId) !== String(selfId)
+    ? String(survivorId)
+    : null;
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -601,11 +630,19 @@ export async function PUT(
       const effectiveName =
         typeof body.name === "string" ? body.name : dryRunTarget.name;
       if (
-        await Filament.exists({
+        // name-lookup-ok: the survivor check below covers the cast case
+        (await Filament.exists({
           name: effectiveName,
           _deletedAt: null,
           _id: { $ne: id },
-        })
+        })) ||
+        // GH #1116 (Codex P1): this has to catch a SURVIVOR too, and it has to
+        // do so HERE. Left to the post-gate guard, a confirmed reparent+rename
+        // would irreversibly promote the carrying parent — moving its color and
+        // spools onto a new variant — and only then 409, reporting failure
+        // after a side effect it cannot undo. Fail-fast before the irreversible
+        // bit is this route's own contract.
+        (await nameTakenBySurvivor(effectiveName, id))
       ) {
         return errorResponse(
           `A filament with that name already exists: "${effectiveName}"`,
@@ -662,22 +699,11 @@ export async function PUT(
     //
     // Trimmed comparison, because that is the question being asked: would the
     // renamed row be indistinguishable from an existing one?
+    // The NON-reparent path: the pre-lock check above only runs when this PUT
+    // also re-parents. Same rule, same helper, so the two cannot drift.
     if (typeof body.name === "string" && body.name.trim()) {
-      // Self-exclusion is compared in JS, NOT pushed into the filter.
-      //
-      // This is a RAW-DRIVER query, so nothing casts: `{_id: {$ne: "507f…"}}`
-      // compares an ObjectId against a STRING, never matches, and the row
-      // therefore fails to exclude ITSELF — every save that echoes an
-      // unchanged name would 409. (Which is the same casting asymmetry this
-      // whole change is about, in the opposite direction: there the cast
-      // silently applied where it was not wanted; here it silently did not
-      // apply where it was.)
-      const survivorId = await findSurvivorId(
-        Filament.collection as unknown as MinimalNameCollection,
-        body.name,
-        { _deletedAt: null },
-      );
-      if (survivorId && String(survivorId) !== String(id)) {
+      const survivorId = await nameTakenBySurvivor(body.name, id);
+      if (survivorId) {
         // Same shape as this route's existing duplicate-key 409
         // (`handleDuplicateKeyError`), NOT the sync route's structured
         // `name_taken` envelope. This guard intercepts a case that used to
@@ -947,7 +973,7 @@ export async function POST(
         );
         // name-lookup-ok: exact-spelling resolution above covers the cast case
         filament = exactId
-          ? await Filament.findOne({ _id: exactId })
+          ? await Filament.findOne({ _id: exactId, _deletedAt: null })
           : await Filament.findOne({ name: decodedName, _deletedAt: null });
         if (filament) matchedBy = "name";
       }
@@ -977,7 +1003,7 @@ export async function POST(
             );
             // name-lookup-ok: exact-spelling resolution above covers the cast case
             filament = baseExactId
-              ? await Filament.findOne({ _id: baseExactId })
+              ? await Filament.findOne({ _id: baseExactId, _deletedAt: null })
               : await Filament.findOne({ name: baseName, _deletedAt: null });
             if (filament) matchedBy = "name";
           }

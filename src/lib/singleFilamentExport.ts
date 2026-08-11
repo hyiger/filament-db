@@ -78,7 +78,9 @@ export async function resolveFilamentForExport(
     filament = (await withPopulate(
       // name-lookup-ok: exact-spelling resolution above covers the cast case
       Filament.findOne(
-        exactRawId ? { _id: exactRawId } : { name: idOrName, _deletedAt: null },
+        exactRawId
+          ? { _id: exactRawId, _deletedAt: null }
+          : { name: idOrName, _deletedAt: null },
       ),
     ).lean()) as FilamentDoc | null;
   }

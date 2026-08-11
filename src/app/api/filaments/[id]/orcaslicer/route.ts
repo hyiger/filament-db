@@ -165,7 +165,7 @@ export async function POST(
       );
       // name-lookup-ok: exact-spelling resolution above covers the cast case
       filament = exactId
-        ? await Filament.findOne({ _id: exactId })
+        ? await Filament.findOne({ _id: exactId, _deletedAt: null })
         : await Filament.findOne({ name: decodedName, _deletedAt: null });
     }
 

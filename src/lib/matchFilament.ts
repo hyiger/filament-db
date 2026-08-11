@@ -237,7 +237,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
     );
     // name-lookup-ok: exact-spelling resolution above covers the cast case
     const exact = await Filament.findOne(
-      exactRawId ? { _id: exactRawId } : { name, _deletedAt: null },
+      exactRawId ? { _id: exactRawId, _deletedAt: null } : { name, _deletedAt: null },
     )
       .select(MATCH_PROJECTION)
       .lean();

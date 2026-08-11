@@ -78,7 +78,9 @@ export async function GET(
       );
       // name-lookup-ok: exact-spelling resolution above covers the cast case
       filament = await Filament.findOne(
-        exactId ? { _id: exactId } : { name: decodedName, _deletedAt: null },
+        exactId
+          ? { _id: exactId, _deletedAt: null }
+          : { name: decodedName, _deletedAt: null },
       )
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")

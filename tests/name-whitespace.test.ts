@@ -552,4 +552,46 @@ describe("wrong-match and missed-collision hazards (#1116)", () => {
     expect((await Filament.collection.findOne({ _id: other._id }))!.name).toBe("Other PLA");
     expect((await Filament.collection.findOne({ _id: rawId }))!.name).toBe("Amb PLA ");
   });
+
+  it("(B) a reparent+rename onto a survivor 409s BEFORE promoting the parent", async () => {
+    // Fail-fast before the irreversible bit. A confirmed reparent that also
+    // renames onto a surviving untrimmed name must not promote the carrying
+    // parent — moving its color and spools onto a new variant — and only then
+    // report failure.
+    // ONLY the survivor — no canonical row. With both present the ordinary
+    // cast check finds the canonical one and the survivor path is never
+    // exercised, which is exactly how the first version of this test passed
+    // against the unfixed code.
+    await Filament.collection.insertOne({
+      name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      _deletedAt: null, spools: [], settings: {},
+    });
+    // A LEGACY carrying parent: has its own color and a spool, no variants yet.
+    const parent = await Filament.create({
+      name: "Carrier PLA", vendor: "V", type: "PLA", color: "#123456",
+      spools: [{ totalWeight: 1000 }],
+    });
+    const target = await Filament.create({ name: "Target PLA", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${target._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Amb PLA",            // collides with the survivor "Amb PLA "
+          parentId: String(parent._id),
+          promoteParent: true,        // confirmed — the gate WOULD promote
+        }),
+      }),
+      { params: Promise.resolve({ id: String(target._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    // The parent is completely untouched — no promotion happened.
+    const fresh = await Filament.collection.findOne({ _id: parent._id });
+    expect(fresh!.color).toBe("#123456");
+    expect(fresh!.spools).toHaveLength(1);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+  });
 });

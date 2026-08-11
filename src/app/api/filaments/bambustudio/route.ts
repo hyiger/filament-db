@@ -167,7 +167,8 @@ export async function POST(request: NextRequest) {
         name,
         { _deletedAt: null },
       );
-      if (survivorId) existingActive = await Filament.findOne({ _id: survivorId });
+      if (survivorId)
+        existingActive = await Filament.findOne({ _id: survivorId, _deletedAt: null });
     }
     if (existingActive) {
       const payload = await prepareBambuUpdate(
@@ -233,7 +234,12 @@ export async function POST(request: NextRequest) {
         name,
         { _deletedAt: { $ne: null }, _purged: { $ne: true } },
       );
-      if (survivorId) existingTrashed = await Filament.findOne({ _id: survivorId });
+      if (survivorId)
+        existingTrashed = await Filament.findOne({
+          _id: survivorId,
+          _deletedAt: { $ne: null },
+          _purged: { $ne: true },
+        });
     }
     if (existingTrashed) {
       const payload = await prepareBambuUpdate(

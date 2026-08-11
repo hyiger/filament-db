@@ -444,7 +444,8 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
       name,
       { _deletedAt: null },
     );
-    if (survivorId) collision = await Filament.findOne({ _id: survivorId }).lean();
+    if (survivorId)
+      collision = await Filament.findOne({ _id: survivorId, _deletedAt: null }).lean();
   }
   if (collision) {
     return NextResponse.json(

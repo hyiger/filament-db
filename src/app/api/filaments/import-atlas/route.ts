@@ -290,7 +290,12 @@ export async function POST(request: NextRequest) {
             importName,
             { _deletedAt: null },
           );
-          if (survivor) existing = await Filament.findById(survivor._id);
+          if (survivor) {
+            existing = await Filament.findOne({
+              _id: survivor._id as Parameters<typeof Filament.findById>[0],
+              _deletedAt: null,
+            });
+          }
         }
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
@@ -396,7 +401,13 @@ export async function POST(request: NextRequest) {
               importName,
               { _deletedAt: { $ne: null }, _purged: { $ne: true } },
             );
-            if (survivor) softDeleted = await Filament.findById(survivor._id);
+            if (survivor) {
+              softDeleted = await Filament.findOne({
+                _id: survivor._id as Parameters<typeof Filament.findById>[0],
+                _deletedAt: { $ne: null },
+                _purged: { $ne: true },
+              });
+            }
           }
           if (softDeleted) {
             // GH #605 sweep: no template check needed on the resurrect — a
