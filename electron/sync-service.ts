@@ -1141,7 +1141,13 @@ export class SyncService extends EventEmitter {
     // cycle (default every 5 min) just to compare four metadata fields —
     // on an Atlas hybrid install with photo-attached spools that's tens
     // to hundreds of MB of metered egress per cycle.
-    const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1 };
+    // GH #1142 adds `name`: the rename-staging predicate has to know whether a
+    // blocker's own copy would rewrite its name on THIS side, which means
+    // comparing the two sides' names. It is a short string, so it does not
+    // reopen the GH #511 egress problem — that was about pulling full bodies
+    // (base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[])
+    // for every row on every cycle, which the hydrate helpers still avoid.
+    const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1, name: 1 };
     const localDocs = await localCol.find({}, { projection: SLIM_PROJECTION }).toArray();
     const remoteDocs = await remoteCol.find({}, { projection: SLIM_PROJECTION }).toArray();
 
@@ -1207,11 +1213,57 @@ export class SyncService extends EventEmitter {
      * Run a write that sets `name`; on a name collision, move the blocking row
      * aside and retry ONCE.
      *
-     * Staging is only legitimate when the blocker is itself in this pass's
-     * write set — then its own write lands its real name moments later. A
-     * blocker that isn't moving is the unsatisfiable case: report it and leave
-     * both peers alone rather than clobbering a record the user still wants.
+     * Staging is legitimate ONLY when the blocker's own LWW outcome writes to
+     * THIS target with a different name — then its real name lands moments
+     * later. Anything else is the unsatisfiable case: report it and leave both
+     * peers alone rather than clobbering a record the user still wants.
+     *
+     * "Paired" is NOT that condition, and the gap is the whole hazard (Codex
+     * P1). A paired row's LWW can copy in the OPPOSITE direction, or do
+     * nothing on an equal timestamp — in either case nothing rewrites its name
+     * on this target, so the placeholder is stranded, and a later copy in the
+     * other direction can propagate `__sync-staging-…` to the other peer. By
+     * then cleanup cannot restore it either, because the row it made way for
+     * owns its original name.
      */
+    /**
+     * Will this pass rewrite `syncId`'s NAME on `col`, to something different
+     * from what that row is called there now?
+     *
+     * This is the only condition under which moving the row aside is safe. It
+     * re-derives just the DIRECTION of the LWW decision — the timestamp
+     * comparison — rather than the whole outcome, because that comparison is
+     * small, total, and cheap to keep honest; duplicating the entire branch
+     * tree is what would drift.
+     *
+     * Deliberately conservative. Every branch it cannot prove (a delete, a
+     * resurrect, an equal timestamp, a missing side) answers false, which
+     * downgrades the case to "unsatisfiable, reported" — a visible conflict,
+     * never a stranded placeholder.
+     */
+    const willRewriteNameOn = (col: typeof localCol, syncId: string): boolean => {
+      const localDoc = localBySyncId.get(syncId);
+      const remoteDoc = remoteBySyncId.get(syncId);
+      if (!localDoc || !remoteDoc) return false; // unpaired: nothing writes it here
+
+      // A tombstoned row on either side takes the delete/resurrect branches,
+      // whose outcomes this shortcut does not model.
+      if (localDoc._deletedAt || remoteDoc._deletedAt) return false;
+
+      const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
+      const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
+      if (localTime === remoteTime) return false; // equal: no copy at all
+
+      // The copy runs from the newer side to the older one.
+      const source = localTime > remoteTime ? localDoc : remoteDoc;
+      const target = localTime > remoteTime ? remoteDoc : localDoc;
+      const targetIsRemote = localTime > remoteTime;
+      if (targetIsRemote !== (col === remoteCol)) return false; // writes the OTHER side
+
+      // ...and only if the name actually changes there.
+      return typeof source.name === "string" && source.name !== target.name;
+    };
+
     const writeWithRenameStaging = async (
       col: typeof localCol,
       targetId: ObjectId,
@@ -1230,28 +1282,53 @@ export class SyncService extends EventEmitter {
         );
         if (!blocker || String(blocker._id) === String(targetId)) throw err;
 
-        // Only a row this pass is going to write can be moved aside.
         const blockerSyncId = typeof blocker.syncId === "string" ? blocker.syncId : null;
-        if (!blockerSyncId || !pairedSyncIds.has(blockerSyncId)) {
+        const blockerName = typeof blocker.name === "string" ? blocker.name : null;
+        if (!blockerSyncId || !blockerName || !willRewriteNameOn(col, blockerSyncId)) {
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: cannot apply name ${JSON.stringify(desiredName)} — ` +
-              `held by a row this pass is not moving. Rename one of them.`,
+              `held by a row this pass will not rewrite on this side. Rename one of them.`,
           );
           return false;
         }
 
+        // CONDITIONAL on what was observed (Codex P1). Between the findOne and
+        // this update another app or syncer can rename or delete the blocker;
+        // an `_id`-only filter would overwrite that concurrent change with a
+        // placeholder, the retry would then take a name its owner had just
+        // released, and cleanup could never restore the original because it is
+        // now occupied. A zero-match means the world moved — report rather
+        // than force.
         const placeholder = placeholderFor(String(blocker._id), stagingNonce);
-        await col.updateOne({ _id: blocker._id }, { $set: { name: placeholder } });
+        const staged = await col.updateOne(
+          { _id: blocker._id, name: blockerName, _deletedAt: null },
+          { $set: { name: placeholder } },
+        );
+        if (!staged.modifiedCount) {
+          result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          console.warn(
+            `[sync] ${collectionName}: the row holding ${JSON.stringify(desiredName)} changed ` +
+              `while being moved aside; leaving both rows alone this cycle.`,
+          );
+          return false;
+        }
         // Remember it so an unsettled placeholder can be restored below — a
         // row left named `__sync-staging-…` is visible in the UI and worse
         // than the collision we were avoiding.
-        stagedRenames.push({
-          col,
-          id: blocker._id as ObjectId,
-          originalName: typeof blocker.name === "string" ? blocker.name : desiredName,
-        });
-        await write();
+        stagedRenames.push({ col, id: blocker._id as ObjectId, originalName: blockerName });
+        try {
+          await write();
+        } catch (retryErr) {
+          // ROLL BACK IMMEDIATELY (Codex P2). A throw here exits syncCollection
+          // through `trySync`, so the settlement loop at the end never runs and
+          // nothing scans for stale placeholders on a later cycle — the row
+          // would keep the temporary name indefinitely.
+          await col
+            .updateOne({ _id: blocker._id, name: placeholder }, { $set: { name: blockerName } })
+            .catch(() => {});
+          throw retryErr;
+        }
         return true;
       }
     };
@@ -1277,18 +1354,6 @@ export class SyncService extends EventEmitter {
       (localBySyncId.has(syncId) && remoteBySyncId.has(syncId) ? paired : unpaired).push(syncId);
     }
     const allSyncIds = pairedOnly ? paired : [...paired, ...unpaired];
-    // GH #1142: only a PAIRED row can be moved aside.
-    //
-    // "In this pass" is not enough, and the difference is load-bearing. An
-    // unpaired row is either remote-only (pulled to local — nothing writes its
-    // name on the remote) or local-only (inserted into remote — it isn't there
-    // to block anything yet). Either way no write on THIS target will give it
-    // a real name, so a placeholder put on it can never settle: it would be
-    // stranded as `__sync-staging-…`, visible in the UI, and if its original
-    // name were meanwhile taken by the row it made way for, unrecoverable.
-    //
-    // A paired row is exactly the case where the target IS written this pass.
-    const pairedSyncIds = new Set(paired);
     const heldBack = pairedOnly ? unpaired.length : 0;
     if (heldBack > 0) {
       console.warn(

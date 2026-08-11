@@ -945,6 +945,49 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1). "Paired" was not the right condition either.
+     *
+     * A paired blocker's own LWW can copy in the OPPOSITE direction, so
+     * nothing rewrites its name on THIS target — the placeholder is stranded,
+     * and its later copy the other way can propagate `__sync-staging-…` to the
+     * other peer. Cleanup cannot rescue it by then, because the row it made
+     * way for owns its original name.
+     *
+     * Here local A is newer and wants "X" on the remote, while remote B
+     * currently owns "X" and is NEWER than local B — so B's copy runs
+     * remote -> local and never rewrites B on the remote.
+     */
+    it("refuses to stage a blocker whose copy runs the OTHER way", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "dir-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Bee", material: "PEI", syncId: "dir-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "dir-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        // remote B is NEWER, so B copies remote -> local and keeps "X" here.
+        { name: "X", material: "PEI", syncId: "dir-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // B keeps its real name on the remote — never staged, never stranded.
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "dir-b" });
+      expect(b!.name).toBe("X");
+      // And no placeholder leaked to EITHER peer.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
      * The unsatisfiable case: a row this pass is NOT moving already holds the
      * name. Staging cannot help, so it must be reported and BOTH peers left
      * alone — writing anyway would clobber a record the user still wants.
