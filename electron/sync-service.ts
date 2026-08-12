@@ -1365,9 +1365,26 @@ export class SyncService extends EventEmitter {
           // through `trySync`, so the settlement loop at the end never runs and
           // nothing scans for stale placeholders on a later cycle — the row
           // would keep the temporary name indefinitely.
-          await col
+          // SURFACE a failed rollback (Codex P2). If the original name was
+          // claimed while this row sat aside, the restore E11000s too — and
+          // discarding that left the blocker permanently named
+          // `__sync-staging-…`, because the throw below exits before
+          // settlement and nothing scans for stale placeholders on a later
+          // cycle. The original error still wins as the cause; this only makes
+          // sure the stranding is not silent.
+          const rolledBack = await col
             .updateOne({ _id: blocker._id, name: placeholder }, { $set: { name: blockerName } })
-            .catch(() => {});
+            .catch((rollbackErr: unknown) => {
+              console.error(
+                `[sync] ${collectionName}: could not roll ${String(blocker._id)} back to ` +
+                  `${JSON.stringify(blockerName)}; it still holds a staging placeholder.`,
+                rollbackErr,
+              );
+              return null;
+            });
+          if (!rolledBack?.modifiedCount) {
+            result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          }
           throw retryErr;
         }
         return true;
