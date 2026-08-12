@@ -47,6 +47,31 @@ export interface FilterParamSpec<T> {
   parse: (raw: string) => T | null;
   /** Value → raw string. Defaults to `String(value)`. */
   serialize?: (value: T) => string;
+  /**
+   * This key is backed by a PERSISTED preference, so its absence is
+   * ambiguous — and the ambiguity is a bug (GH #1141, Codex P1).
+   *
+   * Serialization normally omits a value equal to its fallback, which means a
+   * shared `?sort=cost` from a sender on ascending order says nothing about
+   * direction; a recipient whose saved direction is descending then opens the
+   * link sorted differently from the sender, and the mirror rewrites the URL
+   * to match. Two people, one link, two views.
+   *
+   * A sticky key is therefore emitted EXPLICITLY whenever the serializer
+   * emits anything at all, even at its fallback. Absence then means only one
+   * thing — "this URL is not talking about filters" — which is exactly when
+   * the persisted preference should win.
+   *
+   * A fully default view still serializes to a bare URL: nothing is emitted,
+   * so nothing is made sticky. That gate is load-bearing. Without it every
+   * printed dry-box QR (`/inventory?location=X`) would gain four preference
+   * params and reset the scanner's saved grouping.
+   *
+   * INVARIANT, asserted in the tests: a sticky key's fallback must not
+   * serialize to the empty string, or the delete branch below silently
+   * un-sticks it and reintroduces this bug for that key alone.
+   */
+  sticky?: boolean;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any -- a spec is heterogeneous
@@ -133,6 +158,11 @@ export function serializeFilterParams<S extends FilterSpec>(
   } catch {
     params = new URLSearchParams();
   }
+  // TWO passes, and the split is required rather than tidy: whether a sticky
+  // key must be emitted depends on whether ANY key emitted, which is not known
+  // until every key has been visited. Deciding inside one loop would make the
+  // output depend on `Object.keys(spec)` ordering.
+  let emittedAny = false;
   for (const key of Object.keys(spec) as (keyof S)[]) {
     const entry = spec[key];
     const value = state[key];
@@ -144,7 +174,22 @@ export function serializeFilterParams<S extends FilterSpec>(
     // A value that serializes to empty is indistinguishable from absent once
     // it round-trips, so drop it rather than emitting a bare `key=`.
     if (raw === "") params.delete(entry.param);
-    else params.set(entry.param, raw);
+    else {
+      params.set(entry.param, raw);
+      // Armed by an ACTUAL set, never by `value !== fallback` — the branch
+      // above deletes, and a non-default value that serializes to empty must
+      // not drag the sticky keys into an otherwise-bare URL.
+      emittedAny = true;
+    }
+  }
+  if (emittedAny) {
+    for (const key of Object.keys(spec) as (keyof S)[]) {
+      const entry = spec[key];
+      if (!entry.sticky) continue;
+      const value = state[key];
+      const raw = entry.serialize ? entry.serialize(value) : String(value);
+      if (raw !== "") params.set(entry.param, raw);
+    }
   }
   return params.toString();
 }
@@ -189,6 +234,41 @@ export function nextFilterHref<S extends FilterSpec>(
 export function withCurrentValue(options: string[], current: string): string[] {
   if (!current || options.includes(current)) return options;
   return [current, ...options];
+}
+
+/**
+ * Resolve the state a page should adopt from a query string.
+ *
+ * One rule, declared once: a STICKY key falls back to the persisted preference
+ * when the URL does not carry it; everything else takes the URL's value, which
+ * for an absent param is the spec fallback — i.e. a filter the URL is silent
+ * about is CLEARED, while a preference it is silent about is KEPT.
+ *
+ * This lives here rather than in the pages because it was seven hand-copied
+ * ternaries across two files, and stickiness declared in the spec but consumed
+ * by hand is the same drift class as the hand-mirrored IPC channels in
+ * `electron/main.ts`. It is also the only way to get the rule under the
+ * coverage gate at all — `vitest.config.ts` is `environment: "node"`, so the
+ * pages themselves cannot be exercised.
+ *
+ * Both callers use it: the mount seed passes the STORED preferences, and the
+ * re-seed (a same-route navigation) passes the CURRENT state, which is the
+ * same question asked at a different moment — "what should survive a URL that
+ * does not mention this?"
+ */
+export function seedFilterState<S extends FilterSpec>(
+  search: string,
+  spec: S,
+  persisted: Partial<FilterState<S>>,
+): FilterState<S> {
+  const url = parseFilterParams(search, spec);
+  const present = presentFilterKeys(search, spec);
+  const out = {} as FilterState<S>;
+  for (const key of Object.keys(spec) as (keyof S & string)[]) {
+    const usePersisted = spec[key].sticky && !present.has(key) && key in persisted;
+    out[key] = usePersisted ? (persisted[key] as FilterState<S>[typeof key]) : url[key];
+  }
+  return out;
 }
 
 /**

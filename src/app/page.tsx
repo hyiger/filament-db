@@ -7,12 +7,16 @@ import {
   parseFilterParams,
   presentFilterKeys,
   nextFilterHref,
-  oneOf,
-  boolParam,
-  textParam,
+  seedFilterState,
   withCurrentValue,
-  type FilterSpec,
 } from "@/lib/listFilterParams";
+import {
+  HOME_FILTER_SPEC,
+  HOME_PREFS_KEY,
+  HOME_PERSISTED_KEYS,
+  DEFAULT_HOME_PREFS,
+  type HomePrefs,
+} from "@/lib/listFilterSpecs";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
@@ -20,7 +24,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
-import QuickFilterChips, { QUICK_FILTERS, type QuickFilter } from "@/components/QuickFilterChips";
+import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
@@ -37,8 +41,6 @@ import {
   compareFilaments,
   nextSortState,
   earliestSpoolDate,
-  SORT_KEYS,
-  SORT_DIRS,
   type SortKey,
   type SortDir,
 } from "@/lib/sortFilamentList";
@@ -182,21 +184,22 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 // quick filters would land a returning user on a filtered subset of their
 // catalog, which reads as "filaments missing". Loaded post-mount so SSR /
 // first paint stay on defaults (no hydration mismatch).
-const HOME_PREFS_KEY = "filamentdb-home-prefs";
 const SORT_KEY_VALUES: SortKey[] = ["name", "vendor", "type", "nozzle", "bed", "cost", "remaining", "purchased", "opened"];
 
-function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
-  if (typeof window === "undefined") return { sortKey: "name", sortDir: "asc" };
+function loadHomePrefs(): HomePrefs {
+  if (typeof window === "undefined") return DEFAULT_HOME_PREFS;
   try {
     const raw = window.localStorage.getItem(HOME_PREFS_KEY);
-    if (!raw) return { sortKey: "name", sortDir: "asc" };
+    if (!raw) return DEFAULT_HOME_PREFS;
     const p = JSON.parse(raw) as { sortKey?: unknown; sortDir?: unknown };
     return {
-      sortKey: SORT_KEY_VALUES.includes(p.sortKey as SortKey) ? (p.sortKey as SortKey) : "name",
-      sortDir: p.sortDir === "desc" ? "desc" : "asc",
+      sortKey: SORT_KEY_VALUES.includes(p.sortKey as SortKey)
+        ? (p.sortKey as SortKey)
+        : DEFAULT_HOME_PREFS.sortKey,
+      sortDir: p.sortDir === "desc" ? "desc" : DEFAULT_HOME_PREFS.sortDir,
     };
   } catch {
-    return { sortKey: "name", sortDir: "asc" };
+    return DEFAULT_HOME_PREFS;
   }
 }
 
@@ -232,15 +235,6 @@ async function fetchFilterOptions(
   };
 }
 
-const HOME_FILTER_SPEC = {
-  search: { param: "q", fallback: "", ...textParam },
-  typeFilter: { param: "type", fallback: "", ...textParam },
-  vendorFilter: { param: "vendor", fallback: "", ...textParam },
-  quickFilter: { param: "quick", fallback: "all" as QuickFilter, parse: oneOf(QUICK_FILTERS) },
-  showOutOfStock: { param: "oos", fallback: false, ...boolParam },
-  sortKey: { param: "sort", fallback: "name" as SortKey, parse: oneOf(SORT_KEYS) },
-  sortDir: { param: "dir", fallback: "asc" as SortDir, parse: oneOf(SORT_DIRS) },
-} satisfies FilterSpec;
 
 export default function Home() {
   const { t } = useTranslation();
@@ -300,6 +294,9 @@ export default function Home() {
   // true from the commit AFTER the seed, so the mirror first runs with the
   // seeded values.
   const [seeded, setSeeded] = useState(false);
+  /** Preference keys the USER changed this session — the only ones written
+   *  back to storage. See the persist effect. */
+  const prefsTouchedRef = useRef<Set<(typeof HOME_PERSISTED_KEYS)[number]>>(new Set());
   /** The query string this page last wrote, so its own replaceState does not
    *  come back through SearchParamsSync as an external change. */
   const ownUrlWriteRef = useRef<string | null>(null);
@@ -353,8 +350,11 @@ export default function Home() {
     // Read post-mount, defaults-then-adopt — NOT a lazy `useState` initializer
     // with a `typeof window` check, which produces different first renders on
     // the two sides (the Codex P2 in src/app/locations/new/page.tsx).
-    const url = parseFilterParams(window.location.search, HOME_FILTER_SPEC);
-    const present = presentFilterKeys(window.location.search, HOME_FILTER_SPEC);
+    // Sort falls back to the PERSISTED pref when the URL is silent, so a bare
+    // "/" still opens the way the user left it, while a link that carries the
+    // sort applies it for the visit. `seedFilterState` owns that rule for both
+    // this seed and the re-seed below — see its docblock.
+    const url = seedFilterState(window.location.search, HOME_FILTER_SPEC, p);
 
     setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
     setDebouncedSearch(url.search);
@@ -362,12 +362,8 @@ export default function Home() {
     setVendorFilter(url.vendorFilter);
     setQuickFilter(url.quickFilter);
     setShowOutOfStock(url.showOutOfStock);
-    // Sort falls back to the PERSISTED pref when the URL is silent, so a bare
-    // "/" still opens the way the user left it. A shared link's sort applies
-    // to the visit; the persist effect below then stores it, matching how a
-    // manual sort behaves.
-    setSortKey(present.has("sortKey") ? url.sortKey : p.sortKey);
-    setSortDir(present.has("sortDir") ? url.sortDir : p.sortDir);
+    setSortKey(url.sortKey);
+    setSortDir(url.sortDir);
     setSeeded(true);
   }, []);
 
@@ -444,17 +440,35 @@ export default function Home() {
     // to a bare `/`; resetting to the fallback there would then have the
     // persist effect below overwrite the user's saved sort with `name`/`asc` —
     // a stored preference destroyed by a navigation that never mentioned it.
-    // The mount seed already reads a bare URL this way; this keeps the two
-    // paths agreeing. Functional updates so the callback keeps no state deps.
+    // Same rule as the mount seed, applied to the CURRENT state rather than
+    // the stored one; functional updates keep the callback free of state deps.
     setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
     setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
   }, []);
+  // Persist ONLY what the user chose (GH #1141, Codex P1).
+  //
+  // Sticky keys are now emitted into every non-bare URL, which is what makes a
+  // shared link deterministic — but it also means every shared link MENTIONS
+  // the sort. An ungated persist effect would therefore let a friend's link
+  // permanently overwrite the recipient's saved preference just by being
+  // opened. Tracking which keys the user actually touched, and merging those
+  // over whatever is stored, keeps "applies to this visit" and "is my
+  // preference" separate.
+  //
+  // Per-key rather than a single boolean because the record is one blob:
+  // a boolean cannot express "store the direction I just changed, leave the
+  // sort key alone".
   useEffect(() => {
-    if (!seeded) return;
+    if (!seeded || prefsTouchedRef.current.size === 0) return;
     try {
-      window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify({ sortKey, sortDir }));
+      const raw = window.localStorage.getItem(HOME_PREFS_KEY);
+      const stored = raw ? (JSON.parse(raw) as Partial<HomePrefs>) : {};
+      const live: HomePrefs = { sortKey, sortDir };
+      const next: HomePrefs = { ...DEFAULT_HOME_PREFS, ...stored };
+      for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
+      window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify(next));
     } catch {
-      /* ignore quota / disabled storage */
+      /* ignore quota / disabled storage / a corrupt stored blob */
     }
   }, [seeded, sortKey, sortDir]);
 
@@ -913,6 +927,10 @@ export default function Home() {
 
   const handleSort = (key: SortKey) => {
     const next = nextSortState({ sortKey, sortDir }, key);
+    // The ONLY place a user chooses a sort here, so the only place that may
+    // record one (GH #1141, Codex P1). See the persist effect.
+    prefsTouchedRef.current.add("sortKey");
+    prefsTouchedRef.current.add("sortDir");
     setSortKey(next.sortKey);
     setSortDir(next.sortDir);
   };

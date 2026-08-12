@@ -3,17 +3,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Suspense } from "react";
 import SearchParamsSync from "@/components/SearchParamsSync";
-import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
 import {
   parseFilterParams,
   presentFilterKeys,
   nextFilterHref,
-  oneOf,
-  boolParam,
-  textParam,
+  seedFilterState,
   withCurrentValue,
-  type FilterSpec,
 } from "@/lib/listFilterParams";
+import {
+  INVENTORY_FILTER_SPEC,
+  INVENTORY_PREFS_KEY,
+  INVENTORY_PERSISTED_KEYS,
+  DEFAULT_INVENTORY_PREFS,
+  type InventoryPrefs,
+} from "@/lib/listFilterSpecs";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -31,7 +34,6 @@ import {
   type InventorySortDir,
   INVENTORY_GROUP_BYS,
   INVENTORY_SORT_KEYS,
-  INVENTORY_SORT_DIRS,
 } from "@/lib/inventorySort";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
@@ -173,25 +175,6 @@ function remainingPct(row: SpoolRow): number | null {
  * corrupt/old blob can't wedge the page. `includeRetired` rides along since it
  * also drives the server query.
  */
-const INVENTORY_PREFS_KEY = "filamentdb-inventory-prefs";
-const GROUP_BY_VALUES: InventoryGroupBy[] = ["location", "type", "vendor", "none"];
-const SORT_KEY_VALUES: InventorySortKey[] = ["remaining", "name", "type", "vendor", "purchase", "opened"];
-
-interface InventoryPrefs {
-  groupBy: InventoryGroupBy;
-  sortKey: InventorySortKey;
-  sortDir: InventorySortDir;
-  includeRetired: boolean;
-}
-const DEFAULT_INVENTORY_PREFS: InventoryPrefs = {
-  groupBy: "location",
-  // #795: default to remaining-weight ascending — surfaces near-empty spools to
-  // reorder, the issue's primary use case.
-  sortKey: "remaining",
-  sortDir: "asc",
-  includeRetired: false,
-};
-
 function loadInventoryPrefs(): InventoryPrefs {
   if (typeof window === "undefined") return DEFAULT_INVENTORY_PREFS;
   try {
@@ -199,13 +182,13 @@ function loadInventoryPrefs(): InventoryPrefs {
     if (!raw) return DEFAULT_INVENTORY_PREFS;
     const p = JSON.parse(raw) as Partial<InventoryPrefs>;
     return {
-      groupBy: GROUP_BY_VALUES.includes(p.groupBy as InventoryGroupBy)
+      groupBy: (INVENTORY_GROUP_BYS as readonly InventoryGroupBy[]).includes(p.groupBy as InventoryGroupBy)
         ? (p.groupBy as InventoryGroupBy)
         : DEFAULT_INVENTORY_PREFS.groupBy,
-      sortKey: SORT_KEY_VALUES.includes(p.sortKey as InventorySortKey)
+      sortKey: (INVENTORY_SORT_KEYS as readonly InventorySortKey[]).includes(p.sortKey as InventorySortKey)
         ? (p.sortKey as InventorySortKey)
         : DEFAULT_INVENTORY_PREFS.sortKey,
-      sortDir: p.sortDir === "desc" ? "desc" : "asc",
+      sortDir: p.sortDir === "desc" ? "desc" : DEFAULT_INVENTORY_PREFS.sortDir,
       includeRetired: p.includeRetired === true,
     };
   } catch {
@@ -230,37 +213,6 @@ const NEW_LOCATION_OPTION = "__new_location__";
  * link encoded into printed dry-box QR stickers, not a filter, and
  * `serializeFilterParams` preserves it precisely because it is unowned.
  */
-const INVENTORY_FILTER_SPEC = {
-  search: { param: "q", fallback: "", ...textParam },
-  // Validated against the SELECTABLE kinds (Codex P2), not free text. The
-  // select renders exactly these five options, so a stale or hand-typed
-  // `?kind=garage` would leave React displaying "All kinds" while the hidden
-  // state kept filtering — and re-choosing the option already shown may emit
-  // no change event, so the filter would be invisible AND unclearable.
-  kind: { param: "kind", fallback: "", parse: oneOf(["", ...KNOWN_LOCATION_KINDS]) },
-  type: { param: "type", fallback: "", ...textParam },
-  vendor: { param: "vendor", fallback: "", ...textParam },
-  includeRetired: {
-    param: "includeRetired",
-    fallback: DEFAULT_INVENTORY_PREFS.includeRetired,
-    ...boolParam,
-  },
-  groupBy: {
-    param: "group",
-    fallback: DEFAULT_INVENTORY_PREFS.groupBy,
-    parse: oneOf(INVENTORY_GROUP_BYS),
-  },
-  sortKey: {
-    param: "sort",
-    fallback: DEFAULT_INVENTORY_PREFS.sortKey,
-    parse: oneOf(INVENTORY_SORT_KEYS),
-  },
-  sortDir: {
-    param: "dir",
-    fallback: DEFAULT_INVENTORY_PREFS.sortDir,
-    parse: oneOf(INVENTORY_SORT_DIRS),
-  },
-} satisfies FilterSpec;
 
 export default function InventoryPage() {
   const router = useRouter();
@@ -298,6 +250,9 @@ export default function InventoryPage() {
   // `/inventory?q=pla` landed bare. A state flag is only true from the commit
   // AFTER the seed. Verified on the home page, which had the identical shape.
   const [seeded, setSeeded] = useState(false);
+  /** Preference keys the USER changed this session — the only ones written
+   *  back to storage. See the persist effect. */
+  const prefsTouchedRef = useRef<Set<(typeof INVENTORY_PERSISTED_KEYS)[number]>>(new Set());
   /** The query string this page last wrote, so its own replaceState does not
    *  come back through SearchParamsSync as an external change. */
   const ownUrlWriteRef = useRef<string | null>(null);
@@ -375,6 +330,10 @@ export default function InventoryPage() {
     // are bucket values, not location ids, and the target simply would not
     // exist (PR #1043 P2). Forcing location grouping is what the user asked
     // for by scanning a BOX label; it persists like any manual switch.
+    // PR #1043 P2: this forced switch persists like a manual one — the user
+    // scanned a location QR, so location grouping is what they asked for.
+    // Recorded explicitly now that persistence is per-key (GH #1141).
+    prefsTouchedRef.current.add("groupBy");
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setGroupBy("location");
     // Groups default to expanded (`collapsed` holds collapsed keys), so the
@@ -476,29 +435,36 @@ export default function InventoryPage() {
     // the two sides (the Codex P2 recorded in src/app/locations/new/page.tsx).
     // The server HTML and the first client paint therefore both use the
     // defaults, and the URL is adopted immediately after.
-    const url = parseFilterParams(window.location.search, INVENTORY_FILTER_SPEC);
-    const present = presentFilterKeys(window.location.search, INVENTORY_FILTER_SPEC);
+    // Group/sort/retired fall back to the PERSISTED pref when the URL is
+    // silent, so a bare /inventory still opens the way the user left it, while
+    // a link that carries them applies them for the visit. `seedFilterState`
+    // owns that rule for both this seed and the re-seed below.
+    const url = seedFilterState(window.location.search, INVENTORY_FILTER_SPEC, p);
 
     setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
     setKind(url.kind);
     setType(url.type);
     setVendor(url.vendor);
-    // Group/sort fall back to the PERSISTED pref when the URL is silent, so a
-    // bare /inventory still opens the way the user left it.
-    setGroupBy(present.has("groupBy") ? url.groupBy : p.groupBy);
-    setSortKey(present.has("sortKey") ? url.sortKey : p.sortKey);
-    setSortDir(present.has("sortDir") ? url.sortDir : p.sortDir);
+    setGroupBy(url.groupBy);
+    setSortKey(url.sortKey);
+    setSortDir(url.sortDir);
     // GH #1106: `?includeRetired=1` overrides the persisted pref for this
-    // visit. The /locations "location is still in use" panel links here to
-    // show the retired spools that are blocking a delete — without this the
-    // link lands with the pref off, the aggregation returns no group for that
-    // location, and the deep-link handler below toasts "no active spools",
-    // i.e. the escape hatch would tell the user the spools don't exist. The
-    // persist effect writes it back like any manual toggle, which is right:
-    // the user followed a link asking to see them. That precedent is kept for
-    // THIS key only — a shared link's other filters apply to the visit but are
-    // not written into the recipient's stored preferences.
-    setIncludeRetired(present.has("includeRetired") ? url.includeRetired : p.includeRetired);
+    // visit — the /locations "location is still in use" panel links here to
+    // show the retired spools blocking a delete, and without it the link lands
+    // with the pref off, the aggregation returns no group for that location,
+    // and the deep-link handler below toasts "no active spools". I.e. the
+    // escape hatch would tell the user the spools do not exist. That still
+    // works: the value is adopted for the visit like any other sticky key.
+    //
+    // What CHANGED (GH #1141, Codex P1): it is no longer WRITTEN into the
+    // recipient's stored preferences. It cannot be — `includeRetired` is
+    // sticky, so every non-bare /inventory URL now carries it explicitly, and
+    // "the URL mentions it" no longer distinguishes "someone asked to see
+    // retired spools" from "the serializer emitted a default". Persisting on
+    // that signal would let any shared link rewrite the recipient's saved
+    // prefs, which is the opposite of the intent — and a one-off "show
+    // retired" link should not permanently flip a stored setting anyway.
+    setIncludeRetired(url.includeRetired);
     setSeeded(true);
   }, []);
 
@@ -586,16 +552,30 @@ export default function InventoryPage() {
     setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
   }, []);
 
-  // Persist prefs whenever they change (after the initial load).
+  // Persist ONLY what the user chose (GH #1141, Codex P1).
+  //
+  // Sticky keys are now emitted into every non-bare URL, which is what makes a
+  // shared link deterministic — but it also means every shared /inventory link
+  // MENTIONS the grouping, the sort and includeRetired. An ungated persist
+  // effect would let a friend's link permanently overwrite the recipient's
+  // saved preferences just by being opened. Tracking which keys the user
+  // actually touched, and merging those over what is stored, keeps "applies to
+  // this visit" and "is my preference" separate.
+  //
+  // Per-key rather than a single boolean because the record is one blob: a
+  // boolean cannot express "store the direction I just flipped, leave the
+  // grouping alone".
   useEffect(() => {
-    if (!seeded) return;
+    if (!seeded || prefsTouchedRef.current.size === 0) return;
     try {
-      window.localStorage.setItem(
-        INVENTORY_PREFS_KEY,
-        JSON.stringify({ groupBy, sortKey, sortDir, includeRetired }),
-      );
+      const raw = window.localStorage.getItem(INVENTORY_PREFS_KEY);
+      const stored = raw ? (JSON.parse(raw) as Partial<InventoryPrefs>) : {};
+      const live: InventoryPrefs = { groupBy, sortKey, sortDir, includeRetired };
+      const next: InventoryPrefs = { ...DEFAULT_INVENTORY_PREFS, ...stored };
+      for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
+      window.localStorage.setItem(INVENTORY_PREFS_KEY, JSON.stringify(next));
     } catch {
-      /* ignore quota / disabled storage */
+      /* ignore quota / disabled storage / a corrupt stored blob */
     }
   }, [seeded, groupBy, sortKey, sortDir, includeRetired]);
 
@@ -898,7 +878,10 @@ export default function InventoryPage() {
           <select
             id="inv-groupby"
             value={groupBy}
-            onChange={(e) => setGroupBy(e.target.value as InventoryGroupBy)}
+            onChange={(e) => {
+              prefsTouchedRef.current.add("groupBy");
+              setGroupBy(e.target.value as InventoryGroupBy);
+            }}
             className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
           >
             <option value="location">{t("inventory.groupBy.location")}</option>
@@ -915,7 +898,10 @@ export default function InventoryPage() {
             <select
               id="inv-sortby"
               value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as InventorySortKey)}
+              onChange={(e) => {
+                prefsTouchedRef.current.add("sortKey");
+                setSortKey(e.target.value as InventorySortKey);
+              }}
               className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
             >
               <option value="remaining">{t("inventory.sort.remaining")}</option>
@@ -927,7 +913,10 @@ export default function InventoryPage() {
             </select>
             <button
               type="button"
-              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+              onClick={() => {
+                prefsTouchedRef.current.add("sortDir");
+                setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+              }}
               aria-label={t(sortDir === "asc" ? "inventory.sort.asc" : "inventory.sort.desc")}
               title={t(sortDir === "asc" ? "inventory.sort.asc" : "inventory.sort.desc")}
               className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
@@ -940,7 +929,10 @@ export default function InventoryPage() {
           <input
             type="checkbox"
             checked={includeRetired}
-            onChange={(e) => setIncludeRetired(e.target.checked)}
+            onChange={(e) => {
+              prefsTouchedRef.current.add("includeRetired");
+              setIncludeRetired(e.target.checked);
+            }}
             className="accent-blue-600"
           />
           {t("inventory.filter.includeRetired")}

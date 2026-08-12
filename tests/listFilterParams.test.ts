@@ -4,6 +4,7 @@ import {
   serializeFilterParams,
   nextFilterHref,
   presentFilterKeys,
+  seedFilterState,
   oneOf,
   boolParam,
   textParam,
@@ -208,5 +209,157 @@ describe("presentFilterKeys", () => {
 
   it("accepts a leading ? like the other helpers", () => {
     expect(presentFilterKeys("?type=PLA", SPEC).has("type")).toBe(true);
+  });
+});
+
+/**
+ * GH #1141 (Codex P1). Serialization omits a value equal to its fallback, so a
+ * sender sorted cost/ASC shared `?sort=cost` and said nothing about direction —
+ * a recipient with a saved DESC opened the same link sorted differently, and
+ * the mirror then rewrote the URL to match. Two people, one link, two views.
+ *
+ * A sticky key is emitted explicitly whenever anything is emitted, so absence
+ * means exactly one thing: this URL is not talking about filters.
+ */
+describe("sticky keys", () => {
+  const STICKY_SPEC = {
+    search: { param: "q", fallback: "", ...textParam },
+    sortKey: { param: "sort", fallback: "name", parse: oneOf(["name", "cost"] as const), sticky: true },
+    sortDir: { param: "dir", fallback: "asc", parse: oneOf(["asc", "desc"] as const), sticky: true },
+  } satisfies FilterSpec;
+
+  it("emits a sticky key at its fallback once anything else is emitted", () => {
+    // The reported case: cost + ASC. Pre-fix this was `sort=cost` alone.
+    const q = serializeFilterParams("", STICKY_SPEC, {
+      search: "",
+      sortKey: "cost",
+      sortDir: "asc",
+    });
+    expect(new URLSearchParams(q).get("sort")).toBe("cost");
+    expect(new URLSearchParams(q).get("dir")).toBe("asc");
+  });
+
+  it("arms on a NON-sticky key too — a plain search carries the preferences", () => {
+    const q = serializeFilterParams("", STICKY_SPEC, {
+      search: "pla",
+      sortKey: "name",
+      sortDir: "asc",
+    });
+    expect(new URLSearchParams(q).get("q")).toBe("pla");
+    expect(new URLSearchParams(q).get("sort")).toBe("name");
+    expect(new URLSearchParams(q).get("dir")).toBe("asc");
+  });
+
+  it("stays BARE for an all-default view — the gate that keeps printed QRs clean", () => {
+    // Load-bearing: without it every `/inventory?location=X` sticker would
+    // gain four preference params and reset the scanner's saved grouping.
+    expect(
+      serializeFilterParams("", STICKY_SPEC, { search: "", sortKey: "name", sortDir: "asc" }),
+    ).toBe("");
+  });
+
+  it("is not a ratchet — clearing the last filter returns to bare", () => {
+    const filtered = serializeFilterParams("", STICKY_SPEC, {
+      search: "pla",
+      sortKey: "name",
+      sortDir: "asc",
+    });
+    expect(
+      serializeFilterParams(filtered, STICKY_SPEC, {
+        search: "",
+        sortKey: "name",
+        sortDir: "asc",
+      }),
+    ).toBe("");
+  });
+
+  it("does not arm on an unowned param alone", () => {
+    // `?location=` is printed on dry-box stickers and is not ours.
+    const q = serializeFilterParams("location=abc123", STICKY_SPEC, {
+      search: "",
+      sortKey: "name",
+      sortDir: "asc",
+    });
+    expect(new URLSearchParams(q).get("location")).toBe("abc123");
+    expect(new URLSearchParams(q).has("sort")).toBe(false);
+  });
+
+  it("still preserves unknown params when it does arm", () => {
+    const q = serializeFilterParams("location=abc123", STICKY_SPEC, {
+      search: "pla",
+      sortKey: "name",
+      sortDir: "asc",
+    });
+    expect(new URLSearchParams(q).get("location")).toBe("abc123");
+    expect(new URLSearchParams(q).get("sort")).toBe("name");
+  });
+
+  it("reaches a fixed point, so the mirror does not churn", () => {
+    const href = nextFilterHref(
+      { pathname: "/", search: "", hash: "" },
+      STICKY_SPEC,
+      { search: "pla", sortKey: "cost", sortDir: "desc" },
+    );
+    const written = href!.slice(href!.indexOf("?"));
+    expect(
+      nextFilterHref({ pathname: "/", search: written, hash: "" }, STICKY_SPEC, {
+        search: "pla",
+        sortKey: "cost",
+        sortDir: "desc",
+      }),
+    ).toBeNull();
+  });
+
+  it("round-trips a shared link identically regardless of the reader's prefs", () => {
+    // The whole point. Sender is cost/ASC; two recipients with opposite saved
+    // directions must both see the sender's view.
+    const shared = serializeFilterParams("", STICKY_SPEC, {
+      search: "",
+      sortKey: "cost",
+      sortDir: "asc",
+    });
+    for (const saved of ["asc", "desc"] as const) {
+      const seeded = seedFilterState(shared, STICKY_SPEC, { sortKey: "name", sortDir: saved });
+      expect(seeded.sortKey).toBe("cost");
+      expect(seeded.sortDir).toBe("asc");
+    }
+  });
+});
+
+describe("seedFilterState", () => {
+  const SPEC2 = {
+    search: { param: "q", fallback: "", ...textParam },
+    sortKey: { param: "sort", fallback: "name", parse: oneOf(["name", "cost"] as const), sticky: true },
+  } satisfies FilterSpec;
+
+  it("keeps the persisted value for a sticky key the URL does not carry", () => {
+    // A bare route means "use my preference" — the mount case, and the case
+    // that clicking the header link while filtered has to preserve.
+    expect(seedFilterState("", SPEC2, { sortKey: "cost" })).toEqual({
+      search: "",
+      sortKey: "cost",
+    });
+  });
+
+  it("CLEARS a non-sticky filter the URL does not carry", () => {
+    // The asymmetry is the feature: a filter the URL is silent about is
+    // cleared, a preference it is silent about is kept.
+    expect(seedFilterState("", SPEC2, { sortKey: "cost" }).search).toBe("");
+    expect(seedFilterState("sort=name", SPEC2, { sortKey: "cost" }).sortKey).toBe("name");
+  });
+
+  it("lets the URL win over the persisted value", () => {
+    expect(seedFilterState("q=pla&sort=cost", SPEC2, { sortKey: "name" })).toEqual({
+      search: "pla",
+      sortKey: "cost",
+    });
+  });
+
+  it("falls back to the spec default when nothing is persisted for the key", () => {
+    expect(seedFilterState("", SPEC2, {}).sortKey).toBe("name");
+  });
+
+  it("treats an unparseable sticky value as silence, not as a reset", () => {
+    expect(seedFilterState("sort=bogus", SPEC2, { sortKey: "cost" }).sortKey).toBe("cost");
   });
 });
