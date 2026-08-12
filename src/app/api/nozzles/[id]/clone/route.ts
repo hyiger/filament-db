@@ -27,6 +27,10 @@ import { nextCloneName, clonePeerNamePattern } from "@/lib/nozzleConflicts";
  * follow-up assignment, because this endpoint deliberately doesn't know
  * which printer triggered the clone.
  */
+/** How many `#N` suffixes to probe before giving up. Each miss consumes one,
+ *  so the loop terminates on its own; this only bounds a pathological DB. */
+const MAX_CLONE_SUFFIX_PROBES = 50;
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -54,23 +58,39 @@ export async function POST(
     })
       .select("name")
       .lean();
-    const newName = nextCloneName(
-      source.name,
-      peers.map((p) => p.name),
-    );
+    const peerNames = peers.map((p) => p.name);
+    const firstName = nextCloneName(source.name, peerNames);
 
     // GH #1116 (Codex P1): the GENERATED name needs the survivor check too.
     // The peer regex above is a raw-name match that misses an untrimmed
-    // survivor, so with an active `"0.4 #2 "` this picks `"0.4 #2"`, the
-    // unique index compares the raw strings and permits it, and the clone is
-    // indistinguishable from the row it failed to see.
-    const nameConflict = await survivorNameConflict(
-      Nozzle.collection as unknown as MinimalNameCollection,
-      newName,
-    );
+    // survivor, so with an active `"0.4 #2 "` it picks `"0.4 #2"`, the unique
+    // index compares the raw strings and permits it, and the clone renders
+    // identically to the row it failed to see.
+    //
+    // ADVANCE past it rather than refusing (Codex P2). This endpoint is the
+    // UI's way to mint a distinct physical nozzle, and a survivor is a
+    // permanent state — the migration leaves it precisely because it cannot be
+    // repaired automatically. Returning 409 would make cloning impossible
+    // forever, on every retry, even though `"0.4 #3"` is free. So treat the
+    // survivor as an occupied suffix, which is exactly what it is to a human
+    // reading the list, and take the next candidate.
+    let newName = firstName;
+    let attempt = 0;
+    let nameConflict: string | null = null;
+    // Bounded: each miss consumes one suffix, so this terminates. The cap only
+    // stops a pathological database from spinning.
+    while (attempt < MAX_CLONE_SUFFIX_PROBES) {
+      nameConflict = await survivorNameConflict(
+        Nozzle.collection as unknown as MinimalNameCollection,
+        newName,
+      );
+      if (!nameConflict) break;
+      attempt += 1;
+      newName = nextCloneName(source.name, [...peerNames, newName]);
+    }
     if (nameConflict) {
       return errorResponse(
-        `A nozzle with that name already exists: "${newName}"`,
+        `Could not find a free name for the clone (last tried "${newName}").`,
         409,
       );
     }

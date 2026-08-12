@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  survivorNameConflict,
   trimmedNameFilter,
   findByTrimmedName,
   type MinimalNameCollection,
@@ -93,5 +94,52 @@ describe("findByTrimmedName", () => {
     await findByTrimmedName(collection, "  Drybox #1  ");
     const expr = calls[0].$expr as { $in: [unknown, string[]] };
     expect(expr.$in[1]).toEqual(["Drybox #1"]);
+  });
+});
+
+describe("survivorNameConflict", () => {
+  /** A fake whose `find` returns matches in a caller-chosen order, so the
+   *  "arbitrary match happens to be self" case is deterministic. */
+  function fakeWith(rows: { _id: string }[]) {
+    return {
+      async findOne() {
+        return rows[0] ?? null;
+      },
+      find() {
+        return { async toArray() { return rows; } };
+      },
+    } as unknown as Parameters<typeof survivorNameConflict>[0];
+  }
+
+  it("looks PAST a match that is the row being renamed", async () => {
+    // Several active rows can trim to one name — exactly what a skipped
+    // migration leaves. A single-match lookup returns an ARBITRARY one; when
+    // that was self, the guard reported "no conflict" and the save normalized
+    // a survivor "X " to "X" beside an existing "X", producing two identical
+    // STORED names with no index left to catch it.
+    const col = fakeWith([{ _id: "self" }, { _id: "other" }]);
+    expect(await survivorNameConflict(col, "X", "self")).toBe("other");
+  });
+
+  it("still reports no conflict when self is the ONLY match", async () => {
+    const col = fakeWith([{ _id: "self" }]);
+    expect(await survivorNameConflict(col, "X", "self")).toBeNull();
+  });
+
+  it("reports the first match when there is no self to exclude", async () => {
+    const col = fakeWith([{ _id: "other" }]);
+    expect(await survivorNameConflict(col, "X")).toBe("other");
+  });
+
+  it("normalizes a schema-castable non-string before deciding", async () => {
+    // Mongoose stores 7 as "7"; a `typeof` skip would never look.
+    const col = fakeWith([{ _id: "other" }]);
+    expect(await survivorNameConflict(col, 7)).toBe("other");
+  });
+
+  it("ignores a value the schema would reject, and a blank name", async () => {
+    const col = fakeWith([{ _id: "other" }]);
+    expect(await survivorNameConflict(col, ["nope"])).toBeNull();
+    expect(await survivorNameConflict(col, "   ")).toBeNull();
   });
 });

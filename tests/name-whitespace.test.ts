@@ -900,25 +900,30 @@ describe("generated names are survivor-checked (#1116)", () => {
     expect(parent.name).toBe("PLA");
   });
 
-  it("the nozzle CLONE's generated name is checked", async () => {
-    const source = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "brass" });
-    // The clone would generate "0.4 #2"; a survivor already holds "0.4 #2 ".
+  it("the nozzle CLONE ADVANCES past a survivor instead of refusing forever", async () => {
+    // A survivor is a PERMANENT state — the migration leaves it precisely
+    // because it cannot repair it automatically — so refusing would make
+    // cloning impossible forever, on every retry, even though the next suffix
+    // is free. It is an occupied suffix to a human reading the list, so treat
+    // it as one.
+    const source = await Nozzle.create({ name: "0.5", diameter: 0.5, type: "brass" });
     await Nozzle.collection.insertOne({
-      name: "0.4 #2 ", diameter: 0.4, type: "brass", _deletedAt: null,
+      name: "0.5 #2 ", diameter: 0.5, type: "brass", _deletedAt: null,
     });
     const { POST } = await import("@/app/api/nozzles/[id]/clone/route");
 
     const res = await POST(
-      new NextRequest(`http://localhost/api/nozzles/${source._id}/clone`, {
-        method: "POST",
-      }),
+      new NextRequest(`http://localhost/api/nozzles/${source._id}/clone`, { method: "POST" }),
       { params: Promise.resolve({ id: String(source._id) }) },
     );
 
-    expect(res.status).toBe(409);
-    // Two rows only — the source and the survivor. No indistinguishable clone.
-    expect(await Nozzle.collection.countDocuments({})).toBe(2);
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    // Skipped the survivor-occupied "#2" and took the next free suffix.
+    expect(created.name).toBe("0.5 #3");
+    expect(await Nozzle.collection.countDocuments({})).toBe(3);
   });
+
 
   it("the filament PUT guard checks a schema-castable NON-STRING name", async () => {
     await Filament.collection.insertOne({

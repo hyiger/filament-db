@@ -100,6 +100,13 @@ export interface MinimalNameCollection {
     filter: Record<string, unknown>,
     options?: Record<string, unknown>,
   ): Promise<{ _id: unknown; name?: unknown } | null>;
+  /** Optional: used by `survivorNameConflict`, which has to look PAST a match
+   *  that turns out to be the row being renamed. Absent on the unit-test
+   *  fakes that only exercise the single-row helpers. */
+  find?(
+    filter: Record<string, unknown>,
+    options?: Record<string, unknown>,
+  ): { toArray(): Promise<{ _id: unknown; name?: unknown }[]> };
 }
 
 /**
@@ -206,6 +213,33 @@ export async function survivorNameConflict(
 ): Promise<string | null> {
   const cast = castNameLikeSchema(name);
   if (cast === null || !cast.trim()) return null;
+
+  // Look PAST a match that turns out to be the row being renamed (Codex P2).
+  //
+  // Several active rows can trim to the same name — that is exactly the state
+  // a skipped migration leaves — and a single-match lookup returns an
+  // ARBITRARY one of them. If it happened to be `selfId`, reporting "no
+  // conflict" let the save normalize a survivor `"X "` to `"X"` beside an
+  // existing `"X"`, producing two identical STORED names with no index left to
+  // catch it (the collection was skipped precisely because no adequate unique
+  // index could be built).
+  //
+  // A small cap is enough: we only need one row that is not self.
+  if (collection.find) {
+    const rows = await collection
+      .find(
+        { _deletedAt: null, ...trimmedNameFilter([cast]) },
+        { projection: { _id: 1 }, limit: 5 },
+      )
+      .toArray();
+    for (const row of rows) {
+      const id = String(row._id);
+      if (selfId != null && id === String(selfId)) continue;
+      return id;
+    }
+    return null;
+  }
+
   const row = await findByTrimmedName(collection, cast, { _deletedAt: null });
   if (!row) return null;
   const id = String(row._id);
