@@ -1393,7 +1393,23 @@ export class SyncService extends EventEmitter {
 
         const blockerSyncId = typeof blocker.syncId === "string" ? blocker.syncId : null;
         const blockerName = typeof blocker.name === "string" ? blocker.name : null;
-        if (!blockerSyncId || !blockerName || !stageableOn(col).has(String(blocker._id))) {
+        if (
+          !blockerSyncId ||
+          !blockerName ||
+          !stageableOn(col).has(String(blocker._id)) ||
+          // The plan is a SNAPSHOT; re-derive its rule from fresh state
+          // (Codex P1). Staging is legitimate only while the blocker's own
+          // rewrite is still PENDING — the plan checked that against
+          // pre-pass names, but by now the blocker's write may have LANDED,
+          // in which case its fresh name IS its final one and nothing will
+          // ever move it again: staging it can never be settled, because the
+          // name settlement would restore is the one this retry is about to
+          // take. The planner's contested-destination refusal closes this
+          // for rows it can SEE; this closes it for requesters it cannot —
+          // a resurrect is not in the intent graph (its LWW writes the
+          // deleted side), yet its E11000 lands in this same catch.
+          desiredNameOn(col, blockerSyncId) === blockerName
+        ) {
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: cannot apply name ${JSON.stringify(desiredName)} — ` +

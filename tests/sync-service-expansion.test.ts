@@ -1222,6 +1222,60 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1, fifth pass): a CONTESTED destination must refuse the
+     * whole tangle, because the cached plan cannot follow mid-pass reality.
+     *
+     * The state: the SOURCE holds duplicate active names ("Y" twice), which the
+     * trim refuses to index ("resolve them and restart") while the sync
+     * continues paired-only — so the writes still run against the indexed
+     * target. Pre-fix, the A↔B swap resolved first, C then E11000'd against
+     * the now-final A, and the SNAPSHOT plan still authorized staging A: C
+     * took "Y", and settlement could not restore A because "Y" was occupied.
+     * A stayed `__sync-staging-…` permanently.
+     *
+     * Post-fix nothing is written for the contested tangle at all — three
+     * reported conflicts, both peers byte-identical to the seed. The trim's
+     * own message already tells the user the real remedy (dedupe the source).
+     */
+    it("refuses a contested destination instead of stranding the winner", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // The source needs duplicate active names, so its unique index (created
+      // by the harness beforeEach) has to go — mirroring the real precondition.
+      await localDb.collection("bedtypes").dropIndex("name_1");
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "cd-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "X", material: "PEI", syncId: "cd-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "cd-c", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "cd-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Y", material: "PEI", syncId: "cd-b", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Z", material: "PEI", syncId: "cd-c", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // NOTHING holds a placeholder — the pre-fix outcome was exactly one,
+      // stranded on remote A after C took the name settlement would restore.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // The target is untouched: refused, not half-applied.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-a" }))!.name).toBe("X");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-b" }))!.name).toBe("Y");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-c" }))!.name).toBe("Z");
+      // And it is REPORTED, not silent.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeTruthy();
+    });
+
+    /**
      * The unsatisfiable case: a row this pass is NOT moving already holds the
      * name. Staging cannot help, so it must be reported and BOTH peers left
      * alone — writing anyway would clobber a record the user still wants.

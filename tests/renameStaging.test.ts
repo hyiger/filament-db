@@ -79,19 +79,20 @@ describe("planRenameStaging", () => {
     expect(plan.unsatisfiable).toEqual([]);
   });
 
-  it("stages a holder only once even when two rows contend for it", () => {
-    // Both A and C want B's name. B is staged once, not twice — a second
-    // rename would move it off the placeholder the first one recorded.
+  it("refuses BOTH rows contending for one name (Codex P1, fifth pass)", () => {
+    // Both A and C want B's name. An earlier version staged B once and let
+    // "the index reject the loser" — reasoning this test used to ENCODE as
+    // intent. That rejection is exactly what strands the winner: the loser's
+    // E11000 finds the winner as its blocker, the cached plan still authorized
+    // staging it, and settlement could not restore a name the loser's retry
+    // had just taken. There is no principled winner (write order is
+    // incidental), so every contender is refused and B stays put.
     const plan = planRenameStaging(
       [row("a", "P", "B"), row("c", "Q", "B"), row("b", "B", "Z")],
       "n1",
     );
-    expect(plan.staged.map((s) => s.id)).toEqual(["b"]);
-    // The loser is reported rather than silently dropped... or rather: both
-    // wanted B, and only one can have it. The second is NOT unsatisfiable here
-    // because B is genuinely vacating; the index will reject the loser and the
-    // per-row error path reports it.
-    expect(plan.unsatisfiable).toEqual([]);
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable.map((u) => u.id).sort()).toEqual(["a", "c"]);
   });
 
   it("gives every staged row a distinct, recognisable placeholder", () => {
@@ -156,6 +157,54 @@ describe("isStagingPlaceholder", () => {
     expect(isStagingPlaceholder("")).toBe(false);
     expect(isStagingPlaceholder(null)).toBe(false);
     expect(isStagingPlaceholder(42)).toBe(false);
+  });
+});
+
+/**
+ * GH #1142 (Codex P1, fifth pass): a CONTESTED destination — two rows desiring
+ * the same name — must poison the plan, not merely fail one of the writes.
+ *
+ * The state requires the SOURCE to hold duplicate active names, which the trim
+ * pass refuses to index ("resolve them and restart") while the sync continues
+ * paired-only. At most one contender can win; the loser then E11000s against
+ * the WINNER, whose write has landed — and a cached plan that still authorized
+ * staging the winner had it moved aside with no write ever coming, while its
+ * original name was taken by the loser's retry. Settlement cannot restore it:
+ * stranded permanently.
+ */
+describe("planRenameStaging with contested destinations", () => {
+  it("refuses the whole cycle when a third row desires a name inside it", () => {
+    // Codex's exact example: target A="X", B="Y", C="Z"; desires A→Y, B→X,
+    // C→Y. Pre-fix this planned staged=[B, A] and let the A↔B swap resolve —
+    // after which C collided with the now-final A and stranded it.
+    const plan = planRenameStaging(
+      [row("A", "X", "Y"), row("B", "Y", "X"), row("C", "Z", "Y")],
+      "nonce",
+    );
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable.map((u) => u.id).sort()).toEqual(["A", "B", "C"]);
+  });
+
+  it("refuses to stage a contender for an UNRELATED requester", () => {
+    // D wants A's current name. A is moving — but A is contesting "Y" with C,
+    // so A may lose the race and never vacate "X". Staging A for D's benefit
+    // gambles a permanent placeholder on write order.
+    const plan = planRenameStaging(
+      [row("A", "X", "Y"), row("C", "Z", "Y"), row("D", "W", "X")],
+      "nonce",
+    );
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable.map((u) => u.id)).toEqual(["D"]);
+  });
+
+  it("still resolves a clean swap next to an uncontested rename", () => {
+    // The refusal must be scoped to the contested name, not the whole pass.
+    const plan = planRenameStaging(
+      [row("A", "X", "Y"), row("B", "Y", "X"), row("E", "P", "Q")],
+      "nonce",
+    );
+    expect(plan.staged.map((s) => s.id).sort()).toEqual(["A", "B"]);
+    expect(plan.unsatisfiable).toEqual([]);
   });
 });
 

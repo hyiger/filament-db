@@ -145,6 +145,35 @@ export function planRenameStaging(
   for (const row of rows) {
     if (row.willWrite && row.desiredName !== row.currentName) canVacate.add(row.id);
   }
+
+  // A CONTESTED destination poisons every row that desires it (Codex P1).
+  //
+  // Two rows desiring the same name can only happen when the SOURCE holds
+  // duplicate active names — a state the trim pass refuses to index and the
+  // sync continues through paired-only. At most one of them can win the name;
+  // the loser E11000s against the winner, whose write has by then LANDED, so
+  // moving the winner aside can never be settled — its original name is the
+  // contested one, which the loser's retry just took. Concretely: with target
+  // A="X", B="Y", C="Z" and desires A→"Y", B→"X", C→"Y", staging resolved the
+  // A↔B swap and then C collided with the now-final A; the cached plan still
+  // authorized staging A, C took "Y", and settlement could not restore A —
+  // stranded permanently.
+  //
+  // There is no principled winner to pick (write order is incidental), so
+  // every contender is refused: removed from `canVacate` BEFORE the fixpoint,
+  // which also cascades — a row whose destination is held by a contender
+  // cannot rely on it vacating, and is knocked out by the ordinary rule.
+  const desireCount = new Map<string, number>();
+  for (const row of rows) {
+    if (row.willWrite && row.desiredName !== row.currentName) {
+      desireCount.set(row.desiredName, (desireCount.get(row.desiredName) ?? 0) + 1);
+    }
+  }
+  for (const row of rows) {
+    if (canVacate.has(row.id) && (desireCount.get(row.desiredName) ?? 0) > 1) {
+      canVacate.delete(row.id);
+    }
+  }
   for (;;) {
     let changed = false;
     for (const id of [...canVacate]) {
