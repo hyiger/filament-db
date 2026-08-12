@@ -1079,6 +1079,58 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1, second pass): the holder graph must use MONGODB's
+     * predicate, not JS truthiness. `{_deletedAt: null}` matches null AND
+     * missing and nothing else, so a raw `_deletedAt: ""` — Mongoose casts an
+     * empty string to null on a Date path, the driver stores it verbatim, and
+     * `trimEntityNames` documents the same shape at its own `== null` test —
+     * sits OUTSIDE the partial unique index and can never block a write.
+     *
+     * `!d._deletedAt` let such a row in as a holder. Sorted first it won the
+     * name slot, never vacated (nothing is copying it), and the fixpoint then
+     * declared a perfectly resolvable swap immovable — every cycle, forever.
+     */
+    it("ignores a raw _deletedAt:\"\" row, which the partial index does not cover", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
+
+      // A pure two-row swap on the remote: A wants B's name and B wants A's.
+      // Resolvable by staging one of them aside.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esd-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Aye", material: "PEI", syncId: "esd-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        // The ghost, paired at equal timestamps so nothing is copied for it —
+        // it exists only to sit in the graph.
+        { name: "Bee", material: "PEI", syncId: "esd-ghost", _deletedAt: "", createdAt: older, updatedAt: same },
+      ]);
+      // Inserted FIRST on the target side so it wins the "Bee" slot in the
+      // holder map — first holder wins, which is what made this bite.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esd-ghost", _deletedAt: "", createdAt: older, updatedAt: same },
+        { name: "Aye", material: "PEI", syncId: "esd-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "esd-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The swap goes through — no conflict reported.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-a" }))!.name).toBe("Bee");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-b" }))!.name).toBe("Aye");
+      // The ghost is untouched, and nothing was left holding a placeholder.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-ghost" }))!.name).toBe("Bee");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
      * The unsatisfiable case: a row this pass is NOT moving already holds the
      * name. Staging cannot help, so it must be reported and BOTH peers left
      * alone — writing anyway would clobber a record the user still wants.

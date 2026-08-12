@@ -192,3 +192,41 @@ export function planRenameStaging(
 
   return { staged, unsatisfiable };
 }
+
+/**
+ * Compose the error a caller throws when a staged row could NOT be put back.
+ *
+ * Extracted here — pure, and next to the rest of the staging vocabulary —
+ * because the failure it describes is a genuine race (the original name has to
+ * be claimed by a third party in the window between staging and rollback) and
+ * so cannot be induced from a sync test. Testing the message instead of the
+ * race at least pins the two decisions that matter: that the stranding leads,
+ * and that the cause survives.
+ *
+ * ## Why the stranding leads and the cause follows
+ *
+ * `wrapSyncErrorMessage` REPLACES the whole message when it recognises the
+ * read-only-Atlas shape (GH #143), so anything appended after an auth-shaped
+ * cause is dropped. Between the two, the durable problem has to win: a
+ * permissions error recurs on the next cycle and re-tells its own story, while
+ * a row left holding a placeholder is announced exactly once.
+ *
+ * (The conflict should not arise anyway — staging already wrote to this same
+ * collection a moment earlier, which proves writes were permitted.)
+ */
+export function strandedPlaceholderMessage(input: {
+  collection: string;
+  id: string;
+  originalName: string;
+  placeholderName: string;
+  cause: unknown;
+}): string {
+  const cause =
+    input.cause instanceof Error ? input.cause.message : String(input.cause);
+  return (
+    `${input.collection} ${input.id} was moved aside to free the name ` +
+    `${JSON.stringify(input.originalName)} and could not be restored — it still holds the ` +
+    `temporary name ${JSON.stringify(input.placeholderName)}. Rename it back manually. ` +
+    `The write that failed reported: ${cause}`
+  );
+}

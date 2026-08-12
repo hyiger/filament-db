@@ -3,6 +3,7 @@ import {
   planRenameStaging,
   isStagingPlaceholder,
   placeholderFor,
+  strandedPlaceholderMessage,
   STAGING_PREFIX,
   type RenameIntent,
 } from "@/lib/renameStaging";
@@ -153,5 +154,58 @@ describe("isStagingPlaceholder", () => {
     expect(isStagingPlaceholder("")).toBe(false);
     expect(isStagingPlaceholder(null)).toBe(false);
     expect(isStagingPlaceholder(42)).toBe(false);
+  });
+});
+
+/**
+ * The rollback-failed path in `writeWithRenameStaging` is a genuine race — a
+ * third party has to claim the original name in the window between staging and
+ * rollback — so it cannot be induced from a sync test. What CAN be pinned is
+ * the message it hands up, which after GH #1142 (Codex P2, twice) is the only
+ * channel that reaches the user: the throw leaves `syncCollection` entirely and
+ * `trySync` rebuilds a zero-count SyncResult carrying nothing but the error, so
+ * a counter on `result` — the previous attempt — was discarded on the one path
+ * it existed for.
+ */
+describe("strandedPlaceholderMessage", () => {
+  const base = {
+    collection: "bedtypes",
+    id: "64b7f0000000000000000001",
+    originalName: "Textured PEI",
+    placeholderName: "__sync-staging-64b7f0000000000000000001-abc",
+  };
+
+  it("names the row, both names, and what the user has to do", () => {
+    const msg = strandedPlaceholderMessage({ ...base, cause: new Error("E11000 dup key") });
+    expect(msg).toContain("bedtypes 64b7f0000000000000000001");
+    expect(msg).toContain('"Textured PEI"');
+    expect(msg).toContain('"__sync-staging-64b7f0000000000000000001-abc"');
+    expect(msg).toMatch(/rename it back manually/i);
+  });
+
+  it("keeps the underlying failure, so the cause is not lost", () => {
+    expect(
+      strandedPlaceholderMessage({ ...base, cause: new Error("E11000 dup key") }),
+    ).toContain("E11000 dup key");
+  });
+
+  it("leads with the stranding — an auth-shaped cause must not displace it", () => {
+    // `wrapSyncErrorMessage` REPLACES the whole message on the read-only-Atlas
+    // shape (GH #143). Anything after such a cause would be dropped, so the
+    // durable problem has to come first: a permissions error re-tells itself
+    // next cycle, a stranded placeholder is announced exactly once.
+    const msg = strandedPlaceholderMessage({
+      ...base,
+      cause: new Error("user is not allowed to do action [update] on [db.bedtypes]"),
+    });
+    expect(msg.indexOf("bedtypes 64b7f0000000000000000001")).toBeLessThan(
+      msg.indexOf("user is not allowed"),
+    );
+  });
+
+  it("survives a non-Error rejection", () => {
+    expect(strandedPlaceholderMessage({ ...base, cause: "socket hang up" })).toContain(
+      "socket hang up",
+    );
   });
 });

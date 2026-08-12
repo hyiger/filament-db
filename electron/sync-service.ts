@@ -17,6 +17,7 @@ import {
   isStagingPlaceholder,
   placeholderFor,
   planRenameStaging,
+  strandedPlaceholderMessage,
 } from "../src/lib/renameStaging";
 import {
   retombstonePurgedZombies,
@@ -1277,13 +1278,21 @@ export class SyncService extends EventEmitter {
       if (cached) return cached;
       const docs = col === remoteCol ? remoteDocs : localDocs;
       const intents = docs
-        // ACTIVE rows only (Codex P1). The unique index is partial on
+        // INDEXED rows only (Codex P1, twice). The unique index is partial on
         // `_deletedAt: null`, so a trashed row named "X" does NOT occupy that
         // slot — GH #213 name reuse depends on it. Letting one into the graph
         // made it the "holder" whenever it sorted first, and a trashed row
         // never vacates, so the fixpoint declared the whole chain immovable
         // and refused a swap that was perfectly resolvable — every cycle.
-        .filter((d) => !d._deletedAt && typeof d.name === "string")
+        //
+        // The predicate is MongoDB's own, not JS truthiness. `{_deletedAt:
+        // null}` matches null AND missing and nothing else, so a raw
+        // `_deletedAt: ""` — which Mongoose casts to null on a Date path but
+        // the driver stores verbatim, the shape `trimEntityNames` documents at
+        // its own `== null` test — is OUTSIDE the index. `!d._deletedAt` let
+        // that row in as a holder, reintroducing the immovable-chain stall for
+        // a row that could never have blocked the write in the first place.
+        .filter((d) => d._deletedAt == null && typeof d.name === "string")
         .map((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
@@ -1365,13 +1374,17 @@ export class SyncService extends EventEmitter {
           // through `trySync`, so the settlement loop at the end never runs and
           // nothing scans for stale placeholders on a later cycle — the row
           // would keep the temporary name indefinitely.
-          // SURFACE a failed rollback (Codex P2). If the original name was
-          // claimed while this row sat aside, the restore E11000s too — and
-          // discarding that left the blocker permanently named
-          // `__sync-staging-…`, because the throw below exits before
-          // settlement and nothing scans for stale placeholders on a later
-          // cycle. The original error still wins as the cause; this only makes
-          // sure the stranding is not silent.
+          // SURFACE a failed rollback (Codex P2, twice). If the original name
+          // was claimed while this row sat aside, the restore E11000s too, and
+          // the blocker stays permanently named `__sync-staging-…`: the throw
+          // below exits before settlement and nothing scans for stale
+          // placeholders on a later cycle.
+          //
+          // Counting it in `result` was the WRONG channel — the throw leaves
+          // `syncCollection` entirely and `trySync` builds a fresh zero-count
+          // SyncResult carrying only the error, so the counter was discarded on
+          // the one path it existed for. The error MESSAGE is the only thing
+          // that survives to the renderer, so the stranding goes there.
           const rolledBack = await col
             .updateOne({ _id: blocker._id, name: placeholder }, { $set: { name: blockerName } })
             .catch((rollbackErr: unknown) => {
@@ -1383,7 +1396,16 @@ export class SyncService extends EventEmitter {
               return null;
             });
           if (!rolledBack?.modifiedCount) {
-            result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+            throw new Error(
+              strandedPlaceholderMessage({
+                collection: collectionName,
+                id: String(blocker._id),
+                originalName: blockerName,
+                placeholderName: placeholder,
+                cause: retryErr,
+              }),
+              { cause: retryErr },
+            );
           }
           throw retryErr;
         }
