@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as importSpools } from "@/app/api/spools/import/route";
+import { trimEntityNames } from "@/lib/trimEntityNames";
 
 // GH #605: an overridable hasVariants so the "became a template mid-import"
 // race is testable deterministically — the default passthrough keeps every
@@ -1388,5 +1389,108 @@ describe("/api/spools/import — legacy roll migration (#1111)", () => {
     const fresh = await Filament.findById(f._id);
     expect(fresh.spools).toHaveLength(1);
     expect(fresh.totalWeight).toBeNull();
+  });
+
+  /**
+   * GH #1116, end to end on the LITERAL reported path.
+   *
+   * The rest of the #1116 coverage tests the pieces (schema setter, migration,
+   * importer key). This one walks the actual bug report: a location whose
+   * stored name carried a trailing space, a spool CSV naming it, and the
+   * auto-create in `resolveLocationId` manufacturing a SECOND location that
+   * renders identically — the original silently dropping to zero spools.
+   *
+   * It is deliberately end to end because `resolveLocationId` is fixed only
+   * TRANSITIVELY: it calls `Location.findOne({ name })` through Mongoose, so
+   * the `trim: true` setter casts the query value, and `Location.create` trims
+   * on write. Nothing at that call site says so, so nothing but a test stops a
+   * future refactor to the raw driver (which several hot paths in this repo
+   * already use) from quietly reopening the duplicate.
+   */
+  describe("the reported duplicate-location path (GH #1116)", () => {
+    it("resolves a whitespace-named location instead of auto-creating a twin", async () => {
+      // `tests/setup.ts` wipes `mongoose.models` between tests and this
+      // describe only re-registers Filament, so bring Location back too.
+      const locationMod = await import("@/models/Location");
+      if (!mongoose.models.Location) {
+        mongoose.model("Location", locationMod.default.schema);
+      }
+      const LocationModel = mongoose.models.Location;
+
+      // Pre-upgrade row, written the way the driver would have stored it.
+      await mongoose.connection.collection("locations").insertOne({
+        name: "Drybox #1 ", kind: "drybox", _deletedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+
+      // Stand in for `dbConnect`, which runs this pass EARLY on every connect
+      // precisely so no name-addressed lookup runs against unrepaired data.
+      // Without it the import still manufactures the twin — which is not a
+      // gap so much as the reason the pass runs where it does, and the reason
+      // a collection it has to SKIP keeps reporting until a human resolves it.
+      await trimEntityNames(
+        mongoose.connection.db as unknown as import("@/lib/trimEntityNames").MinimalTrimDb,
+      );
+      await Filament.create({ name: "PLA Basic", vendor: "V", type: "PLA" });
+
+      // The CSV carries the name QUOTED with its trailing space — which is
+      // exactly what csvWriter now emits, and the shape that used to miss.
+      const res = await importSpools(
+        csvRequest('filament,totalWeight,location\nPLA Basic,1000,"Drybox #1 "\n'),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).imported).toBe(1);
+
+      const locations = await LocationModel.find({ _deletedAt: null });
+      expect(locations).toHaveLength(1);
+      expect(locations[0].name).toBe("Drybox #1");
+
+      // And the spool landed on that one, not on a twin.
+      const filament = await Filament.findOne({ name: "PLA Basic" });
+      expect(filament.spools).toHaveLength(1);
+      expect(String(filament.spools[0].locationId)).toBe(String(locations[0]._id));
+    });
+
+    /**
+     * The case above assumes the pass SUCCEEDED. This is the one that bites
+     * (Codex P1, round 23): `trimEntityNames` skips a collection whose
+     * protective unique index cannot be established — which is exactly what a
+     * database with pre-existing duplicate active names does — and the raw
+     * untrimmed row survives.
+     *
+     * `resolveLocationId` then cannot see it (the setter casts the query),
+     * falls through to `Location.create`, and the create SUCCEEDS because the
+     * two raw strings are distinct so the unique index has no objection. The
+     * user gets a second location rendering identically to the first, and
+     * every imported spool attaches to the twin — the original silently
+     * dropping to zero spools, which is the bug report verbatim.
+     */
+    it("resolves a SURVIVING untrimmed location when the migration never ran", async () => {
+      const locationMod = await import("@/models/Location");
+      if (!mongoose.models.Location) {
+        mongoose.model("Location", locationMod.default.schema);
+      }
+      const LocationModel = mongoose.models.Location;
+
+      const raw = await mongoose.connection.collection("locations").insertOne({
+        name: "Drybox #1 ", kind: "drybox", _deletedAt: null,
+        createdAt: new Date(), updatedAt: new Date(),
+      });
+      await Filament.create({ name: "PLA Basic", vendor: "V", type: "PLA" });
+
+      // Deliberately NO trimEntityNames call — the survivor is still there.
+      const res = await importSpools(
+        csvRequest('filament,totalWeight,location\nPLA Basic,1000,"Drybox #1 "\n'),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).imported).toBe(1);
+
+      // No twin was manufactured...
+      const locations = await LocationModel.find({ _deletedAt: null });
+      expect(locations).toHaveLength(1);
+      // ...and the spool attached to the row that was actually there.
+      const filament = await Filament.findOne({ name: "PLA Basic" });
+      expect(String(filament.spools[0].locationId)).toBe(String(raw.insertedId));
+    });
   });
 });

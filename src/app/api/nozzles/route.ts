@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
@@ -92,6 +96,22 @@ export async function POST(request: NextRequest) {
       return errorResponse(assignment.message, 400);
     }
 
+    // GH #1116: the partial unique index can no longer answer this. It
+    // compares RAW stored strings, so a submitted "0.4 Brass" and a surviving
+    // untrimmed "0.4 Brass " are two different keys and the write succeeds —
+    // manufacturing the indistinguishable pair this change exists to remove.
+    // Ask the trimmed question explicitly, in the same 409 shape
+    // handleDuplicateKeyError produces so the client contract is unchanged.
+    const nameConflict = await survivorNameConflict(
+      Nozzle.collection as unknown as MinimalNameCollection,
+      body.name,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A nozzle with that name already exists: "${String(body.name).trim()}"`,
+        409,
+      );
+    }
     const nozzle = await Nozzle.create(body);
 
     if (assignment.targetId) {

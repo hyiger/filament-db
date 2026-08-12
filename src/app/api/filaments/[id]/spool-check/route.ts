@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  findExactRawNameId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
@@ -54,7 +58,22 @@ export async function GET(
       ? await Filament.findOne({ _id: id, _deletedAt: null }).lean()
       : null;
     if (!filament) {
-      filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
+      // name-lookup-ok: read-only; a miss is a 404
+      // GH #1116 (Codex P1, same class as the sync routes): the EXACT stored
+      // spelling wins. The setter casts this query, so with both "X" and "X "
+      // active a request addressed as "X " would return the CANONICAL row's
+      // data — the wrong filament's calibration / spool state.
+      const exactId = await findExactRawNameId(
+        Filament.collection as unknown as MinimalNameCollection,
+        decodedName,
+        { _deletedAt: null },
+      );
+      // name-lookup-ok: exact-spelling resolution above covers the cast case
+      filament = await Filament.findOne(
+        exactId
+          ? { _id: exactId, _deletedAt: null }
+          : { name: decodedName, _deletedAt: null },
+      ).lean();
     }
 
     if (!filament) {

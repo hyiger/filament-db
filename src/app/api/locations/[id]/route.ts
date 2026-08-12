@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
@@ -68,6 +72,21 @@ export async function PUT(
       update.desiccantChangedAt = raw;
     }
     if ("notes" in body) update.notes = body.notes;
+    // GH #1116: a RENAME needs the same trimmed check as the create — the
+    // index compares raw stored strings, so renaming onto a surviving
+    // untrimmed spelling does not collide and leaves two rows rendering
+    // identically. `id` excludes this row itself.
+    const nameConflict = await survivorNameConflict(
+      Location.collection as unknown as MinimalNameCollection,
+      (body as { name?: unknown }).name,
+      id,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A location with that name already exists: "${String((body as { name?: unknown }).name).trim()}"`,
+        409,
+      );
+    }
     const location = await Location.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       update,
