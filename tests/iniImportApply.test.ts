@@ -811,6 +811,13 @@ describe("upsertIniFilament — an id-selected survivor keeps the update (GH #11
   beforeEach(async () => {
     Filament = (await import("@/models/Filament")).default;
     await Filament.collection.deleteMany({});
+    // Build the PRODUCTION index (Codex P1). Without it this test passed while
+    // the update was in fact trying to rename the survivor onto the canonical
+    // row's name — an E11000 in the real world. The partial filter is what
+    // lets the two coexist in the first place.
+    await Filament.collection
+      .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } })
+      .catch(() => {});
   });
 
   const section = (name: string, filamentdbId?: string): CollapsedFilamentData => ({
@@ -846,6 +853,10 @@ describe("upsertIniFilament — an id-selected survivor keeps the update (GH #11
     // The survivor got the settings...
     const s2 = await Filament.collection.findOne({ _id: survivor.insertedId });
     expect(s2!.cost).toBe(77);
+    // ...and KEPT its raw name. Renaming it to the canonical form would
+    // collide with the row that already holds it; normalizing names is the
+    // migration's job, not the importer's.
+    expect(s2!.name).toBe("PLA ");
     // ...and the bystander is untouched. That is the whole point.
     const c2 = await Filament.collection.findOne({ _id: canonical.insertedId });
     expect(c2!.cost).toBe(1);

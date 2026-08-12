@@ -428,6 +428,28 @@ export async function upsertIniFilament(
   }
   if (existingActive) {
     const update = await buildIniUpdate(collapsed, existingActive);
+    // GH #1116 (Codex P1): do not RENAME a survivor into an occupied name.
+    //
+    // Dropping `name` from the write FILTER is not enough — `toUpdateSet` also
+    // puts the section's canonical name in `$set`, so the by-`_id` update
+    // would try to rename `"PLA "` to `"PLA"`, collide with the canonical row
+    // that already holds it, and throw E11000 instead of applying the
+    // settings.
+    //
+    // Conditional on a twin ACTUALLY holding it, though: a LONE survivor has
+    // nothing to collide with, and normalizing it there is a free repair the
+    // existing coverage relies on. Only when the name is taken does the
+    // rename get dropped — resolving that pair is the migration's job, and it
+    // is the thing that knows how to refuse rather than clobber.
+    if (activeIsSurvivor) {
+      // name-lookup-ok: `name` is already the canonical trimmed form here
+      const canonicalTwin = await Filament.findOne({ name, _deletedAt: null })
+        .select("_id")
+        .lean();
+      if (canonicalTwin && String(canonicalTwin._id) !== String(existingActive._id)) {
+        delete (update.$set as Record<string, unknown> | undefined)?.name;
+      }
+    }
     // GH #605 (codex P2, slicer-sync sweep): the name-matched target may be a
     // TEMPLATE (≥1 live variant) — strip the per-variant fields the section
     // echoes (`color` from filament_colour; the shared TEMPLATE_STRIP_FIELDS)
