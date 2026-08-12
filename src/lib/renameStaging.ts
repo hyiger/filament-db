@@ -237,29 +237,32 @@ export function strandedPlaceholderNotice(info: StrandedPlaceholder): string {
 const STRANDING_KEY = "strandingNotice";
 
 /**
- * Build the error a caller throws when a staged row could NOT be put back.
+ * Attach a stranding notice to an error on its way up.
  *
- * ONE factory rather than "compose a message, then tag it" because those are two
- * steps a later edit can desynchronise, and the resulting failure is silent and
- * identical to the bug this exists to fix. Composing and tagging in the same
- * expression makes an untagged stranding message unrepresentable.
+ * ONE factory rather than "compose a message, then tag it" because those are
+ * two steps a later edit can desynchronise, and the resulting failure is silent
+ * and identical to the bug this exists to fix. Composing and tagging in the
+ * same expression makes an untagged stranding message unrepresentable.
  *
  * The original error rides as `cause`, which matters beyond provenance: it is
  * where a driver error's `code` lives, and `new Error(msg, {cause})` does NOT
  * inherit it — so a consumer that classifies errors by code has to look through
  * `cause`, and can only do that if the cause is attached.
  *
+ * Notices ACCUMULATE. One pass can move several rows aside, and a failure late
+ * in that pass strands all of them at once; reporting only the last would be a
+ * quieter version of reporting none.
+ *
  * A duck-typed string property, not a subclass: `instanceof` fails silently if
  * the module is ever loaded twice, and a silent drop is exactly the failure mode
  * being designed out.
  */
-export function strandedPlaceholderError(
-  info: StrandedPlaceholder & { cause: unknown },
-): Error {
-  const notice = strandedPlaceholderNotice(info);
-  const causeText = info.cause instanceof Error ? info.cause.message : String(info.cause);
-  const err = new Error(`${notice} ${CAUSE_LEAD}${causeText}`, { cause: info.cause });
-  return Object.assign(err, { [STRANDING_KEY]: notice });
+export function withStrandingNotice(cause: unknown, notice: string): Error {
+  const existing = strandingNoticeOf(cause);
+  const combined = existing ? `${existing} ${notice}` : notice;
+  const causeText = cause instanceof Error ? cause.message : String(cause);
+  const err = new Error(`${combined} ${CAUSE_LEAD}${causeText}`, { cause });
+  return Object.assign(err, { [STRANDING_KEY]: combined });
 }
 
 /**

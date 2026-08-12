@@ -4,7 +4,7 @@ import {
   isDuplicateKeyError,
   wrapSyncErrorMessage,
 } from "../electron/sync-service";
-import { strandedPlaceholderError } from "@/lib/renameStaging";
+import { strandedPlaceholderNotice, withStrandingNotice } from "@/lib/renameStaging";
 
 describe("getDbNameFromUri", () => {
   it("extracts db name from a basic mongodb URI with explicit path", () => {
@@ -151,16 +151,17 @@ describe("wrapSyncErrorMessage + a stranded placeholder", () => {
     expect(wrapped).toContain('"__sync-staging-64b7f0000000000000000001-abc"');
     expect(wrapped).toMatch(/rename it back manually/i);
   };
+  /** Exactly what the settlement path hands up: the row's notice, the real
+   *  failure as `cause`. */
+  const stranded = (cause: unknown) =>
+    withStrandingNotice(cause, strandedPlaceholderNotice(info));
 
   it("keeps BOTH the stranding and the Atlas hint when the cause is auth-shaped", () => {
     const wrapped = wrapSyncErrorMessage(
-      strandedPlaceholderError({
-        ...info,
-        cause: Object.assign(
+      stranded(Object.assign(
           new Error("user is not allowed to do action [update] on [prod-db.bedtypes]"),
           { code: 13 },
-        ),
-      }),
+        )),
       "prod-db",
     );
     expectStranding(wrapped);
@@ -174,10 +175,7 @@ describe("wrapSyncErrorMessage + a stranded placeholder", () => {
     // signal the docblock calls the reliable one. A fix that merely appends the
     // notice inside the auth branch passes the case above and fails this one.
     const wrapped = wrapSyncErrorMessage(
-      strandedPlaceholderError({
-        ...info,
-        cause: Object.assign(new Error("Unauthorized"), { code: 13 }),
-      }),
+      stranded(Object.assign(new Error("Unauthorized"), { code: 13 })),
       "prod-db",
     );
     expectStranding(wrapped);
@@ -186,10 +184,7 @@ describe("wrapSyncErrorMessage + a stranded placeholder", () => {
 
   it("keeps the stranding and the driver text when the cause is not auth", () => {
     const wrapped = wrapSyncErrorMessage(
-      strandedPlaceholderError({
-        ...info,
-        cause: new Error('E11000 duplicate key error index: name_1 dup key: { name: "Textured PEI" }'),
-      }),
+      stranded(new Error('E11000 duplicate key error index: name_1 dup key: { name: "Textured PEI" }')),
       "prod-db",
     );
     expectStranding(wrapped);
@@ -202,10 +197,7 @@ describe("wrapSyncErrorMessage + a stranded placeholder", () => {
     // after the branch decision, so redacting only the body would leave a
     // future notice-borne URI in the clear.
     const wrapped = wrapSyncErrorMessage(
-      strandedPlaceholderError({
-        ...info,
-        cause: new Error("connect failed to mongodb+srv://user:secret@cluster.mongodb.net/db"),
-      }),
+      stranded(new Error("connect failed to mongodb+srv://user:secret@cluster.mongodb.net/db")),
       "prod-db",
     );
     expectStranding(wrapped);
@@ -217,7 +209,7 @@ describe("wrapSyncErrorMessage + a stranded placeholder", () => {
     // Guards the recursion trap: re-entering the wrapper with the cause would
     // turn a string cause into "Sync failed".
     const wrapped = wrapSyncErrorMessage(
-      strandedPlaceholderError({ ...info, cause: "socket hang up" }),
+      stranded("socket hang up"),
       "prod-db",
     );
     expectStranding(wrapped);

@@ -4,7 +4,7 @@ import {
   isStagingPlaceholder,
   placeholderFor,
   strandedPlaceholderNotice,
-  strandedPlaceholderError,
+  withStrandingNotice,
   strandingNoticeOf,
   STAGING_PREFIX,
   type RenameIntent,
@@ -192,10 +192,10 @@ describe("stranded placeholder reporting", () => {
     // If the cause leaked in here, an auth-shaped one would make the notice
     // itself match wrapSyncErrorMessage's regex on re-attachment, and the
     // stranding would vanish exactly as it did before.
-    const err = strandedPlaceholderError({
-      ...info,
-      cause: new Error("user is not allowed to do action [update] on [db.bedtypes]"),
-    });
+    const err = withStrandingNotice(
+      new Error("user is not allowed to do action [update] on [db.bedtypes]"),
+      strandedPlaceholderNotice(info),
+    );
     expect(strandingNoticeOf(err)).not.toContain("user is not allowed");
     // ...while the composed message still carries both halves.
     expect(err.message).toContain("user is not allowed");
@@ -207,15 +207,24 @@ describe("stranded placeholder reporting", () => {
     // driver error's `code` lives, and `new Error(msg, {cause})` does not
     // inherit it.
     const cause = Object.assign(new Error("Unauthorized"), { code: 13 });
-    const err = strandedPlaceholderError({ ...info, cause });
+    const err = withStrandingNotice(cause, strandedPlaceholderNotice(info));
     expect(err.cause).toBe(cause);
     expect(strandingNoticeOf(err)).toBe(strandedPlaceholderNotice(info));
   });
 
   it("survives a non-Error rejection", () => {
-    expect(strandedPlaceholderError({ ...info, cause: "socket hang up" }).message).toContain(
-      "socket hang up",
-    );
+    expect(
+      withStrandingNotice("socket hang up", strandedPlaceholderNotice(info)).message,
+    ).toContain("socket hang up");
+  });
+
+  it("ACCUMULATES notices — one pass can strand several rows at once", () => {
+    // A failure late in a pass abandons every row moved aside earlier, so
+    // reporting only the last would be a quieter version of reporting none.
+    const first = withStrandingNotice(new Error("boom"), "ROW-A stranded.");
+    const both = withStrandingNotice(first, "ROW-B stranded.");
+    expect(strandingNoticeOf(both)).toBe("ROW-A stranded. ROW-B stranded.");
+    expect(both.cause).toBe(first);
   });
 
   it("reads no notice off anything that is not a tagged error", () => {
