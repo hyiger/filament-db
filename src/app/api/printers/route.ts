@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
@@ -132,6 +136,22 @@ export async function POST(request: NextRequest) {
       return errorResponse(slotError, 400);
     }
 
+    // GH #1116: the partial unique index can no longer answer this. It
+    // compares RAW stored strings, so a submitted "MK4" and a surviving
+    // untrimmed "MK4 " are two different keys and the write succeeds —
+    // manufacturing the indistinguishable pair this change exists to remove.
+    // Ask the trimmed question explicitly, in the same 409 shape
+    // handleDuplicateKeyError produces so the client contract is unchanged.
+    const nameConflict = await survivorNameConflict(
+      Printer.collection as unknown as MinimalNameCollection,
+      body.name,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A printer with that name already exists: "${String(body.name).trim()}"`,
+        409,
+      );
+    }
     const printer = await Printer.create(body);
 
     // GH #242 — see printers/[id] PUT. Clear any spools this new printer

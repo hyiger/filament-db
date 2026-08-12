@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  survivorNameConflict,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
@@ -146,6 +150,21 @@ export async function PUT(
     if ("enclosed" in body) update.enclosed = body.enclosed;
     if ("autoBedLevel" in body) update.autoBedLevel = body.autoBedLevel;
     if ("amsSlots" in body) update.amsSlots = body.amsSlots;
+    // GH #1116: a RENAME needs the same trimmed check as the create — the
+    // index compares raw stored strings, so renaming onto a surviving
+    // untrimmed spelling does not collide and leaves two rows rendering
+    // identically. `id` excludes this row itself.
+    const nameConflict = await survivorNameConflict(
+      Printer.collection as unknown as MinimalNameCollection,
+      (body as { name?: unknown }).name,
+      id,
+    );
+    if (nameConflict) {
+      return errorResponse(
+        `A printer with that name already exists: "${String((body as { name?: unknown }).name).trim()}"`,
+        409,
+      );
+    }
 
     const printer = await Printer.findOneAndUpdate(
       { _id: id, _deletedAt: null },

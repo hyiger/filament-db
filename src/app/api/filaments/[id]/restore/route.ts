@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  findSurvivorId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
@@ -74,13 +78,29 @@ export async function POST(
     // Name collision check: if a non-deleted filament now uses this name,
     // restoring would violate the partial unique index. Fail with a useful
     // message so the caller can rename one or the other.
-    const conflict = await Filament.findOne({
+    // GH #1116: a MISSED collision fails in the dangerous direction. `name`
+    // casts, so restoring a trashed `"X"` while an unresolved active `"X "`
+    // survives finds nothing, the restore proceeds, and the user ends up with
+    // two ACTIVE rows rendering identically — precisely what this guard is
+    // for. The survivor lookup compares TRIMMED forms, which is the question
+    // the guard is actually asking. ("Refuses, never creates" was the wrong
+    // exemption: failing to refuse is how this one creates a duplicate.)
+    // name-lookup-ok: survivor lookup below covers the cast case
+    let conflict: { _id: unknown } | null = await Filament.findOne({
       name: trashed.name,
       _deletedAt: null,
       _id: { $ne: trashed._id },
     })
       .select("_id")
       .lean();
+    if (!conflict) {
+      const survivorId = await findSurvivorId(
+        Filament.collection as unknown as MinimalNameCollection,
+        String(trashed.name ?? ""),
+        { _deletedAt: null, _id: { $ne: trashed._id } },
+      );
+      if (survivorId) conflict = { _id: survivorId };
+    }
     if (conflict) {
       return errorResponse(
         `Cannot restore: another active filament named "${trashed.name}" already exists. Rename one of them first.`,
