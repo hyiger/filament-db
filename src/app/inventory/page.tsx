@@ -7,7 +7,6 @@ import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
 import {
   parseFilterParams,
   nextFilterHref,
-  serializeFilterParams,
   oneOf,
   boolParam,
   textParam,
@@ -512,31 +511,14 @@ export default function InventoryPage() {
   // `?location=` — encoded into printed dry-box QR stickers — is preserved
   // because the spec does not own it. Gated on `prefsLoaded` so it cannot run
   // before the seed above and blank the query string.
-  /** What this page's filters serialize to — the value it writes, and what
-   *  SearchParamsSync needs in order to keep its own notion current (see
-   *  its docblock: useSearchParams does not observe a manual replaceState). */
-  const mirroredQuery = useMemo(
-    () => serializeFilterParams(
-      typeof window === "undefined" ? "" : window.location.search,
-      INVENTORY_FILTER_SPEC,
-      {
-      search,
-      kind,
-      type,
-      vendor,
-      includeRetired,
-      groupBy,
-      sortKey,
-      sortDir,
-    },
-    ),
-    [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir],
-  );
-
   useEffect(() => {
     if (!prefsLoaded.current) return;
     const href = nextFilterHref(window.location, INVENTORY_FILTER_SPEC, {
-      search,
+      // The DEBOUNCED value (Codex P2). Serializing the raw one fired a
+      // `router.replace` per keystroke — a client navigation each time, and
+      // overlapping query transitions on fast typing. The home page already
+      // mirrors its debounced value; this now matches.
+      search: debouncedSearch,
       kind,
       type,
       vendor,
@@ -558,7 +540,7 @@ export default function InventoryPage() {
       // URL. `scroll: false` keeps the list position; already debounced.
       router.replace(href, { scroll: false });
     }
-  }, [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir, router]);
+  }, [debouncedSearch, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir, router]);
 
   // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
   //
@@ -578,6 +560,9 @@ export default function InventoryPage() {
     }
     const url = parseFilterParams(nextSearch, INVENTORY_FILTER_SPEC);
     setSearch(url.search);
+    // Both, or the debounce timer would re-write the pre-navigation value a
+    // moment later and undo the re-seed.
+    setDebouncedSearch(url.search);
     setKind(url.kind);
     setType(url.type);
     setVendor(url.vendor);
@@ -798,7 +783,7 @@ export default function InventoryPage() {
     <>
       {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
       <Suspense fallback={null}>
-        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={mirroredQuery} />
+        <SearchParamsSync onExternalChange={reseedFromUrl} />
       </Suspense>
     <main id="main-content" className="w-full max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6 gap-4">

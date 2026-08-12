@@ -6,7 +6,6 @@ import SearchParamsSync from "@/components/SearchParamsSync";
 import {
   parseFilterParams,
   nextFilterHref,
-  serializeFilterParams,
   oneOf,
   boolParam,
   textParam,
@@ -373,34 +372,6 @@ export default function Home() {
   //
   // `nextFilterHref` returns null when nothing would change, and MERGES rather
   // than rebuilding, so params this page does not own survive.
-  /** What this page's filters serialize to — the value it writes, and what
-   *  SearchParamsSync needs in order to keep its own notion current (see
-   *  its docblock: useSearchParams does not observe a manual replaceState). */
-  const mirroredQuery = useMemo(
-    () => serializeFilterParams(
-      typeof window === "undefined" ? "" : window.location.search,
-      HOME_FILTER_SPEC,
-      {
-      search: debouncedSearch,
-      typeFilter,
-      vendorFilter,
-      quickFilter,
-      showOutOfStock,
-      sortKey,
-      sortDir,
-    },
-    ),
-    [
-    debouncedSearch,
-    typeFilter,
-    vendorFilter,
-    quickFilter,
-    showOutOfStock,
-    sortKey,
-    sortDir,
-  ],
-  );
-
   useEffect(() => {
     if (!homePrefsLoaded.current) return;
     const href = nextFilterHref(window.location, HOME_FILTER_SPEC, {
@@ -1603,7 +1574,7 @@ export default function Home() {
     <>
       {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
       <Suspense fallback={null}>
-        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={mirroredQuery} />
+        <SearchParamsSync onExternalChange={reseedFromUrl} />
       </Suspense>
     <main id="main-content" className="w-full px-4 py-8">
       {/* GH #411: visually-hidden h1 so screen-reader users navigating
