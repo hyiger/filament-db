@@ -1207,7 +1207,12 @@ export class SyncService extends EventEmitter {
     // one. Here the real write is attempted, and only an actual name collision
     // triggers staging — so the healthy path is untouched and there is no
     // second decision to keep in step.
-    const stagedRenames: { col: typeof localCol; id: ObjectId; originalName: string }[] = [];
+    const stagedRenames: {
+      col: typeof localCol;
+      id: ObjectId;
+      originalName: string;
+      placeholderName: string;
+    }[] = [];
     const stagingNonce = new ObjectId().toHexString().slice(-8);
 
     /**
@@ -1272,7 +1277,13 @@ export class SyncService extends EventEmitter {
       if (cached) return cached;
       const docs = col === remoteCol ? remoteDocs : localDocs;
       const intents = docs
-        .filter((d) => typeof d.name === "string")
+        // ACTIVE rows only (Codex P1). The unique index is partial on
+        // `_deletedAt: null`, so a trashed row named "X" does NOT occupy that
+        // slot — GH #213 name reuse depends on it. Letting one into the graph
+        // made it the "holder" whenever it sorted first, and a trashed row
+        // never vacates, so the fixpoint declared the whole chain immovable
+        // and refused a swap that was perfectly resolvable — every cycle.
+        .filter((d) => !d._deletedAt && typeof d.name === "string")
         .map((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
@@ -1341,7 +1352,12 @@ export class SyncService extends EventEmitter {
         // Remember it so an unsettled placeholder can be restored below — a
         // row left named `__sync-staging-…` is visible in the UI and worse
         // than the collision we were avoiding.
-        stagedRenames.push({ col, id: blocker._id as ObjectId, originalName: blockerName });
+        stagedRenames.push({
+          col,
+          id: blocker._id as ObjectId,
+          originalName: blockerName,
+          placeholderName: placeholder,
+        });
         try {
           await write();
         } catch (retryErr) {
@@ -1607,10 +1623,29 @@ export class SyncService extends EventEmitter {
           );
           continue;
         }
-        await staged.col.updateOne({ _id: staged.id }, { $set: { name: staged.originalName } });
-      } catch {
-        /* best-effort: the next cycle re-attempts, and the placeholder is
-           recognisable rather than silently wrong */
+        // CONDITIONAL on the placeholder we actually put there (Codex P1).
+        // Another app or syncer can write this row between the read above and
+        // here; an `_id`-only filter would overwrite that newer real name with
+        // the old one — and because the concurrent write may already have
+        // copied its `updatedAt`, the peers could end up with different names
+        // at an EQUAL timestamp, which LWW then never repairs.
+        const restored = await staged.col.updateOne(
+          { _id: staged.id, name: staged.placeholderName },
+          { $set: { name: staged.originalName } },
+        );
+        if (!restored.modifiedCount) continue; // someone else moved it on
+      } catch (settleErr) {
+        // SURFACE it (Codex P1). Swallowing left the collection reporting
+        // success with a placeholder still stored, and nothing scans for stale
+        // placeholders on a later cycle — worse, a row staged after its own
+        // write landed shares its source's `updatedAt`, so LWW does no copy
+        // and never repairs it either.
+        result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+        console.error(
+          `[sync] ${collectionName}: could not restore ${JSON.stringify(staged.originalName)} ` +
+            `on ${String(staged.id)}; it still holds a staging placeholder.`,
+          settleErr,
+        );
       }
     }
 

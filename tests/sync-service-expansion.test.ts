@@ -988,6 +988,50 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1): a TRASHED row must not enter the holder graph.
+     *
+     * The unique index is partial on `_deletedAt: null`, so a trashed row
+     * named "X" does not occupy that slot — GH #213 name reuse depends on it.
+     * Letting one in made it the "holder" whenever it sorted first, and a
+     * trashed row never vacates, so the fixpoint declared the chain immovable
+     * and refused a swap that was perfectly resolvable, every cycle.
+     */
+    it("resolves a swap even when a TRASHED row shares one of the names", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // A trashed "X" on the remote, inserted FIRST so it sorts ahead of the
+      // active blocker in the holder map.
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "X", material: "PEI", syncId: "tomb-x",
+        _deletedAt: older, createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "tswap-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "tswap-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "tswap-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "tswap-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+
+      // The swap went through despite the tombstone sharing a name.
+      const a = await remoteDb.collection("bedtypes").findOne({ syncId: "tswap-a" });
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "tswap-b" });
+      expect(a!.name).toBe("X");
+      expect(b!.name).toBe("Y");
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+      ).toBe(0);
+    });
+
+    /**
      * GH #1142 (Codex P1): the whole CHAIN has to terminate, not just the
      * first hop. A -> B, B -> C, and C standing still: a one-hop check stages
      * B for A, A takes "B", and B can then never take "C" — settlement cannot
