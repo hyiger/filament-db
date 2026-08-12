@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
+import { NextRequest } from "next/server";
 import { upsertImportRows } from "@/lib/importFilaments";
 import { trimEntityNames, type MinimalTrimDb } from "@/lib/trimEntityNames";
 
@@ -250,6 +251,150 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
     expect(result.skippedRows?.[0].reason).toContain("Missing required field");
   });
 
+
+
+  /**
+   * Reach the condition the raw-driver fallback exists for: an untrimmed row
+   * present at import time.
+   *
+   * Doing that by index manipulation does not work. Mongoose's `autoIndex`
+   * rebuilds the schema's unique `name_1` in the BACKGROUND on first model
+   * use, so a plain index planted here races that build — locally about half
+   * the runs, and it was a real CI failure (IndexKeySpecsConflict, because
+   * MongoDB auto-names both indexes `name_1`).
+   *
+   * So settle the migration instead: one no-op import flips
+   * `cached.migrations.trimEntityNames`, after which the pass does not run
+   * again in this process and a row inserted through the raw driver survives
+   * untrimmed. That models the production states that matter — a row the pass
+   * had to leave alone, or a collection it skipped — without depending on
+   * which one, and without fighting autoIndex.
+   */
+  async function settleTrimMigration() {
+    await upsertImportRows([
+      { name: "Settle Probe", vendor: "V", type: "PLA" },
+    ]);
+    await Filament.deleteMany({ name: "Settle Probe" });
+  }
+
+  it("does not CREATE a duplicate when the untrimmed row survived the migration (Codex P1)", async () => {
+    // Reaching this state takes care: `upsertImportRows` calls dbConnect,
+    // whose trim pass would normally repair the row before the import runs.
+    // The reachable survival route is a SKIPPED collection — no adequate
+    // unique name index, so the pass deliberately writes nothing. A plain
+    // NON-unique index on `name` produces exactly that: createIndex conflicts
+    // on the options, and the existing index is not unique, so the pass
+    // refuses to write unserialized.
+    //
+    // Such a row is invisible to every Mongoose query, because a String
+    // schema setter applies to QUERY values too. Without the raw-driver
+    // load the import creates a SECOND record beside it — the duplicate this
+    // whole change exists to stop.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Legacy ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000001",
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Legacy ", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(await Filament.countDocuments({})).toBe(1);
+    // Better than merely avoiding the duplicate: the update goes through the
+    // schema setter, so finding the row also REPAIRS its name — the thing the
+    // migration couldn't do without a serializing index.
+    const raw = await mongoose.connection
+      .collection("filaments")
+      .findOne({ name: "PLA Legacy" });
+    expect(raw).not.toBeNull();
+    expect(raw!.cost).toBe(42);
+  });
+
+  it("matches a surviving legacy row even when the IMPORT name is canonical (Codex P1)", async () => {
+    // The predicate has to be on the STORED value. Keying it on the input's
+    // spelling missed the ordinary case: importing a canonical "PLA Canon"
+    // against a surviving "PLA Canon " produced no candidates at all, and the
+    // importer created a second row beside it.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Canon ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000002",
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Canon", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.updated).toBe(1);
+    expect(await Filament.countDocuments({})).toBe(1);
+  });
+
+  it("matches across DIFFERENT edge whitespace on the two sides", async () => {
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "  PLA Both", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000003",
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Both  ", vendor: "V", type: "PLA", cost: 7 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(await Filament.countDocuments({})).toBe(1);
+  });
+
+  it("scans when the indexed lookup found only a TOMBSTONE (Codex P2)", async () => {
+    // With the collection skipped, an active "PLA Ghost " can coexist with a
+    // soft-deleted "PLA Ghost". Counting the tombstone as "found" skipped the
+    // scan, so the importer resurrected the tombstone and left TWO active
+    // rows rendering identically.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertMany([
+      { name: "PLA Ghost", vendor: "V", type: "PLA", _deletedAt: new Date(), spools: [], cost: 1 },
+      { name: "PLA Ghost ", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 2 },
+    ]);
+
+    const result = await upsertImportRows([
+      { name: "PLA Ghost", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    // Exactly one ACTIVE row, and it is the one that was already active.
+    expect(await Filament.countDocuments({ _deletedAt: null })).toBe(1);
+    const active = await Filament.findOne({ _deletedAt: null });
+    expect(active.cost).toBe(42);
+  });
+
+  it("matches a name whose whitespace only JS trim() strips (Codex P2)", async () => {
+    // MongoDB's $trim default set is ASCII; it does not strip U+FEFF, which
+    // String.prototype.trim does — and the schema setter uses the latter.
+    await settleTrimMigration();
+    await mongoose.connection.collection("filaments").insertOne({
+      name: "PLA Bom\uFEFF", vendor: "V", type: "PLA", _deletedAt: null, spools: [], cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000004",
+    });
+
+    const result = await upsertImportRows([
+      { name: "PLA Bom", vendor: "V", type: "PLA", cost: 42 },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(await Filament.countDocuments({ _deletedAt: null })).toBe(1);
+  });
+
   it("still creates a genuinely new row", async () => {
     const result = await upsertImportRows([
       { name: "Fresh PLA ", vendor: "V", type: "PLA" },
@@ -407,5 +552,397 @@ describe("an inadequate legacy name index is converted, not skipped forever", ()
     expect(res.skipped.map((s) => s.collection)).toContain("locations");
     const idx = await col().indexes();
     expect(idx.some((i) => (i as { name?: string }).name === "name_1")).toBe(true);
+  });
+});
+
+
+/**
+ * GH #1116 (Codex round 29) — the WRONG-MATCH and MISSED-COLLISION hazards.
+ *
+ * Three distinct ways the cast bites, and the earlier work only covered the
+ * first:
+ *   (A) a MISS then a create  -> a duplicate                (survivor fallback)
+ *   (B) a MISS in a GUARD     -> the guard wrongly permits  (survivor fallback)
+ *   (C) a WRONG MATCH         -> the wrong row is used      (exact-spelling)
+ *
+ * "Read-only" was never a valid exemption for (C): reading the wrong row hands
+ * back another filament's data. "Refuses, never creates" was never valid for
+ * (B): failing to refuse is exactly how the guard creates a duplicate.
+ */
+describe("wrong-match and missed-collision hazards (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+  });
+
+  async function seedBothSpellings() {
+    const canonical = await Filament.collection.insertOne({
+      name: "Amb PLA", vendor: "V", type: "PLA", cost: 1,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000005",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const raw = await Filament.collection.insertOne({
+      name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000006",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    return { canonicalId: canonical.insertedId, rawId: raw.insertedId };
+  }
+
+  it("(C) matchFilament returns the row actually named, not the canonical one", async () => {
+    const { rawId } = await seedBothSpellings();
+    const { matchFilament } = await import("@/lib/matchFilament");
+
+    const res = await matchFilament({ name: "Amb PLA " });
+    // A confident match, and the RIGHT one — an NFC scan must not
+    // auto-associate the tag with a different filament.
+    expect(res.match).not.toBeNull();
+    expect(String((res.match as { _id: unknown })._id)).toBe(String(rawId));
+  });
+
+  it("(C) a single-filament export exports the row that was addressed", async () => {
+    const { rawId } = await seedBothSpellings();
+    const { resolveFilamentForExport } = await import("@/lib/singleFilamentExport");
+
+    const doc = await resolveFilamentForExport("Amb PLA ");
+    expect(doc).not.toBeNull();
+    expect(String(doc!._id)).toBe(String(rawId));
+  });
+
+  it("(B) a rename onto a surviving untrimmed name is REFUSED", async () => {
+    const { rawId } = await seedBothSpellings();
+    const other = await Filament.create({ name: "Other PLA", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${other._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Amb PLA" }),
+      }),
+      { params: Promise.resolve({ id: String(other._id) }) },
+    );
+
+    // Without the survivor check this returned 200 and left TWO active rows
+    // rendering as "Amb PLA" — the raw index strings differ, so no E11000.
+    expect(res.status).toBe(409);
+    // And nothing was renamed.
+    expect((await Filament.collection.findOne({ _id: other._id }))!.name).toBe("Other PLA");
+    expect((await Filament.collection.findOne({ _id: rawId }))!.name).toBe("Amb PLA ");
+  });
+
+  it("(B) a reparent+rename onto a survivor 409s BEFORE promoting the parent", async () => {
+    // Fail-fast before the irreversible bit. A confirmed reparent that also
+    // renames onto a surviving untrimmed name must not promote the carrying
+    // parent — moving its color and spools onto a new variant — and only then
+    // report failure.
+    // ONLY the survivor — no canonical row. With both present the ordinary
+    // cast check finds the canonical one and the survivor path is never
+    // exercised, which is exactly how the first version of this test passed
+    // against the unfixed code.
+    await Filament.collection.insertOne({
+      name: "Amb PLA ", vendor: "V", type: "PLA", cost: 2,
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000007",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    // A LEGACY carrying parent: has its own color and a spool, no variants yet.
+    const parent = await Filament.create({
+      name: "Carrier PLA", vendor: "V", type: "PLA", color: "#123456",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000008",
+      spools: [{ totalWeight: 1000 }],
+    });
+    const target = await Filament.create({ name: "Target PLA", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${target._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Amb PLA",            // collides with the survivor "Amb PLA "
+          parentId: String(parent._id),
+          promoteParent: true,        // confirmed — the gate WOULD promote
+        }),
+      }),
+      { params: Promise.resolve({ id: String(target._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    // The parent is completely untouched — no promotion happened.
+    const fresh = await Filament.collection.findOne({ _id: parent._id });
+    expect(fresh!.color).toBe("#123456");
+    expect(fresh!.spools).toHaveLength(1);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+  });
+});
+
+
+/**
+ * GH #1116 (Codex P1, round 31) — the ordinary CRUD writes.
+ *
+ * These leaned entirely on the partial unique index to reject a duplicate
+ * name. That stops working against a survivor: the index compares RAW stored
+ * strings, so "Drybox" and a surviving "Drybox " are two different keys and
+ * the write succeeds. Before `trim: true` the submitted spelling reached the
+ * index unchanged and collided as the user expected; now it is cast first and
+ * the collision evaporates.
+ */
+describe("ordinary CRUD refuses a name that already exists untrimmed (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Location: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const [name, mod] of [
+      ["Location", await import("@/models/Location")],
+    ] as const) {
+      if (!mongoose.models[name]) {
+        mongoose.model(name, (mod as { default: { schema: mongoose.Schema } }).default.schema);
+      }
+    }
+    Location = mongoose.models.Location;
+    await Location.collection.deleteMany({});
+  });
+
+  it("POST refuses to create beside a surviving untrimmed row", async () => {
+    await Location.collection.insertOne({
+      name: "Drybox ", kind: "drybox", _deletedAt: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const { POST } = await import("@/app/api/locations/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/locations", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Drybox", kind: "drybox" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toMatch(/already exists/i);
+    expect(await Location.collection.countDocuments({})).toBe(1);
+  });
+
+  it("PUT refuses to rename onto a surviving untrimmed row", async () => {
+    await Location.collection.insertOne({
+      name: "Drybox ", kind: "drybox", _deletedAt: null,
+      createdAt: new Date(), updatedAt: new Date(),
+    });
+    const other = await Location.create({ name: "Shelf", kind: "shelf" });
+    const { PUT } = await import("@/app/api/locations/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/locations/${other._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Drybox" }),
+      }),
+      { params: Promise.resolve({ id: String(other._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect((await Location.collection.findOne({ _id: other._id }))!.name).toBe("Shelf");
+  });
+
+  it("a no-op save that echoes the row's OWN name still succeeds", async () => {
+    // Self-exclusion: the guard must not 409 the ordinary form echo.
+    const loc = await Location.create({ name: "Shelf", kind: "shelf" });
+    const { PUT } = await import("@/app/api/locations/[id]/route");
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/locations/${loc._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Shelf", notes: "touched" }),
+      }),
+      { params: Promise.resolve({ id: String(loc._id) }) },
+    );
+    expect(res.status).toBe(200);
+  });
+});
+
+
+/**
+ * GH #1116 (Codex round 32) — the two holes round 31's own guard left.
+ */
+describe("the create guard covers the gated variant path and cast names (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+  });
+
+  it("a VARIANT create onto a survivor 409s, and never promotes the parent", async () => {
+    // The gate RETURNS from the variant path, so a guard placed after it was
+    // unreachable here — the variant was inserted, and for a carrying parent
+    // the promotion had already moved its color and spools.
+    await Filament.collection.insertOne({
+      name: "Var PLA ", vendor: "V", type: "PLA",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws00000009",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const parent = await Filament.create({
+      name: "Carrier", vendor: "V", type: "PLA", color: "#123456",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000a",
+      spools: [{ totalWeight: 1000 }],
+    });
+    const { POST } = await import("@/app/api/filaments/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Var PLA",
+          vendor: "V",
+          type: "PLA",
+          parentId: String(parent._id),
+          promoteParent: true,
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    // No variant was inserted...
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    // ...and the carrying parent is untouched.
+    const fresh = await Filament.collection.findOne({ _id: parent._id });
+    expect(fresh!.color).toBe("#123456");
+    expect(fresh!.spools).toHaveLength(1);
+  });
+
+  it("a schema-castable NON-STRING name is checked, not skipped", async () => {
+    // Mongoose stores `7` as "7". Beside a survivor stored as "7 " the raw
+    // index sees different strings and admits the duplicate — while a
+    // `typeof name !== "string"` skip means the guard never looked.
+    await Filament.collection.insertOne({
+      name: "7 ", vendor: "V", type: "PLA",
+      // Raw driver bypasses the schema default, and `instanceId` carries a
+      // UNIQUE index — two seeds would both be null and collide on it.
+      instanceId: "ws0000000b",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const { POST } = await import("@/app/api/filaments/route");
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: 7, vendor: "V", type: "PLA" }),
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(await Filament.collection.countDocuments({})).toBe(1);
+  });
+});
+
+
+/**
+ * GH #1116 (Codex round 33) — GENERATED names need the guard too.
+ *
+ * Both of these compute a name themselves and then create it. Their own
+ * "is it taken?" probes are cast queries (an `exists`, an anchored regex),
+ * so neither can see a survivor, and the raw unique index then permits the
+ * write because the two stored strings differ.
+ */
+describe("generated names are survivor-checked (#1116)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let Nozzle: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    const nozMod = await import("@/models/Nozzle");
+    if (!mongoose.models.Nozzle) mongoose.model("Nozzle", nozMod.default.schema);
+    Nozzle = mongoose.models.Nozzle;
+    await Filament.collection.deleteMany({});
+    await Nozzle.collection.deleteMany({});
+  });
+
+  it("the PROMOTION copy's generated name is checked", async () => {
+    // A carrying parent "PLA" with colorName "Red" promotes to a variant
+    // named "PLA — Red". An active survivor already holds "PLA — Red ".
+    await Filament.collection.insertOne({
+      name: "PLA — Red ", vendor: "V", type: "PLA", instanceId: "wsgen0001",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const parent = await Filament.create({
+      name: "PLA", vendor: "V", type: "PLA",
+      color: "#FF0000", colorName: "Red", spools: [{ totalWeight: 1000 }],
+    });
+    const { resolvePromotionVariantName } = await import("@/lib/promoteParent");
+
+    const chosen = await resolvePromotionVariantName(Filament, "PLA — Red");
+    // It must NOT pick the name the survivor already renders as.
+    expect(chosen).not.toBe("PLA — Red");
+    expect(chosen).toBe("PLA — Red (2)");
+    expect(parent.name).toBe("PLA");
+  });
+
+  it("the nozzle CLONE ADVANCES past a survivor instead of refusing forever", async () => {
+    // A survivor is a PERMANENT state — the migration leaves it precisely
+    // because it cannot repair it automatically — so refusing would make
+    // cloning impossible forever, on every retry, even though the next suffix
+    // is free. It is an occupied suffix to a human reading the list, so treat
+    // it as one.
+    const source = await Nozzle.create({ name: "0.5", diameter: 0.5, type: "brass" });
+    await Nozzle.collection.insertOne({
+      name: "0.5 #2 ", diameter: 0.5, type: "brass", _deletedAt: null,
+    });
+    const { POST } = await import("@/app/api/nozzles/[id]/clone/route");
+
+    const res = await POST(
+      new NextRequest(`http://localhost/api/nozzles/${source._id}/clone`, { method: "POST" }),
+      { params: Promise.resolve({ id: String(source._id) }) },
+    );
+
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    // Skipped the survivor-occupied "#2" and took the next free suffix.
+    expect(created.name).toBe("0.5 #3");
+    expect(await Nozzle.collection.countDocuments({})).toBe(3);
+  });
+
+
+  it("the filament PUT guard checks a schema-castable NON-STRING name", async () => {
+    await Filament.collection.insertOne({
+      name: "7 ", vendor: "V", type: "PLA", instanceId: "wsgen0002",
+      _deletedAt: null, spools: [], settings: {},
+    });
+    const target = await Filament.create({ name: "Target", vendor: "V", type: "PLA" });
+    const { PUT } = await import("@/app/api/filaments/[id]/route");
+
+    const res = await PUT(
+      new NextRequest(`http://localhost/api/filaments/${target._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: 7 }),
+      }),
+      { params: Promise.resolve({ id: String(target._id) }) },
+    );
+
+    expect(res.status).toBe(409);
+    expect((await Filament.collection.findOne({ _id: target._id }))!.name).toBe("Target");
   });
 });

@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  findSurvivorId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import {
@@ -150,10 +154,22 @@ export async function POST(request: NextRequest) {
     // resolved.
 
     // Phase 1 — active update.
-    const existingActive = await Filament.findOne({
+    let existingActive = await Filament.findOne({
       name,
       _deletedAt: null,
     });
+    if (!existingActive) {
+      // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
+      // absence — the setter casts this query, so it cannot select a row whose
+      // stored name is still raw. See src/lib/trimmedNameLookup.ts.
+      const survivorId = await findSurvivorId(
+        Filament.collection as unknown as MinimalNameCollection,
+        name,
+        { _deletedAt: null },
+      );
+      if (survivorId)
+        existingActive = await Filament.findOne({ _id: survivorId, _deletedAt: null });
+    }
     if (existingActive) {
       const payload = await prepareBambuUpdate(
         parsed,
@@ -204,11 +220,27 @@ export async function POST(request: NextRequest) {
     // rather than creating a duplicate that would strand the trashed
     // record (its restore would 409 forever on the name conflict).
     // (Codex P1 on PR #387 round 5.)
-    const existingTrashed = await Filament.findOne({
+    let existingTrashed = await Filament.findOne({
       name,
       _deletedAt: { $ne: null },
       _purged: { $ne: true },
     });
+    if (!existingTrashed) {
+      // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
+      // absence — the setter casts this query, so it cannot select a row whose
+      // stored name is still raw. See src/lib/trimmedNameLookup.ts.
+      const survivorId = await findSurvivorId(
+        Filament.collection as unknown as MinimalNameCollection,
+        name,
+        { _deletedAt: { $ne: null }, _purged: { $ne: true } },
+      );
+      if (survivorId)
+        existingTrashed = await Filament.findOne({
+          _id: survivorId,
+          _deletedAt: { $ne: null },
+          _purged: { $ne: true },
+        });
+    }
     if (existingTrashed) {
       const payload = await prepareBambuUpdate(
         parsed,
@@ -328,6 +360,7 @@ export async function POST(request: NextRequest) {
       if (!isDuplicateKeyError(createErr)) {
         return errorResponseFromCaught(createErr, "Failed to create filament");
       }
+      // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match, so no survivor is involved
       const racing = await Filament.findOne({ name, _deletedAt: null });
       if (!racing) {
         // The winning row was already deleted; bail out with the

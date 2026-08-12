@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import {
+  findExactRawNameId,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { generateOrcaSlicerProfiles } from "@/lib/orcaSlicerBundle";
@@ -147,7 +151,22 @@ export async function POST(
       ? await Filament.findOne({ _id: id, _deletedAt: null })
       : null;
     if (!filament) {
-      filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
+      // name-lookup-ok: resolves an EXISTING row; create-on-404 removed in #867
+      // GH #1116 (Codex P1): the EXACT stored spelling wins. `decodedName`
+      // is the addressing key, and the `trim: true` setter casts this query
+      // — so with both "X" and "X " active (an unresolved migration) a
+      // preset addressed as "X " would select the CANONICAL row and apply
+      // the preset to the wrong filament. Before the setter this query
+      // matched "X " exactly, so the redirection is ours to prevent.
+      const exactId = await findExactRawNameId(
+        Filament.collection as unknown as MinimalNameCollection,
+        decodedName,
+        { _deletedAt: null },
+      );
+      // name-lookup-ok: exact-spelling resolution above covers the cast case
+      filament = exactId
+        ? await Filament.findOne({ _id: exactId, _deletedAt: null })
+        : await Filament.findOne({ name: decodedName, _deletedAt: null });
     }
 
     if (!filament) {

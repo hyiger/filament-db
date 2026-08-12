@@ -12,6 +12,10 @@ import {
   LEGACY_NOZZLE_CONDITION_RE,
 } from "@/lib/legacyNozzleConditions";
 import { castNameLikeSchema } from "@/lib/trimEntityNames";
+import {
+  findByTrimmedName,
+  type MinimalNameCollection,
+} from "@/lib/trimmedNameLookup";
 
 /**
  * GH #255: explicit ALLOW-LIST of filament fields that may be copied
@@ -269,7 +273,30 @@ export async function POST(request: NextRequest) {
         const castName = castNameLikeSchema(filamentData.name);
         const importName = castName === null ? "" : castName.trim();
         if (castName !== null) filamentData.name = importName;
-        const existing = await Filament.findOne({ name: importName, _deletedAt: null });
+        let existing = await Filament.findOne({ name: importName, _deletedAt: null });
+        if (!existing && importName !== "") {
+          // GH #1116 (Codex P1): the miss may be a LOOKUP failure, not an
+          // absence. The setter casts this query, so it cannot select a local
+          // row whose stored name is still the raw `"PLA Basic "` — which is
+          // what survives when `trimEntityNames` had to skip the filaments
+          // collection or leave that row alone. Falling through to create
+          // would succeed (the two raw strings are distinct, so the partial
+          // unique index has no objection) and mint a second active filament
+          // that renders identically to the first.
+          //
+          // Re-hydrate by `_id`, the one key casting cannot break.
+          const survivor = await findByTrimmedName(
+            Filament.collection as unknown as MinimalNameCollection,
+            importName,
+            { _deletedAt: null },
+          );
+          if (survivor) {
+            existing = await Filament.findOne({
+              _id: survivor._id as Parameters<typeof Filament.findById>[0],
+              _deletedAt: null,
+            });
+          }
+        }
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
           // GH #605 (codex round 3 sweep; extended round 4, F4): when the
@@ -355,11 +382,33 @@ export async function POST(request: NextRequest) {
           // invisible everywhere (list / trash both filter on `_purged:
           // { $ne: true }`) but still occupies the name on the partial-
           // unique active-name index, so the user can't recreate it.
-          const softDeleted = await Filament.findOne({
+          let softDeleted = await Filament.findOne({
             name: importName,
             _deletedAt: { $ne: null },
             _purged: { $ne: true },
           });
+          if (!softDeleted && importName !== "") {
+            // Same lookup failure as the active branch above, one state over.
+            // Missing an untrimmed TOMBSTONE does not immediately duplicate —
+            // the partial unique index only covers active rows, so the create
+            // below succeeds legitimately — but it defers the duplicate rather
+            // than avoiding it: restoring that tombstone later flips only
+            // `_deletedAt`, leaving its raw name intact, and the user ends up
+            // with two ACTIVE rows rendering identically. Resurrect the row
+            // that is actually there instead.
+            const survivor = await findByTrimmedName(
+              Filament.collection as unknown as MinimalNameCollection,
+              importName,
+              { _deletedAt: { $ne: null }, _purged: { $ne: true } },
+            );
+            if (survivor) {
+              softDeleted = await Filament.findOne({
+                _id: survivor._id as Parameters<typeof Filament.findById>[0],
+                _deletedAt: { $ne: null },
+                _purged: { $ne: true },
+              });
+            }
+          }
           if (softDeleted) {
             // GH #605 sweep: no template check needed on the resurrect — a
             // trashed doc cannot have live variants (soft-deleting a parent

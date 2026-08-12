@@ -717,3 +717,149 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
     });
   });
 });
+
+/**
+ * GH #1116 (Codex P1, round 24). `trimEntityNames` can leave a raw untrimmed
+ * row behind — a skipped collection, or a row whose trim would collide. The
+ * INI importer then cannot see it (the `trim: true` setter casts the query),
+ * falls through all three phases, and CREATES a second active filament that
+ * renders identically to the one it failed to find.
+ *
+ * Two halves have to work, and the second is easy to miss: fixing only the
+ * LOOKUP leaves the fix completely inert, because the phase-1 write filter
+ * re-pins `name` (the GH #951 rename guard) and that clause is cast too — so
+ * the by-`_id` update would miss and fall through to the create anyway.
+ */
+describe("upsertIniFilament — a surviving untrimmed row (GH #1116)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  const section = (name: string): CollapsedFilamentData => ({
+    name,
+    vendor: "Acme",
+    type: "PLA",
+    color: "#808080",
+    cost: 25,
+    density: 1.24,
+    diameter: 1.75,
+    temperatures: { nozzle: 210, nozzleFirstLayer: null, bed: 60, bedFirstLayer: null },
+    maxVolumetricSpeed: null,
+    inherits: null,
+    settings: {},
+  });
+
+  it("updates the survivor in place instead of creating a twin", async () => {
+    // Raw driver on purpose — a Mongoose create would trim it.
+    await Filament.collection.insertOne({
+      name: "Survivor PLA ",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 1,
+      _deletedAt: null,
+      spools: [],
+    });
+
+    const outcome = await upsertIniFilament(section("Survivor PLA"));
+    expect(outcome).toBe("updated");
+
+    // One row, not two — and the write landed on the row that was there.
+    const rows = await Filament.collection.find({}).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].cost).toBe(25);
+    // The update also normalizes the stored name, because `name` rides the
+    // $set and the setter trims it on the way in.
+    expect(rows[0].name).toBe("Survivor PLA");
+  });
+
+  it("resurrects a surviving untrimmed TRASHED row rather than stranding it", async () => {
+    // Left behind, this strands the tombstone: the new active row owns the
+    // name, so the trashed row's restore 409s forever (GH #297).
+    await Filament.collection.insertOne({
+      name: "Trashed Survivor ",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 1,
+      _deletedAt: new Date(),
+      spools: [],
+    });
+
+    const outcome = await upsertIniFilament(section("Trashed Survivor"));
+    expect(outcome).toBe("updated");
+
+    const rows = await Filament.collection.find({}).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]._deletedAt).toBeNull();
+    expect(rows[0].name).toBe("Trashed Survivor");
+  });
+});
+
+/**
+ * GH #1116 (Codex P1). Accepting a trim-equal id/name pair and then
+ * re-resolving by NAME sends the update to the wrong row: with an active
+ * "PLA" and a survivor "PLA ", an exported INI carrying the SURVIVOR's
+ * `filamentdb_id` passes the guard, and the canonical-first query then selects
+ * "PLA" — writing the survivor's settings onto the canonical bystander.
+ */
+describe("upsertIniFilament — an id-selected survivor keeps the update (GH #1116)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+    // Build the PRODUCTION index (Codex P1). Without it this test passed while
+    // the update was in fact trying to rename the survivor onto the canonical
+    // row's name — an E11000 in the real world. The partial filter is what
+    // lets the two coexist in the first place.
+    await Filament.collection
+      .createIndex({ name: 1 }, { unique: true, partialFilterExpression: { _deletedAt: null } })
+      .catch(() => {});
+  });
+
+  const section = (name: string, filamentdbId?: string): CollapsedFilamentData => ({
+    name,
+    vendor: "Acme",
+    type: "PLA",
+    color: "#808080",
+    cost: 77,
+    density: 1.24,
+    diameter: 1.75,
+    temperatures: { nozzle: 210, nozzleFirstLayer: null, bed: 60, bedFirstLayer: null },
+    maxVolumetricSpeed: null,
+    inherits: null,
+    settings: {},
+    ...(filamentdbId ? { filamentdbId } : {}),
+  });
+
+  it("writes to the row the id names, not the canonical twin", async () => {
+    const canonical = await Filament.collection.insertOne({
+      name: "PLA", vendor: "Acme", type: "PLA", cost: 1,
+      instanceId: "wsini001", _deletedAt: null, spools: [], settings: {},
+    });
+    const survivor = await Filament.collection.insertOne({
+      name: "PLA ", vendor: "Acme", type: "PLA", cost: 2,
+      instanceId: "wsini002", _deletedAt: null, spools: [], settings: {},
+    });
+
+    const outcome = await upsertIniFilament(
+      section("PLA", String(survivor.insertedId)),
+    );
+    expect(outcome).toBe("updated");
+
+    // The survivor got the settings...
+    const s2 = await Filament.collection.findOne({ _id: survivor.insertedId });
+    expect(s2!.cost).toBe(77);
+    // ...and KEPT its raw name. Renaming it to the canonical form would
+    // collide with the row that already holds it; normalizing names is the
+    // migration's job, not the importer's.
+    expect(s2!.name).toBe("PLA ");
+    // ...and the bystander is untouched. That is the whole point.
+    const c2 = await Filament.collection.findOne({ _id: canonical.insertedId });
+    expect(c2!.cost).toBe(1);
+    expect(c2!.name).toBe("PLA");
+  });
+});
