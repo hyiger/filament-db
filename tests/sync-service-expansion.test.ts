@@ -1131,6 +1131,97 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1, third pass): the staging PREDICTOR has to classify
+     * deletion the way the LOOP does, not merely the way the index does.
+     *
+     * `desiredNameOn` used JS truthiness while the loop uses `_deletedAt !=
+     * null`. They disagree on exactly one stored value — the empty string —
+     * and there the loop takes the DELETE branch (resurrecting on the other
+     * side) while the predictor claimed a rename on this one. The blocker got
+     * staged for a write that never came, and the resurrect's fresh
+     * `hydrateRemote` read copied `__sync-staging-…` onto the OTHER peer,
+     * where nothing tracks it and settlement never looks.
+     *
+     * Distinct from the `_deletedAt: ""` case above, which pins the HOLDER
+     * GRAPH: there the ghost is paired at equal timestamps, so `desiredNameOn`
+     * short-circuits before ever reaching the deletion test.
+     *
+     * SEED CONSTRAINTS, all load-bearing:
+     *  - remote B needs a REAL `updatedAt`; at epoch 0 the delete propagates
+     *    instead of resurrecting and the cross-peer half is lost;
+     *  - local B's `_deletedAt` must be the literal `""` — a real Date returns
+     *    null even pre-fix and the test proves nothing;
+     *  - remote B needs `_deletedAt: null` so it is inside the partial index
+     *    and findable as the blocker.
+     */
+    it("will not stage a blocker whose pair is a raw _deletedAt:\"\" row", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esn-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Zed", material: "PEI", syncId: "esn-b", _deletedAt: "", createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "esn-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "esn-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // NOTHING may hold a placeholder — on either peer. The local one is the
+      // one that used to escape entirely: `stagedRenames` never tracked it, so
+      // no settlement pass could have restored it.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // Both peers keep their seeded names: the case is reported, not forced.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esn-a" }))!.name).toBe("Aye");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esn-b" }))!.name).toBe("Bee");
+    });
+
+    /**
+     * The same defect through the PURGE branch. The loop's first both-exist
+     * arm fires on `_purged` and writes only the flags — no name — so a paired
+     * row with a purge zombie on one side (`_purged: true` with a live
+     * `_deletedAt`) is just as immovable as a deleted one.
+     *
+     * Seeded on `bedtypes` DELIBERATELY: `retombstonePurgedZombies` repairs
+     * `filaments` only, so a filaments-based test would pass on the migration
+     * rather than on this guard.
+     */
+    it("will not stage a blocker whose pair is a purge zombie", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Pea", material: "PEI", syncId: "pz-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Qew", material: "PEI", syncId: "pz-b", _deletedAt: null, _purged: true, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Ehh", material: "PEI", syncId: "pz-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Pea", material: "PEI", syncId: "pz-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "pz-a" }))!.name).toBe("Ehh");
+    });
+
+    /**
      * The unsatisfiable case: a row this pass is NOT moving already holds the
      * name. Staging cannot help, so it must be reported and BOTH peers left
      * alone — writing anyway would clobber a record the user still wants.

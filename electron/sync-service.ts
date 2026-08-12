@@ -17,7 +17,10 @@ import {
   isStagingPlaceholder,
   placeholderFor,
   planRenameStaging,
-  strandedPlaceholderMessage,
+  strandedPlaceholderError,
+  strandedPlaceholderNotice,
+  strandingNoticeOf,
+  CAUSE_LEAD,
 } from "../src/lib/renameStaging";
 import {
   retombstonePurgedZombies,
@@ -126,22 +129,51 @@ export function getDbNameFromUri(uri: string): string {
  * `user is not allowed to do action [update] on [db.coll]`) and by code 13
  * (the more reliable signal, but not always populated on every wrapped
  * error path). Either is sufficient. See GH #143.
+ *
+ * ## Composed errors: classify the CAUSE, re-attach the notice (GH #1142)
+ *
+ * Two things break when a caller wraps a driver error in its own Error, which
+ * `strandedPlaceholderError` does:
+ *
+ *  1. `new Error(msg, {cause})` does NOT inherit `code`, so the "more reliable
+ *     signal" above silently disappears — a genuine `code: 13` whose text does
+ *     not match the regex used to produce the hint and now produces nothing.
+ *     So classification reads through `cause` when there is one.
+ *  2. The auth branch REPLACES the whole message, discarding anything the
+ *     caller put in it. Ordering cannot save a composed message — the function
+ *     never reads the original. So a stranding notice is re-attached at the
+ *     END, outside the auth/redact decision, where no present or future
+ *     rewriting branch can drop it.
+ *
+ * The notice is cause-free by construction (see `strandedPlaceholderNotice`),
+ * so re-attaching it cannot itself trip the regex on the next pass.
  */
 export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
-  const message = err instanceof Error ? err.message : "Sync failed";
+  // Classify the CAUSE when the error carries one — that is where the driver's
+  // own message and `code` survive.
+  const cause = err instanceof Error && err.cause !== undefined ? err.cause : err;
+  const message =
+    cause instanceof Error ? cause.message : err instanceof Error ? err.message : "Sync failed";
   const code =
-    err && typeof err === "object" && "code" in err
-      ? (err as { code: unknown }).code
+    cause && typeof cause === "object" && "code" in cause
+      ? (cause as { code: unknown }).code
       : undefined;
 
   const isAuthError =
     /user is not allowed to do action/i.test(message) || code === 13;
 
-  if (isAuthError) {
-    return `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`;
-  }
+  const body = isAuthError
+    ? `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`
+    : message;
 
-  return message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+  // A stranded row needs manual recovery and is announced exactly once, so it
+  // survives whichever branch ran above.
+  const notice = strandingNoticeOf(err);
+  const full = notice ? `${notice} ${CAUSE_LEAD}${body}` : body;
+
+  // Redact LAST, over the WHOLE string: the notice quotes user-typed entity
+  // names, and the body may carry a connection string.
+  return full.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
 }
 
 export interface SyncStatus {
@@ -1214,6 +1246,8 @@ export class SyncService extends EventEmitter {
       originalName: string;
       placeholderName: string;
     }[] = [];
+    /** Rows this pass left holding a placeholder, for the result message. */
+    const strandedNotices: string[] = [];
     const stagingNonce = new ObjectId().toHexString().slice(-8);
 
     /**
@@ -1239,16 +1273,46 @@ export class SyncService extends EventEmitter {
      *
      * Re-derives only the DIRECTION of the LWW decision — a small, total
      * comparison — rather than the whole branch tree, which is what would
-     * drift. Deliberately conservative: every branch it cannot model (a
-     * delete, a resurrect, an equal timestamp, a missing side) answers null,
+     * drift. Deliberately conservative: every branch it cannot model (a purge,
+     * a delete, a resurrect, an equal timestamp, a missing side) answers null,
      * which downgrades the case to "unsatisfiable, reported" rather than
      * risking a stranded placeholder.
+     *
+     * ## The property this actually has (Codex P1, second pass)
+     *
+     * Not "it mirrors the loop exactly" — it does not, and claiming so is how
+     * the previous version drifted. The true, scoped claim is: FOR A ROW THAT
+     * IS LIVE ON `col` — the only rows `stageableOn` can ask about, since its
+     * filter is the index predicate — the only branch that rewrites the name
+     * is the both-active LWW one. The purge branch writes flags only;
+     * delete-propagation writes `_deletedAt` only; and both resurrect arms
+     * write on the DELETED side, which that same filter excludes.
+     *
+     * The guards below therefore have to use the LOOP's classifications, not
+     * lookalikes: `_purged === true` and `_deletedAt != null`, matching the
+     * `localPurged`/`localDeleted` derivations further down. Truthiness
+     * disagrees with `!= null` on exactly one stored value — the empty string,
+     * which the driver writes verbatim and Mongoose never casts — and there
+     * the loop takes the DELETE branch (resurrecting on the other side) while
+     * the predictor was claiming a rename on this one. The blocker was then
+     * staged for a write that never came, and the fresh `hydrateRemote` read
+     * could copy `__sync-staging-…` to the other peer before settlement ever
+     * noticed.
+     *
+     * The cost of being wrong in the safe direction is one reported cycle: a
+     * delete or purge frees the name in the same pass without renaming, so
+     * treating that pair as a permanent holder stalls the collection once
+     * (and cascade-skips its dependents) before converging cleanly. That is
+     * the trade this function was always making; it is not free.
      */
     const desiredNameOn = (col: typeof localCol, syncId: string): string | null => {
       const localDoc = localBySyncId.get(syncId);
       const remoteDoc = remoteBySyncId.get(syncId);
       if (!localDoc || !remoteDoc) return null; // unpaired: nothing writes it here
-      if (localDoc._deletedAt || remoteDoc._deletedAt) return null;
+      // Purge first, mirroring the loop's branch order — its purge arm is
+      // tested before either delete arm and writes no name at all.
+      if (localDoc._purged === true || remoteDoc._purged === true) return null;
+      if (localDoc._deletedAt != null || remoteDoc._deletedAt != null) return null;
 
       const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
       const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
@@ -1396,16 +1460,13 @@ export class SyncService extends EventEmitter {
               return null;
             });
           if (!rolledBack?.modifiedCount) {
-            throw new Error(
-              strandedPlaceholderMessage({
-                collection: collectionName,
-                id: String(blocker._id),
-                originalName: blockerName,
-                placeholderName: placeholder,
-                cause: retryErr,
-              }),
-              { cause: retryErr },
-            );
+            throw strandedPlaceholderError({
+              collection: collectionName,
+              id: String(blocker._id),
+              originalName: blockerName,
+              placeholderName: placeholder,
+              cause: retryErr,
+            });
           }
           throw retryErr;
         }
@@ -1655,7 +1716,20 @@ export class SyncService extends EventEmitter {
           { projection: { _id: 1 } },
         );
         if (taken) {
+          // NAME the row, do not just count it (Codex P1). This branch and the
+          // catch below are the two REACHABLE producers of a permanent
+          // placeholder — no race, no privilege change — and until now their
+          // only trace was a console line plus a counter whose rendering could
+          // be overwritten entirely (see the `heldBack` note at the end).
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          strandedNotices.push(
+            strandedPlaceholderNotice({
+              collection: collectionName,
+              id: String(staged.id),
+              originalName: staged.originalName,
+              placeholderName: staged.placeholderName,
+            }),
+          );
           console.warn(
             `[sync] ${collectionName}: left a staging placeholder on ${String(staged.id)} — ` +
               `${JSON.stringify(staged.originalName)} was taken while it was moved aside.`,
@@ -1680,6 +1754,14 @@ export class SyncService extends EventEmitter {
         // write landed shares its source's `updatedAt`, so LWW does no copy
         // and never repairs it either.
         result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+        strandedNotices.push(
+          strandedPlaceholderNotice({
+            collection: collectionName,
+            id: String(staged.id),
+            originalName: staged.originalName,
+            placeholderName: staged.placeholderName,
+          }),
+        );
         console.error(
           `[sync] ${collectionName}: could not restore ${JSON.stringify(staged.originalName)} ` +
             `on ${String(staged.id)}; it still holds a staging placeholder.`,
@@ -1719,11 +1801,23 @@ export class SyncService extends EventEmitter {
         `${result.nameConflicts} name conflict(s) could not be applied — two rows want ` +
         `the same name and neither can give it up. Rename one of them.`;
     }
+    // A row left holding `__sync-staging-…` needs a HUMAN, and nothing scans
+    // for stale placeholders on a later cycle — the equal-`updatedAt` case
+    // documented above is never repaired by LWW either. So name the rows, do
+    // not merely count them.
+    if (strandedNotices.length > 0) {
+      result.error = `${result.error ? `${result.error} ` : ""}${strandedNotices.join(" ")}`;
+    }
 
     if (heldBack > 0) {
-      result.error =
+      // APPEND (Codex P1). This used to ASSIGN, so a held-back collection that
+      // also stranded a placeholder reported only the hold-back — and that text
+      // blames the trim pass, sending the user somewhere the actual problem is
+      // not. Both facts are true at once and both need saying.
+      const held =
         `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +
         `collection, so its names cannot be matched safely yet`;
+      result.error = result.error ? `${result.error} Also: ${held}` : held;
     }
 
     return result;

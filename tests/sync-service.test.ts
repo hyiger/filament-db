@@ -4,6 +4,7 @@ import {
   isDuplicateKeyError,
   wrapSyncErrorMessage,
 } from "../electron/sync-service";
+import { strandedPlaceholderError } from "@/lib/renameStaging";
 
 describe("getDbNameFromUri", () => {
   it("extracts db name from a basic mongodb URI with explicit path", () => {
@@ -123,6 +124,114 @@ describe("wrapSyncErrorMessage", () => {
     const wrapped = wrapSyncErrorMessage(err, "filament-db");
     // No rewrite — message passes through (with URI redaction, n/a here)
     expect(wrapped).toBe("network reset while updating filament cache");
+  });
+});
+
+/**
+ * GH #1142 (Codex P2, twice). A stranded row needs a HUMAN — nothing scans for
+ * leftover `__sync-staging-…` names on a later cycle, and the equal-`updatedAt`
+ * case is documented as never repaired by LWW — so the one announcement has to
+ * survive whatever else the wrapper decides about the error.
+ *
+ * The previous attempt tried to achieve that by ORDERING the composed message.
+ * It cannot work: the auth branch RETURNS a fresh string and never reads the
+ * original, so both orderings lose equally. These cases pin the structural
+ * property instead, and the first two FAIL on that design.
+ */
+describe("wrapSyncErrorMessage + a stranded placeholder", () => {
+  const info = {
+    collection: "bedtypes",
+    id: "64b7f0000000000000000001",
+    originalName: "Textured PEI",
+    placeholderName: "__sync-staging-64b7f0000000000000000001-abc",
+  };
+  const expectStranding = (wrapped: string) => {
+    expect(wrapped).toContain("bedtypes 64b7f0000000000000000001");
+    expect(wrapped).toContain('"Textured PEI"');
+    expect(wrapped).toContain('"__sync-staging-64b7f0000000000000000001-abc"');
+    expect(wrapped).toMatch(/rename it back manually/i);
+  };
+
+  it("keeps BOTH the stranding and the Atlas hint when the cause is auth-shaped", () => {
+    const wrapped = wrapSyncErrorMessage(
+      strandedPlaceholderError({
+        ...info,
+        cause: Object.assign(
+          new Error("user is not allowed to do action [update] on [prod-db.bedtypes]"),
+          { code: 13 },
+        ),
+      }),
+      "prod-db",
+    );
+    expectStranding(wrapped);
+    expect(wrapped).toContain('only has read permission for "prod-db"');
+    expect(wrapped).toContain("readWrite");
+  });
+
+  it("still recognises code 13 through the wrapper — a composed Error inherits no code", () => {
+    // The inverse gap, and the more damaging half: `new Error(msg, {cause})`
+    // does not copy `code`, so classifying the OUTER error threw away the
+    // signal the docblock calls the reliable one. A fix that merely appends the
+    // notice inside the auth branch passes the case above and fails this one.
+    const wrapped = wrapSyncErrorMessage(
+      strandedPlaceholderError({
+        ...info,
+        cause: Object.assign(new Error("Unauthorized"), { code: 13 }),
+      }),
+      "prod-db",
+    );
+    expectStranding(wrapped);
+    expect(wrapped).toContain('only has read permission for "prod-db"');
+  });
+
+  it("keeps the stranding and the driver text when the cause is not auth", () => {
+    const wrapped = wrapSyncErrorMessage(
+      strandedPlaceholderError({
+        ...info,
+        cause: new Error('E11000 duplicate key error index: name_1 dup key: { name: "Textured PEI" }'),
+      }),
+      "prod-db",
+    );
+    expectStranding(wrapped);
+    expect(wrapped).toContain("E11000");
+    expect(wrapped).not.toContain("only has read permission");
+  });
+
+  it("redacts a connection string in the cause without losing the stranding", () => {
+    // Redaction has to run over the FINAL string: the notice is concatenated
+    // after the branch decision, so redacting only the body would leave a
+    // future notice-borne URI in the clear.
+    const wrapped = wrapSyncErrorMessage(
+      strandedPlaceholderError({
+        ...info,
+        cause: new Error("connect failed to mongodb+srv://user:secret@cluster.mongodb.net/db"),
+      }),
+      "prod-db",
+    );
+    expectStranding(wrapped);
+    expect(wrapped).toContain("mongodb://***");
+    expect(wrapped).not.toContain("secret");
+  });
+
+  it("keeps a non-Error cause's text rather than collapsing it", () => {
+    // Guards the recursion trap: re-entering the wrapper with the cause would
+    // turn a string cause into "Sync failed".
+    const wrapped = wrapSyncErrorMessage(
+      strandedPlaceholderError({ ...info, cause: "socket hang up" }),
+      "prod-db",
+    );
+    expectStranding(wrapped);
+    expect(wrapped).toContain("socket hang up");
+  });
+
+  it("leaves an ordinary auth error exactly as GH #143 specified", () => {
+    const wrapped = wrapSyncErrorMessage(
+      new Error("user is not allowed to do action [update] on [prod-db.bedtypes]"),
+      "prod-db",
+    );
+    expect(wrapped).toContain('only has read permission for "prod-db"');
+    expect(wrapped).not.toContain("staging");
+    expect(wrapped).not.toMatch(/rename it back manually/i);
   });
 });
 

@@ -3,7 +3,9 @@ import {
   planRenameStaging,
   isStagingPlaceholder,
   placeholderFor,
-  strandedPlaceholderMessage,
+  strandedPlaceholderNotice,
+  strandedPlaceholderError,
+  strandingNoticeOf,
   STAGING_PREFIX,
   type RenameIntent,
 } from "@/lib/renameStaging";
@@ -158,17 +160,20 @@ describe("isStagingPlaceholder", () => {
 });
 
 /**
- * The rollback-failed path in `writeWithRenameStaging` is a genuine race — a
- * third party has to claim the original name in the window between staging and
- * rollback — so it cannot be induced from a sync test. What CAN be pinned is
- * the message it hands up, which after GH #1142 (Codex P2, twice) is the only
- * channel that reaches the user: the throw leaves `syncCollection` entirely and
- * `trySync` rebuilds a zero-count SyncResult carrying nothing but the error, so
- * a counter on `result` — the previous attempt — was discarded on the one path
- * it existed for.
+ * GH #1142 (Codex P2, twice). The rollback-failed path is a genuine race — a
+ * third party has to claim the original name between staging and rollback — so
+ * it cannot be induced from a sync test. What CAN be pinned is the structure
+ * that carries it to the user, and the structure is the whole fix: the notice
+ * is CAUSE-FREE so it can be re-attached after `wrapSyncErrorMessage` has
+ * decided what kind of error this is, and the factory composes and tags in one
+ * expression so an untagged stranding message cannot be written.
+ *
+ * `tests/sync-service.test.ts` pins the other half — that the wrapper actually
+ * re-attaches it — which is where the previous attempt failed: it asserted
+ * ORDERING inside a string the wrapper discards wholesale.
  */
-describe("strandedPlaceholderMessage", () => {
-  const base = {
+describe("stranded placeholder reporting", () => {
+  const info = {
     collection: "bedtypes",
     id: "64b7f0000000000000000001",
     originalName: "Textured PEI",
@@ -176,36 +181,48 @@ describe("strandedPlaceholderMessage", () => {
   };
 
   it("names the row, both names, and what the user has to do", () => {
-    const msg = strandedPlaceholderMessage({ ...base, cause: new Error("E11000 dup key") });
-    expect(msg).toContain("bedtypes 64b7f0000000000000000001");
-    expect(msg).toContain('"Textured PEI"');
-    expect(msg).toContain('"__sync-staging-64b7f0000000000000000001-abc"');
-    expect(msg).toMatch(/rename it back manually/i);
+    const notice = strandedPlaceholderNotice(info);
+    expect(notice).toContain("bedtypes 64b7f0000000000000000001");
+    expect(notice).toContain('"Textured PEI"');
+    expect(notice).toContain('"__sync-staging-64b7f0000000000000000001-abc"');
+    expect(notice).toMatch(/rename it back manually/i);
   });
 
-  it("keeps the underlying failure, so the cause is not lost", () => {
-    expect(
-      strandedPlaceholderMessage({ ...base, cause: new Error("E11000 dup key") }),
-    ).toContain("E11000 dup key");
-  });
-
-  it("leads with the stranding — an auth-shaped cause must not displace it", () => {
-    // `wrapSyncErrorMessage` REPLACES the whole message on the read-only-Atlas
-    // shape (GH #143). Anything after such a cause would be dropped, so the
-    // durable problem has to come first: a permissions error re-tells itself
-    // next cycle, a stranded placeholder is announced exactly once.
-    const msg = strandedPlaceholderMessage({
-      ...base,
+  it("keeps the notice free of the cause — the property the wrapper relies on", () => {
+    // If the cause leaked in here, an auth-shaped one would make the notice
+    // itself match wrapSyncErrorMessage's regex on re-attachment, and the
+    // stranding would vanish exactly as it did before.
+    const err = strandedPlaceholderError({
+      ...info,
       cause: new Error("user is not allowed to do action [update] on [db.bedtypes]"),
     });
-    expect(msg.indexOf("bedtypes 64b7f0000000000000000001")).toBeLessThan(
-      msg.indexOf("user is not allowed"),
-    );
+    expect(strandingNoticeOf(err)).not.toContain("user is not allowed");
+    // ...while the composed message still carries both halves.
+    expect(err.message).toContain("user is not allowed");
+    expect(err.message).toContain("bedtypes 64b7f0000000000000000001");
+  });
+
+  it("tags exactly what it composed, and keeps the cause attached", () => {
+    // The cause has to survive as an OBJECT, not just as text: it is where a
+    // driver error's `code` lives, and `new Error(msg, {cause})` does not
+    // inherit it.
+    const cause = Object.assign(new Error("Unauthorized"), { code: 13 });
+    const err = strandedPlaceholderError({ ...info, cause });
+    expect(err.cause).toBe(cause);
+    expect(strandingNoticeOf(err)).toBe(strandedPlaceholderNotice(info));
   });
 
   it("survives a non-Error rejection", () => {
-    expect(strandedPlaceholderMessage({ ...base, cause: "socket hang up" })).toContain(
+    expect(strandedPlaceholderError({ ...info, cause: "socket hang up" }).message).toContain(
       "socket hang up",
     );
+  });
+
+  it("reads no notice off anything that is not a tagged error", () => {
+    for (const value of [null, undefined, "a string", 42, {}, new Error("plain")]) {
+      expect(strandingNoticeOf(value)).toBeNull();
+    }
+    // ...including a lookalike whose key holds the wrong type.
+    expect(strandingNoticeOf({ strandingNotice: 42 })).toBeNull();
   });
 });

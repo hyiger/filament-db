@@ -193,40 +193,83 @@ export function planRenameStaging(
   return { staged, unsatisfiable };
 }
 
-/**
- * Compose the error a caller throws when a staged row could NOT be put back.
- *
- * Extracted here — pure, and next to the rest of the staging vocabulary —
- * because the failure it describes is a genuine race (the original name has to
- * be claimed by a third party in the window between staging and rollback) and
- * so cannot be induced from a sync test. Testing the message instead of the
- * race at least pins the two decisions that matter: that the stranding leads,
- * and that the cause survives.
- *
- * ## Why the stranding leads and the cause follows
- *
- * `wrapSyncErrorMessage` REPLACES the whole message when it recognises the
- * read-only-Atlas shape (GH #143), so anything appended after an auth-shaped
- * cause is dropped. Between the two, the durable problem has to win: a
- * permissions error recurs on the next cycle and re-tells its own story, while
- * a row left holding a placeholder is announced exactly once.
- *
- * (The conflict should not arise anyway — staging already wrote to this same
- * collection a moment earlier, which proves writes were permitted.)
- */
-export function strandedPlaceholderMessage(input: {
+/** Facts about a row left holding a staging placeholder. */
+export interface StrandedPlaceholder {
   collection: string;
   id: string;
   originalName: string;
   placeholderName: string;
-  cause: unknown;
-}): string {
-  const cause =
-    input.cause instanceof Error ? input.cause.message : String(input.cause);
+}
+
+/**
+ * The lead-in that joins a stranding notice to the failure that caused it.
+ *
+ * Shared so the composer and any consumer that re-attaches the notice after
+ * normalising an error agree on the wording.
+ */
+export const CAUSE_LEAD = "The failure was: ";
+
+/**
+ * The CAUSE-FREE sentence describing a stranded row.
+ *
+ * Cause-free is the load-bearing property, not a style choice. `wrapSyncErrorMessage`
+ * decides whether an error is the read-only-Atlas shape by testing a REGEX over
+ * the message, and it REPLACES the whole string when it matches. Interpolating a
+ * cause into the same string is therefore how the stranding disappears — first
+ * because an auth-shaped cause makes the composed message match, and second
+ * because the notice quotes user-typed entity names, so a row could be named
+ * into matching it. Keeping the notice free of the cause means the notice can be
+ * re-attached AFTER any such decision, and can never be the thing that trips it.
+ *
+ * An earlier version relied on ORDER — stranding first, cause second — which
+ * achieves nothing: the wrapper returns a fresh string and never reads the
+ * original at all.
+ */
+export function strandedPlaceholderNotice(info: StrandedPlaceholder): string {
   return (
-    `${input.collection} ${input.id} was moved aside to free the name ` +
-    `${JSON.stringify(input.originalName)} and could not be restored — it still holds the ` +
-    `temporary name ${JSON.stringify(input.placeholderName)}. Rename it back manually. ` +
-    `The write that failed reported: ${cause}`
+    `${info.collection} ${info.id} was moved aside to free the name ` +
+    `${JSON.stringify(info.originalName)} and could not be restored — it still holds the ` +
+    `temporary name ${JSON.stringify(info.placeholderName)}. Rename it back manually.`
   );
+}
+
+/** Where the notice is stashed on a thrown error, for consumers to recover. */
+const STRANDING_KEY = "strandingNotice";
+
+/**
+ * Build the error a caller throws when a staged row could NOT be put back.
+ *
+ * ONE factory rather than "compose a message, then tag it" because those are two
+ * steps a later edit can desynchronise, and the resulting failure is silent and
+ * identical to the bug this exists to fix. Composing and tagging in the same
+ * expression makes an untagged stranding message unrepresentable.
+ *
+ * The original error rides as `cause`, which matters beyond provenance: it is
+ * where a driver error's `code` lives, and `new Error(msg, {cause})` does NOT
+ * inherit it — so a consumer that classifies errors by code has to look through
+ * `cause`, and can only do that if the cause is attached.
+ *
+ * A duck-typed string property, not a subclass: `instanceof` fails silently if
+ * the module is ever loaded twice, and a silent drop is exactly the failure mode
+ * being designed out.
+ */
+export function strandedPlaceholderError(
+  info: StrandedPlaceholder & { cause: unknown },
+): Error {
+  const notice = strandedPlaceholderNotice(info);
+  const causeText = info.cause instanceof Error ? info.cause.message : String(info.cause);
+  const err = new Error(`${notice} ${CAUSE_LEAD}${causeText}`, { cause: info.cause });
+  return Object.assign(err, { [STRANDING_KEY]: notice });
+}
+
+/**
+ * Recover the cause-free stranding notice from an error, or null.
+ *
+ * Total by design — it is called from a generic catch that has no idea what
+ * threw.
+ */
+export function strandingNoticeOf(err: unknown): string | null {
+  if (typeof err !== "object" || err === null) return null;
+  const value = (err as Record<string, unknown>)[STRANDING_KEY];
+  return typeof value === "string" ? value : null;
 }
