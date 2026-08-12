@@ -169,3 +169,24 @@ export function nextFilterHref<S extends FilterSpec>(
   const currentHref = `${location.pathname}${currentQuery ? `?${currentQuery}` : ""}${location.hash}`;
   return next === currentHref ? null : next;
 }
+
+/**
+ * The option list for a `<select>` whose current value may not be in it.
+ *
+ * A URL-supplied `?type=` / `?vendor=` is free text — the values come from the
+ * user's own data, so they cannot be validated against a fixed union the way
+ * `kind` or `sort` can. A stale bookmark or a hand-edited link can therefore
+ * carry a value the distinct-value endpoints no longer return, and a
+ * controlled `<select>` with no matching option renders as "All …": the filter
+ * is applied to the query, invisible in the control, and re-choosing the shown
+ * option may emit no change event, so it cannot even be cleared.
+ *
+ * Rendering the orphan as its own option keeps it visible and clearable.
+ * Preferred over dropping the value, because the option lists load
+ * asynchronously — clearing on absence would race the fetch and silently
+ * discard a filter the URL explicitly asked for.
+ */
+export function withCurrentValue(options: string[], current: string): string[] {
+  if (!current || options.includes(current)) return options;
+  return [current, ...options];
+}

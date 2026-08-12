@@ -6,9 +6,11 @@ import SearchParamsSync from "@/components/SearchParamsSync";
 import {
   parseFilterParams,
   nextFilterHref,
+  serializeFilterParams,
   oneOf,
   boolParam,
   textParam,
+  withCurrentValue,
   type FilterSpec,
 } from "@/lib/listFilterParams";
 import { useRouter } from "next/navigation";
@@ -371,6 +373,34 @@ export default function Home() {
   //
   // `nextFilterHref` returns null when nothing would change, and MERGES rather
   // than rebuilding, so params this page does not own survive.
+  /** What this page's filters serialize to — the value it writes, and what
+   *  SearchParamsSync needs in order to keep its own notion current (see
+   *  its docblock: useSearchParams does not observe a manual replaceState). */
+  const mirroredQuery = useMemo(
+    () => serializeFilterParams(
+      typeof window === "undefined" ? "" : window.location.search,
+      HOME_FILTER_SPEC,
+      {
+      search: debouncedSearch,
+      typeFilter,
+      vendorFilter,
+      quickFilter,
+      showOutOfStock,
+      sortKey,
+      sortDir,
+    },
+    ),
+    [
+    debouncedSearch,
+    typeFilter,
+    vendorFilter,
+    quickFilter,
+    showOutOfStock,
+    sortKey,
+    sortDir,
+  ],
+  );
+
   useEffect(() => {
     if (!homePrefsLoaded.current) return;
     const href = nextFilterHref(window.location, HOME_FILTER_SPEC, {
@@ -383,10 +413,17 @@ export default function Home() {
       sortDir,
     });
     if (href) {
-      // Record what we wrote so SearchParamsSync can tell our own change from
+      // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.
       ownUrlWriteRef.current = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
-      window.history.replaceState(window.history.state, "", href);
+      // Through the ROUTER, not `window.history` directly. A raw
+      // `replaceState` leaves the router's own model of the URL untouched, so
+      // `useSearchParams` keeps reporting the pre-write value — and a later
+      // Link click to the same route then looks like no change at all, which
+      // is exactly the navigation the re-seed exists to catch. Verified in the
+      // browser: with a raw replaceState the list stayed filtered under a bare
+      // URL. `scroll: false` keeps the list position; already debounced.
+      router.replace(href, { scroll: false });
     }
   }, [
     debouncedSearch,
@@ -396,6 +433,7 @@ export default function Home() {
     showOutOfStock,
     sortKey,
     sortDir,
+    router,
   ]);
 
   // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
@@ -403,6 +441,15 @@ export default function Home() {
   // clicking the header's home link while filtered reuses this page, so the
   // URL goes bare while the state stays filtered.
   const reseedFromUrl = useCallback((nextSearch: string) => {
+    // Our own replaceState comes back through here; CONSUME the marker rather
+    // than just testing it (Codex P2). Left set, a later external navigation
+    // to the same query looks like another page write — type `pla`, click the
+    // header link to the bare route, press Back, and the URL returns to
+    // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
+    if (ownUrlWriteRef.current === nextSearch) {
+      ownUrlWriteRef.current = null;
+      return;
+    }
     const url = parseFilterParams(nextSearch, HOME_FILTER_SPEC);
     setSearch(url.search);
     setDebouncedSearch(url.search);
@@ -1556,7 +1603,7 @@ export default function Home() {
     <>
       {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
       <Suspense fallback={null}>
-        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={ownUrlWriteRef} />
+        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={mirroredQuery} />
       </Suspense>
     <main id="main-content" className="w-full px-4 py-8">
       {/* GH #411: visually-hidden h1 so screen-reader users navigating
@@ -1793,7 +1840,7 @@ export default function Home() {
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allTypes")}</option>
-          {types.map((tp) => (
+          {withCurrentValue(types, typeFilter).map((tp) => (
             <option key={tp} value={tp}>
               {tp}
             </option>
@@ -1805,7 +1852,7 @@ export default function Home() {
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allVendors")}</option>
-          {vendors.map((vn) => (
+          {withCurrentValue(vendors, vendorFilter).map((vn) => (
             <option key={vn} value={vn}>
               {vn}
             </option>

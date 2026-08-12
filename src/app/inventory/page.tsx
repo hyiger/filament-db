@@ -7,9 +7,11 @@ import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
 import {
   parseFilterParams,
   nextFilterHref,
+  serializeFilterParams,
   oneOf,
   boolParam,
   textParam,
+  withCurrentValue,
   type FilterSpec,
 } from "@/lib/listFilterParams";
 import { useRouter } from "next/navigation";
@@ -261,6 +263,7 @@ const INVENTORY_FILTER_SPEC = {
 } satisfies FilterSpec;
 
 export default function InventoryPage() {
+  const router = useRouter();
   const { t } = useTranslation();
   const { formatNumber } = useNumberFormat();
   const { toast } = useToast();
@@ -509,6 +512,27 @@ export default function InventoryPage() {
   // `?location=` — encoded into printed dry-box QR stickers — is preserved
   // because the spec does not own it. Gated on `prefsLoaded` so it cannot run
   // before the seed above and blank the query string.
+  /** What this page's filters serialize to — the value it writes, and what
+   *  SearchParamsSync needs in order to keep its own notion current (see
+   *  its docblock: useSearchParams does not observe a manual replaceState). */
+  const mirroredQuery = useMemo(
+    () => serializeFilterParams(
+      typeof window === "undefined" ? "" : window.location.search,
+      INVENTORY_FILTER_SPEC,
+      {
+      search,
+      kind,
+      type,
+      vendor,
+      includeRetired,
+      groupBy,
+      sortKey,
+      sortDir,
+    },
+    ),
+    [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir],
+  );
+
   useEffect(() => {
     if (!prefsLoaded.current) return;
     const href = nextFilterHref(window.location, INVENTORY_FILTER_SPEC, {
@@ -522,12 +546,19 @@ export default function InventoryPage() {
       sortDir,
     });
     if (href) {
-      // Record what we wrote so SearchParamsSync can tell our own change from
+      // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.
       ownUrlWriteRef.current = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
-      window.history.replaceState(window.history.state, "", href);
+      // Through the ROUTER, not `window.history` directly. A raw
+      // `replaceState` leaves the router's own model of the URL untouched, so
+      // `useSearchParams` keeps reporting the pre-write value — and a later
+      // Link click to the same route then looks like no change at all, which
+      // is exactly the navigation the re-seed exists to catch. Verified in the
+      // browser: with a raw replaceState the list stayed filtered under a bare
+      // URL. `scroll: false` keeps the list position; already debounced.
+      router.replace(href, { scroll: false });
     }
-  }, [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir]);
+  }, [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir, router]);
 
   // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
   //
@@ -536,6 +567,15 @@ export default function InventoryPage() {
   // reuses this page, so the URL goes bare while the state stays filtered and
   // the next refresh clears what was still on screen.
   const reseedFromUrl = useCallback((nextSearch: string) => {
+    // Our own replaceState comes back through here; CONSUME the marker rather
+    // than just testing it (Codex P2). Left set, a later external navigation
+    // to the same query looks like another page write — type `pla`, click the
+    // header link to the bare route, press Back, and the URL returns to
+    // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
+    if (ownUrlWriteRef.current === nextSearch) {
+      ownUrlWriteRef.current = null;
+      return;
+    }
     const url = parseFilterParams(nextSearch, INVENTORY_FILTER_SPEC);
     setSearch(url.search);
     setKind(url.kind);
@@ -758,7 +798,7 @@ export default function InventoryPage() {
     <>
       {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
       <Suspense fallback={null}>
-        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={ownUrlWriteRef} />
+        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={mirroredQuery} />
       </Suspense>
     <main id="main-content" className="w-full max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6 gap-4">
@@ -827,7 +867,7 @@ export default function InventoryPage() {
             className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
           >
             <option value="">{t("inventory.filter.allTypes")}</option>
-            {types.map((tp) => (
+            {withCurrentValue(types, type).map((tp) => (
               <option key={tp} value={tp}>
                 {tp}
               </option>
@@ -845,7 +885,7 @@ export default function InventoryPage() {
             className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
           >
             <option value="">{t("inventory.filter.allVendors")}</option>
-            {vendors.map((vn) => (
+            {withCurrentValue(vendors, vendor).map((vn) => (
               <option key={vn} value={vn}>
                 {vn}
               </option>
@@ -1192,10 +1232,10 @@ function SpoolEditRow({
   onToggleSelected,
   selectLabel,
 }: RowProps) {
+  const router = useRouter();
   const { t } = useTranslation();
   const { formatDate } = useDateFormat();
   const { formatGrams } = useNumberFormat();
-  const router = useRouter();
   // #1117(h): carry the CURRENT url back, so a detour to create a location
   // returns to THIS page rather than stranding the user on /locations. The
   // query string (`?location=`, `?includeRetired=`) and the localStorage
