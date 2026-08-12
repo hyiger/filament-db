@@ -1,6 +1,8 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { Suspense } from "react";
+import SearchParamsSync from "@/components/SearchParamsSync";
 import {
   parseFilterParams,
   nextFilterHref,
@@ -286,6 +288,9 @@ export default function Home() {
   // #831: gate the persist effect so it doesn't fire on the default state
   // before the post-mount load runs.
   const homePrefsLoaded = useRef(false);
+  /** The query string this page last wrote, so its own replaceState does not
+   *  come back through SearchParamsSync as an external change. */
+  const ownUrlWriteRef = useRef<string | null>(null);
   const [importing, setImporting] = useState(false);
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -377,7 +382,12 @@ export default function Home() {
       sortKey,
       sortDir,
     });
-    if (href) window.history.replaceState(window.history.state, "", href);
+    if (href) {
+      // Record what we wrote so SearchParamsSync can tell our own change from
+      // someone else's and not loop on it.
+      ownUrlWriteRef.current = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+      window.history.replaceState(window.history.state, "", href);
+    }
   }, [
     debouncedSearch,
     typeFilter,
@@ -387,6 +397,22 @@ export default function Home() {
     sortKey,
     sortDir,
   ]);
+
+  // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
+  // The mount seed misses a client-side navigation to the SAME route —
+  // clicking the header's home link while filtered reuses this page, so the
+  // URL goes bare while the state stays filtered.
+  const reseedFromUrl = useCallback((nextSearch: string) => {
+    const url = parseFilterParams(nextSearch, HOME_FILTER_SPEC);
+    setSearch(url.search);
+    setDebouncedSearch(url.search);
+    setTypeFilter(url.typeFilter);
+    setVendorFilter(url.vendorFilter);
+    setQuickFilter(url.quickFilter);
+    setShowOutOfStock(url.showOutOfStock);
+    setSortKey(url.sortKey);
+    setSortDir(url.sortDir);
+  }, []);
   useEffect(() => {
     if (!homePrefsLoaded.current) return;
     try {
@@ -1527,6 +1553,11 @@ export default function Home() {
   };
 
   return (
+    <>
+      {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
+      <Suspense fallback={null}>
+        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={ownUrlWriteRef} />
+      </Suspense>
     <main id="main-content" className="w-full px-4 py-8">
       {/* GH #411: visually-hidden h1 so screen-reader users navigating
           by heading land on the page title. Sighted users already get
@@ -1959,5 +1990,6 @@ export default function Home() {
         />
       )}
     </main>
+    </>
   );
 }

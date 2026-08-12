@@ -1,6 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense } from "react";
+import SearchParamsSync from "@/components/SearchParamsSync";
+import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
 import {
   parseFilterParams,
   nextFilterHref,
@@ -227,7 +230,12 @@ const NEW_LOCATION_OPTION = "__new_location__";
  */
 const INVENTORY_FILTER_SPEC = {
   search: { param: "q", fallback: "", ...textParam },
-  kind: { param: "kind", fallback: "", ...textParam },
+  // Validated against the SELECTABLE kinds (Codex P2), not free text. The
+  // select renders exactly these five options, so a stale or hand-typed
+  // `?kind=garage` would leave React displaying "All kinds" while the hidden
+  // state kept filtering — and re-choosing the option already shown may emit
+  // no change event, so the filter would be invisible AND unclearable.
+  kind: { param: "kind", fallback: "", parse: oneOf(["", ...KNOWN_LOCATION_KINDS]) },
   type: { param: "type", fallback: "", ...textParam },
   vendor: { param: "vendor", fallback: "", ...textParam },
   includeRetired: {
@@ -281,6 +289,9 @@ export default function InventoryPage() {
   const [sortKey, setSortKey] = useState<InventorySortKey>(DEFAULT_INVENTORY_PREFS.sortKey);
   const [sortDir, setSortDir] = useState<InventorySortDir>(DEFAULT_INVENTORY_PREFS.sortDir);
   const prefsLoaded = useRef(false);
+  /** The query string this page last wrote, so its own replaceState does not
+   *  come back through SearchParamsSync as an external change. */
+  const ownUrlWriteRef = useRef<string | null>(null);
 
   // GH #444: debounce the search input. The filtered-groups memo
   // walks every group + every spool on each keystroke; on a slow
@@ -510,8 +521,31 @@ export default function InventoryPage() {
       sortKey,
       sortDir,
     });
-    if (href) window.history.replaceState(window.history.state, "", href);
+    if (href) {
+      // Record what we wrote so SearchParamsSync can tell our own change from
+      // someone else's and not loop on it.
+      ownUrlWriteRef.current = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+      window.history.replaceState(window.history.state, "", href);
+    }
   }, [search, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir]);
+
+  // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
+  //
+  // The seed above runs once on mount, which misses a client-side navigation
+  // to the SAME route — clicking the header's Inventory link while filtered
+  // reuses this page, so the URL goes bare while the state stays filtered and
+  // the next refresh clears what was still on screen.
+  const reseedFromUrl = useCallback((nextSearch: string) => {
+    const url = parseFilterParams(nextSearch, INVENTORY_FILTER_SPEC);
+    setSearch(url.search);
+    setKind(url.kind);
+    setType(url.type);
+    setVendor(url.vendor);
+    setIncludeRetired(url.includeRetired);
+    setGroupBy(url.groupBy);
+    setSortKey(url.sortKey);
+    setSortDir(url.sortDir);
+  }, []);
 
   // Persist prefs whenever they change (after the initial load).
   useEffect(() => {
@@ -721,6 +755,11 @@ export default function InventoryPage() {
   );
 
   return (
+    <>
+      {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
+      <Suspense fallback={null}>
+        <SearchParamsSync onExternalChange={reseedFromUrl} ownWrite={ownUrlWriteRef} />
+      </Suspense>
     <main id="main-content" className="w-full max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>
@@ -1118,6 +1157,7 @@ export default function InventoryPage() {
         />
       )}
     </main>
+    </>
   );
 }
 
