@@ -363,6 +363,10 @@ export async function upsertIniFilament(
   // matching name — or a stale/absent id — falls through to the name-based
   // upsert below.
   const fid = collapsed.filamentdbId;
+  /** The row the preset's own `filamentdb_id` selected, when it is a
+   *  trim-equal match. Phase 1 must use THIS row rather than re-resolving by
+   *  name — see below. */
+  let idSelected: { _id: Parameters<typeof Filament.findById>[0]; name?: unknown } | null = null;
   if (fid && /^[a-f0-9]{24}$/i.test(fid)) {
     const byId = await Filament.findOne({ _id: fid, _deletedAt: null })
       .select("_id name")
@@ -381,13 +385,30 @@ export async function upsertIniFilament(
           `"${name}" — not imported (rename the section to match, or resolve the id/name conflict).`,
       );
     }
+    idSelected = byId ?? null;
   }
 
+  // GH #1116 (Codex P1): once the id has SELECTED a row, keep it.
+  //
+  // Accepting a trim-equal pair above and then re-resolving by name below
+  // sends the update to the wrong row: with an active `"PLA"` and a survivor
+  // `"PLA "`, an exported INI carrying the SURVIVOR's `filamentdb_id` passes
+  // the guard, and the canonical-first query in phase 1 then selects `"PLA"` —
+  // so the survivor's settings are written onto the canonical bystander. The
+  // id is the more specific address; it wins.
+  const idSelectedIsSurvivor =
+    idSelected !== null && String(idSelected.name ?? "") !== name;
+
   // Phase 1 — update an existing ACTIVE row.
-  let existingActive = await Filament.findOne({ name, _deletedAt: null })
-    .select(INI_INHERITANCE_PROJECTION)
-    .lean();
-  let activeIsSurvivor = false;
+  let existingActive = idSelected
+    ? await Filament.findOne({ _id: idSelected._id, _deletedAt: null })
+        .select(INI_INHERITANCE_PROJECTION)
+        .lean()
+    : // name-lookup-ok: the survivor fallback below covers the cast case
+      await Filament.findOne({ name, _deletedAt: null })
+        .select(INI_INHERITANCE_PROJECTION)
+        .lean();
+  let activeIsSurvivor = idSelectedIsSurvivor && existingActive != null;
   if (!existingActive) {
     // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
     // absence — the setter casts this query, so it cannot select a row whose

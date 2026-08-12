@@ -796,3 +796,59 @@ describe("upsertIniFilament — a surviving untrimmed row (GH #1116)", () => {
     expect(rows[0].name).toBe("Trashed Survivor");
   });
 });
+
+/**
+ * GH #1116 (Codex P1). Accepting a trim-equal id/name pair and then
+ * re-resolving by NAME sends the update to the wrong row: with an active
+ * "PLA" and a survivor "PLA ", an exported INI carrying the SURVIVOR's
+ * `filamentdb_id` passes the guard, and the canonical-first query then selects
+ * "PLA" — writing the survivor's settings onto the canonical bystander.
+ */
+describe("upsertIniFilament — an id-selected survivor keeps the update (GH #1116)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.collection.deleteMany({});
+  });
+
+  const section = (name: string, filamentdbId?: string): CollapsedFilamentData => ({
+    name,
+    vendor: "Acme",
+    type: "PLA",
+    color: "#808080",
+    cost: 77,
+    density: 1.24,
+    diameter: 1.75,
+    temperatures: { nozzle: 210, nozzleFirstLayer: null, bed: 60, bedFirstLayer: null },
+    maxVolumetricSpeed: null,
+    inherits: null,
+    settings: {},
+    ...(filamentdbId ? { filamentdbId } : {}),
+  });
+
+  it("writes to the row the id names, not the canonical twin", async () => {
+    const canonical = await Filament.collection.insertOne({
+      name: "PLA", vendor: "Acme", type: "PLA", cost: 1,
+      instanceId: "wsini001", _deletedAt: null, spools: [], settings: {},
+    });
+    const survivor = await Filament.collection.insertOne({
+      name: "PLA ", vendor: "Acme", type: "PLA", cost: 2,
+      instanceId: "wsini002", _deletedAt: null, spools: [], settings: {},
+    });
+
+    const outcome = await upsertIniFilament(
+      section("PLA", String(survivor.insertedId)),
+    );
+    expect(outcome).toBe("updated");
+
+    // The survivor got the settings...
+    const s2 = await Filament.collection.findOne({ _id: survivor.insertedId });
+    expect(s2!.cost).toBe(77);
+    // ...and the bystander is untouched. That is the whole point.
+    const c2 = await Filament.collection.findOne({ _id: canonical.insertedId });
+    expect(c2!.cost).toBe(1);
+    expect(c2!.name).toBe("PLA");
+  });
+});
