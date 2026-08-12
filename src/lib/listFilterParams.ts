@@ -190,3 +190,35 @@ export function withCurrentValue(options: string[], current: string): string[] {
   if (!current || options.includes(current)) return options;
   return [current, ...options];
 }
+
+/**
+ * Which of the spec's keys the query string actually CARRIES.
+ *
+ * `parseFilterParams` deliberately cannot answer this: it returns the
+ * fallback for an absent param, which is what a fresh visit wants. But two
+ * callers need "absent" and "present with the default value" to differ,
+ * because some keys are backed by a persisted preference:
+ *
+ *   - the mount seed — a bare `/` opens the way the user left it, while
+ *     `?sortKey=cost` applies the link's sort for the visit;
+ *   - the re-seed on a same-route navigation — clicking the header link
+ *     clears the FILTERS but must not reset the sort the user has saved and
+ *     then let the persist effect overwrite storage with the fallback
+ *     (GH #1141, Codex P2).
+ *
+ * Presence means the param is there AND its value parses. A garbage value is
+ * treated as absent, which keeps the persisted preference rather than
+ * resetting to a default the URL never actually asked for.
+ */
+export function presentFilterKeys<S extends FilterSpec>(
+  search: string,
+  spec: S,
+): Set<keyof S & string> {
+  const params = new URLSearchParams(search);
+  const present = new Set<keyof S & string>();
+  for (const key of Object.keys(spec) as (keyof S & string)[]) {
+    const raw = params.get(spec[key].param);
+    if (raw !== null && spec[key].parse(raw) !== null) present.add(key);
+  }
+  return present;
+}

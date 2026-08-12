@@ -3,6 +3,7 @@ import {
   parseFilterParams,
   serializeFilterParams,
   nextFilterHref,
+  presentFilterKeys,
   oneOf,
   boolParam,
   textParam,
@@ -165,5 +166,47 @@ describe("nextFilterHref", () => {
     const p = new URLSearchParams(href!.split("?")[1]);
     expect(p.get("location")).toBe("xyz");
     expect(p.get("q")).toBe("pla");
+  });
+});
+
+/**
+ * GH #1141 (Codex P2). `parseFilterParams` cannot answer "did the URL actually
+ * say anything about this key?" — it returns the fallback either way, which is
+ * right for a fresh visit and wrong for a key backed by a persisted preference.
+ * Clicking the header link while filtered navigates to a bare route; treating
+ * the fallback as an instruction there reset the user's saved sort AND had the
+ * persist effect overwrite storage with it.
+ */
+describe("presentFilterKeys", () => {
+  it("is empty for a bare query string — the case that caused the regression", () => {
+    expect(presentFilterKeys("", SPEC).size).toBe(0);
+    // ...while parse still hands back a full, defaulted state. Both are
+    // correct; conflating them is what destroyed the stored preference.
+    expect(parseFilterParams("", SPEC).quick).toBe("all");
+  });
+
+  it("reports a param present even when its value equals the fallback", () => {
+    // `?quick=all` is an explicit instruction, not silence — a shared link
+    // that pins the default has to override a persisted non-default.
+    const present = presentFilterKeys("quick=all&oos=0&q=", SPEC);
+    expect(present.has("quick")).toBe(true);
+    expect(present.has("oos" as never)).toBe(false); // keyed by SPEC key, not param
+    expect(present.has("showOutOfStock")).toBe(true);
+    // `q=` parses to null (textParam trims to empty), so it counts as absent.
+    expect(present.has("search")).toBe(false);
+  });
+
+  it("treats an unparseable value as absent, keeping the persisted preference", () => {
+    // A default the URL never asked for is worse than leaving things alone.
+    expect(presentFilterKeys("quick=bogus&oos=maybe", SPEC).size).toBe(0);
+  });
+
+  it("ignores params outside the spec", () => {
+    // `?location=` rides on printed dry-box QR stickers; it is not ours.
+    expect(presentFilterKeys("location=abc123", SPEC).size).toBe(0);
+  });
+
+  it("accepts a leading ? like the other helpers", () => {
+    expect(presentFilterKeys("?type=PLA", SPEC).has("type")).toBe(true);
   });
 });

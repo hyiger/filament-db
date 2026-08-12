@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import SearchParamsSync from "@/components/SearchParamsSync";
 import {
   parseFilterParams,
+  presentFilterKeys,
   nextFilterHref,
   oneOf,
   boolParam,
@@ -288,7 +289,17 @@ export default function Home() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   // #831: gate the persist effect so it doesn't fire on the default state
   // before the post-mount load runs.
-  const homePrefsLoaded = useRef(false);
+  //
+  // STATE, not a ref (GH #1141, Codex P1). Effects in one commit run in
+  // declaration order, so a ref set by the seed effect is already true when the
+  // mirror effect below runs — in the SAME commit, still closed over the
+  // initial defaults. It then serialized those defaults over the URL that had
+  // just been read, and `/?type=PLA` landed on a bare `/`: the second run saw
+  // `window.location` not yet updated by the pending `router.replace`, found
+  // nothing to change, and never wrote the filter back. A state flag is only
+  // true from the commit AFTER the seed, so the mirror first runs with the
+  // seeded values.
+  const [seeded, setSeeded] = useState(false);
   /** The query string this page last wrote, so its own replaceState does not
    *  come back through SearchParamsSync as an external change. */
   const ownUrlWriteRef = useRef<string | null>(null);
@@ -343,9 +354,7 @@ export default function Home() {
     // with a `typeof window` check, which produces different first renders on
     // the two sides (the Codex P2 in src/app/locations/new/page.tsx).
     const url = parseFilterParams(window.location.search, HOME_FILTER_SPEC);
-    const present = new URLSearchParams(window.location.search);
-    const hasParam = (key: keyof typeof HOME_FILTER_SPEC) =>
-      present.has(HOME_FILTER_SPEC[key].param);
+    const present = presentFilterKeys(window.location.search, HOME_FILTER_SPEC);
 
     setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
     setDebouncedSearch(url.search);
@@ -357,9 +366,9 @@ export default function Home() {
     // "/" still opens the way the user left it. A shared link's sort applies
     // to the visit; the persist effect below then stores it, matching how a
     // manual sort behaves.
-    setSortKey(hasParam("sortKey") ? url.sortKey : p.sortKey);
-    setSortDir(hasParam("sortDir") ? url.sortDir : p.sortDir);
-    homePrefsLoaded.current = true;
+    setSortKey(present.has("sortKey") ? url.sortKey : p.sortKey);
+    setSortDir(present.has("sortDir") ? url.sortDir : p.sortDir);
+    setSeeded(true);
   }, []);
 
   // GH #1141: mirror the filters into the URL — shareable, bookmarkable, and
@@ -373,7 +382,7 @@ export default function Home() {
   // `nextFilterHref` returns null when nothing would change, and MERGES rather
   // than rebuilding, so params this page does not own survive.
   useEffect(() => {
-    if (!homePrefsLoaded.current) return;
+    if (!seeded) return;
     const href = nextFilterHref(window.location, HOME_FILTER_SPEC, {
       search: debouncedSearch,
       typeFilter,
@@ -397,6 +406,7 @@ export default function Home() {
       router.replace(href, { scroll: false });
     }
   }, [
+    seeded,
     debouncedSearch,
     typeFilter,
     vendorFilter,
@@ -422,23 +432,31 @@ export default function Home() {
       return;
     }
     const url = parseFilterParams(nextSearch, HOME_FILTER_SPEC);
+    const present = presentFilterKeys(nextSearch, HOME_FILTER_SPEC);
     setSearch(url.search);
     setDebouncedSearch(url.search);
     setTypeFilter(url.typeFilter);
     setVendorFilter(url.vendorFilter);
     setQuickFilter(url.quickFilter);
     setShowOutOfStock(url.showOutOfStock);
-    setSortKey(url.sortKey);
-    setSortDir(url.sortDir);
+    // Sort is PERSISTED, so an absent param means "unchanged", not "default"
+    // (GH #1141, Codex P2). Clicking the header link while filtered navigates
+    // to a bare `/`; resetting to the fallback there would then have the
+    // persist effect below overwrite the user's saved sort with `name`/`asc` —
+    // a stored preference destroyed by a navigation that never mentioned it.
+    // The mount seed already reads a bare URL this way; this keeps the two
+    // paths agreeing. Functional updates so the callback keeps no state deps.
+    setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
+    setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
   }, []);
   useEffect(() => {
-    if (!homePrefsLoaded.current) return;
+    if (!seeded) return;
     try {
       window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify({ sortKey, sortDir }));
     } catch {
       /* ignore quota / disabled storage */
     }
-  }, [sortKey, sortDir]);
+  }, [seeded, sortKey, sortDir]);
 
   // #717: load locations for the per-spool "move to" dropdowns. Best-effort —
   // if it fails the panel just shows the ids' current selection with no

@@ -6,6 +6,7 @@ import SearchParamsSync from "@/components/SearchParamsSync";
 import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
 import {
   parseFilterParams,
+  presentFilterKeys,
   nextFilterHref,
   oneOf,
   boolParam,
@@ -290,7 +291,13 @@ export default function InventoryPage() {
   const [groupBy, setGroupBy] = useState<InventoryGroupBy>(DEFAULT_INVENTORY_PREFS.groupBy);
   const [sortKey, setSortKey] = useState<InventorySortKey>(DEFAULT_INVENTORY_PREFS.sortKey);
   const [sortDir, setSortDir] = useState<InventorySortDir>(DEFAULT_INVENTORY_PREFS.sortDir);
-  const prefsLoaded = useRef(false);
+  // STATE, not a ref (GH #1141, Codex P1). Effects in one commit run in
+  // declaration order, so a ref set by the seed effect is already true when the
+  // mirror effect runs in that SAME commit, still closed over the initial
+  // defaults — it wrote those over the URL it had just read, and a shared
+  // `/inventory?q=pla` landed bare. A state flag is only true from the commit
+  // AFTER the seed. Verified on the home page, which had the identical shape.
+  const [seeded, setSeeded] = useState(false);
   /** The query string this page last wrote, so its own replaceState does not
    *  come back through SearchParamsSync as an external change. */
   const ownUrlWriteRef = useRef<string | null>(null);
@@ -458,7 +465,7 @@ export default function InventoryPage() {
 
   // GH #795: load persisted group/sort prefs once, after mount, so the first
   // client paint matches the server HTML (both use the defaults), then adopt
-  // the stored values. The persist effect below is gated on `prefsLoaded` so it
+  // the stored values. The persist effect below is gated on `seeded` so it
   // doesn't clobber storage with the defaults before this runs.
   useEffect(() => {
     const p = loadInventoryPrefs();
@@ -470,8 +477,7 @@ export default function InventoryPage() {
     // The server HTML and the first client paint therefore both use the
     // defaults, and the URL is adopted immediately after.
     const url = parseFilterParams(window.location.search, INVENTORY_FILTER_SPEC);
-    const hasParam = (key: keyof typeof INVENTORY_FILTER_SPEC) =>
-      new URLSearchParams(window.location.search).has(INVENTORY_FILTER_SPEC[key].param);
+    const present = presentFilterKeys(window.location.search, INVENTORY_FILTER_SPEC);
 
     setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
     setKind(url.kind);
@@ -479,9 +485,9 @@ export default function InventoryPage() {
     setVendor(url.vendor);
     // Group/sort fall back to the PERSISTED pref when the URL is silent, so a
     // bare /inventory still opens the way the user left it.
-    setGroupBy(hasParam("groupBy") ? url.groupBy : p.groupBy);
-    setSortKey(hasParam("sortKey") ? url.sortKey : p.sortKey);
-    setSortDir(hasParam("sortDir") ? url.sortDir : p.sortDir);
+    setGroupBy(present.has("groupBy") ? url.groupBy : p.groupBy);
+    setSortKey(present.has("sortKey") ? url.sortKey : p.sortKey);
+    setSortDir(present.has("sortDir") ? url.sortDir : p.sortDir);
     // GH #1106: `?includeRetired=1` overrides the persisted pref for this
     // visit. The /locations "location is still in use" panel links here to
     // show the retired spools that are blocking a delete — without this the
@@ -492,8 +498,8 @@ export default function InventoryPage() {
     // the user followed a link asking to see them. That precedent is kept for
     // THIS key only — a shared link's other filters apply to the visit but are
     // not written into the recipient's stored preferences.
-    setIncludeRetired(hasParam("includeRetired") ? url.includeRetired : p.includeRetired);
-    prefsLoaded.current = true;
+    setIncludeRetired(present.has("includeRetired") ? url.includeRetired : p.includeRetired);
+    setSeeded(true);
   }, []);
 
   // GH #1141: mirror the filters into the URL so a view can be shared,
@@ -509,10 +515,10 @@ export default function InventoryPage() {
   // `nextFilterHref` returns null when nothing would change, so this is a
   // no-op on the renders that merely recompute the same state. And it MERGES:
   // `?location=` — encoded into printed dry-box QR stickers — is preserved
-  // because the spec does not own it. Gated on `prefsLoaded` so it cannot run
+  // because the spec does not own it. Gated on `seeded` so it cannot run
   // before the seed above and blank the query string.
   useEffect(() => {
-    if (!prefsLoaded.current) return;
+    if (!seeded) return;
     const href = nextFilterHref(window.location, INVENTORY_FILTER_SPEC, {
       // The DEBOUNCED value (Codex P2). Serializing the raw one fired a
       // `router.replace` per keystroke — a client navigation each time, and
@@ -540,7 +546,7 @@ export default function InventoryPage() {
       // URL. `scroll: false` keeps the list position; already debounced.
       router.replace(href, { scroll: false });
     }
-  }, [debouncedSearch, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir, router]);
+  }, [seeded, debouncedSearch, kind, type, vendor, includeRetired, groupBy, sortKey, sortDir, router]);
 
   // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
   //
@@ -559,6 +565,7 @@ export default function InventoryPage() {
       return;
     }
     const url = parseFilterParams(nextSearch, INVENTORY_FILTER_SPEC);
+    const present = presentFilterKeys(nextSearch, INVENTORY_FILTER_SPEC);
     setSearch(url.search);
     // Both, or the debounce timer would re-write the pre-navigation value a
     // moment later and undo the re-seed.
@@ -566,15 +573,22 @@ export default function InventoryPage() {
     setKind(url.kind);
     setType(url.type);
     setVendor(url.vendor);
-    setIncludeRetired(url.includeRetired);
-    setGroupBy(url.groupBy);
-    setSortKey(url.sortKey);
-    setSortDir(url.sortDir);
+    // Group, sort and includeRetired are PERSISTED, so an absent param means
+    // "unchanged", not "default" (GH #1141, Codex P2). A navigation to a bare
+    // /inventory clears the filters; resetting these too would then have the
+    // persist effect below overwrite the user's stored group/sort with the
+    // defaults — a saved preference destroyed by a navigation that never
+    // mentioned it. The mount seed already reads a bare URL this way.
+    // Functional updates so the callback keeps no state deps.
+    setIncludeRetired((cur) => (present.has("includeRetired") ? url.includeRetired : cur));
+    setGroupBy((cur) => (present.has("groupBy") ? url.groupBy : cur));
+    setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
+    setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
   }, []);
 
   // Persist prefs whenever they change (after the initial load).
   useEffect(() => {
-    if (!prefsLoaded.current) return;
+    if (!seeded) return;
     try {
       window.localStorage.setItem(
         INVENTORY_PREFS_KEY,
@@ -583,7 +597,7 @@ export default function InventoryPage() {
     } catch {
       /* ignore quota / disabled storage */
     }
-  }, [groupBy, sortKey, sortDir, includeRetired]);
+  }, [seeded, groupBy, sortKey, sortDir, includeRetired]);
 
   const toggleCollapse = (key: string) => {
     setCollapsed((prev) => {
