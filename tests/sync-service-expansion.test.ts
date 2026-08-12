@@ -988,6 +988,53 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * GH #1142 (Codex P1): the whole CHAIN has to terminate, not just the
+     * first hop. A -> B, B -> C, and C standing still: a one-hop check stages
+     * B for A, A takes "B", and B can then never take "C" — settlement cannot
+     * restore B either, because A owns its original name. B would be left as
+     * `__sync-staging-…` permanently.
+     */
+    it("refuses a rename chain whose far end is immovable", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
+
+      // The chain lives on the REMOTE (the target): A wants B's name, B wants
+      // C's, and C never moves. Local names are what gets copied over.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "ch-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Cee", material: "PEI", syncId: "ch-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        // Equal timestamps on C, so nothing is copied for it either way; its
+        // local name just has to be distinct here.
+        { name: "Seaside", material: "PEI", syncId: "ch-c", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "ch-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "ch-b", _deletedAt: null, createdAt: older, updatedAt: older },
+        // Equal timestamps: C never moves, so "Cee" is never vacated.
+        { name: "Cee", material: "PEI", syncId: "ch-c", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // NOTHING was moved aside, so nothing can be stranded.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // B still has its real name on the remote — the one a one-hop check
+      // would have left as a placeholder.
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "ch-b" });
+      expect(b!.name).toBe("Bee");
+      const c = await remoteDb.collection("bedtypes").findOne({ syncId: "ch-c" });
+      expect(c!.name).toBe("Cee");
+    });
+
+    /**
      * The unsatisfiable case: a row this pass is NOT moving already holds the
      * name. Staging cannot help, so it must be reported and BOTH peers left
      * alone — writing anyway would clobber a record the user still wants.
@@ -995,31 +1042,40 @@ describe("SyncService — v1.12 sync expansion", () => {
     it("reports an unsatisfiable name conflict without clobbering the holder", async () => {
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
-      const older = new Date(Date.now() - 60_000);
+      const older = new Date(Date.now() - 120_000);
       const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
 
-      // Local renames its row to "Taken"; the remote already has a DIFFERENT,
-      // unpaired row called "Taken" that this pass will not move.
-      await localDb.collection("bedtypes").insertOne({
-        name: "Taken", material: "PEI", syncId: "unsat-a",
-        _deletedAt: null, createdAt: older, updatedAt: newer,
-      });
+      // Local A is newer and wants "Taken" on the remote. Remote B holds
+      // "Taken" and is NOT moving — its timestamps match, so no copy happens
+      // for it at all. Both rows are PAIRED, so nothing reaches the insert
+      // path; the only conflict is the one under test.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Taken", material: "PEI", syncId: "unsat-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Squat", material: "PEI", syncId: "unsat-b", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
       await remoteDb.collection("bedtypes").insertMany([
         { name: "Original", material: "PEI", syncId: "unsat-a", _deletedAt: null, createdAt: older, updatedAt: older },
-        { name: "Taken", material: "PEI", syncId: "unsat-squatter", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Taken", material: "PEI", syncId: "unsat-b", _deletedAt: null, createdAt: older, updatedAt: same },
       ]);
 
       sync = makeSync();
-      await sync.sync();
+      const results = await sync.sync();
 
-      // The squatter is untouched — that is the point.
-      const squatter = await remoteDb.collection("bedtypes").findOne({ syncId: "unsat-squatter" });
-      expect(squatter!.name).toBe("Taken");
+      // GH #1142 (Codex P1): it must SURFACE. A counter nothing reads left the
+      // cycle reporting idle while a whole-document update was silently
+      // skipped and would fail identically forever.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/name conflict/i);
+
+      // The immovable holder is untouched — that is the point.
+      const holder = await remoteDb.collection("bedtypes").findOne({ syncId: "unsat-b" });
+      expect(holder!.name).toBe("Taken");
       // And no placeholder was stranded on it.
-      const leftovers = await remoteDb
-        .collection("bedtypes")
-        .countDocuments({ name: { $regex: "^__sync-staging-" } });
-      expect(leftovers).toBe(0);
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
     });
   });
 

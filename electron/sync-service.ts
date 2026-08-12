@@ -16,6 +16,7 @@ import {
 import {
   isStagingPlaceholder,
   placeholderFor,
+  planRenameStaging,
 } from "../src/lib/renameStaging";
 import {
   retombstonePurgedZombies,
@@ -1227,41 +1228,65 @@ export class SyncService extends EventEmitter {
      * owns its original name.
      */
     /**
-     * Will this pass rewrite `syncId`'s NAME on `col`, to something different
-     * from what that row is called there now?
+     * The name this pass will write for `syncId` on `col`, or null when it
+     * writes nothing there.
      *
-     * This is the only condition under which moving the row aside is safe. It
-     * re-derives just the DIRECTION of the LWW decision — the timestamp
-     * comparison — rather than the whole outcome, because that comparison is
-     * small, total, and cheap to keep honest; duplicating the entire branch
-     * tree is what would drift.
-     *
-     * Deliberately conservative. Every branch it cannot prove (a delete, a
-     * resurrect, an equal timestamp, a missing side) answers false, which
-     * downgrades the case to "unsatisfiable, reported" — a visible conflict,
-     * never a stranded placeholder.
+     * Re-derives only the DIRECTION of the LWW decision — a small, total
+     * comparison — rather than the whole branch tree, which is what would
+     * drift. Deliberately conservative: every branch it cannot model (a
+     * delete, a resurrect, an equal timestamp, a missing side) answers null,
+     * which downgrades the case to "unsatisfiable, reported" rather than
+     * risking a stranded placeholder.
      */
-    const willRewriteNameOn = (col: typeof localCol, syncId: string): boolean => {
+    const desiredNameOn = (col: typeof localCol, syncId: string): string | null => {
       const localDoc = localBySyncId.get(syncId);
       const remoteDoc = remoteBySyncId.get(syncId);
-      if (!localDoc || !remoteDoc) return false; // unpaired: nothing writes it here
-
-      // A tombstoned row on either side takes the delete/resurrect branches,
-      // whose outcomes this shortcut does not model.
-      if (localDoc._deletedAt || remoteDoc._deletedAt) return false;
+      if (!localDoc || !remoteDoc) return null; // unpaired: nothing writes it here
+      if (localDoc._deletedAt || remoteDoc._deletedAt) return null;
 
       const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
       const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
-      if (localTime === remoteTime) return false; // equal: no copy at all
+      if (localTime === remoteTime) return null;
 
-      // The copy runs from the newer side to the older one.
-      const source = localTime > remoteTime ? localDoc : remoteDoc;
-      const target = localTime > remoteTime ? remoteDoc : localDoc;
       const targetIsRemote = localTime > remoteTime;
-      if (targetIsRemote !== (col === remoteCol)) return false; // writes the OTHER side
+      if (targetIsRemote !== (col === remoteCol)) return null; // writes the OTHER side
+      const source = targetIsRemote ? localDoc : remoteDoc;
+      return typeof source.name === "string" ? source.name : null;
+    };
 
-      // ...and only if the name actually changes there.
-      return typeof source.name === "string" && source.name !== target.name;
+    /**
+     * Which rows may be moved aside on `col`, computed ONCE per target.
+     *
+     * Delegated to the pure planner because the answer needs the whole rename
+     * GRAPH, not one hop (Codex P1). Checking only that the immediate blocker
+     * will be rewritten strands it whenever its own destination is itself
+     * blocked: with A->B, B->C and C standing still, A takes B's name and B can
+     * then never take C — and settlement cannot restore B, because A owns its
+     * original name. The planner runs unsatisfiability backwards to a fixpoint,
+     * so a blocked far end refuses the whole chain while a true cycle still
+     * resolves.
+     */
+    const stagingPlans = new Map<typeof localCol, Set<string>>();
+    const stageableOn = (col: typeof localCol): Set<string> => {
+      const cached = stagingPlans.get(col);
+      if (cached) return cached;
+      const docs = col === remoteCol ? remoteDocs : localDocs;
+      const intents = docs
+        .filter((d) => typeof d.name === "string")
+        .map((d) => {
+          const syncId = typeof d.syncId === "string" ? d.syncId : null;
+          const desired = syncId ? desiredNameOn(col, syncId) : null;
+          return {
+            id: String(d._id),
+            currentName: d.name as string,
+            desiredName: desired ?? (d.name as string),
+            willWrite: desired !== null,
+          };
+        });
+      const plan = planRenameStaging(intents, stagingNonce);
+      const ids = new Set(plan.staged.map((st) => st.id));
+      stagingPlans.set(col, ids);
+      return ids;
     };
 
     const writeWithRenameStaging = async (
@@ -1284,7 +1309,7 @@ export class SyncService extends EventEmitter {
 
         const blockerSyncId = typeof blocker.syncId === "string" ? blocker.syncId : null;
         const blockerName = typeof blocker.name === "string" ? blocker.name : null;
-        if (!blockerSyncId || !blockerName || !willRewriteNameOn(col, blockerSyncId)) {
+        if (!blockerSyncId || !blockerName || !stageableOn(col).has(String(blocker._id))) {
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: cannot apply name ${JSON.stringify(desiredName)} — ` +
@@ -1602,6 +1627,25 @@ export class SyncService extends EventEmitter {
     // The counts above stay real — the paired copies DID happen, so a user's
     // rename still propagates and the collection can converge. Only the
     // dependents wait.
+    // GH #1142 (Codex P1): a name conflict has to reach the user.
+    //
+    // Incrementing a counter nothing reads left `trySync` treating the
+    // collection as successful and the cycle reporting `idle`, while a
+    // whole-document update was silently skipped and would fail identically
+    // every cycle — permanent divergence with no signal at all.
+    //
+    // This is deliberately stricter than the paired/unpaired split agreed for
+    // the SWAP case: a swap now RESOLVES, so anything still counted here is
+    // the unsatisfiable kind — a row that will never sync until a human
+    // renames one of the two. Cascade-skipping dependents is over-strict for
+    // that (both rows exist on both peers, so refs still resolve), but a
+    // reported, recoverable stall beats an invisible one.
+    if ((result.nameConflicts ?? 0) > 0 && !result.error) {
+      result.error =
+        `${result.nameConflicts} name conflict(s) could not be applied — two rows want ` +
+        `the same name and neither can give it up. Rename one of them.`;
+    }
+
     if (heldBack > 0) {
       result.error =
         `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +

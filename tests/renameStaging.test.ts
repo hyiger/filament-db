@@ -104,6 +104,46 @@ describe("planRenameStaging", () => {
   it("the nonce separates concurrent passes", () => {
     expect(placeholderFor("a", "n1")).not.toBe(placeholderFor("a", "n2"));
   });
+
+  /**
+   * GH #1142 (Codex P1): a one-level check is not enough. With A->B, B->C and
+   * C standing still, staging B for A lets A take B's name, but B can then
+   * never take C — and settlement cannot restore B, because A owns its
+   * original name. B would be stranded as a placeholder permanently.
+   */
+  it("refuses the whole CHAIN when its far end is blocked", () => {
+    const plan = planRenameStaging(
+      [row("a", "A", "B"), row("b", "B", "C"), row("c", "C", "C", false)],
+      "n1",
+    );
+    // Nothing is moved aside...
+    expect(plan.staged).toEqual([]);
+    // ...and BOTH links are reported, not just the one touching C.
+    expect(plan.unsatisfiable.map((u) => u.id).sort()).toEqual(["a", "b"]);
+  });
+
+  it("still resolves a chain whose far end IS free", () => {
+    const plan = planRenameStaging([row("a", "A", "B"), row("b", "B", "C")], "n1");
+    expect(plan.staged.map((s) => s.id)).toEqual(["b"]);
+    expect(plan.unsatisfiable).toEqual([]);
+  });
+
+  it("a pure CYCLE survives the fixpoint", () => {
+    // Each depends only on the other, so neither is ever knocked out —
+    // correct, because staging one frees the whole cycle.
+    const plan = planRenameStaging([row("a", "X", "Y"), row("b", "Y", "X")], "n1");
+    expect(plan.staged.length).toBeGreaterThanOrEqual(1);
+    expect(plan.unsatisfiable).toEqual([]);
+  });
+
+  it("a longer cycle also survives", () => {
+    const plan = planRenameStaging(
+      [row("a", "X", "Y"), row("b", "Y", "Z"), row("c", "Z", "X")],
+      "n1",
+    );
+    expect(plan.staged.length).toBeGreaterThanOrEqual(1);
+    expect(plan.unsatisfiable).toEqual([]);
+  });
 });
 
 describe("isStagingPlaceholder", () => {

@@ -123,6 +123,43 @@ export function planRenameStaging(
     if (!holderByName.has(row.currentName)) holderByName.set(row.currentName, row);
   }
 
+  const byId = new Map(rows.map((r) => [r.id, r]));
+
+  /**
+   * Which rows can actually VACATE the name they hold?
+   *
+   * Not just "is it moving" — its own destination has to be reachable too.
+   * Checking one level is insufficient (Codex P1): with A->B, B->C and C
+   * standing still, a one-level check stages B for A, A takes B's name, and
+   * then B cannot take C. Settlement cannot restore B either, because A now
+   * owns its original name — B is stranded as `__sync-staging-…` permanently.
+   *
+   * Unsatisfiability propagates BACKWARDS along the chain, so this is a
+   * fixpoint: start optimistic, then repeatedly knock out any row whose
+   * destination is held by a row that cannot vacate, until nothing changes. A
+   * pure cycle (A<->B) survives — each depends only on the other, and neither
+   * is ever knocked out — which is exactly right, since staging one of them
+   * frees the whole cycle.
+   */
+  const canVacate = new Set<string>();
+  for (const row of rows) {
+    if (row.willWrite && row.desiredName !== row.currentName) canVacate.add(row.id);
+  }
+  for (;;) {
+    let changed = false;
+    for (const id of [...canVacate]) {
+      const row = byId.get(id)!;
+      const holder = holderByName.get(row.desiredName);
+      if (!holder || holder.id === row.id) continue; // destination is free
+      if (!canVacate.has(holder.id)) {
+        // The row occupying our destination will never leave it.
+        canVacate.delete(id);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
   const stagedIds = new Set<string>();
   for (const row of rows) {
     if (!row.willWrite) continue;
@@ -131,10 +168,8 @@ export function planRenameStaging(
     const holder = holderByName.get(row.desiredName);
     if (!holder || holder.id === row.id) continue;
 
-    // The holder is moving too, so getting it out of the way unblocks this
-    // write and the holder's own write will give it its real name.
-    const holderIsMoving = holder.willWrite && holder.desiredName !== holder.currentName;
-    if (holderIsMoving) {
+    // Only move a holder aside when the whole chain behind it terminates.
+    if (canVacate.has(holder.id) && canVacate.has(row.id)) {
       if (!stagedIds.has(holder.id)) {
         stagedIds.add(holder.id);
         staged.push({
@@ -146,9 +181,8 @@ export function planRenameStaging(
       continue;
     }
 
-    // The holder is staying put — or is being written WITHOUT a rename, which
-    // means it is keeping this exact name. Two rows genuinely want one name;
-    // staging cannot help and writing anyway would either E11000 or clobber.
+    // Either the holder is staying put, or its own destination is blocked by
+    // something that is. Staging cannot help; report and write nothing.
     unsatisfiable.push({
       id: row.id,
       desiredName: row.desiredName,
