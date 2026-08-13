@@ -2167,6 +2167,60 @@ describe("SyncService — v1.12 sync expansion", () => {
         (await localDb.collection("bedtypes").findOne({ syncId: "dp-b" }))?.name,
       ).toBe(`${PH}dp2`);
     });
+
+    /**
+     * Round 23 (Codex P1): a quarantined row still holding its REAL name
+     * must be unavailable to blocker staging. Before the fix, an earlier
+     * pair wanting that name found the quarantined row movable (the plan
+     * knew nothing of quarantine, and processedSyncIds was only stamped at
+     * the row's own loop turn), staged it aside and took the name — then the
+     * gate skipped the quarantined row's promised write, and settlement
+     * could not restore because the earlier row now occupied the original.
+     * A stranding manufactured by the machinery itself.
+     */
+    it("never stages a quarantined blocker — refuses the conflict instead", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date(Date.now() - 60_000);
+
+      // Pair qa iterates FIRST (insertion order): local A wants "Quar N"
+      // onto the remote, where quarantined B still holds it.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Quar N", material: "PEI", syncId: "qa", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Quar M", material: "PEI", syncId: "qb", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Quar N old", material: "PEI", syncId: "qa", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      const { insertedId: bRemote } = await remoteDb.collection("bedtypes").insertOne({
+        // B is MOVABLE on its own merits: its pair renames it to "Quar M".
+        name: "Quar N", material: "PEI", syncId: "qb", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      // A YOUNG queue entry over remote B — the sweep quarantines the pair
+      // while B still holds its real name (the round-18 window case).
+      await remoteDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(bRemote), o: "Quar B orig", p: `${PH}q3`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The conflict is REFUSED, not resolved by staging a row whose write
+      // this cycle will never run.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeDefined();
+      // B keeps its real name; A's copy did not land.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "qb" }))?.name).toBe("Quar N");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "qa" }))?.name).toBe("Quar N old");
+      // And the machinery manufactured NO stranding: zero placeholders.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
   });
 
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {

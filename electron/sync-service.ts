@@ -1915,11 +1915,19 @@ export class SyncService extends EventEmitter {
         .map((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
+          // Round 23 (Codex P1): a QUARANTINED row's name-carrying write is
+          // blocked at the row-loop gate this cycle, so the plan must not
+          // bet on it. willWrite: true here let an earlier pair stage the
+          // quarantined row aside and take its name — then the gate skipped
+          // the promised write and settlement could not restore (the name
+          // was occupied). It stays in the graph as a HOLDER (it really does
+          // occupy its index slot); it just cannot vacate.
+          const blocked = syncId !== null && quarantinedSyncIds.has(syncId);
           return {
             id: String(d._id),
             currentName: d.name as string,
             desiredName: desired ?? (d.name as string),
-            willWrite: desired !== null,
+            willWrite: desired !== null && !blocked,
           };
         });
       const plan = planRenameStaging(intents, stagingNonce);
@@ -2313,6 +2321,18 @@ export class SyncService extends EventEmitter {
           `${heldBack} unpaired one(s) until names can be normalized`,
       );
     }
+
+    // Round 23 (Codex P1): mark every sweep-time quarantine as processed
+    // BEFORE any pair runs. `processedSyncIds` means "no name write coming"
+    // to the blocker check, and for a quarantined row that is the truth from
+    // the cycle's start — not from its own loop turn. Deferred to its turn,
+    // an EARLIER pair could still stage it aside (the plan exclusion above
+    // is the first line; this is the write-time backstop) and take a name
+    // its skipped write could never reclaim. Mid-loop quarantines (the
+    // scan-window guard below) need no seeding: they hold placeholder
+    // names, which no legitimate write ever desires, so they can never be
+    // found as blockers.
+    for (const q of quarantinedSyncIds) processedSyncIds.add(q);
 
     // Round 22: quarantine means "names must not transfer", not "nothing may
     // happen". The classifier below answers whether a pair's branch writes
