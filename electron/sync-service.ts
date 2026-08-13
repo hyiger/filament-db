@@ -1353,8 +1353,10 @@ export class SyncService extends EventEmitter {
             { projection: { name: 1 } },
           );
           if (!row || row.name !== entry.p) {
-            // Gone, landed, or human-renamed — nothing to recover.
-            await dequeueRestoreOn(migrations, entry);
+            // Gone, landed, or human-renamed — nothing to recover. Versioned
+            // on the observed stamp: the owner may have re-asserted since
+            // this sweep's snapshot.
+            await dequeueRestoreOn(migrations, entry, entry.at);
             continue;
           }
           const taken = await col.findOne(
@@ -1376,7 +1378,7 @@ export class SyncService extends EventEmitter {
             { _id: row._id, name: entry.p },
             { $set: { name: entry.o } },
           );
-          await dequeueRestoreOn(migrations, entry);
+          await dequeueRestoreOn(migrations, entry, entry.at);
           if (restored.modifiedCount) {
             console.log(
               `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
@@ -1424,7 +1426,12 @@ export class SyncService extends EventEmitter {
             : [];
           if (
             freshEntries.some(
-              (e) => isRestoreEntry(e) && e.i === String(stray._id),
+              // Scoped to THIS collection (Codex P2) — _id uniqueness is
+              // per-collection, so an entry for a same-id row in a DIFFERENT
+              // collection must not mask this stray's backstop, potentially
+              // forever when that entry is retained for a taken name. The
+              // `coveredIds` snapshot above already scopes this way.
+              (e) => isRestoreEntry(e) && e.c === collectionName && e.i === String(stray._id),
             )
           ) {
             continue;
@@ -1475,15 +1482,29 @@ export class SyncService extends EventEmitter {
         }
       }
     };
-    /** `$pull` one entry from an already-resolved migrations collection. */
+    /** `$pull` one entry from an already-resolved migrations collection.
+     *
+     * Two drain modes, and the asymmetry is the point (Codex P2):
+     *  - the OWNER (settlement, the zero-match branch) drains by KEY alone —
+     *    it owns the row's fate, and the re-assert may have refreshed the
+     *    stamp it never tracked, so a versioned drain would leak the entry;
+     *  - a SWEEPER passes the `at` it OBSERVED, versioning the drain against
+     *    an in-flight re-assert: it judged a snapshot, and the owner may have
+     *    staged and re-stamped between that snapshot and this $pull — an
+     *    unversioned drain would remove the FRESH record and leave a later
+     *    owner crash with a placeholder and no authoritative original name.
+     *    `$eq` keeps the observed value literal, per this module's rule. */
     const dequeueRestoreOn = async (
       migrations: ReturnType<Db["collection"]>,
       entry: RenameStagingRestoreKey,
+      observedAt?: Date,
     ): Promise<void> => {
+      const match: Document = { c: entry.c, i: entry.i, o: entry.o, p: entry.p };
+      if (observedAt !== undefined) match.at = { $eq: observedAt };
       await migrations
         .updateOne(
           { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
-          { $pull: { entries: { c: entry.c, i: entry.i, o: entry.o, p: entry.p } } as Document },
+          { $pull: { entries: match } as Document },
         )
         .catch((err: unknown) => {
           console.warn(`[sync] ${entry.c}: could not dequeue a staging-restore entry.`, err);

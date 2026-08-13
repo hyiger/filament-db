@@ -1553,6 +1553,52 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The versioned drain (Codex P2): a sweeper judges a SNAPSHOT, and the
+     * owner can stage + re-assert between that snapshot and the $pull. The
+     * drain must match the observed stamp, or it removes the FRESH record —
+     * and a later owner crash leaves the placeholder without its
+     * authoritative original name. Simulated at the unit of the race: the
+     * row is mid-window (holds its original name), the entry is OLD at the
+     * sweep's read, and a re-asserted twin with a fresh stamp sits in the
+     * queue — the aged drain must remove only what it observed.
+     */
+    it("drains only the stamp it observed, never a re-asserted entry", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Resolved", material: "PEI", syncId: "sw-g", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Resolved", material: "PEI", syncId: "sw-g", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      const fresh = new Date();
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [
+          // The aged entry the sweep will judge resolved (row holds "Resolved",
+          // not the placeholder) and drain...
+          { c: "bedtypes", i: String(insertedId), o: "Resolved", p: `${PH}x6`, at: OLD },
+          // ...and the re-asserted twin — same key, fresh stamp — that must
+          // SURVIVE, exactly as it would mid-race.
+          { c: "bedtypes", i: String(insertedId), o: "Resolved", p: `${PH}x6`, at: fresh },
+        ] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      const entries = (queue?.entries ?? []) as Array<{ at: Date }>;
+      expect(entries.length).toBe(1);
+      expect(entries[0].at.getTime()).toBe(fresh.getTime());
+    });
+
+    /**
      * The free-form-name case (Codex P2): a user may name a row with the
      * placeholder PREFIX. The backstop must not touch it — not rename it to
      * its peer's value, not report it — because acting on recognition is
