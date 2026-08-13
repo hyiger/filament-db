@@ -15,6 +15,8 @@ import {
 } from "../src/lib/trimEntityNames";
 import {
   isStagingPlaceholder,
+  placeholderRestoreTarget,
+  STAGING_PREFIX,
   placeholderFor,
   planRenameStaging,
   pendingRenameCanFreeName,
@@ -39,6 +41,36 @@ interface LegacyTransitEntry {
   u: unknown;
   p: unknown;
   r: unknown[] | null;
+}
+
+/** GH #1153: one durable staging-restore record — written BEFORE a row is
+ * moved aside, so a later cycle can put it back no matter how this one ends.
+ * Lives in the `_migrations` doc `_id: "renameStagingRestores"` on the SAME
+ * database as the staged row (each DB's queue describes its own rows).
+ * c=collection, i=String(_id), o=originalName, p=placeholderName. */
+interface RenameStagingRestoreEntry {
+  c: string;
+  i: string;
+  o: string;
+  p: string;
+}
+
+const RESTORE_QUEUE_ID = "renameStagingRestores";
+
+/** Structural validation for queue entries read back from disk — a malformed
+ * entry is dropped rather than allowed to abort its collection's sweep. */
+function isRestoreEntry(value: unknown): value is RenameStagingRestoreEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const e = value as Record<string, unknown>;
+  return (
+    typeof e.c === "string" &&
+    typeof e.i === "string" &&
+    ObjectId.isValid(e.i) &&
+    typeof e.o === "string" &&
+    e.o !== "" &&
+    typeof e.p === "string" &&
+    isStagingPlaceholder(e.p)
+  );
 }
 
 /**
@@ -1203,6 +1235,170 @@ export class SyncService extends EventEmitter {
     // reopen the GH #511 egress problem — that was about pulling full bodies
     // (base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[])
     // for every row on every cycle, which the hydrate helpers still avoid.
+    // ── GH #1153: sweep leftover placeholders BEFORE the pass reads names ──
+    //
+    // Three histories leave a row named `__sync-staging-…` past its own cycle:
+    // settlement's `taken` branch, settlement's catch, and a process death
+    // between staging and settlement. The durable queue written at staging
+    // time carries the original name; this sweep restores it once the name is
+    // free again — BEFORE the slim reads below, so a restored name
+    // participates in this pass's LWW graph and staging plan rather than the
+    // placeholder doing so.
+    //
+    // A stranding that STILL cannot be restored (name permanently taken) is
+    // counted and named every cycle, and — per the #1142 posture, "a
+    // reported, recoverable stall beats an invisible one" — fails the
+    // collection below, cascade-skipping its dependents until a human
+    // renames one of the two rows.
+    //
+    // The GRAMMAR BACKSTOP covers rows with no queue entry (pre-#1153
+    // strandings, and placeholders a pre-#1142 copy propagated to the other
+    // peer): the restore target is derived from the syncId-paired peer's
+    // name, which is what the staged row's own write would have delivered.
+    // `placeholderRestoreTarget` (pure, tested) owns that decision table; a
+    // row it cannot answer for is reported, never guessed — inventing a name
+    // is a product decision this machinery is not allowed to make.
+    const sweptConflicts: string[] = [];
+    const sweepSide = async (
+      db: Db,
+      col: ReturnType<Db["collection"]>,
+      peerCol: ReturnType<Db["collection"]>,
+    ): Promise<void> => {
+      const migrations = db.collection("_migrations");
+      const queueDoc = await migrations
+        .findOne({ _id: RESTORE_QUEUE_ID as unknown as ObjectId })
+        .catch(() => null);
+      const rawEntries: unknown[] = Array.isArray(queueDoc?.entries) ? queueDoc.entries : [];
+      const entries = rawEntries.filter(isRestoreEntry).filter((e) => e.c === collectionName);
+      // Drop malformed entries outright — one bad record must not abort the
+      // sweep, and it can never become restorable.
+      for (const bad of rawEntries.filter(
+        (e) => !isRestoreEntry(e) && (e as RenameStagingRestoreEntry)?.c === collectionName,
+      )) {
+        await migrations
+          .updateOne(
+            { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+            { $pull: { entries: bad } as Document },
+          )
+          .catch(() => {});
+      }
+
+      const coveredIds = new Set(entries.map((e) => e.i));
+      for (const entry of entries) {
+        try {
+          const row = await col.findOne(
+            { _id: new ObjectId(entry.i) },
+            { projection: { name: 1 } },
+          );
+          if (!row || row.name !== entry.p) {
+            // Gone, landed, or human-renamed — nothing to recover.
+            await dequeueRestoreOn(migrations, entry);
+            continue;
+          }
+          const taken = await col.findOne(
+            { name: entry.o, _deletedAt: null, _id: { $ne: row._id } },
+            { projection: { _id: 1 } },
+          );
+          if (taken) {
+            sweptConflicts.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: entry.i,
+                originalName: entry.o,
+                placeholderName: entry.p,
+              }),
+            );
+            continue; // keep queued — retried next cycle
+          }
+          const restored = await col.updateOne(
+            { _id: row._id, name: entry.p },
+            { $set: { name: entry.o } },
+          );
+          await dequeueRestoreOn(migrations, entry);
+          if (restored.modifiedCount) {
+            console.log(
+              `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
+            );
+          }
+        } catch (err) {
+          // Keep the entry; next cycle retries. One bad row must not abort
+          // the collection's sweep.
+          console.warn(`[sync] ${collectionName}: staging-restore sweep failed for ${entry.i}.`, err);
+        }
+      }
+
+      // Grammar backstop. STAGING_PREFIX is `__sync-staging-` — word chars
+      // and hyphens only, safe as a literal anchored regex.
+      const strays = await col
+        .find({ name: { $regex: `^${STAGING_PREFIX}` } }, { projection: { name: 1, syncId: 1 } })
+        .toArray()
+        .catch(() => [] as Document[]);
+      for (const stray of strays) {
+        if (coveredIds.has(String(stray._id))) continue; // queue already handled it
+        try {
+          const peer =
+            typeof stray.syncId === "string"
+              ? await peerCol.findOne({ syncId: stray.syncId }, { projection: { name: 1 } })
+              : null;
+          const target = placeholderRestoreTarget(stray.name, null, peer?.name);
+          if (target === null) {
+            sweptConflicts.push(
+              `${collectionName} ${String(stray._id)} holds the temporary name ` +
+                `${JSON.stringify(stray.name)} and its original name could not be determined. ` +
+                `Rename it manually.`,
+            );
+            continue;
+          }
+          const taken = await col.findOne(
+            { name: target, _deletedAt: null, _id: { $ne: stray._id } },
+            { projection: { _id: 1 } },
+          );
+          if (taken) {
+            sweptConflicts.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: String(stray._id),
+                originalName: target,
+                placeholderName: String(stray.name),
+              }),
+            );
+            continue;
+          }
+          const healed = await col.updateOne(
+            { _id: stray._id, name: stray.name },
+            { $set: { name: target } },
+          );
+          if (healed.modifiedCount) {
+            console.log(
+              `[sync] ${collectionName}: adopted the peer name ${JSON.stringify(target)} onto ` +
+                `${String(stray._id)} (GH #1153 backstop)`,
+            );
+          }
+        } catch (err) {
+          console.warn(
+            `[sync] ${collectionName}: placeholder backstop failed for ${String(stray._id)}.`,
+            err,
+          );
+        }
+      }
+    };
+    /** `$pull` one entry from an already-resolved migrations collection. */
+    const dequeueRestoreOn = async (
+      migrations: ReturnType<Db["collection"]>,
+      entry: RenameStagingRestoreEntry,
+    ): Promise<void> => {
+      await migrations
+        .updateOne(
+          { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+          { $pull: { entries: { c: entry.c, i: entry.i, o: entry.o, p: entry.p } } as Document },
+        )
+        .catch((err: unknown) => {
+          console.warn(`[sync] ${entry.c}: could not dequeue a staging-restore entry.`, err);
+        });
+    };
+    await sweepSide(localDb, localCol, remoteCol);
+    await sweepSide(remoteDb, remoteCol, localCol);
+
     const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1, name: 1 };
     const localDocs = await localCol.find({}, { projection: SLIM_PROJECTION }).toArray();
     const remoteDocs = await remoteCol.find({}, { projection: SLIM_PROJECTION }).toArray();
@@ -1269,7 +1465,7 @@ export class SyncService extends EventEmitter {
       placeholderName: string;
     }[] = [];
     /** Rows this pass left holding a placeholder, for the result message. */
-    const strandedNotices: string[] = [];
+    const strandedNotices: string[] = [...sweptConflicts];
     /**
      * SyncIds whose loop iteration has started (and, since iterations are
      * sequential, has finished for every id but the current one). The one
@@ -1482,6 +1678,38 @@ export class SyncService extends EventEmitter {
           return refuseStaging();
         }
 
+        // DURABLE RECORD FIRST (GH #1153) — the same
+        // observation-before-destructive-write ordering the #1021 runner uses.
+        // Settlement can restore a placeholder only while the pass that staged
+        // it is alive; a crash, a thrown cycle, or a taken name used to leave
+        // the row named `__sync-staging-…` with the original name existing
+        // NOWHERE durable. The queue entry is what a later cycle's sweep
+        // restores from. If the enqueue itself fails, staging is refused —
+        // a reported name conflict beats an unrecoverable placeholder.
+        const placeholder = placeholderFor(String(blocker._id), stagingNonce);
+        const entry: RenameStagingRestoreEntry = {
+          c: collectionName,
+          i: String(blocker._id),
+          o: blockerName,
+          p: placeholder,
+        };
+        const sideDb = col === remoteCol ? remoteDb : localDb;
+        try {
+          await sideDb
+            .collection("_migrations")
+            .updateOne(
+              { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+              { $push: { entries: entry } as Document },
+              { upsert: true },
+            );
+        } catch (enqueueErr) {
+          console.error(
+            `[sync] ${collectionName}: could not record the staging-restore entry; refusing to stage.`,
+            enqueueErr,
+          );
+          return refuseStaging();
+        }
+
         // CONDITIONAL on what was observed (Codex P1). Between the findOne and
         // this update another app or syncer can rename or delete the blocker;
         // an `_id`-only filter would overwrite that concurrent change with a
@@ -1489,12 +1717,16 @@ export class SyncService extends EventEmitter {
         // released, and cleanup could never restore the original because it is
         // now occupied. A zero-match means the world moved — report rather
         // than force.
-        const placeholder = placeholderFor(String(blocker._id), stagingNonce);
         const staged = await col.updateOne(
           { _id: blocker._id, name: blockerName, _deletedAt: null },
           { $set: { name: placeholder } },
         );
         if (!staged.modifiedCount) {
+          // Nothing was written, and settlement never sees this row (it is
+          // pushed to `stagedRenames` only below) — so the entry comes out
+          // HERE. A failed dequeue is harmless: the sweep re-examines the row
+          // next cycle, finds no placeholder, and drops the entry itself.
+          await dequeueRestoreOn(sideDb.collection("_migrations"), entry);
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: the row holding ${JSON.stringify(desiredName)} changed ` +
@@ -1542,6 +1774,13 @@ export class SyncService extends EventEmitter {
     };
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
+    // GH #1153: a stranding the sweep could not restore FAILS the collection
+    // (the #1142 posture — a reported, recoverable stall beats an invisible
+    // one). The notices are already seeded into `strandedNotices` above, so
+    // they ride the same rendering as a fresh stranding.
+    if (sweptConflicts.length > 0) {
+      result.nameConflicts = (result.nameConflicts ?? 0) + sweptConflicts.length;
+    }
 
     // GH #1142: settle any placeholder whose real write never landed.
     //
@@ -1562,12 +1801,29 @@ export class SyncService extends EventEmitter {
       // Drained, so a second call cannot re-report or re-restore.
       const pending = stagedRenames.splice(0, stagedRenames.length);
       for (const staged of pending) {
+        // GH #1153: settlement is where the durable queue drains for every
+        // resolved outcome — it visits every staged row on every exit path
+        // and is the one place that knows how each ended. The entry stays
+        // queued ONLY on `taken` and on the catch below, which are exactly
+        // the strandings the next cycle's sweep exists to retry.
+        const stagedEntry: RenameStagingRestoreEntry = {
+          c: collectionName,
+          i: String(staged.id),
+          o: staged.originalName,
+          p: staged.placeholderName,
+        };
+        const stagedDb = staged.col === remoteCol ? remoteDb : localDb;
         try {
           const row = await staged.col.findOne(
             { _id: staged.id },
             { projection: { name: 1 } },
           );
-          if (!row || !isStagingPlaceholder(row.name)) continue; // its write landed
+          if (!row || !isStagingPlaceholder(row.name)) {
+            // Its write landed (or a rollback restored it, or a human renamed
+            // it) — no placeholder remains, nothing to recover later.
+            await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+            continue;
+          }
           const taken = await staged.col.findOne(
             { name: staged.originalName, _deletedAt: null, _id: { $ne: staged.id } },
             { projection: { _id: 1 } },
@@ -1603,7 +1859,10 @@ export class SyncService extends EventEmitter {
             { _id: staged.id, name: staged.placeholderName },
             { $set: { name: staged.originalName } },
           );
-          if (!restored.modifiedCount) continue; // someone else moved it on
+          // Restored, or someone else moved it on — either way no placeholder
+          // remains under this entry's name, so it drains.
+          await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+          if (!restored.modifiedCount) continue;
         } catch (settleErr) {
           // SURFACE it (Codex P1). Swallowing left the collection reporting
           // success with a placeholder still stored, and nothing scans for stale

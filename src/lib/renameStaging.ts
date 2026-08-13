@@ -259,6 +259,46 @@ export function pendingRenameCanFreeName(
   return freshSourceName !== blockerCurrentName;
 }
 
+/**
+ * Where should a swept placeholder row be restored to? (GH #1153)
+ *
+ * The sweep meets a row named `__sync-staging-…` on a LATER cycle, when the
+ * pass that staged it — and the in-memory record of its original name — is
+ * gone. Two sources can answer, in strict preference order:
+ *
+ *  1. the DURABLE QUEUE entry written before the row was staged — authoritative,
+ *     it IS the original name;
+ *  2. the syncId-paired PEER row's current name — the staging invariant is that
+ *     a staged row's own write (carrying the peer's name) was expected moments
+ *     later, so the peer's name is what that write would have delivered. Only
+ *     trusted when it is a real, non-placeholder string that actually differs
+ *     from what the row holds now: a placeholder peer means BOTH sides are
+ *     stranded (adopting it would copy the disease, not the cure), and a
+ *     non-string peer answers nothing.
+ *
+ * Returns null when neither source answers — the caller reports and leaves the
+ * row alone, because inventing a name is a product decision this machinery is
+ * not allowed to make. Free-ness on the target side is the CALLER's check: it
+ * is a live index question, not a naming one.
+ */
+export function placeholderRestoreTarget(
+  currentName: unknown,
+  queuedOriginalName: string | null,
+  peerName: unknown,
+): string | null {
+  if (!isStagingPlaceholder(currentName)) return null; // nothing to restore
+  if (queuedOriginalName !== null && queuedOriginalName !== "") return queuedOriginalName;
+  if (
+    typeof peerName === "string" &&
+    peerName !== "" &&
+    !isStagingPlaceholder(peerName) &&
+    peerName !== currentName
+  ) {
+    return peerName;
+  }
+  return null;
+}
+
 /** Facts about a row left holding a staging placeholder. */
 export interface StrandedPlaceholder {
   collection: string;

@@ -1320,6 +1320,160 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("leftover staging placeholders are swept on the next cycle (GH #1153)", () => {
+    const PH = "__sync-staging-deadbeef-";
+    const QUEUE_ID = "renameStagingRestores";
+
+    /**
+     * The crash case: a prior pass staged a row, wrote its durable restore
+     * entry, and died before settlement. The next cycle's sweep restores the
+     * original name from the queue and drains the entry.
+     */
+    it("restores a queued placeholder and drains the entry", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x1`, material: "PEI", syncId: "sw-a", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf A", material: "PEI", syncId: "sw-a", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf A", p: `${PH}x1` }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      const row = await localDb.collection("bedtypes").findOne({ syncId: "sw-a" });
+      expect(row?.name).toBe("Shelf A");
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
+     * The taken case: the original name is occupied, so the sweep must NOT
+     * overwrite — it reports (failing the collection, the #1142 posture) and
+     * keeps the entry. Once the occupier is renamed, the NEXT cycle restores.
+     */
+    it("reports a still-taken name every cycle, then restores once it frees", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x2`, material: "PEI", syncId: "sw-b", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      // The occupier — active, holds the original name, NOT movable.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Shelf B", material: "PEI", syncId: "sw-occ", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: `${PH}x2`, material: "PEI", syncId: "sw-b", _deletedAt: null, createdAt: same, updatedAt: same },
+        { name: "Shelf B", material: "PEI", syncId: "sw-occ", _deletedAt: null, createdAt: same, updatedAt: same },
+      ]);
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf B", p: `${PH}x2` }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const first = await sync.sync();
+      // Reported and FAILED — the placeholder is visible in the UI and the
+      // collection must not read as green around it.
+      expect(first.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+      const kept = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((kept?.entries ?? []).length).toBe(1);
+
+      // A human renames the occupier; the next cycle heals.
+      await localDb.collection("bedtypes").updateOne(
+        { syncId: "sw-occ" }, { $set: { name: "Shelf B (old)" } },
+      );
+      await remoteDb.collection("bedtypes").updateOne(
+        { syncId: "sw-occ" }, { $set: { name: "Shelf B (old)" } },
+      );
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-b" }))?.name).toBe("Shelf B");
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The grammar backstop: a pre-#1153 stranding has NO queue entry, so the
+     * restore target is derived from the syncId-paired peer's name.
+     */
+    it("adopts the peer's name for a queue-less placeholder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x3`, material: "PEI", syncId: "sw-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Drybox 4", material: "PEI", syncId: "sw-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-c" }))?.name).toBe("Drybox 4");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
+     * The human-rename case: the row no longer holds the placeholder, so the
+     * stale entry drains without touching the row.
+     */
+    it("drains a stale entry without touching a row a human already fixed", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Hand Fixed", material: "PEI", syncId: "sw-d", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Hand Fixed", material: "PEI", syncId: "sw-d", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Old Name", p: `${PH}x4` }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-d" }))?.name).toBe("Hand Fixed");
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+  });
+
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
     /**
      * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
