@@ -80,15 +80,20 @@ export interface MinimalTombstoneCollection {
 export async function repairMalformedTombstones(
   collection: MinimalTombstoneCollection,
 ): Promise<number> {
-  // No `$type: "date"` exclusion (Codex P2): query-form $type matches array
-  // ELEMENTS, so `_deletedAt: [new Date()]` — unreadable to the engine, an
-  // array is nothing readTimestamp understands — would be excluded from the
-  // scan and stay malformed forever. The JS filter below is the single
-  // decision point; the query only bounds the scan to rows that have a
-  // non-null tombstone at all.
+  // `$exists` ONLY (Codex P2, twice — same trap, two operators). Query-form
+  // `$type: "date"` matches array ELEMENTS, so it hid `[new Date()]`; the
+  // `$nin: [null]` that replaced it has the SAME multikey semantics and hid
+  // `[null]` and `[null, "bad"]`. Every value-inspecting query operator
+  // evaluates against elements when the field holds an array, and arrays are
+  // precisely a shape this repair exists to catch — so the server side gets
+  // NO value predicate at all. The JS filter below is the single decision
+  // point (scalar null included: `isReadableTombstone(null)` is true, so an
+  // active row is simply skipped). The cost is fetching one projected field
+  // for every row that has `_deletedAt` at all — these collections are small,
+  // and after two rounds of multikey surprises, correctness over cleverness.
   const candidates = await collection
     .find(
-      { _deletedAt: { $exists: true, $nin: [null] } },
+      { _deletedAt: { $exists: true } },
       { projection: { _deletedAt: 1 } },
     )
     .toArray();

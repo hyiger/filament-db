@@ -89,7 +89,21 @@ describe("repairMalformedTombstones (GH #1152)", () => {
     expect((await col().findOne({ name: "ArrayDate" }))?._deletedAt).toEqual(new Date(0));
   });
 
-  it("repairs a BSON-regex value — implicit equality would loop forever (Codex P2)", async () => {
+  it("repairs a null-containing array — $nin has the same multikey trap $type did (Codex P2)", async () => {
+    // `$nin: [null]` evaluates against array ELEMENTS, so `[null]` and
+    // `[null, "bad"]` were excluded from the scan while the sync loop still
+    // reads them as deleted and readTimestamp cannot parse them.
+    await col().insertMany([
+      { name: "NullArr", _deletedAt: [null] },
+      { name: "MixedArr", _deletedAt: [null, "bad"] },
+    ]);
+    expect(await repairMalformedTombstones(minimal())).toBe(2);
+    for (const name of ["NullArr", "MixedArr"]) {
+      expect((await col().findOne({ name }))?._deletedAt).toEqual(new Date(0));
+    }
+  });
+
+    it("repairs a BSON-regex value — implicit equality would loop forever (Codex P2)", async () => {
     // In query position a regex is a regex QUERY, which never matches the
     // regex-valued row: the conditional write would no-match every cycle and
     // the row would stay malformed forever. `$eq` compares it as a literal.
