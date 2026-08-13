@@ -1531,16 +1531,33 @@ export class SyncService extends EventEmitter {
           const freshEntries: unknown[] = Array.isArray(nowCovered?.entries)
             ? nowCovered.entries
             : [];
-          if (
-            freshEntries.some(
-              // Scoped to THIS collection (Codex P2) — _id uniqueness is
-              // per-collection, so an entry for a same-id row in a DIFFERENT
-              // collection must not mask this stray's backstop, potentially
-              // forever when that entry is retained for a taken name. The
-              // `coveredIds` snapshot above already scopes this way.
-              (e) => isRestoreEntry(e) && e.c === collectionName && e.i === String(stray._id),
-            )
-          ) {
+          const lateEntry = freshEntries.find(
+            // Scoped to THIS collection (Codex P2) — _id uniqueness is
+            // per-collection, so an entry for a same-id row in a DIFFERENT
+            // collection must not mask this stray's backstop, potentially
+            // forever when that entry is retained for a taken name. The
+            // `coveredIds` snapshot above already scopes this way.
+            (e): e is RenameStagingRestoreEntry =>
+              isRestoreEntry(e) && e.c === collectionName && e.i === String(stray._id),
+          );
+          if (lateEntry) {
+            // A LATE entry — enqueued after this sweep's snapshot, so it never
+            // passed through the entries loop and neither protection path saw
+            // it (Codex P1). Deferring the ACTION to its owner is right; but
+            // the row currently holds a generated placeholder, and if that
+            // owner pauses or crashes while an edit makes the row the LWW
+            // winner, the slim reads just below would carry the placeholder
+            // to the peer. Same treatment as the queue path's young-holding
+            // branch: quarantine and report, touch nothing.
+            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
+            sweptConflicts.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: String(stray._id),
+                originalName: lateEntry.o,
+                placeholderName: lateEntry.p,
+              }),
+            );
             continue;
           }
           const peer =
