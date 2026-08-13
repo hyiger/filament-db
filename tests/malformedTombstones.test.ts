@@ -81,6 +81,50 @@ describe("repairMalformedTombstones (GH #1152)", () => {
     expect(row?._deletedAt).toBeInstanceOf(Date);
   });
 
+  it("conditions every write on the OBSERVED malformed value (Codex P1)", async () => {
+    // The TOCTOU this pins: an API restore or snapshot replacement landing
+    // between the repair's read and its write must NOT have its fresh value
+    // overwritten — an _id-only filter would silently RE-DELETE a row the
+    // user just restored. A double records what the repair actually sends.
+    const ops: Array<{ updateOne: { filter: Record<string, unknown> } }> = [];
+    const double = {
+      find: () => ({
+        toArray: async () => [
+          { _id: "id1", _deletedAt: "" },
+          { _id: "id2", _deletedAt: "garbage" },
+        ],
+      }),
+      bulkWrite: async (operations: typeof ops) => {
+        ops.push(...operations);
+        return { modifiedCount: operations.length };
+      },
+    };
+    expect(await repairMalformedTombstones(double as never)).toBe(2);
+    expect(ops.map((o) => o.updateOne.filter)).toEqual([
+      { _id: "id1", _deletedAt: "" },
+      { _id: "id2", _deletedAt: "garbage" },
+    ]);
+  });
+
+  it("a row that changed between read and write is left alone", async () => {
+    // The live half of the same contract, against a real collection: seed the
+    // malformed value, then simulate the concurrent restore by changing the
+    // row before the (conditional) write would land. With the observed-value
+    // filter the write no-matches; an _id-only filter would clobber it.
+    await col().insertOne({ name: "Restored", _deletedAt: "" });
+    const real = minimal();
+    const raced: MinimalTombstoneCollection = {
+      find: (f, o) => real.find(f, o),
+      bulkWrite: async (operations) => {
+        // The "restore" lands after the read, before the write.
+        await col().updateOne({ name: "Restored" }, { $set: { _deletedAt: null } });
+        return real.bulkWrite(operations);
+      },
+    };
+    expect(await repairMalformedTombstones(raced)).toBe(0);
+    expect((await col().findOne({ name: "Restored" }))?._deletedAt).toBeNull();
+  });
+
   it("covers every synced collection in the constant", () => {
     expect([...TOMBSTONE_COLLECTIONS].sort()).toEqual(
       [

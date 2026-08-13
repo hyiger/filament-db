@@ -576,6 +576,11 @@ export class SyncService extends EventEmitter {
         // a filaments-only concept. Epoch stamp: LWW-arithmetic-preserving —
         // see the helper's docblock for why NOT `new Date()` and NOT null.
         for (const collectionName of TOMBSTONE_COLLECTIONS) {
+          // Re-checked per iteration (Codex P2): destroy() can flip `aborted`
+          // while an awaited repair is in flight, and the service contract is
+          // that only the operation already in flight may finish — not six
+          // more repairs against a database the user just switched away from.
+          if (this.aborted) break;
           const healed = await repairMalformedTombstones(
             dbHandle.collection(collectionName) as unknown as MinimalTombstoneCollection,
           );

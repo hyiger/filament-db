@@ -59,9 +59,13 @@ export interface MinimalTombstoneCollection {
     filter: Record<string, unknown>,
     options: { projection: Record<string, number> },
   ): { toArray(): Promise<Array<{ _id: unknown; _deletedAt?: unknown }>> };
-  updateMany(
-    filter: Record<string, unknown>,
-    update: Record<string, unknown>,
+  bulkWrite(
+    operations: Array<{
+      updateOne: {
+        filter: Record<string, unknown>;
+        update: Record<string, unknown>;
+      };
+    }>,
   ): Promise<{ modifiedCount?: number } | unknown>;
 }
 
@@ -84,9 +88,20 @@ export async function repairMalformedTombstones(
     .toArray();
   const broken = candidates.filter((d) => !isReadableTombstone(d._deletedAt));
   if (broken.length === 0) return 0;
-  const res = await collection.updateMany(
-    { _id: { $in: broken.map((d) => d._id) } },
-    { $set: { _deletedAt: new Date(0) } },
+  // CONDITIONAL on the observed value, per row (Codex P1) — the same
+  // observed-state rule every staging write follows. An `_id`-only filter is
+  // a TOCTOU: an API restore or a snapshot replacement landing between the
+  // read above and this write would have its fresh `null` (or valid date)
+  // overwritten with epoch — the repair silently RE-DELETING a row the user
+  // just restored. Filtered on the exact malformed value, a changed row
+  // simply no-matches and the next cycle re-examines it.
+  const res = await collection.bulkWrite(
+    broken.map((d) => ({
+      updateOne: {
+        filter: { _id: d._id, _deletedAt: d._deletedAt },
+        update: { $set: { _deletedAt: new Date(0) } },
+      },
+    })),
   );
   return (res as { modifiedCount?: number })?.modifiedCount ?? 0;
 }
