@@ -1347,10 +1347,16 @@ export class SyncService extends EventEmitter {
       for (const bad of rawEntries.filter(
         (e) => !isRestoreEntry(e) && (e as RenameStagingRestoreEntry)?.c === collectionName,
       )) {
+        // `$eq`, the literal-safety rule in $pull position (Codex P2): a bare
+        // document operand is a MATCH CONDITION, so a malformed subset like
+        // `{c: "bedtypes"}` would pull every valid entry for the collection
+        // along with itself — discarding the authoritative original names and
+        // demoting their rows to the peer-name backstop. `$eq` removes only
+        // elements wholly equal to the malformed value.
         await migrations
           .updateOne(
             { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
-            { $pull: { entries: bad } as Document },
+            { $pull: { entries: { $eq: bad } } as Document },
           )
           .catch(() => {});
       }

@@ -1732,6 +1732,53 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The literal $pull (Codex P2): a bare document operand is a MATCH
+     * CONDITION, so dropping a malformed `{c: "bedtypes"}` subset would pull
+     * every valid entry for the collection along with itself.
+     */
+    it("drops a malformed queue entry without taking valid ones with it", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // A valid stranded entry the sweep must keep judging...
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}xa`, material: "PEI", syncId: "sw-k", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: `${PH}xa`, material: "PEI", syncId: "sw-k", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf G", material: "PEI", syncId: "sw-k-occ", _deletedAt: null,
+          createdAt: same, updatedAt: same,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [
+          // ...and a malformed subset that, as a bare $pull operand, would
+          // match the valid entry too.
+          { c: "bedtypes" },
+          { c: "bedtypes", i: String(insertedId), o: "Shelf G", p: `${PH}xa`, at: OLD },
+        ] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      const entries = (queue?.entries ?? []) as Array<Record<string, unknown>>;
+      // The malformed one is gone; the valid one SURVIVES (still stranded —
+      // its original name is taken — so it stays queued for retry).
+      expect(entries.length).toBe(1);
+      expect(entries[0].i).toBe(String(insertedId));
+    });
+
+    /**
      * The free-form-name case (Codex P2): a user may name a row with the
      * placeholder PREFIX. The backstop must not touch it — not rename it to
      * its peer's value, not report it — because acting on recognition is
