@@ -543,10 +543,13 @@ export default function InventoryPage() {
     // to the same query looks like another page write — type `pla`, click the
     // header link to the bare route, press Back, and the URL returns to
     // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
-    if (ownUrlWriteRef.current === nextSearch) {
-      ownUrlWriteRef.current = null;
-      return;
-    }
+    // One OBSERVATION, one chance (Codex P2) — see the home page's twin
+    // comment: a normalization-only replace is invisible to useSearchParams,
+    // and a marker consumed only on match survives to mis-claim a later
+    // genuine navigation to the same canonical query.
+    const own = ownUrlWriteRef.current;
+    ownUrlWriteRef.current = null;
+    if (own === nextSearch) return;
     const url = parseFilterParams(nextSearch, INVENTORY_FILTER_SPEC);
     const present = presentFilterKeys(nextSearch, INVENTORY_FILTER_SPEC);
     setSearch(url.search);

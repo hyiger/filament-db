@@ -439,10 +439,20 @@ export default function Home() {
     // to the same query looks like another page write — type `pla`, click the
     // header link to the bare route, press Back, and the URL returns to
     // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
-    if (ownUrlWriteRef.current === nextSearch) {
-      ownUrlWriteRef.current = null;
-      return;
-    }
+    // One OBSERVATION, one chance (Codex P2, fourth marker pass). Consuming
+    // only on a match left the marker armed whenever our own write produced
+    // no observable change — a normalization-only replace (`?q=foo%20bar` →
+    // `q=foo+bar`) is invisible to useSearchParams, which already reported
+    // the canonical form. The stale marker then matched a LATER genuine
+    // navigation to that same query: click the bare header link, press Back,
+    // and the restored filtered URL was mistaken for our own echo — list
+    // unfiltered under a filtered URL, the original bug re-entered through
+    // the encoding. Whatever the next observed change is, the marker's write
+    // either was it, produced nothing observable, or was superseded; in all
+    // three it is spent.
+    const own = ownUrlWriteRef.current;
+    ownUrlWriteRef.current = null;
+    if (own === nextSearch) return;
     const url = parseFilterParams(nextSearch, HOME_FILTER_SPEC);
     const present = presentFilterKeys(nextSearch, HOME_FILTER_SPEC);
     setSearch(url.search);
