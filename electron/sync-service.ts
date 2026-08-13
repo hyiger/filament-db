@@ -48,12 +48,36 @@ interface LegacyTransitEntry {
  * Lives in the `_migrations` doc `_id: "renameStagingRestores"` on the SAME
  * database as the staged row (each DB's queue describes its own rows).
  * c=collection, i=String(_id), o=originalName, p=placeholderName. */
-interface RenameStagingRestoreEntry {
+interface RenameStagingRestoreKey {
   c: string;
   i: string;
   o: string;
   p: string;
 }
+
+interface RenameStagingRestoreEntry extends RenameStagingRestoreKey {
+  /** Enqueue time. The sweep refuses to touch entries younger than
+   * `SWEEP_MIN_AGE_MS` — see that constant for the two races this closes. */
+  at: Date;
+}
+
+/**
+ * How old a restore entry must be before another pass's sweep may act on it
+ * (GH #1153, Codex P2). Two services can share one database — the desktop
+ * client and a Docker instance against the same Atlas is the documented
+ * GH #439 reality — and an entry is durable BEFORE its row is staged. In that
+ * enqueue-to-update window the row still holds its original name, so a
+ * concurrent sweep read the record as resolved and DRAINED it; the owning
+ * pass then staged and could crash without the durable record this queue
+ * exists to guarantee. The same blindness let a sweep restore a placeholder
+ * an active pass was still using. Age is the discriminator: a pass's own
+ * staging-to-settlement span is seconds, so an entry older than this bound
+ * belongs to a DEAD pass. Fifteen minutes dwarfs both any plausible pass and
+ * cross-service clock skew (the stamp is written by one service's clock and
+ * compared by another's); the cost is that a genuine stranding waits one
+ * bound before healing — it already waited at least a full cycle.
+ */
+const SWEEP_MIN_AGE_MS = 15 * 60 * 1000;
 
 const RESTORE_QUEUE_ID = "renameStagingRestores";
 
@@ -69,7 +93,9 @@ function isRestoreEntry(value: unknown): value is RenameStagingRestoreEntry {
     typeof e.o === "string" &&
     e.o !== "" &&
     typeof e.p === "string" &&
-    isStagingPlaceholder(e.p)
+    isStagingPlaceholder(e.p) &&
+    e.at instanceof Date &&
+    !Number.isNaN(e.at.getTime())
   );
 }
 
@@ -1285,6 +1311,13 @@ export class SyncService extends EventEmitter {
 
       const coveredIds = new Set(entries.map((e) => e.i));
       for (const entry of entries) {
+        // AGE GATE (Codex P2): a young entry may belong to a pass that is
+        // alive RIGHT NOW on another service — possibly still between its
+        // enqueue and its staging write, where the row holds the original
+        // name and this sweep would misread the record as resolved and drain
+        // it. Skip anything younger than the bound; only a dead pass's
+        // entries are ours to judge.
+        if (Date.now() - entry.at.getTime() < SWEEP_MIN_AGE_MS) continue;
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
@@ -1336,6 +1369,28 @@ export class SyncService extends EventEmitter {
       for (const stray of strays) {
         if (coveredIds.has(String(stray._id))) continue; // queue already handled it
         try {
+          // FRESH re-check (Codex P2): the queue snapshot above predates this
+          // find, and enqueue-before-stage means any placeholder minted since
+          // then already has a durable entry — owned by a live pass the
+          // backstop must not race. The residual window is the milliseconds
+          // between an enqueue landing and this read observing it; even
+          // there, the backstop's conditional update only touches a row
+          // still holding the placeholder, so the worst case is the owning
+          // pass's retry colliding and REPORTING — never silent loss.
+          const nowCovered = await migrations.findOne(
+            { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+            { projection: { entries: 1 } },
+          );
+          const freshEntries: unknown[] = Array.isArray(nowCovered?.entries)
+            ? nowCovered.entries
+            : [];
+          if (
+            freshEntries.some(
+              (e) => isRestoreEntry(e) && e.i === String(stray._id),
+            )
+          ) {
+            continue;
+          }
           const peer =
             typeof stray.syncId === "string"
               ? await peerCol.findOne({ syncId: stray.syncId }, { projection: { name: 1 } })
@@ -1385,7 +1440,7 @@ export class SyncService extends EventEmitter {
     /** `$pull` one entry from an already-resolved migrations collection. */
     const dequeueRestoreOn = async (
       migrations: ReturnType<Db["collection"]>,
-      entry: RenameStagingRestoreEntry,
+      entry: RenameStagingRestoreKey,
     ): Promise<void> => {
       await migrations
         .updateOne(
@@ -1692,6 +1747,7 @@ export class SyncService extends EventEmitter {
           i: String(blocker._id),
           o: blockerName,
           p: placeholder,
+          at: new Date(),
         };
         const sideDb = col === remoteCol ? remoteDb : localDb;
         try {
@@ -1806,7 +1862,10 @@ export class SyncService extends EventEmitter {
         // and is the one place that knows how each ended. The entry stays
         // queued ONLY on `taken` and on the catch below, which are exactly
         // the strandings the next cycle's sweep exists to retry.
-        const stagedEntry: RenameStagingRestoreEntry = {
+        // A KEY, not a full entry: the dequeue matcher matches on {c,i,o,p}
+        // (query subset semantics), and settlement does not know — and does
+        // not need — the enqueue timestamp.
+        const stagedEntry: RenameStagingRestoreKey = {
           c: collectionName,
           i: String(staged.id),
           o: staged.originalName,

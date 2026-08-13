@@ -1323,6 +1323,9 @@ describe("SyncService — v1.12 sync expansion", () => {
   describe("leftover staging placeholders are swept on the next cycle (GH #1153)", () => {
     const PH = "__sync-staging-deadbeef-";
     const QUEUE_ID = "renameStagingRestores";
+    /** Older than SWEEP_MIN_AGE_MS — the sweep only judges DEAD passes'
+     *  entries; a young one may belong to a pass alive on another service. */
+    const OLD = new Date(Date.now() - 20 * 60 * 1000);
 
     /**
      * The crash case: a prior pass staged a row, wrote its durable restore
@@ -1344,7 +1347,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       });
       await localDb.collection("_migrations").updateOne(
         { _id: QUEUE_ID as never },
-        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf A", p: `${PH}x1` }] } },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf A", p: `${PH}x1`, at: OLD }] } },
         { upsert: true },
       );
 
@@ -1388,7 +1391,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       ]);
       await localDb.collection("_migrations").updateOne(
         { _id: QUEUE_ID as never },
-        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf B", p: `${PH}x2` }] } },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf B", p: `${PH}x2`, at: OLD }] } },
         { upsert: true },
       );
 
@@ -1443,6 +1446,42 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The multi-writer race (Codex P2): two services share one database, and
+     * an entry is durable BEFORE its row is staged. A concurrent sweep that
+     * judged a YOUNG entry would misread the enqueue-to-update window — the
+     * row still holds its original name — as "resolved" and drain the record
+     * the owning pass is about to depend on. Age is the discriminator.
+     */
+    it("leaves a YOUNG entry alone even when the row looks resolved", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // The window shape: row holds its ORIGINAL name; the entry is fresh.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Mid Stage", material: "PEI", syncId: "sw-e", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Mid Stage", material: "PEI", syncId: "sw-e", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Mid Stage", p: `${PH}x5`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The entry SURVIVES — only a dead pass's entries are the sweep's to
+      // judge, and this one is younger than the bound.
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((queue?.entries ?? []).length).toBe(1);
+    });
+
+    /**
      * The human-rename case: the row no longer holds the placeholder, so the
      * stale entry drains without touching the row.
      */
@@ -1461,7 +1500,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       });
       await localDb.collection("_migrations").updateOne(
         { _id: QUEUE_ID as never },
-        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Old Name", p: `${PH}x4` }] } },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Old Name", p: `${PH}x4`, at: OLD }] } },
         { upsert: true },
       );
 
