@@ -267,7 +267,10 @@ export default function InventoryPage() {
   // side because the search runs purely client-side here.
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   useEffect(() => {
-    const id = setTimeout(() => setDebouncedSearch(search), 200);
+    // Trimmed at the debounce (Codex P2) — the parser trims on read, so an
+    // untrimmed live value diverged from its own mirrored URL. See the home
+    // page's twin comment; the input keeps the raw text.
+    const id = setTimeout(() => setDebouncedSearch(search.trim()), 200);
     return () => clearTimeout(id);
   }, [search]);
 
@@ -486,7 +489,10 @@ export default function InventoryPage() {
   // before the seed above and blank the query string.
   useEffect(() => {
     if (!seeded) return;
-    const href = nextFilterHref(window.location, INVENTORY_FILTER_SPEC, {
+    const href = nextFilterHref(
+      window.location,
+      INVENTORY_FILTER_SPEC,
+      {
       // The DEBOUNCED value (Codex P2). Serializing the raw one fired a
       // `router.replace` per keystroke — a client navigation each time, and
       // overlapping query transitions on fast typing. The home page already
@@ -499,7 +505,13 @@ export default function InventoryPage() {
       groupBy,
       sortKey,
       sortDir,
-    });
+    },
+      // Fresh persisted values (Codex P2) — the sticky keys stay encoded while
+      // the view's group/sort/retired differ from the stored ones, or clearing
+      // the last filter drops the URL to bare and a reload silently swaps the
+      // shared link's view for the persisted one. See the home page's twin.
+      loadInventoryPrefs(),
+    );
     if (href) {
       // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.

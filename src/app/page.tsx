@@ -380,15 +380,26 @@ export default function Home() {
   // than rebuilding, so params this page does not own survive.
   useEffect(() => {
     if (!seeded) return;
-    const href = nextFilterHref(window.location, HOME_FILTER_SPEC, {
-      search: debouncedSearch,
-      typeFilter,
-      vendorFilter,
-      quickFilter,
-      showOutOfStock,
-      sortKey,
-      sortDir,
-    });
+    const href = nextFilterHref(
+      window.location,
+      HOME_FILTER_SPEC,
+      {
+        search: debouncedSearch,
+        typeFilter,
+        vendorFilter,
+        quickFilter,
+        showOutOfStock,
+        sortKey,
+        sortDir,
+      },
+      // The persisted sort, read fresh each run (Codex P2): the sticky keys
+      // must stay encoded while the VIEW's sort differs from the stored one,
+      // or clearing the last filter drops the URL to bare while the page
+      // still shows a shared link's sort — and a reload then silently swaps
+      // it for the persisted one. Bare means "use my prefs"; it has to be
+      // true before the URL is allowed to say it.
+      loadHomePrefs(),
+    );
     if (href) {
       // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.
@@ -506,7 +517,13 @@ export default function Home() {
 
   // Debounce search input by 300ms
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    // Trimmed at the debounce (Codex P2): the parser trims on read, so an
+    // untrimmed live value made the view disagree with its own mirrored URL —
+    // `" pla "` filtered differently before and after a refresh. The INPUT
+    // keeps the raw text (trimming state mid-typing would eat the space the
+    // user just typed); everything downstream — the fetch and the mirror —
+    // reads the canonical form.
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(timer);
   }, [search]);
 

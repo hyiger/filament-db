@@ -151,6 +151,9 @@ export function serializeFilterParams<S extends FilterSpec>(
   current: string,
   spec: S,
   state: FilterState<S>,
+  /** The persisted values behind the sticky keys, when the caller has them.
+   *  See the second trigger below — without this the boundary case regresses. */
+  persistedSticky?: Partial<FilterState<S>>,
 ): string {
   let params: URLSearchParams;
   try {
@@ -182,7 +185,33 @@ export function serializeFilterParams<S extends FilterSpec>(
       emittedAny = true;
     }
   }
-  if (emittedAny) {
+  // Sticky keys are emitted on EITHER trigger (Codex P2, second pass):
+  //
+  //  1. anything else emitted — the original rule, which makes a shared link
+  //     deterministic; or
+  //  2. the sticky state DIFFERS from the caller's persisted values — the
+  //     boundary the first trigger alone missed. Open a shared sort link and
+  //     clear its search: pass 1 deletes everything (the link's sort may equal
+  //     the spec fallback), the URL went bare, and a reload then seeded the
+  //     PERSISTED sort while the page still showed the link's. A bare URL
+  //     means "use my prefs"; it is only truthful while the view actually
+  //     matches them, so the sticky keys stay encoded until it does.
+  //
+  // A fully-default view over matching prefs still serializes bare — the gate
+  // that keeps printed dry-box QRs clean — and callers without persisted
+  // values (or without sticky keys) get trigger 1 alone, the prior behaviour.
+  let emitSticky = emittedAny;
+  if (!emitSticky && persistedSticky) {
+    for (const key of Object.keys(spec) as (keyof S)[]) {
+      const entry = spec[key];
+      if (!entry.sticky || !(key in persistedSticky)) continue;
+      if (state[key] !== persistedSticky[key]) {
+        emitSticky = true;
+        break;
+      }
+    }
+  }
+  if (emitSticky) {
     for (const key of Object.keys(spec) as (keyof S)[]) {
       const entry = spec[key];
       if (!entry.sticky) continue;
@@ -205,8 +234,9 @@ export function nextFilterHref<S extends FilterSpec>(
   location: { pathname: string; search: string; hash: string },
   spec: S,
   state: FilterState<S>,
+  persistedSticky?: Partial<FilterState<S>>,
 ): string | null {
-  const query = serializeFilterParams(location.search, spec, state);
+  const query = serializeFilterParams(location.search, spec, state, persistedSticky);
   const next = `${location.pathname}${query ? `?${query}` : ""}${location.hash}`;
   const currentQuery = location.search.startsWith("?")
     ? location.search.slice(1)

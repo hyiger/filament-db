@@ -326,6 +326,83 @@ describe("sticky keys", () => {
   });
 });
 
+describe("sticky keys at the clear-to-bare boundary (Codex P2, second pass)", () => {
+  const SPEC3 = {
+    search: { param: "q", fallback: "", ...textParam },
+    sortKey: { param: "sort", fallback: "name", parse: oneOf(["name", "cost"] as const), sticky: true },
+    sortDir: { param: "dir", fallback: "asc", parse: oneOf(["asc", "desc"] as const), sticky: true },
+  } satisfies FilterSpec;
+  const persisted = { sortKey: "cost", sortDir: "desc" } as const;
+
+  it("keeps the sticky keys encoded while the view differs from the persisted prefs", () => {
+    // The reported sequence, end to end. A recipient saved cost/desc opens a
+    // shared name/asc link and clears its search: pass 1 deletes everything
+    // (the link's sort equals the spec fallback), and pre-fix the URL went
+    // bare while the page still showed name/asc — so a reload silently
+    // swapped the view for cost/desc. Bare means "use my prefs"; it must be
+    // TRUE before the URL is allowed to say it.
+    const shared = "q=pla&sort=name&dir=asc";
+    const seeded = seedFilterState(shared, SPEC3, persisted);
+    expect(seeded.sortKey).toBe("name");
+
+    const cleared = serializeFilterParams(shared, SPEC3, { ...seeded, search: "" }, persisted);
+    expect(new URLSearchParams(cleared).get("sort")).toBe("name");
+    expect(new URLSearchParams(cleared).get("dir")).toBe("asc");
+
+    // The round trip is what matters: a reload of the produced URL shows
+    // exactly what the page was showing.
+    const reloaded = seedFilterState(cleared, SPEC3, persisted);
+    expect(reloaded.sortKey).toBe("name");
+    expect(reloaded.sortDir).toBe("asc");
+  });
+
+  it("goes bare exactly when bare is TRUE: view == prefs == the fallbacks", () => {
+    // A view matching NON-fallback prefs still encodes (pass 1 emits the
+    // non-default value, which arms the sticky pass) — fine, deterministic,
+    // and a refresh reproduces it either way. Bare is reserved for the one
+    // state it truthfully describes.
+    expect(
+      serializeFilterParams("sort=cost&dir=desc", SPEC3, {
+        search: "",
+        sortKey: "cost",
+        sortDir: "desc",
+      }, persisted),
+    ).toBe("sort=cost&dir=desc");
+    expect(
+      serializeFilterParams("sort=name&dir=asc", SPEC3, {
+        search: "",
+        sortKey: "name",
+        sortDir: "asc",
+      }, { sortKey: "name", sortDir: "asc" }),
+    ).toBe("");
+  });
+
+  it("still goes bare for an all-default view when nothing is persisted for the keys", () => {
+    // Back-compat: no persisted arg (or none of the keys present) keeps the
+    // original emitted-anything trigger alone.
+    expect(
+      serializeFilterParams("", SPEC3, { search: "", sortKey: "name", sortDir: "asc" }),
+    ).toBe("");
+    expect(
+      serializeFilterParams("", SPEC3, { search: "", sortKey: "name", sortDir: "asc" }, {}),
+    ).toBe("");
+  });
+
+  it("reaches a fixed point, so the mirror does not churn at the boundary", () => {
+    const state = { search: "", sortKey: "name", sortDir: "asc" } as const;
+    const href = nextFilterHref(
+      { pathname: "/", search: "?q=pla&sort=name&dir=asc", hash: "" },
+      SPEC3,
+      state,
+      persisted,
+    );
+    const written = href!.slice(href!.indexOf("?"));
+    expect(
+      nextFilterHref({ pathname: "/", search: written, hash: "" }, SPEC3, state, persisted),
+    ).toBeNull();
+  });
+});
+
 describe("seedFilterState", () => {
   const SPEC2 = {
     search: { param: "q", fallback: "", ...textParam },
