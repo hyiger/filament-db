@@ -357,104 +357,37 @@ describe("isDuplicateKeyError (GH #439, scoped to syncId per Codex on #464)", ()
  * user-facing notice within its lexical neighborhood.
  */
 describe("every quarantine reports (source invariant)", () => {
-  it("finds a notice push inside each quarantine's own enclosing block", async () => {
+  /**
+   * GH #1153, seventeen review rounds of which seven were "one more branch
+   * forgot an obligation". The sweep now HOISTS both obligations — quarantine
+   * at recognition, one central notice push per touched row with a generic
+   * fallback — so a branch structurally cannot skip either. This invariant
+   * pins that shape: any new branch-local `quarantinedSyncIds.add` or push
+   * site is a regression to per-branch discipline, which failed seven times.
+   */
+  it("the sweep has exactly two hoisted quarantine sites and two central pushes", async () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync("electron/sync-service.ts", "utf8");
 
-    // A byte-window version of this test accepted a NEIGHBOR branch's notice
-    // (Codex P2) — deleting one branch's push stayed green because the
-    // adjacent branch's push sat inside the window. So the association is
-    // structural: the notice must live in the same innermost `{...}` block
-    // as the quarantine. Brace matching must ignore braces inside comments,
-    // strings, and template literals (the notices themselves contain `${}`),
-    // hence the mini-lexer.
-    type Mode = "code" | "line" | "block" | "single" | "double" | "template";
-    const stack: number[] = [];
-    const blockOf = new Map<number, { open: number; close: number }>();
-    const spans: Array<{ open: number; close: number }> = [];
-    let mode: Mode = "code";
-    const templateDepth: number[] = []; // ${ nesting per template level
-    for (let k = 0; k < src.length; k++) {
-      const ch = src[k];
-      const next = src[k + 1];
-      if (mode === "line") {
-        if (ch === "\n") mode = "code";
-        continue;
-      }
-      if (mode === "block") {
-        if (ch === "*" && next === "/") { mode = "code"; k++; }
-        continue;
-      }
-      if (mode === "single" || mode === "double") {
-        if (ch === "\\") { k++; continue; }
-        if ((mode === "single" && ch === "'") || (mode === "double" && ch === '"')) mode = "code";
-        continue;
-      }
-      if (mode === "template") {
-        if (ch === "\\") { k++; continue; }
-        if (ch === "`") { mode = "code"; continue; }
-        if (ch === "$" && next === "{") {
-          templateDepth.push(1);
-          mode = "code";
-          k++;
-          continue;
-        }
-        continue;
-      }
-      // code
-      if (ch === "/" && next === "/") { mode = "line"; k++; continue; }
-      if (ch === "/" && next === "*") { mode = "block"; k++; continue; }
-      if (ch === "'") { mode = "single"; continue; }
-      if (ch === '"') { mode = "double"; continue; }
-      if (ch === "`") { mode = "template"; continue; }
-      if (ch === "{") {
-        if (templateDepth.length > 0) templateDepth[templateDepth.length - 1]++;
-        stack.push(k);
-        continue;
-      }
-      if (ch === "}") {
-        if (templateDepth.length > 0) {
-          const d = --templateDepth[templateDepth.length - 1];
-          if (d === 0) {
-            // Closing a ${ } — return to the template literal. The ${'s own
-            // brace was consumed without being pushed, so there is nothing to
-            // pop here; popping anyway corrupted the block structure of every
-            // function containing an interpolation (i.e. every notice).
-            templateDepth.pop();
-            mode = "template";
-            continue;
-          }
-        }
-        const open = stack.pop();
-        if (open !== undefined) spans.push({ open, close: k });
-        continue;
-      }
-    }
-    const innermostBlock = (pos: number) => {
-      let best: { open: number; close: number } | null = null;
-      for (const sp of spans) {
-        if (sp.open < pos && pos < sp.close) {
-          if (!best || sp.open > best.open) best = sp;
-        }
-      }
-      return best;
-    };
-    void blockOf;
+    const adds = src.match(/quarantinedSyncIds\.add\(/g) ?? [];
+    expect(adds.length).toBe(2);
 
-    const offenders: number[] = [];
-    const re = /quarantinedSyncIds\.add\([^)]*\);/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(src)) !== null) {
-      // A braceless guarded add (`if (x) quarantinedSyncIds.add(x);`) belongs
-      // to its PARENT branch block, which the innermost-block lookup already
-      // yields, since the guard introduces no braces.
-      const block = innermostBlock(m.index);
-      const body = block ? src.slice(block.open, block.close) : "";
-      const reports =
-        body.includes("sweptHoldbacks.push") ||
-        body.includes("sweptConflicts.push");
-      if (!reports) offenders.push(src.slice(0, m.index).split("\n").length);
-    }
-    expect(offenders).toEqual([]);
+    const centralPushes =
+      src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];
+    expect(centralPushes.length).toBe(2);
+
+    // ZERO direct pushes inside the sweep loops — branches assign `notice`;
+    // only the central ternary sites push. A direct `sweptX.push(` inside a
+    // branch is the regression this invariant exists to block.
+    const sweepRegion = src.slice(
+      src.indexOf("for (const entry of entries)"),
+      src.indexOf("const SLIM_PROJECTION"),
+    );
+    const branchPushes = (sweepRegion.match(/swept(Holdbacks|Conflicts)\.push\(/g) ?? []).length;
+    expect(branchPushes).toBe(0);
+
+    // The silence fallback exists in both loops.
+    const fallbacks = src.match(/was held back this cycle by placeholder recovery/g) ?? [];
+    expect(fallbacks.length).toBe(2);
   });
 });

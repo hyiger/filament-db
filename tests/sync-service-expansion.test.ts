@@ -1521,7 +1521,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       });
 
       sync = makeSync();
-      await sync.sync();
+      const results = await sync.sync();
 
       expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-c" }))?.name).toBe("Drybox 4");
       for (const db of [localDb, remoteDb]) {
@@ -1529,6 +1529,16 @@ describe("SyncService — v1.12 sync expansion", () => {
           await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
         ).toBe(0);
       }
+      // The healed pair holds this cycle (Codex P1 round 17: another service
+      // can stage the row right after the heal, with the scan finished and
+      // coveredIds blind) — reported as a hold, not a collision — and the
+      // next cycle is clean.
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/adopted the name/i);
+      expect(err).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
     });
 
     /**

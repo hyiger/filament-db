@@ -1371,207 +1371,170 @@ export class SyncService extends EventEmitter {
 
       const coveredIds = new Set(entries.map((e) => e.i));
       for (const entry of entries) {
-        // The AGE GATE defers JUDGMENT, not inspection (Codex P1, second
-        // pass). A young entry may belong to a pass alive on another service
-        // — possibly still between its enqueue and its staging write — so no
-        // young entry may be DRAINED or RESTORED. But a young entry whose row
-        // already HOLDS the recorded placeholder is a live stranding either
-        // way (a settlement-taken row re-reported five minutes later sits
-        // well under the fifteen-minute bound), and skipping it entirely left
-        // its syncId unquarantined: an edit while stranded then let LWW copy
-        // the placeholder to the peer — the exact corruption the quarantine
-        // exists to prevent. So the row is always READ; youth only forbids
-        // the destructive verbs.
-        //
-        // The observed syncId lives OUTSIDE the try (Codex P2): the catch
-        // also receives failures from the taken-lookup and the restore
-        // update, AFTER the row was seen holding its placeholder — and
-        // discarding the observation there let the row enter the loop
-        // unquarantined on precisely the cycles where something is already
-        // wrong.
+        // STRUCTURE, not discipline (Codex P1 ×7 — rounds 4 through 17 of
+        // this PR each found one more branch that forgot an obligation).
+        // The two obligations are therefore HOISTED so a branch cannot skip
+        // them:
+        //   1. QUARANTINE at recognition — any live observed row with a
+        //      pending record holds its pair for the cycle, whatever the
+        //      branch then does (restore, drain, defer, fail). The window is
+        //      the argument everywhere: between this read and the slim
+        //      reads, another service can stage this row, and coveredIds
+        //      blinds the backstop to it.
+        //   2. ONE notice per touched row, pushed at a single site after the
+        //      branch logic. Branches only choose the TEXT and channel; a
+        //      branch that forgets gets the generic fallback, never silence.
+        // Branches are an if/else chain with no `continue`, so control
+        // always reaches the central push. Carve-outs stay where they were:
+        // tombstoned rows pass through untouched (their deletion must
+        // propagate; the owner's staging filter can never re-placeholder
+        // them), and a vanished row has nothing to hold.
         let strandedSyncId: string | null = null;
-        /** Did the row read itself succeed? An entry whose row could not even
-         * be INSPECTED cannot be quarantined (no syncId was observed) while
-         * `coveredIds` keeps the backstop away from it too — so nothing can
-         * make the safety promise for it, and the collection must fail
-         * (Codex P2, the read-failure posture one more level down). Distinct
-         * from a row observed WITHOUT a syncId: that row never enters the LWW
-         * maps and cannot spread, so continuing is safe there. */
+        /** Did the row read itself succeed? An entry whose row could not be
+         * INSPECTED cannot be quarantined while coveredIds keeps the
+         * backstop away — nothing can make the safety promise, so the
+         * collection must fail. Distinct from a row observed WITHOUT a
+         * syncId: that row never enters the LWW maps and cannot spread. */
         let rowInspected = false;
         const young = Date.now() - entry.at.getTime() < SWEEP_MIN_AGE_MS;
+        /** The branch's message: channel + text. Null only for rows the
+         * sweep deliberately does not touch (gone / tombstoned). */
+        let notice: { hold: boolean; text: string } | null = null;
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
             { projection: { name: 1, syncId: 1, _deletedAt: 1, _purged: 1 } },
           );
           rowInspected = true;
-          if (!row || row.name !== entry.p) {
-            // Gone, landed, or human-renamed — nothing to recover. Only an
-            // AGED entry may be drained (young + not-holding is exactly the
-            // enqueue-to-update window), and the drain is versioned on the
-            // observed stamp: the owner may have re-asserted since this
-            // sweep's snapshot.
-            if (!young) {
-              // Draining a dead record does NOT close the window (Codex P1,
-              // the suspension race one branch over): an owner suspended past
-              // the age bound can resume AFTER this read, stage, and pause
-              // again — and coveredIds, built from the snapshot that carried
-              // this entry, keeps the backstop away from the fresh
-              // placeholder. So a live, non-tombstoned row is quarantined
-              // here too, with the same carve-outs as the young branch. One
-              // held-back cycle per drained record over a live row — the
-              // entry is gone next cycle, so it cannot recur.
-              // Drain FIRST, then say what actually happened (Codex P2):
-              // the drain can fail, the entry then stays aged, and a notice
-              // claiming clearance would lie every cycle of a persistent
-              // _migrations failure.
-              const drain = await dequeueRestoreOn(migrations, entry, entry.at);
-              const cleared = drain.accepted && drain.modified > 0;
-              if (
-                row &&
-                typeof row.syncId === "string" &&
-                row._deletedAt == null &&
-                row._purged !== true
-              ) {
-                quarantinedSyncIds.add(row.syncId);
-                sweptHoldbacks.push(
-                  cleared
-                    ? `${collectionName} ${entry.i} had a pending rename record; held back ` +
-                        `this cycle while it was cleared, and retried on the next.`
-                    : `${collectionName} ${entry.i} has a pending rename record that could ` +
-                        `not be cleared; held back and retried on the next cycle.`,
-                );
-              }
-            } else if (
-              row &&
-              typeof row.syncId === "string" &&
-              row._deletedAt == null &&
-              row._purged !== true
-            ) {
-              // A YOUNG entry quarantines its pair through the whole staging
-              // window (Codex P1), not only once the placeholder is visible:
-              // the owner can stage BETWEEN this read and the slim reads
-              // below, at which point coveredIds blinds the backstop and the
-              // fresh placeholder would ride LWW to the peer. Held back one
-              // cycle and reported honestly — this row is not stranded, its
-              // owner is mid-flight (or crashed pre-stage, which the aged
-              // sweep resolves). Tombstoned rows are exempt: the owner's
-              // staging filter requires `_deletedAt: null`, so no placeholder
-              // can appear on them, and quarantining would re-block the
-              // tombstone from propagating.
-              quarantinedSyncIds.add(row.syncId);
-              sweptHoldbacks.push(
-                `${collectionName} ${entry.i} is being renamed by another sync ` +
-                  `service; held back this cycle and retried on the next.`,
-              );
-            }
-            continue;
-          }
-          // RESOLVED BY DELETION (Codex P2): a user may deal with a stranded
-          // row by trashing or purging it. The name no longer needs
-          // restoration — a tombstoned row is outside the partial index, and
-          // a placeholder name in the trash is cosmetic — and quarantining it
-          // would block the one thing that still matters: the TOMBSTONE
-          // propagating to the peer. So: never quarantine, never restore,
-          // never report; drain the entry once aged (a young entry defers to
-          // its owner, as everywhere else). The loop's own predicates decide
-          // tombstoned-ness, per the #1146 rule.
-          if (row._deletedAt != null || row._purged === true) {
+          if (row && (row._deletedAt != null || row._purged === true)) {
+            // RESOLVED BY DELETION: the tombstone must propagate, the name in
+            // the trash is cosmetic, and the owner's staging filter
+            // (`_deletedAt: null`) can never re-placeholder this row. Drain
+            // once aged; a young entry defers to its owner.
             if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
-            continue;
-          }
-          if (typeof row.syncId === "string") strandedSyncId = row.syncId;
-          if (young) {
-            // Holding, but the entry is fresh — quarantine and report without
-            // touching row or record; the owning pass (or the next aged
-            // sweep) resolves it.
-            sweptConflicts.push(
-              strandedPlaceholderNotice({
-                collection: collectionName,
-                id: entry.i,
-                originalName: entry.o,
-                placeholderName: entry.p,
-              }),
-            );
-            if (strandedSyncId) quarantinedSyncIds.add(strandedSyncId);
-            continue;
-          }
-          const taken = await col.findOne(
-            { name: entry.o, _deletedAt: null, _id: { $ne: row._id } },
-            { projection: { _id: 1 } },
-          );
-          if (taken) {
-            sweptConflicts.push(
-              strandedPlaceholderNotice({
-                collection: collectionName,
-                id: entry.i,
-                originalName: entry.o,
-                placeholderName: entry.p,
-              }),
-            );
-            if (strandedSyncId) quarantinedSyncIds.add(strandedSyncId);
-            continue; // keep queued — retried next cycle
-          }
-          const restored = await col.updateOne(
-            { _id: row._id, name: entry.p },
-            { $set: { name: entry.o } },
-          );
-          await dequeueRestoreOn(migrations, entry, entry.at);
-          if (restored.modifiedCount) {
-            console.log(
-              `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
-            );
-            // Quarantine even on SUCCESS (Codex P1) — the last branch that
-            // did not, and the window is the same as everywhere else: another
-            // service can enqueue and stage this very row between this
-            // restore and the slim reads, with coveredIds (built from OUR
-            // snapshot) blinding the backstop. The rule is now uniform: every
-            // queue entry over a live row holds its pair for the cycle. The
-            // restored name syncs on the next one.
-            if (strandedSyncId) {
-              quarantinedSyncIds.add(strandedSyncId);
-              sweptHoldbacks.push(
-                `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}; ` +
-                  `held back this cycle and synced on the next.`,
-              );
+          } else if (!row) {
+            // Gone entirely — nothing to hold; drain once aged (versioned on
+            // the observed stamp: the owner may have re-asserted).
+            if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
+          } else {
+            // LIVE row with a pending record — obligation 1, unconditionally.
+            if (typeof row.syncId === "string") {
+              strandedSyncId = row.syncId;
+              quarantinedSyncIds.add(row.syncId);
             }
-          } else if (strandedSyncId) {
-            // The conditional restore no-matched — someone moved the row
-            // between our read and the write. Unknown state: hold it back
-            // this cycle rather than let a possibly-still-stranded row sync —
-            // and SAY so (Codex P2), or trySync reads the collection as
-            // successful and dependents run over the deliberately-skipped
-            // pair. Every quarantine reports; this was the last silent one.
-            quarantinedSyncIds.add(strandedSyncId);
-            sweptHoldbacks.push(
-              `${collectionName} ${entry.i} changed while being restored; held back ` +
-                `this cycle and re-examined on the next.`,
-            );
+            if (row.name !== entry.p) {
+              // Not holding the placeholder: the enqueue-to-stage window, or
+              // a landed/human-fixed row under a stale record.
+              if (!young) {
+                // Drain FIRST, then say what actually happened: the drain can
+                // fail, and a notice claiming clearance would lie every cycle
+                // of a persistent _migrations failure. `modified`, not
+                // acceptance, is the clearance signal — a re-asserted twin
+                // survives a versioned pull as an accepted zero-match.
+                const drain = await dequeueRestoreOn(migrations, entry, entry.at);
+                const cleared = drain.accepted && drain.modified > 0;
+                notice = {
+                  hold: true,
+                  text: cleared
+                    ? `${collectionName} ${entry.i} had a pending rename record; held back ` +
+                      `this cycle while it was cleared, and retried on the next.`
+                    : `${collectionName} ${entry.i} has a pending rename record that could ` +
+                      `not be cleared; held back and retried on the next cycle.`,
+                };
+              } else {
+                notice = {
+                  hold: true,
+                  text:
+                    `${collectionName} ${entry.i} is being renamed by another sync ` +
+                    `service; held back this cycle and retried on the next.`,
+                };
+              }
+            } else if (young) {
+              // Holding, but the entry is fresh — report without touching row
+              // or record; the owning pass (or the next aged sweep) resolves.
+              notice = {
+                hold: false,
+                text: strandedPlaceholderNotice({
+                  collection: collectionName,
+                  id: entry.i,
+                  originalName: entry.o,
+                  placeholderName: entry.p,
+                }),
+              };
+            } else {
+              const taken = await col.findOne(
+                { name: entry.o, _deletedAt: null, _id: { $ne: row._id } },
+                { projection: { _id: 1 } },
+              );
+              if (taken) {
+                notice = {
+                  hold: false,
+                  text: strandedPlaceholderNotice({
+                    collection: collectionName,
+                    id: entry.i,
+                    originalName: entry.o,
+                    placeholderName: entry.p,
+                  }),
+                };
+              } else {
+                const restored = await col.updateOne(
+                  { _id: row._id, name: entry.p },
+                  { $set: { name: entry.o } },
+                );
+                await dequeueRestoreOn(migrations, entry, entry.at);
+                notice = restored.modifiedCount
+                  ? {
+                      hold: true,
+                      text:
+                        `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}; ` +
+                        `held back this cycle and synced on the next.`,
+                    }
+                  : {
+                      hold: true,
+                      text:
+                        `${collectionName} ${entry.i} changed while being restored; held back ` +
+                        `this cycle and re-examined on the next.`,
+                    };
+                if (restored.modifiedCount) {
+                  console.log(
+                    `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
+                  );
+                }
+              }
+            }
           }
         } catch (err) {
           if (!rowInspected) {
             // The row read itself failed: nothing observed, nothing
-            // quarantinable, backstop blinded by coveredIds. The sweep cannot
-            // make its promise for this collection — fail it, like every
-            // other failed read here.
+            // quarantinable, backstop blinded by coveredIds. Fail the
+            // collection, like every other failed read here.
             throw err;
           }
-          // Keep the entry; next cycle retries. One bad row must not abort
-          // the collection's sweep — but a row OBSERVED holding its
-          // placeholder must not sync just because a later step failed.
+          // Post-observation failure: the quarantine already happened at the
+          // hoist; only the message remains.
           if (strandedSyncId) {
-            quarantinedSyncIds.add(strandedSyncId);
-            sweptConflicts.push(
-              strandedPlaceholderNotice({
+            notice = {
+              hold: false,
+              text: strandedPlaceholderNotice({
                 collection: collectionName,
                 id: entry.i,
                 originalName: entry.o,
                 placeholderName: entry.p,
               }),
-            );
+            };
           }
           console.warn(`[sync] ${collectionName}: staging-restore sweep failed for ${entry.i}.`, err);
         }
+        // Obligation 2 — the single push site. The fallback fires only if a
+        // future branch quarantines and assigns nothing: degraded to a
+        // generic message rather than silence.
+        if (strandedSyncId && !notice) {
+          notice = {
+            hold: true,
+            text: `${collectionName} ${entry.i} was held back this cycle by placeholder recovery.`,
+          };
+        }
+        if (notice) (notice.hold ? sweptHoldbacks : sweptConflicts).push(notice.text);
       }
 
       // Grammar backstop. STAGING_PREFIX is `__sync-staging-` — word chars
@@ -1584,28 +1547,26 @@ export class SyncService extends EventEmitter {
         )
         .toArray();
       for (const stray of strays) {
-        // STRICT grammar, not the prefix (Codex P2). The backstop ACTS on
-        // recognition alone — it rewrites the name to the peer's, or fails
-        // the collection every cycle when it cannot — and entity names are
-        // free-form: a user's own `__sync-staging-custom` matched the prefix
-        // find above and would have been silently renamed to its peer's
-        // value. Only the complete generated shape (8-hex nonce, 24-hex id)
-        // is treated as an artifact; anything else is presumed a user's name
-        // and left entirely alone — not even reported.
+        // STRICT grammar, not the prefix: the backstop ACTS on recognition,
+        // and entity names are free-form — a user's own `__sync-staging-custom`
+        // must be left entirely alone, not even reported.
         if (!isGeneratedPlaceholder(stray.name)) continue;
-        // Tombstoned = resolved by deletion — same rule as the queue path:
-        // let the tombstone sync; the name in the trash is cosmetic.
+        // Tombstoned = resolved by deletion — let the tombstone sync.
         if (stray._deletedAt != null || stray._purged === true) continue;
         if (coveredIds.has(String(stray._id))) continue; // queue already handled it
+        // Same hoisted structure as the queue path (Codex P1 ×7, including
+        // the backstop's own restore attempt): a recognized live stray holds
+        // its pair for the cycle no matter which branch runs — another
+        // service can enqueue and stage this row after the re-check below,
+        // or replace a just-healed name, and coveredIds/the finished scan
+        // would never look again this pass. One notice per stray, one push
+        // site, generic fallback over silence.
+        if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
+        let notice: { hold: boolean; text: string } | null = null;
         try {
-          // FRESH re-check (Codex P2): the queue snapshot above predates this
-          // find, and enqueue-before-stage means any placeholder minted since
-          // then already has a durable entry — owned by a live pass the
-          // backstop must not race. The residual window is the milliseconds
-          // between an enqueue landing and this read observing it; even
-          // there, the backstop's conditional update only touches a row
-          // still holding the placeholder, so the worst case is the owning
-          // pass's retry colliding and REPORTING — never silent loss.
+          // FRESH re-check: enqueue-before-stage means any placeholder minted
+          // after the sweep's snapshot already has a durable entry — owned by
+          // a live pass whose ACTION the backstop must defer to.
           const nowCovered = await migrations.findOne(
             { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
             { projection: { entries: 1 } },
@@ -1614,91 +1575,99 @@ export class SyncService extends EventEmitter {
             ? nowCovered.entries
             : [];
           const lateEntry = freshEntries.find(
-            // Scoped to THIS collection (Codex P2) — _id uniqueness is
-            // per-collection, so an entry for a same-id row in a DIFFERENT
-            // collection must not mask this stray's backstop, potentially
-            // forever when that entry is retained for a taken name. The
-            // `coveredIds` snapshot above already scopes this way.
+            // Scoped to THIS collection — _id uniqueness is per-collection.
             (e): e is RenameStagingRestoreEntry =>
               isRestoreEntry(e) && e.c === collectionName && e.i === String(stray._id),
           );
           if (lateEntry) {
-            // A LATE entry — enqueued after this sweep's snapshot, so it never
-            // passed through the entries loop and neither protection path saw
-            // it (Codex P1). Deferring the ACTION to its owner is right; but
-            // the row currently holds a generated placeholder, and if that
-            // owner pauses or crashes while an edit makes the row the LWW
-            // winner, the slim reads just below would carry the placeholder
-            // to the peer. Same treatment as the queue path's young-holding
-            // branch: quarantine and report, touch nothing.
-            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
-            sweptConflicts.push(
-              strandedPlaceholderNotice({
+            // Enqueued after the snapshot: defer the ACTION to its owner;
+            // the hoisted quarantine already holds the pair.
+            notice = {
+              hold: false,
+              text: strandedPlaceholderNotice({
                 collection: collectionName,
                 id: String(stray._id),
                 originalName: lateEntry.o,
                 placeholderName: lateEntry.p,
               }),
-            );
-            continue;
-          }
-          const peer =
-            typeof stray.syncId === "string"
-              ? await peerCol.findOne({ syncId: stray.syncId }, { projection: { name: 1 } })
-              : null;
-          const target = placeholderRestoreTarget(stray.name, null, peer?.name);
-          if (target === null) {
-            sweptConflicts.push(
-              `${collectionName} ${String(stray._id)} holds the temporary name ` +
-                `${JSON.stringify(stray.name)} and its original name could not be determined. ` +
-                `Rename it manually.`,
-            );
-            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
-            continue;
-          }
-          const taken = await col.findOne(
-            { name: target, _deletedAt: null, _id: { $ne: stray._id } },
-            { projection: { _id: 1 } },
-          );
-          if (taken) {
-            sweptConflicts.push(
-              strandedPlaceholderNotice({
-                collection: collectionName,
-                id: String(stray._id),
-                originalName: target,
-                placeholderName: String(stray.name),
-              }),
-            );
-            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
-            continue;
-          }
-          const healed = await col.updateOne(
-            { _id: stray._id, name: stray.name },
-            { $set: { name: target } },
-          );
-          if (healed.modifiedCount) {
-            console.log(
-              `[sync] ${collectionName}: adopted the peer name ${JSON.stringify(target)} onto ` +
-                `${String(stray._id)} (GH #1153 backstop)`,
-            );
+            };
+          } else {
+            const peer =
+              typeof stray.syncId === "string"
+                ? await peerCol.findOne({ syncId: stray.syncId }, { projection: { name: 1 } })
+                : null;
+            const target = placeholderRestoreTarget(stray.name, null, peer?.name);
+            if (target === null) {
+              notice = {
+                hold: false,
+                text:
+                  `${collectionName} ${String(stray._id)} holds the temporary name ` +
+                  `${JSON.stringify(stray.name)} and its original name could not be determined. ` +
+                  `Rename it manually.`,
+              };
+            } else {
+              const taken = await col.findOne(
+                { name: target, _deletedAt: null, _id: { $ne: stray._id } },
+                { projection: { _id: 1 } },
+              );
+              if (taken) {
+                notice = {
+                  hold: false,
+                  text: strandedPlaceholderNotice({
+                    collection: collectionName,
+                    id: String(stray._id),
+                    originalName: target,
+                    placeholderName: String(stray.name),
+                  }),
+                };
+              } else {
+                const healed = await col.updateOne(
+                  { _id: stray._id, name: stray.name },
+                  { $set: { name: target } },
+                );
+                notice = healed.modifiedCount
+                  ? {
+                      hold: true,
+                      text:
+                        `${collectionName} ${String(stray._id)} adopted the name ` +
+                        `${JSON.stringify(target)} from its peer; held back this cycle and ` +
+                        `synced on the next.`,
+                    }
+                  : {
+                      hold: true,
+                      text:
+                        `${collectionName} ${String(stray._id)} changed while being healed; ` +
+                        `held back this cycle and re-examined on the next.`,
+                    };
+                if (healed.modifiedCount) {
+                  console.log(
+                    `[sync] ${collectionName}: adopted the peer name ${JSON.stringify(target)} onto ` +
+                      `${String(stray._id)} (GH #1153 backstop)`,
+                  );
+                }
+              }
+            }
           }
         } catch (err) {
-          // Same rule as the queue path's catch (Codex P2, both halves): a
-          // row recognized as a generated placeholder must not sync because a
-          // later step failed — and the failure must reach the USER, not just
-          // the console, or the cycle reads green while the placeholder
-          // stands indefinitely.
-          if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
-          sweptConflicts.push(
-            `${collectionName} ${String(stray._id)} holds the temporary name ` +
+          notice = {
+            hold: false,
+            text:
+              `${collectionName} ${String(stray._id)} holds the temporary name ` +
               `${JSON.stringify(stray.name)} and could not be recovered this cycle. ` +
               `Rename it manually if this persists.`,
-          );
+          };
           console.warn(
             `[sync] ${collectionName}: placeholder backstop failed for ${String(stray._id)}.`,
             err,
           );
         }
+        if (!notice) {
+          notice = {
+            hold: true,
+            text: `${collectionName} ${String(stray._id)} was held back this cycle by placeholder recovery.`,
+          };
+        }
+        (notice.hold ? sweptHoldbacks : sweptConflicts).push(notice.text);
       }
     };
     /** `$pull` one entry from an already-resolved migrations collection.
