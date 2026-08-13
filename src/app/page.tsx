@@ -11,6 +11,7 @@ import {
   withCurrentValue,
 } from "@/lib/listFilterParams";
 import {
+  parseStoredPrefs,
   HOME_FILTER_SPEC,
   HOME_PREFS_KEY,
   HOME_PERSISTED_KEYS,
@@ -467,8 +468,14 @@ export default function Home() {
   useEffect(() => {
     if (!seeded || prefsTouchedRef.current.size === 0) return;
     try {
-      const raw = window.localStorage.getItem(HOME_PREFS_KEY);
-      const stored = raw ? (JSON.parse(raw) as Partial<HomePrefs>) : {};
+      // Tolerant parse (Codex P2): a corrupt blob must not throw here — the
+      // catch below would skip the setItem, so nothing would ever overwrite
+      // the bad value and persistence would be dead until storage was cleared
+      // by hand. Parsed as `{}`, it merges against defaults and THIS write
+      // replaces it: the write path is the one chance to heal.
+      const stored = parseStoredPrefs(
+        window.localStorage.getItem(HOME_PREFS_KEY),
+      ) as Partial<HomePrefs>;
       const live: HomePrefs = { sortKey, sortDir };
       const next: HomePrefs = { ...DEFAULT_HOME_PREFS, ...stored };
       for (const key of prefsTouchedRef.current) next[key] = live[key] as never;

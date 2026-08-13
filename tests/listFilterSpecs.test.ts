@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  parseStoredPrefs,
   HOME_FILTER_SPEC,
   HOME_PERSISTED_KEYS,
   INVENTORY_FILTER_SPEC,
@@ -128,4 +129,35 @@ describe("preference writers record the touch", () => {
       expect(offenders).toEqual([]);
     });
   }
+});
+
+/**
+ * GH #1141 (Codex P2). The persist effects parse the stored blob inside a
+ * catch-everything try; a corrupt blob threw at the parse, skipped the
+ * `setItem`, and so was never overwritten — persistence dead until the user
+ * cleared storage by hand. The write path is the one chance to heal, so the
+ * parse must be tolerant there.
+ */
+describe("parseStoredPrefs", () => {
+  it("returns the object for a valid blob", () => {
+    expect(parseStoredPrefs('{"sortKey":"cost"}')).toEqual({ sortKey: "cost" });
+  });
+
+  it("returns {} for absent storage", () => {
+    expect(parseStoredPrefs(null)).toEqual({});
+    expect(parseStoredPrefs("")).toEqual({});
+  });
+
+  it("returns {} for corrupt JSON — the case that killed persistence", () => {
+    expect(parseStoredPrefs("{not json")).toEqual({});
+  });
+
+  it("returns {} for valid JSON that is not a plain object", () => {
+    // Spreading an array would yield index keys, not preferences; a number or
+    // null would spread to nothing but signals the blob is garbage either way.
+    expect(parseStoredPrefs("42")).toEqual({});
+    expect(parseStoredPrefs("null")).toEqual({});
+    expect(parseStoredPrefs('"cost"')).toEqual({});
+    expect(parseStoredPrefs('[{"sortKey":"cost"}]')).toEqual({});
+  });
 });

@@ -11,6 +11,7 @@ import {
   withCurrentValue,
 } from "@/lib/listFilterParams";
 import {
+  parseStoredPrefs,
   INVENTORY_FILTER_SPEC,
   INVENTORY_PREFS_KEY,
   INVENTORY_PERSISTED_KEYS,
@@ -572,8 +573,11 @@ export default function InventoryPage() {
   useEffect(() => {
     if (!seeded || prefsTouchedRef.current.size === 0) return;
     try {
-      const raw = window.localStorage.getItem(INVENTORY_PREFS_KEY);
-      const stored = raw ? (JSON.parse(raw) as Partial<InventoryPrefs>) : {};
+      // Tolerant parse (Codex P2) — a corrupt blob merges as `{}` and this
+      // write replaces it. See the home page's twin comment.
+      const stored = parseStoredPrefs(
+        window.localStorage.getItem(INVENTORY_PREFS_KEY),
+      ) as Partial<InventoryPrefs>;
       const live: InventoryPrefs = { groupBy, sortKey, sortDir, includeRetired };
       const next: InventoryPrefs = { ...DEFAULT_INVENTORY_PREFS, ...stored };
       for (const key of prefsTouchedRef.current) next[key] = live[key] as never;

@@ -32,6 +32,32 @@ import {
 import { SORT_KEYS, SORT_DIRS, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { QUICK_FILTERS, type QuickFilter } from "@/components/QuickFilterChips";
 
+/**
+ * Parse a stored preference blob, tolerating corruption (GH #1141, Codex P2).
+ *
+ * The persist effects READ the stored blob before writing, so they can merge
+ * per-key over it. Parsing it inline inside their catch-everything try meant a
+ * corrupt blob threw at the parse and skipped the `setItem` — so nothing ever
+ * OVERWROTE the bad value, and persistence was dead until the user cleared
+ * storage by hand. The load path already tolerated corruption; the write path
+ * choked on it, which is backwards: the write is the one chance to heal.
+ *
+ * Returns `{}` for anything that is not a plain JSON object — null, corrupt
+ * text, `"42"`, arrays (spreading an array yields index keys, not prefs) — so
+ * the caller merges against defaults and the next write replaces the blob.
+ */
+export function parseStoredPrefs(raw: string | null): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 /* ------------------------------------------------------------------ home */
 
 /** #831: persisted sort for the filament list. */
