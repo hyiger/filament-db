@@ -80,9 +80,15 @@ export interface MinimalTombstoneCollection {
 export async function repairMalformedTombstones(
   collection: MinimalTombstoneCollection,
 ): Promise<number> {
+  // No `$type: "date"` exclusion (Codex P2): query-form $type matches array
+  // ELEMENTS, so `_deletedAt: [new Date()]` — unreadable to the engine, an
+  // array is nothing readTimestamp understands — would be excluded from the
+  // scan and stay malformed forever. The JS filter below is the single
+  // decision point; the query only bounds the scan to rows that have a
+  // non-null tombstone at all.
   const candidates = await collection
     .find(
-      { _deletedAt: { $exists: true, $nin: [null], $not: { $type: "date" } } },
+      { _deletedAt: { $exists: true, $nin: [null] } },
       { projection: { _deletedAt: 1 } },
     )
     .toArray();
@@ -98,7 +104,13 @@ export async function repairMalformedTombstones(
   const res = await collection.bulkWrite(
     broken.map((d) => ({
       updateOne: {
-        filter: { _id: d._id, _deletedAt: d._deletedAt },
+        // `$eq`, not implicit equality (Codex P2): the observed value sits in
+        // QUERY position, and raw-driver values are explicitly in scope — a
+        // BSON regex placed there implicitly becomes a regex QUERY that never
+        // matches the regex-valued row (the repair would repeat forever), and
+        // an operator-shaped document would change the filter's meaning
+        // entirely. `$eq` compares the observed value as a literal.
+        filter: { _id: d._id, _deletedAt: { $eq: d._deletedAt } },
         update: { $set: { _deletedAt: new Date(0) } },
       },
     })),

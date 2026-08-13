@@ -81,6 +81,25 @@ describe("repairMalformedTombstones (GH #1152)", () => {
     expect(row?._deletedAt).toBeInstanceOf(Date);
   });
 
+  it("repairs a date-containing ARRAY — query-form $type would have hidden it (Codex P2)", async () => {
+    // `$type: "date"` matches array ELEMENTS, so a `$not` exclusion dropped
+    // `[new Date()]` from the scan while the engine still cannot read it.
+    await col().insertOne({ name: "ArrayDate", _deletedAt: [new Date()] });
+    expect(await repairMalformedTombstones(minimal())).toBe(1);
+    expect((await col().findOne({ name: "ArrayDate" }))?._deletedAt).toEqual(new Date(0));
+  });
+
+  it("repairs a BSON-regex value — implicit equality would loop forever (Codex P2)", async () => {
+    // In query position a regex is a regex QUERY, which never matches the
+    // regex-valued row: the conditional write would no-match every cycle and
+    // the row would stay malformed forever. `$eq` compares it as a literal.
+    await col().insertOne({ name: "RegexVal", _deletedAt: /not-a-date/ });
+    expect(await repairMalformedTombstones(minimal())).toBe(1);
+    expect((await col().findOne({ name: "RegexVal" }))?._deletedAt).toEqual(new Date(0));
+    // And it stays repaired — the loop-forever shape is the regression.
+    expect(await repairMalformedTombstones(minimal())).toBe(0);
+  });
+
   it("conditions every write on the OBSERVED malformed value (Codex P1)", async () => {
     // The TOCTOU this pins: an API restore or snapshot replacement landing
     // between the repair's read and its write must NOT have its fresh value
@@ -100,9 +119,12 @@ describe("repairMalformedTombstones (GH #1152)", () => {
       },
     };
     expect(await repairMalformedTombstones(double as never)).toBe(2);
+    // `$eq` wrapping is part of the contract: it is what keeps a BSON regex
+    // or operator-shaped observed value a LITERAL rather than live query
+    // syntax (the second Codex P2 on this file).
     expect(ops.map((o) => o.updateOne.filter)).toEqual([
-      { _id: "id1", _deletedAt: "" },
-      { _id: "id2", _deletedAt: "garbage" },
+      { _id: "id1", _deletedAt: { $eq: "" } },
+      { _id: "id2", _deletedAt: { $eq: "garbage" } },
     ]);
   });
 
