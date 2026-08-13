@@ -126,10 +126,14 @@ export function getDbNameFromUri(uri: string): string {
  * text for an actionable hint that points the user at the fix —
  * regenerating the connection string from a writable Atlas user.
  *
- * Detects the auth shape two ways: by message regex (matches the driver's
- * `user is not allowed to do action [update] on [db.coll]`) and by code 13
- * (the more reliable signal, but not always populated on every wrapped
- * error path). Either is sufficient. See GH #143.
+ * Detects the auth shape by structured code first (GH #1154): a present
+ * numeric code is authoritative — 13 is mongod's Unauthorized, whose message
+ * never matches the regex anyway — and the message regex decides only for
+ * code-less errors and for AtlasError 8000, whose shared-tier proxy authors
+ * the "user is not allowed to do action" text itself. Any OTHER numeric code
+ * suppresses the regex, because value-echoing server errors (E11000 and
+ * friends) quote stored data verbatim, and stored data must not be able to
+ * steer this message. See GH #143 for the hint itself.
  *
  * ## Composed errors: classify the CAUSE, re-attach the notice (GH #1142)
  *
@@ -160,8 +164,25 @@ export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
       ? (cause as { code: unknown }).code
       : undefined;
 
+  // A present NUMERIC code is authoritative; the regex decides only for
+  // code-less errors and for AtlasError 8000 (GH #1154). The old `regex ||
+  // code` sniffed a string that already contains user-controlled data — an
+  // E11000 echoes the offending value verbatim, so a row literally named
+  // "user is not allowed to do action" turned a name collision into the
+  // Atlas-permissions hint. Every value-echoing server error carries a
+  // numeric code (11000, BadValue, FailedToParse…), so gating the regex on
+  // the code being absent-or-8000 removes the only route by which stored
+  // data can steer the message. The 8000 allowance is load-bearing: Atlas's
+  // shared-tier proxy raises unauthorized writes as AtlasError 8000 with a
+  // message IT authors (never echoing document values), so a literal
+  // "code-first, regex only when absent" would silently drop the hint
+  // exactly where GH #143 needed it — and CI would stay green, because the
+  // existing tests model auth errors as code-less.
+  const numericCode = typeof code === "number" ? code : null;
   const isAuthError =
-    /user is not allowed to do action/i.test(message) || code === 13;
+    numericCode === 13 ||
+    ((numericCode === null || numericCode === 8000) &&
+      /user is not allowed to do action/i.test(message));
 
   const body = isAuthError
     ? `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`
