@@ -1538,8 +1538,15 @@ export class SyncService extends EventEmitter {
           } else if (strandedSyncId) {
             // The conditional restore no-matched — someone moved the row
             // between our read and the write. Unknown state: hold it back
-            // this cycle rather than let a possibly-still-stranded row sync.
+            // this cycle rather than let a possibly-still-stranded row sync —
+            // and SAY so (Codex P2), or trySync reads the collection as
+            // successful and dependents run over the deliberately-skipped
+            // pair. Every quarantine reports; this was the last silent one.
             quarantinedSyncIds.add(strandedSyncId);
+            sweptHoldbacks.push(
+              `${collectionName} ${entry.i} changed while being restored; held back ` +
+                `this cycle and re-examined on the next.`,
+            );
           }
         } catch (err) {
           if (!rowInspected) {

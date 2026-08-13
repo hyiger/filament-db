@@ -348,3 +348,32 @@ describe("isDuplicateKeyError (GH #439, scoped to syncId per Codex on #464)", ()
     expect(isDuplicateKeyError(11000)).toBe(false);
   });
 });
+
+/**
+ * GH #1153 (Codex P2, several rounds of it): a quarantine without a report is
+ * a silently held-back pair under a green cycle — the posture violation the
+ * sweep exists to end, and it was reintroduced three separate times on three
+ * different branches. Pin it structurally: every quarantine site must have a
+ * user-facing notice within its lexical neighborhood.
+ */
+describe("every quarantine reports (source invariant)", () => {
+  it("finds a notice push near each quarantinedSyncIds.add", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("electron/sync-service.ts", "utf8");
+    const offenders: number[] = [];
+    const re = /quarantinedSyncIds\.add\([^)]*\);/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      const after = src.slice(m.index + m[0].length, m.index + m[0].length + 500);
+      const before = src.slice(Math.max(0, m.index - 700), m.index);
+      const reports =
+        after.includes("sweptHoldbacks.push") ||
+        after.includes("sweptConflicts.push") ||
+        before.includes("sweptHoldbacks.push") ||
+        before.includes("sweptConflicts.push") ||
+        before.includes("strandedPlaceholderNotice");
+      if (!reports) offenders.push(src.slice(0, m.index).split("\n").length);
+    }
+    expect(offenders).toEqual([]);
+  });
+});
