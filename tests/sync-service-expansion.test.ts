@@ -1646,6 +1646,46 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The young-holding case (Codex P1): youth defers the destructive verbs,
+     * not inspection. A settlement-taken stranding re-observed five minutes
+     * later sits well under the fifteen-minute bound — and skipping it
+     * entirely left its syncId unquarantined, so an edit while stranded let
+     * LWW copy the placeholder to the peer anyway.
+     */
+    it("quarantines a YOUNG entry whose row already holds the placeholder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // Edited while stranded — the LWW winner. The entry is FRESH.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x8`, material: "PEI", syncId: "sw-i", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf E", material: "PEI", syncId: "sw-i", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf E2", p: `${PH}x8`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The peer's name survives, the stranding is reported, and the row and
+      // record are both UNTOUCHED — youth forbids restore and drain alike.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe("Shelf E");
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe(`${PH}x8`);
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((queue?.entries ?? []).length).toBe(1);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+    });
+
+    /**
      * The free-form-name case (Codex P2): a user may name a row with the
      * placeholder PREFIX. The backstop must not touch it — not rename it to
      * its peer's value, not report it — because acting on recognition is

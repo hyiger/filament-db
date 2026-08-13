@@ -1350,23 +1350,54 @@ export class SyncService extends EventEmitter {
 
       const coveredIds = new Set(entries.map((e) => e.i));
       for (const entry of entries) {
-        // AGE GATE (Codex P2): a young entry may belong to a pass that is
-        // alive RIGHT NOW on another service — possibly still between its
-        // enqueue and its staging write, where the row holds the original
-        // name and this sweep would misread the record as resolved and drain
-        // it. Skip anything younger than the bound; only a dead pass's
-        // entries are ours to judge.
-        if (Date.now() - entry.at.getTime() < SWEEP_MIN_AGE_MS) continue;
+        // The AGE GATE defers JUDGMENT, not inspection (Codex P1, second
+        // pass). A young entry may belong to a pass alive on another service
+        // — possibly still between its enqueue and its staging write — so no
+        // young entry may be DRAINED or RESTORED. But a young entry whose row
+        // already HOLDS the recorded placeholder is a live stranding either
+        // way (a settlement-taken row re-reported five minutes later sits
+        // well under the fifteen-minute bound), and skipping it entirely left
+        // its syncId unquarantined: an edit while stranded then let LWW copy
+        // the placeholder to the peer — the exact corruption the quarantine
+        // exists to prevent. So the row is always READ; youth only forbids
+        // the destructive verbs.
+        //
+        // The observed syncId lives OUTSIDE the try (Codex P2): the catch
+        // also receives failures from the taken-lookup and the restore
+        // update, AFTER the row was seen holding its placeholder — and
+        // discarding the observation there let the row enter the loop
+        // unquarantined on precisely the cycles where something is already
+        // wrong.
+        let strandedSyncId: string | null = null;
+        const young = Date.now() - entry.at.getTime() < SWEEP_MIN_AGE_MS;
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
             { projection: { name: 1, syncId: 1 } },
           );
           if (!row || row.name !== entry.p) {
-            // Gone, landed, or human-renamed — nothing to recover. Versioned
-            // on the observed stamp: the owner may have re-asserted since
-            // this sweep's snapshot.
-            await dequeueRestoreOn(migrations, entry, entry.at);
+            // Gone, landed, or human-renamed — nothing to recover. Only an
+            // AGED entry may be drained (young + not-holding is exactly the
+            // enqueue-to-update window), and the drain is versioned on the
+            // observed stamp: the owner may have re-asserted since this
+            // sweep's snapshot.
+            if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
+            continue;
+          }
+          if (typeof row.syncId === "string") strandedSyncId = row.syncId;
+          if (young) {
+            // Holding, but the entry is fresh — quarantine and report without
+            // touching row or record; the owning pass (or the next aged
+            // sweep) resolves it.
+            sweptConflicts.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: entry.i,
+                originalName: entry.o,
+                placeholderName: entry.p,
+              }),
+            );
+            if (strandedSyncId) quarantinedSyncIds.add(strandedSyncId);
             continue;
           }
           const taken = await col.findOne(
@@ -1382,7 +1413,7 @@ export class SyncService extends EventEmitter {
                 placeholderName: entry.p,
               }),
             );
-            if (typeof row.syncId === "string") quarantinedSyncIds.add(row.syncId);
+            if (strandedSyncId) quarantinedSyncIds.add(strandedSyncId);
             continue; // keep queued — retried next cycle
           }
           const restored = await col.updateOne(
@@ -1394,10 +1425,27 @@ export class SyncService extends EventEmitter {
             console.log(
               `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
             );
+          } else if (strandedSyncId) {
+            // The conditional restore no-matched — someone moved the row
+            // between our read and the write. Unknown state: hold it back
+            // this cycle rather than let a possibly-still-stranded row sync.
+            quarantinedSyncIds.add(strandedSyncId);
           }
         } catch (err) {
           // Keep the entry; next cycle retries. One bad row must not abort
-          // the collection's sweep.
+          // the collection's sweep — but a row OBSERVED holding its
+          // placeholder must not sync just because a later step failed.
+          if (strandedSyncId) {
+            quarantinedSyncIds.add(strandedSyncId);
+            sweptConflicts.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: entry.i,
+                originalName: entry.o,
+                placeholderName: entry.p,
+              }),
+            );
+          }
           console.warn(`[sync] ${collectionName}: staging-restore sweep failed for ${entry.i}.`, err);
         }
       }
@@ -1488,6 +1536,9 @@ export class SyncService extends EventEmitter {
             );
           }
         } catch (err) {
+          // Same rule as the queue path's catch: a row recognized as a
+          // generated placeholder must not sync because a later step failed.
+          if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
           console.warn(
             `[sync] ${collectionName}: placeholder backstop failed for ${String(stray._id)}.`,
             err,
