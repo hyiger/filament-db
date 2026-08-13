@@ -1553,6 +1553,53 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The quarantine (Codex P2): reporting an unresolved placeholder is not
+     * enough — the row still entered the row loop, and a user edit bumping
+     * its updatedAt while stranded made the placeholder the LWW WINNER,
+     * copying `__sync-staging-…` over the peer's legitimate name. A stranded
+     * row sits out the cycle entirely.
+     */
+    it("does not let an edited stranded row copy its placeholder to the peer", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // The stranded row was EDITED while stranded — newer than its peer.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x7`, material: "PEI", syncId: "sw-h", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf D", material: "PEI", syncId: "sw-h", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      // The original name is TAKEN, so the sweep cannot restore.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf D2", material: "PEI", syncId: "sw-h-occ", _deletedAt: null,
+          createdAt: older, updatedAt: older,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf D2", p: `${PH}x7`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The peer's legitimate name SURVIVES — the stranded row sat the cycle
+      // out despite being the LWW winner — and the stranding is reported.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-h" }))?.name).toBe("Shelf D");
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+      ).toBe(0);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+    });
+
+    /**
      * The versioned drain (Codex P2): a sweeper judges a SNAPSHOT, and the
      * owner can stage + re-assert between that snapshot and the $pull. The
      * drain must match the observed stamp, or it removes the FRESH record —

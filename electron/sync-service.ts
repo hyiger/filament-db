@@ -1314,6 +1314,16 @@ export class SyncService extends EventEmitter {
     // row it cannot answer for is reported, never guessed — inventing a name
     // is a product decision this machinery is not allowed to make.
     const sweptConflicts: string[] = [];
+    /** SyncIds of rows left holding an UNRESOLVED placeholder (Codex P2).
+     * Reporting is not enough: the row still entered the row loop, and a user
+     * edit bumping its `updatedAt` while stranded made the placeholder the
+     * LWW winner — copying `__sync-staging-…` over the peer's legitimate
+     * name. A stranded row is QUARANTINED from this cycle's transfer instead:
+     * its syncId is skipped entirely (both directions — copying the peer's
+     * side inward is equally wrong while the local truth is a placeholder),
+     * and the pair converges on the first cycle after the placeholder
+     * resolves. */
+    const quarantinedSyncIds = new Set<string>();
     const sweepSide = async (
       db: Db,
       col: ReturnType<Db["collection"]>,
@@ -1350,7 +1360,7 @@ export class SyncService extends EventEmitter {
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
-            { projection: { name: 1 } },
+            { projection: { name: 1, syncId: 1 } },
           );
           if (!row || row.name !== entry.p) {
             // Gone, landed, or human-renamed — nothing to recover. Versioned
@@ -1372,6 +1382,7 @@ export class SyncService extends EventEmitter {
                 placeholderName: entry.p,
               }),
             );
+            if (typeof row.syncId === "string") quarantinedSyncIds.add(row.syncId);
             continue; // keep queued — retried next cycle
           }
           const restored = await col.updateOne(
@@ -1447,6 +1458,7 @@ export class SyncService extends EventEmitter {
                 `${JSON.stringify(stray.name)} and its original name could not be determined. ` +
                 `Rename it manually.`,
             );
+            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
             continue;
           }
           const taken = await col.findOne(
@@ -1462,6 +1474,7 @@ export class SyncService extends EventEmitter {
                 placeholderName: String(stray.name),
               }),
             );
+            if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
             continue;
           }
           const healed = await col.updateOne(
@@ -2071,6 +2084,14 @@ export class SyncService extends EventEmitter {
     // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
     try {
       for (const syncId of allSyncIds) {
+        // GH #1153 (Codex P2): a row the sweep left holding an unresolved
+        // placeholder is excluded from transfer this cycle — see the
+        // quarantine set's docblock. Marked processed anyway, so a blocker
+        // check treats it as "no write coming", which is the truth.
+        if (quarantinedSyncIds.has(syncId)) {
+          processedSyncIds.add(syncId);
+          continue;
+        }
         // Marked at the TOP, not the bottom: the body is full of `continue`s
         // and a trailing add would be skipped by every one of them. Including
         // the CURRENT id is harmless — `syncId` is unique per collection, so
