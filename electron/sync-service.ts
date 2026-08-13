@@ -14,6 +14,7 @@ import {
   type MinimalTrimDb,
 } from "../src/lib/trimEntityNames";
 import {
+  isGeneratedPlaceholder,
   isStagingPlaceholder,
   placeholderRestoreTarget,
   STAGING_PREFIX,
@@ -1367,6 +1368,15 @@ export class SyncService extends EventEmitter {
         .toArray()
         .catch(() => [] as Document[]);
       for (const stray of strays) {
+        // STRICT grammar, not the prefix (Codex P2). The backstop ACTS on
+        // recognition alone — it rewrites the name to the peer's, or fails
+        // the collection every cycle when it cannot — and entity names are
+        // free-form: a user's own `__sync-staging-custom` matched the prefix
+        // find above and would have been silently renamed to its peer's
+        // value. Only the complete generated shape (8-hex nonce, 24-hex id)
+        // is treated as an artifact; anything else is presumed a user's name
+        // and left entirely alone — not even reported.
+        if (!isGeneratedPlaceholder(stray.name)) continue;
         if (coveredIds.has(String(stray._id))) continue; // queue already handled it
         try {
           // FRESH re-check (Codex P2): the queue snapshot above predates this
@@ -1790,6 +1800,41 @@ export class SyncService extends EventEmitter {
           );
           return false;
         }
+        // RE-ASSERT the record now that the placeholder actually EXISTS
+        // (Codex P2). Age alone cannot distinguish a dead pass from a
+        // SUSPENDED one: a laptop sleeping fifteen minutes between the
+        // enqueue above and this point lets another service's sweep read the
+        // aged entry against a row still holding its original name, judge it
+        // resolved, and drain it — after which this resumed pass would stage
+        // without the durable protection the queue exists to give. So the
+        // record is refreshed the moment the vulnerable state begins: drop
+        // any surviving copy, push a fresh one stamped NOW, which also
+        // restarts the sweep's age window at the moment it matters. A crash
+        // between the two writes leaves a placeholder with no record — the
+        // grammar backstop's case, covered. A refresh failure is logged and
+        // tolerated: the subsequent copy write shares the same connection
+        // and will surface the real problem itself.
+        try {
+          await sideDb
+            .collection("_migrations")
+            .updateOne(
+              { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+              { $pull: { entries: { c: entry.c, i: entry.i, o: entry.o, p: entry.p } } as Document },
+            );
+          await sideDb
+            .collection("_migrations")
+            .updateOne(
+              { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
+              { $push: { entries: { ...entry, at: new Date() } } as Document },
+              { upsert: true },
+            );
+        } catch (refreshErr) {
+          console.warn(
+            `[sync] ${collectionName}: could not refresh the staging-restore entry for ${entry.i}.`,
+            refreshErr,
+          );
+        }
+
         // Remember it so an unsettled placeholder can be restored below — a
         // row left named `__sync-staging-…` is visible in the UI and worse
         // than the collision we were avoiding.

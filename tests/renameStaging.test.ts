@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   planRenameStaging,
   isStagingPlaceholder,
+  isGeneratedPlaceholder,
   placeholderFor,
   strandedPlaceholderNotice,
   withStrandingNotice,
@@ -356,5 +357,29 @@ describe("placeholderRestoreTarget", () => {
 
   it("does nothing for a row that is not holding a placeholder", () => {
     expect(placeholderRestoreTarget("Textured PEI", "Whatever", "Peer")).toBeNull();
+  });
+});
+
+/**
+ * GH #1153 (Codex P2): the backstop ACTS on recognition, so recognition must
+ * be the complete generated grammar — names are free-form, and a prefix match
+ * alone let a user's own `__sync-staging-custom` be silently renamed.
+ */
+describe("isGeneratedPlaceholder", () => {
+  it("accepts exactly what placeholderFor produces", () => {
+    expect(
+      isGeneratedPlaceholder(placeholderFor("64b7f0000000000000000001", "deadbeef")),
+    ).toBe(true);
+  });
+
+  it("rejects a user name that merely carries the prefix", () => {
+    expect(isGeneratedPlaceholder("__sync-staging-custom")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-deadbeef-nothexhexhexhexhexhexhex!")).toBe(false);
+    // Wrong widths — a 7-hex nonce or a 23-hex id is not the generator's.
+    expect(isGeneratedPlaceholder("__sync-staging-deadbee-64b7f0000000000000000001")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-deadbeef-64b7f000000000000000001")).toBe(false);
+    expect(isGeneratedPlaceholder(42)).toBe(false);
+    expect(isGeneratedPlaceholder(null)).toBe(false);
   });
 });

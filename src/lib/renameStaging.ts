@@ -96,9 +96,39 @@ export function placeholderFor(id: string, nonce: string): string {
   return `${STAGING_PREFIX}${nonce}-${id}`;
 }
 
-/** Is this a placeholder left over from a previous (crashed) pass? */
+/** Is this a placeholder left over from a previous (crashed) pass?
+ *
+ * PREFIX match — deliberately loose, for call sites where a false positive is
+ * CONSERVATIVE: refusing to transfer a placeholder-looking name, or treating
+ * a row as possibly-staged. A site that takes DESTRUCTIVE action on the
+ * strength of the name alone must use `isGeneratedPlaceholder` instead —
+ * names are free-form strings, and a user may legitimately (if unwisely) name
+ * a row `__sync-staging-custom`. */
 export function isStagingPlaceholder(name: unknown): boolean {
   return typeof name === "string" && name.startsWith(STAGING_PREFIX);
+}
+
+/**
+ * Does this name match the COMPLETE generated placeholder grammar —
+ * `__sync-staging-<8 hex nonce>-<24 hex ObjectId>` — not merely the prefix?
+ * (GH #1153, Codex P2.)
+ *
+ * The sweep's grammar backstop ACTS on rows it recognizes: it rewrites the
+ * name to the peer's, or fails the collection every cycle when it cannot.
+ * Entity names are free-form, so a prefix match alone would let a user's own
+ * `__sync-staging-custom` be silently renamed to its peer's value — data
+ * loss by helpfulness. The full grammar (nonce from an ObjectId's tail hex,
+ * id a full ObjectId hex) is not a shape anyone produces by accident.
+ *
+ * Deliberately NOT anchored to the row's own _id: a pre-#1142 LWW copy could
+ * carry a placeholder to the other peer, where the embedded id is the SOURCE
+ * row's — still a genuine artifact, still worth healing.
+ */
+const GENERATED_PLACEHOLDER_RE = new RegExp(
+  `^${STAGING_PREFIX}[0-9a-f]{8}-[0-9a-f]{24}$`,
+);
+export function isGeneratedPlaceholder(name: unknown): boolean {
+  return typeof name === "string" && GENERATED_PLACEHOLDER_RE.test(name);
 }
 
 /**

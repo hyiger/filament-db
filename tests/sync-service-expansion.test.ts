@@ -1425,8 +1425,11 @@ describe("SyncService — v1.12 sync expansion", () => {
       const remoteDb = remoteClient.db("filament-db");
       const same = new Date(Date.now() - 60_000);
 
+      // A CONFORMING generated shape — the backstop only acts on the full
+      // grammar now, and a propagated placeholder embeds the SOURCE row's id,
+      // which is why the check is not anchored to this row's own _id.
       await localDb.collection("bedtypes").insertOne({
-        name: `${PH}x3`, material: "PEI", syncId: "sw-c", _deletedAt: null,
+        name: "__sync-staging-deadbeef-64b7f0000000000000000001", material: "PEI", syncId: "sw-c", _deletedAt: null,
         createdAt: same, updatedAt: same,
       });
       await remoteDb.collection("bedtypes").insertOne({
@@ -1479,6 +1482,37 @@ describe("SyncService — v1.12 sync expansion", () => {
       // judge, and this one is younger than the bound.
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((queue?.entries ?? []).length).toBe(1);
+    });
+
+    /**
+     * The free-form-name case (Codex P2): a user may name a row with the
+     * placeholder PREFIX. The backstop must not touch it — not rename it to
+     * its peer's value, not report it — because acting on recognition is
+     * exactly why recognition must be the complete generated grammar.
+     */
+    it("leaves a user's prefix-shaped name entirely alone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // Same name on both peers, paired, equal timestamps: nothing should
+      // move, nothing should be reported.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "__sync-staging-custom", material: "PEI", syncId: "sw-f", _deletedAt: null,
+          createdAt: same, updatedAt: same,
+        });
+      }
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      for (const db of [localDb, remoteDb]) {
+        expect((await db.collection("bedtypes").findOne({ syncId: "sw-f" }))?.name).toBe(
+          "__sync-staging-custom",
+        );
+      }
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
     });
 
     /**
