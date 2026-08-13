@@ -119,6 +119,74 @@ describe("wrapSyncErrorMessage", () => {
     expect(wrapSyncErrorMessage(undefined, "filament-db")).toBe("Sync failed");
   });
 
+  it("is not steered by a user-typed name inside a coded error (GH #1154)", () => {
+    // An E11000 echoes the offending value verbatim, so a row literally named
+    // "user is not allowed to do action" used to convert a name collision
+    // into the Atlas-permissions hint — stored data steering the message. A
+    // present numeric code (11000) is now authoritative: not auth.
+    const err = Object.assign(
+      new Error(
+        'E11000 duplicate key error collection: filament-db.filaments index: name_1 dup key: { name: "user is not allowed to do action" }',
+      ),
+      { code: 11000, keyPattern: { name: 1 } },
+    );
+    const wrapped = wrapSyncErrorMessage(err, "filament-db");
+    expect(wrapped).toContain("E11000");
+    expect(wrapped).toContain("user is not allowed to do action"); // the NAME, quoted back
+    expect(wrapped).not.toContain("read permission");
+    expect(wrapped).not.toContain("readWrite");
+  });
+
+  it("keeps the hostile-name suppression through a stranding composition", () => {
+    // The cause read-through must apply the same rule: the hostile E11000 as
+    // the CAUSE of a stranded-placeholder error keeps the stranding AND the
+    // duplicate-key text, and still produces no auth hint.
+    const cause = Object.assign(
+      new Error('E11000 dup key: { name: "user is not allowed to do action" }'),
+      { code: 11000 },
+    );
+    const wrapped = wrapSyncErrorMessage(
+      withStrandingNotice(cause, strandedPlaceholderNotice({
+        collection: "bedtypes",
+        id: "64b7f0000000000000000001",
+        originalName: "Textured PEI",
+        placeholderName: "__sync-staging-64b7f0000000000000000001-abc",
+      })),
+      "filament-db",
+    );
+    expect(wrapped).toMatch(/rename it back manually/i);
+    expect(wrapped).toContain("E11000");
+    expect(wrapped).not.toContain("read permission");
+  });
+
+  it("still produces the hint for AtlasError 8000 with the matching message", () => {
+    // Atlas's shared-tier proxy raises unauthorized writes as code 8000 with
+    // a message IT authors — never echoing document values. A literal
+    // "code-first, regex only when code is absent" would drop the hint
+    // exactly where GH #143 needed it, and CI would not notice, because
+    // every other auth test here models the error as code-less.
+    const err = Object.assign(
+      new Error("user is not allowed to do action [update] on [prod-db.filaments]"),
+      { code: 8000, codeName: "AtlasError" },
+    );
+    const wrapped = wrapSyncErrorMessage(err, "prod-db");
+    expect(wrapped).toContain('only has read permission for "prod-db"');
+    expect(wrapped).toContain("readWrite");
+  });
+
+  it("suppresses the regex for any other numeric code carrying the phrase", () => {
+    // The general rule the two cases above instantiate: a coded, non-13,
+    // non-8000 error is whatever its code says it is, even if its text
+    // happens to contain the magic phrase.
+    const err = Object.assign(
+      new Error('Path validation failed: "user is not allowed to do action" is not a valid value'),
+      { code: 121 },
+    );
+    const wrapped = wrapSyncErrorMessage(err, "filament-db");
+    expect(wrapped).not.toContain("read permission");
+    expect(wrapped).toContain("Path validation failed");
+  });
+
   it("does not match the auth regex on incidental text", () => {
     const err = new Error("network reset while updating filament cache");
     const wrapped = wrapSyncErrorMessage(err, "filament-db");
