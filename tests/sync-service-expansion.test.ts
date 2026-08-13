@@ -1320,6 +1320,74 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("unreadable tombstones are healed and never spread (GH #1152)", () => {
+    /**
+     * The raw-driver `_deletedAt: ""` shape sits between the engine's two
+     * classifications — outside the partial unique index yet deleted to the
+     * loop — and it used to be SELF-PROPAGATING: the purge branch's `??`
+     * passed it through verbatim, and stripForTransfer drops only _id/__v so
+     * every whole-doc LWW copy carried it to the other peer. The cycle-start
+     * repair heals both sides; the write-site guards stop the engine from
+     * minting new instances.
+     */
+    it("heals a raw _deletedAt:\"\" on both peers at cycle start", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+
+      // Paired at equal timestamps so the loop itself copies nothing — what
+      // changes must be the repair, not a copy.
+      await localDb.collection("bedtypes").insertOne(
+        { name: "Ghost", material: "PEI", syncId: "mt-a", _deletedAt: "", createdAt: older, updatedAt: older },
+      );
+      await remoteDb.collection("bedtypes").insertOne(
+        { name: "Ghost", material: "PEI", syncId: "mt-a", _deletedAt: "", createdAt: older, updatedAt: older },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      for (const db of [localDb, remoteDb]) {
+        const row = await db.collection("bedtypes").findOne({ syncId: "mt-a" });
+        // EPOCH, not now: the engine already treated the unreadable value as
+        // time zero, so epoch preserves every LWW outcome — a live peer with
+        // a real updatedAt still wins and resurrects on a later cycle.
+        expect(row?._deletedAt).toBeInstanceOf(Date);
+        expect((row?._deletedAt as Date).getTime()).toBe(0);
+      }
+    });
+
+    it("a purge over an unreadable tombstone stamps a real Date on the peer", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+
+      // Purged locally with the malformed tombstone; the remote pair is a
+      // live row the purge branch will tombstone. Seed the local side with a
+      // shape the cycle-start repair has already... no — the repair heals it
+      // first, which is the point: by the time the purge branch runs, the
+      // value it propagates is readable. This test pins the COMPOSED
+      // behaviour: no "" ever reaches the remote.
+      await localDb.collection("filaments").insertOne(
+        { name: "PurgedGhost", vendor: "V", type: "PLA", syncId: "mt-p", instanceId: "mt-p-1",
+          _purged: true, _deletedAt: "", createdAt: older, updatedAt: older },
+      );
+      await remoteDb.collection("filaments").insertOne(
+        { name: "PurgedGhost", vendor: "V", type: "PLA", syncId: "mt-p", instanceId: "mt-p-2",
+          _deletedAt: null, createdAt: older, updatedAt: older },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const remote = await remoteDb.collection("filaments").findOne({ syncId: "mt-p" });
+      expect(remote?._purged).toBe(true);
+      expect(remote?._deletedAt).toBeInstanceOf(Date);
+      const local = await localDb.collection("filaments").findOne({ syncId: "mt-p" });
+      expect(local?._deletedAt).toBeInstanceOf(Date);
+    });
+  });
+
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
     /**
      * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
