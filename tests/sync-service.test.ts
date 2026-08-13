@@ -348,3 +348,63 @@ describe("isDuplicateKeyError (GH #439, scoped to syncId per Codex on #464)", ()
     expect(isDuplicateKeyError(11000)).toBe(false);
   });
 });
+
+/**
+ * GH #1153 (Codex P2, several rounds of it): a quarantine without a report is
+ * a silently held-back pair under a green cycle — the posture violation the
+ * sweep exists to end, and it was reintroduced three separate times on three
+ * different branches. Pin it structurally: every quarantine site must have a
+ * user-facing notice within its lexical neighborhood.
+ */
+describe("every quarantine reports (source invariant)", () => {
+  /**
+   * GH #1153, seventeen review rounds of which seven were "one more branch
+   * forgot an obligation". The sweep now HOISTS both obligations — quarantine
+   * at recognition, one central notice push per touched row with a generic
+   * fallback — so a branch structurally cannot skip either. This invariant
+   * pins that shape: any new branch-local `quarantinedSyncIds.add` or push
+   * site is a regression to per-branch discipline, which failed seven times.
+   */
+  it("the sweep has exactly two hoisted quarantine sites and two central pushes", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("electron/sync-service.ts", "utf8");
+
+    const adds = src.match(/quarantinedSyncIds\.add\(/g) ?? [];
+    expect(adds.length).toBe(2);
+
+    const centralPushes =
+      src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];
+    expect(centralPushes.length).toBe(2);
+
+    // ZERO direct pushes inside the sweep loops — branches assign `notice`;
+    // only the central ternary sites push. A direct `sweptX.push(` inside a
+    // branch is the regression this invariant exists to block.
+    const sweepRegion = src.slice(
+      src.indexOf("for (const entry of entries)"),
+      src.indexOf("const SLIM_PROJECTION"),
+    );
+    const branchPushes = (sweepRegion.match(/swept(Holdbacks|Conflicts)\.push\(/g) ?? []).length;
+    expect(branchPushes).toBe(0);
+
+    // The silence fallback exists in both loops.
+    const fallbacks = src.match(/was held back this cycle by placeholder recovery/g) ?? [];
+    expect(fallbacks.length).toBe(2);
+  });
+
+  it("the loop catch carries BOTH notice channels onto the thrown error", async () => {
+    // Codex P2, round 20: `trySync` keeps only the thrown message, and the
+    // post-loop rendering never runs on this path — so a catch that carried
+    // `strandedNotices` alone silently dropped every hold-back report for the
+    // cycle whenever an unrelated transfer threw later in the same pass. The
+    // path needs a mid-loop I/O failure, which a real driver cannot produce
+    // deterministically, so the composition is pinned at the source: the
+    // catch block must fold BOTH channels into the carried notice.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("electron/sync-service.ts", "utf8");
+
+    const catchStart = src.indexOf("} catch (loopErr) {");
+    expect(catchStart).toBeGreaterThan(-1);
+    const catchBlock = src.slice(catchStart, src.indexOf("throw loopErr;", catchStart));
+    expect(catchBlock).toContain("[...strandedNotices, ...sweptHoldbacks]");
+  });
+});

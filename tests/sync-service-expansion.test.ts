@@ -1388,6 +1388,677 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("leftover staging placeholders are swept on the next cycle (GH #1153)", () => {
+    const PH = "__sync-staging-deadbeef-";
+    const QUEUE_ID = "renameStagingRestores";
+    /** Older than SWEEP_MIN_AGE_MS — the sweep only judges DEAD passes'
+     *  entries; a young one may belong to a pass alive on another service. */
+    const OLD = new Date(Date.now() - 20 * 60 * 1000);
+
+    /**
+     * The crash case: a prior pass staged a row, wrote its durable restore
+     * entry, and died before settlement. The next cycle's sweep restores the
+     * original name from the queue and drains the entry.
+     */
+    it("restores a queued placeholder and drains the entry", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x1`, material: "PEI", syncId: "sw-a", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf A", material: "PEI", syncId: "sw-a", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf A", p: `${PH}x1`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      const row = await localDb.collection("bedtypes").findOne({ syncId: "sw-a" });
+      expect(row?.name).toBe("Shelf A");
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // The restored pair holds back for THIS cycle (the uniform window
+      // rule: every queue entry over a live row quarantines its pair) with
+      // an honest informational notice, then converges on the next.
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/was restored to/i);
+      expect(err).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The taken case: the original name is occupied, so the sweep must NOT
+     * overwrite — it reports (failing the collection, the #1142 posture) and
+     * keeps the entry. Once the occupier is renamed, the NEXT cycle restores.
+     */
+    it("reports a still-taken name every cycle, then restores once it frees", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x2`, material: "PEI", syncId: "sw-b", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      // The occupier — active, holds the original name, NOT movable.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Shelf B", material: "PEI", syncId: "sw-occ", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: `${PH}x2`, material: "PEI", syncId: "sw-b", _deletedAt: null, createdAt: same, updatedAt: same },
+        { name: "Shelf B", material: "PEI", syncId: "sw-occ", _deletedAt: null, createdAt: same, updatedAt: same },
+      ]);
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf B", p: `${PH}x2`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const first = await sync.sync();
+      // Reported and FAILED — the placeholder is visible in the UI and the
+      // collection must not read as green around it.
+      const firstTakenErr = first.find((r) => r.collection === "bedtypes")?.error;
+      expect(firstTakenErr).toMatch(/rename it back manually/i);
+      // Self-describing stranding, no false collision preamble (round 18).
+      expect(firstTakenErr).not.toMatch(/Rename one of them/);
+      const kept = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((kept?.entries ?? []).length).toBe(1);
+
+      // A human renames the occupier; the next cycle heals.
+      await localDb.collection("bedtypes").updateOne(
+        { syncId: "sw-occ" }, { $set: { name: "Shelf B (old)" } },
+      );
+      await remoteDb.collection("bedtypes").updateOne(
+        { syncId: "sw-occ" }, { $set: { name: "Shelf B (old)" } },
+      );
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-b" }))?.name).toBe("Shelf B");
+      // The restoring cycle holds the pair back (uniform window rule) with
+      // the informational notice; the THIRD cycle is fully clean.
+      const secondErr = second.find((r) => r.collection === "bedtypes")?.error;
+      expect(secondErr).toMatch(/was restored to/i);
+      expect(secondErr).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const third = await sync.sync();
+      expect(third.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The grammar backstop: a pre-#1153 stranding has NO queue entry, so the
+     * restore target is derived from the syncId-paired peer's name.
+     */
+    it("adopts the peer's name for a queue-less placeholder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // A CONFORMING generated shape — the backstop only acts on the full
+      // grammar now, and a propagated placeholder embeds the SOURCE row's id,
+      // which is why the check is not anchored to this row's own _id.
+      await localDb.collection("bedtypes").insertOne({
+        name: "__sync-staging-deadbeef-64b7f0000000000000000001", material: "PEI", syncId: "sw-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Drybox 4", material: "PEI", syncId: "sw-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-c" }))?.name).toBe("Drybox 4");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // The healed pair holds this cycle (Codex P1 round 17: another service
+      // can stage the row right after the heal, with the scan finished and
+      // coveredIds blind) — reported as a hold, not a collision — and the
+      // next cycle is clean.
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/adopted the name/i);
+      expect(err).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The aged-drain window (Codex P1): draining a dead record over a LIVE
+     * row leaves the same resume race the young branch closed — a suspended
+     * owner can stage between the row read and the slim reads, with the
+     * backstop blinded by coveredIds. The drain proceeds, but the pair sits
+     * this one cycle out.
+     */
+    it("holds a live pair back for the cycle that drains its aged record", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // Live row holding its ORIGINAL name — the LWW winner — with a dead
+      // (aged) record from a pre-stage crash.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Crash Left (edited)", material: "PEI", syncId: "sw-l", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Crash Left", material: "PEI", syncId: "sw-l", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Crash Left", p: `${PH}xb`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const first = await sync.sync();
+
+      // The record drained, the pair held back one cycle and reported.
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-l" }))?.name).toBe("Crash Left");
+      const firstErr = first.find((r) => r.collection === "bedtypes")?.error;
+      expect(firstErr).toMatch(/held back/i);
+      expect(firstErr).toMatch(/was cleared/i); // the drain succeeded, and the notice says so
+      expect(firstErr).not.toMatch(/Rename one of them/);
+
+      // No record left ⇒ the very next cycle converges normally.
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-l" }))?.name).toBe(
+        "Crash Left (edited)",
+      );
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The multi-writer race (Codex P2): two services share one database, and
+     * an entry is durable BEFORE its row is staged. A concurrent sweep that
+     * judged a YOUNG entry would misread the enqueue-to-update window — the
+     * row still holds its original name — as "resolved" and drain the record
+     * the owning pass is about to depend on. Age is the discriminator.
+     */
+    it("holds a YOUNG entry's pair back without touching the record", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // The window shape: row holds its ORIGINAL name, the entry is fresh —
+      // and the row is the LWW winner, so pre-quarantine it would have synced
+      // mid-window (Codex P1: the owner can stage between the sweep and the
+      // slim reads, at which point the backstop is blinded by coveredIds).
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Mid Stage (edited)", material: "PEI", syncId: "sw-e", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Mid Stage", material: "PEI", syncId: "sw-e", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Mid Stage", p: `${PH}x5`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The entry SURVIVES — only a dead pass's entries are the sweep's to
+      // judge — and the PAIR sat the cycle out: the peer keeps its name
+      // despite losing LWW, with the hold-back reported honestly.
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((queue?.entries ?? []).length).toBe(1);
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-e" }))?.name).toBe("Mid Stage");
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/held back this cycle/i);
+      // Informational, not a collision: the "Rename one of them" preamble
+      // would be a false diagnosis for a pair that converges by itself.
+      expect(err).not.toMatch(/Rename one of them/);
+    });
+
+    /**
+     * The quarantine (Codex P2): reporting an unresolved placeholder is not
+     * enough — the row still entered the row loop, and a user edit bumping
+     * its updatedAt while stranded made the placeholder the LWW WINNER,
+     * copying `__sync-staging-…` over the peer's legitimate name. A stranded
+     * row sits out the cycle entirely.
+     */
+    it("does not let an edited stranded row copy its placeholder to the peer", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // The stranded row was EDITED while stranded — newer than its peer.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x7`, material: "PEI", syncId: "sw-h", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf D", material: "PEI", syncId: "sw-h", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      // The original name is TAKEN, so the sweep cannot restore.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf D2", material: "PEI", syncId: "sw-h-occ", _deletedAt: null,
+          createdAt: older, updatedAt: older,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf D2", p: `${PH}x7`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The peer's legitimate name SURVIVES — the stranded row sat the cycle
+      // out despite being the LWW winner — and the stranding is reported.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-h" }))?.name).toBe("Shelf D");
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+      ).toBe(0);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+    });
+
+    /**
+     * The versioned drain (Codex P2): a sweeper judges a SNAPSHOT, and the
+     * owner can stage + re-assert between that snapshot and the $pull. The
+     * drain must match the observed stamp, or it removes the FRESH record —
+     * and a later owner crash leaves the placeholder without its
+     * authoritative original name. Simulated at the unit of the race: the
+     * row is mid-window (holds its original name), the entry is OLD at the
+     * sweep's read, and a re-asserted twin with a fresh stamp sits in the
+     * queue — the aged drain must remove only what it observed.
+     */
+    it("drains only the stamp it observed, never a re-asserted entry", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Resolved", material: "PEI", syncId: "sw-g", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Resolved", material: "PEI", syncId: "sw-g", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      const fresh = new Date();
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [
+          // The aged entry the sweep will judge resolved (row holds "Resolved",
+          // not the placeholder) and drain...
+          { c: "bedtypes", i: String(insertedId), o: "Resolved", p: `${PH}x6`, at: OLD },
+          // ...and the re-asserted twin — same key, fresh stamp — that must
+          // SURVIVE, exactly as it would mid-race.
+          { c: "bedtypes", i: String(insertedId), o: "Resolved", p: `${PH}x6`, at: fresh },
+        ] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      const entries = (queue?.entries ?? []) as Array<{ at: Date }>;
+      expect(entries.length).toBe(1);
+      expect(entries[0].at.getTime()).toBe(fresh.getTime());
+    });
+
+    /**
+     * The young-holding case (Codex P1): youth defers the destructive verbs,
+     * not inspection. A settlement-taken stranding re-observed five minutes
+     * later sits well under the fifteen-minute bound — and skipping it
+     * entirely left its syncId unquarantined, so an edit while stranded let
+     * LWW copy the placeholder to the peer anyway.
+     */
+    it("quarantines a YOUNG entry whose row already holds the placeholder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // Edited while stranded — the LWW winner. The entry is FRESH.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x8`, material: "PEI", syncId: "sw-i", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf E", material: "PEI", syncId: "sw-i", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf E2", p: `${PH}x8`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The peer's name survives and the row and record are both UNTOUCHED —
+      // youth forbids restore and drain alike. The report is a HOLD, not a
+      // stranding (Codex P2, round 18): this state is usually a healthy owner
+      // between staging and settlement, and telling the user to rename a row
+      // the owner is about to fix was a false prescription. A crash-stranded
+      // row ages into the real stranding text at the bound.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe("Shelf E");
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe(`${PH}x8`);
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect((queue?.entries ?? []).length).toBe(1);
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/mid-rename by another sync service/i);
+      expect(err).not.toMatch(/rename it back manually/i);
+      expect(err).not.toMatch(/Rename one of them/);
+    });
+
+    /**
+     * Resolved by deletion (Codex P2): a user may deal with a stranded row by
+     * trashing it. The name no longer needs restoring — but quarantining the
+     * pair blocked the one thing that still matters: the tombstone
+     * propagating to the peer, forever.
+     */
+    it("lets a trashed stranded row propagate its tombstone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const deletedAt = new Date();
+
+      // Stranded (placeholder name, original taken), then TRASHED by the user.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x9`, material: "PEI", syncId: "sw-j", _deletedAt: deletedAt,
+        createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf F", material: "PEI", syncId: "sw-j", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      // The occupier that made the stranding permanent.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf F2", material: "PEI", syncId: "sw-j-occ", _deletedAt: null,
+          createdAt: older, updatedAt: older,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf F2", p: `${PH}x9`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The deletion reached the peer, the entry drained, and nothing about
+      // this row failed the collection.
+      const remote = await remoteDb.collection("bedtypes").findOne({ syncId: "sw-j" });
+      expect(remote?._deletedAt).not.toBeNull();
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The literal $pull (Codex P2): a bare document operand is a MATCH
+     * CONDITION, so dropping a malformed `{c: "bedtypes"}` subset would pull
+     * every valid entry for the collection along with itself.
+     */
+    it("drops a malformed queue entry without taking valid ones with it", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // A valid stranded entry the sweep must keep judging...
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}xa`, material: "PEI", syncId: "sw-k", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: `${PH}xa`, material: "PEI", syncId: "sw-k", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf G", material: "PEI", syncId: "sw-k-occ", _deletedAt: null,
+          createdAt: same, updatedAt: same,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [
+          // ...and a malformed subset that, as a bare $pull operand, would
+          // match the valid entry too.
+          { c: "bedtypes" },
+          { c: "bedtypes", i: String(insertedId), o: "Shelf G", p: `${PH}xa`, at: OLD },
+        ] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      const entries = (queue?.entries ?? []) as Array<Record<string, unknown>>;
+      // The malformed one is gone; the valid one SURVIVES (still stranded —
+      // its original name is taken — so it stays queued for retry).
+      expect(entries.length).toBe(1);
+      expect(entries[0].i).toBe(String(insertedId));
+    });
+
+    /**
+     * The free-form-name case (Codex P2): a user may name a row with the
+     * placeholder PREFIX. The backstop must not touch it — not rename it to
+     * its peer's value, not report it — because acting on recognition is
+     * exactly why recognition must be the complete generated grammar.
+     */
+    it("leaves a user's prefix-shaped name entirely alone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      // Same name on both peers, paired, equal timestamps: nothing should
+      // move, nothing should be reported.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "__sync-staging-custom", material: "PEI", syncId: "sw-f", _deletedAt: null,
+          createdAt: same, updatedAt: same,
+        });
+      }
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      for (const db of [localDb, remoteDb]) {
+        expect((await db.collection("bedtypes").findOne({ syncId: "sw-f" }))?.name).toBe(
+          "__sync-staging-custom",
+        );
+      }
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * The human-rename case: the row no longer holds the placeholder, so the
+     * stale entry drains without touching the row.
+     */
+    it("drains a stale entry without touching a row a human already fixed", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Hand Fixed", material: "PEI", syncId: "sw-d", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Hand Fixed", material: "PEI", syncId: "sw-d", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Old Name", p: `${PH}x4`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-d" }))?.name).toBe("Hand Fixed");
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    /** Pin every entries-emptying `$pull` on `_migrations` to a rejection.
+     *  `moderate` is the trick: validation applies only to documents that
+     *  ALREADY satisfy the validator, so the pre-seeded `entries: []` doc is
+     *  non-conforming and every enqueue passes freely — but once an entry
+     *  lands the doc conforms, and any update that would empty it (the
+     *  drains) is rejected. Deterministic, no mocking. */
+    const failEmptyingDrains = async (db: import("mongodb").Db) => {
+      // Upsert, not insert — the doc survives across tests on the shared servers.
+      await db.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [] } },
+        { upsert: true },
+      );
+      await db.command({
+        collMod: "_migrations",
+        validator: { $or: [{ _id: { $ne: QUEUE_ID } }, { "entries.0": { $exists: true } }] },
+        validationLevel: "moderate",
+        validationAction: "error",
+      });
+    };
+    const allowDrains = async (db: import("mongodb").Db) => {
+      await db.command({ collMod: "_migrations", validator: {}, validationLevel: "off" });
+    };
+
+    /**
+     * Codex P2, round 21: settlement drained its queue entry and IGNORED the
+     * result, so a landed rename whose `_migrations` cleanup failed reported
+     * SUCCESS — while the live entry made every later cycle fail as "being
+     * renamed by another sync service", for the age window or forever.
+     * The cycle that leaves the record behind must be the one that says so.
+     */
+    it("reports a settlement whose queue record could not be cleared, then converges", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      // The proven swap seed — local newer, so the remote adopts the swap and
+      // the staging (and its queue entry) happens on the REMOTE.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "dq-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "dq-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "dq-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "dq-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+      await failEmptyingDrains(remoteDb);
+
+      try {
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // The swap itself RESOLVED (both writes landed, no placeholder left)…
+        expect((await remoteDb.collection("bedtypes").findOne({ syncId: "dq-a" }))?.name).toBe("X");
+        expect((await remoteDb.collection("bedtypes").findOne({ syncId: "dq-b" }))?.name).toBe("Y");
+        expect(
+          await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+
+        // …but the cycle must NOT report success: the queue record survived.
+        const err = results.find((r) => r.collection === "bedtypes")?.error;
+        expect(err).toMatch(/pending rename record could not be cleared/i);
+        expect(err).not.toMatch(/Rename one of them/);
+        const queue = await remoteDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+        expect((queue?.entries ?? []).length).toBe(1);
+      } finally {
+        await allowDrains(remoteDb);
+      }
+
+      // Age the leftover record past the sweep window; the next cycle's aged
+      // sweep clears it (holding the pair back once more), and the one after
+      // is clean.
+      await remoteDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { "entries.$[].at": OLD } },
+      );
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toMatch(
+        /pending rename record/i,
+      );
+      sync.destroy(); sync = makeSync();
+      const third = await sync.sync();
+      expect(third.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      const drained = await remoteDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(drained?.entries ?? []).toEqual([]);
+    });
+
+    /**
+     * The sweep's own restore has the same obligation (round 21 class sweep):
+     * a restored placeholder whose record failed to drain must say so, not
+     * claim a clean "synced on the next".
+     */
+    it("says when a swept restore could not clear its record", async () => {
+      const localDb = localClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}dq1`, material: "PEI", syncId: "dq-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await failEmptyingDrains(localDb);
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $push: { entries: { c: "bedtypes", i: String(insertedId), o: "Shelf Q", p: `${PH}dq1`, at: OLD } } as never },
+      );
+
+      try {
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // Restored — but honestly reported as un-drained.
+        expect((await localDb.collection("bedtypes").findOne({ syncId: "dq-c" }))?.name).toBe("Shelf Q");
+        const err = results.find((r) => r.collection === "bedtypes")?.error;
+        expect(err).toMatch(/was restored to .*but its pending rename record could not be cleared/i);
+        expect(err).not.toMatch(/synced on the next/i);
+      } finally {
+        await allowDrains(localDb);
+      }
+    });
+  });
+
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
     /**
      * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as

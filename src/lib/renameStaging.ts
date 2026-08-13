@@ -96,9 +96,39 @@ export function placeholderFor(id: string, nonce: string): string {
   return `${STAGING_PREFIX}${nonce}-${id}`;
 }
 
-/** Is this a placeholder left over from a previous (crashed) pass? */
+/** Is this a placeholder left over from a previous (crashed) pass?
+ *
+ * PREFIX match — deliberately loose, for call sites where a false positive is
+ * CONSERVATIVE: refusing to transfer a placeholder-looking name, or treating
+ * a row as possibly-staged. A site that takes DESTRUCTIVE action on the
+ * strength of the name alone must use `isGeneratedPlaceholder` instead —
+ * names are free-form strings, and a user may legitimately (if unwisely) name
+ * a row `__sync-staging-custom`. */
 export function isStagingPlaceholder(name: unknown): boolean {
   return typeof name === "string" && name.startsWith(STAGING_PREFIX);
+}
+
+/**
+ * Does this name match the COMPLETE generated placeholder grammar —
+ * `__sync-staging-<8 hex nonce>-<24 hex ObjectId>` — not merely the prefix?
+ * (GH #1153, Codex P2.)
+ *
+ * The sweep's grammar backstop ACTS on rows it recognizes: it rewrites the
+ * name to the peer's, or fails the collection every cycle when it cannot.
+ * Entity names are free-form, so a prefix match alone would let a user's own
+ * `__sync-staging-custom` be silently renamed to its peer's value — data
+ * loss by helpfulness. The full grammar (nonce from an ObjectId's tail hex,
+ * id a full ObjectId hex) is not a shape anyone produces by accident.
+ *
+ * Deliberately NOT anchored to the row's own _id: a pre-#1142 LWW copy could
+ * carry a placeholder to the other peer, where the embedded id is the SOURCE
+ * row's — still a genuine artifact, still worth healing.
+ */
+const GENERATED_PLACEHOLDER_RE = new RegExp(
+  `^${STAGING_PREFIX}[0-9a-f]{8}-[0-9a-f]{24}$`,
+);
+export function isGeneratedPlaceholder(name: unknown): boolean {
+  return typeof name === "string" && GENERATED_PLACEHOLDER_RE.test(name);
 }
 
 /**
@@ -257,6 +287,46 @@ export function pendingRenameCanFreeName(
   if (typeof freshSourceName !== "string") return false;
   if (isStagingPlaceholder(freshSourceName)) return false;
   return freshSourceName !== blockerCurrentName;
+}
+
+/**
+ * Where should a swept placeholder row be restored to? (GH #1153)
+ *
+ * The sweep meets a row named `__sync-staging-…` on a LATER cycle, when the
+ * pass that staged it — and the in-memory record of its original name — is
+ * gone. Two sources can answer, in strict preference order:
+ *
+ *  1. the DURABLE QUEUE entry written before the row was staged — authoritative,
+ *     it IS the original name;
+ *  2. the syncId-paired PEER row's current name — the staging invariant is that
+ *     a staged row's own write (carrying the peer's name) was expected moments
+ *     later, so the peer's name is what that write would have delivered. Only
+ *     trusted when it is a real, non-placeholder string that actually differs
+ *     from what the row holds now: a placeholder peer means BOTH sides are
+ *     stranded (adopting it would copy the disease, not the cure), and a
+ *     non-string peer answers nothing.
+ *
+ * Returns null when neither source answers — the caller reports and leaves the
+ * row alone, because inventing a name is a product decision this machinery is
+ * not allowed to make. Free-ness on the target side is the CALLER's check: it
+ * is a live index question, not a naming one.
+ */
+export function placeholderRestoreTarget(
+  currentName: unknown,
+  queuedOriginalName: string | null,
+  peerName: unknown,
+): string | null {
+  if (!isStagingPlaceholder(currentName)) return null; // nothing to restore
+  if (queuedOriginalName !== null && queuedOriginalName !== "") return queuedOriginalName;
+  if (
+    typeof peerName === "string" &&
+    peerName !== "" &&
+    !isStagingPlaceholder(peerName) &&
+    peerName !== currentName
+  ) {
+    return peerName;
+  }
+  return null;
 }
 
 /** Facts about a row left holding a staging placeholder. */

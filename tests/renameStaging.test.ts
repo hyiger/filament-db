@@ -2,10 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   planRenameStaging,
   isStagingPlaceholder,
+  isGeneratedPlaceholder,
   placeholderFor,
   strandedPlaceholderNotice,
   withStrandingNotice,
   pendingRenameCanFreeName,
+  placeholderRestoreTarget,
   strandingNoticeOf,
   STAGING_PREFIX,
   type RenameIntent,
@@ -319,5 +321,65 @@ describe("stranded placeholder reporting", () => {
     }
     // ...including a lookalike whose key holds the wrong type.
     expect(strandingNoticeOf({ strandingNotice: 42 })).toBeNull();
+  });
+});
+
+/**
+ * GH #1153: where a swept placeholder row is restored to. Preference order is
+ * strict — the durable queue entry IS the original name; the syncId-paired
+ * peer's name is what the staged row's own write would have delivered and is
+ * only trusted when it is a real, non-placeholder string. Null means REPORT:
+ * inventing a name is a product decision this machinery may not make.
+ */
+describe("placeholderRestoreTarget", () => {
+  const ph = `${STAGING_PREFIX}abc123-64b7f0000000000000000001`;
+
+  it("prefers the queued original name over everything", () => {
+    expect(placeholderRestoreTarget(ph, "Textured PEI", "Peer Name")).toBe("Textured PEI");
+  });
+
+  it("adopts the peer name when no queue entry exists", () => {
+    expect(placeholderRestoreTarget(ph, null, "Textured PEI")).toBe("Textured PEI");
+  });
+
+  it("refuses a peer that is itself a placeholder — both sides are stranded", () => {
+    // Adopting it would copy the disease, not the cure.
+    expect(placeholderRestoreTarget(ph, null, `${STAGING_PREFIX}zzz-64b7f0000000000000000002`)).toBeNull();
+  });
+
+  it("answers null when neither source can", () => {
+    expect(placeholderRestoreTarget(ph, null, null)).toBeNull();
+    expect(placeholderRestoreTarget(ph, null, undefined)).toBeNull();
+    expect(placeholderRestoreTarget(ph, null, 42)).toBeNull();
+    expect(placeholderRestoreTarget(ph, null, "")).toBeNull();
+    expect(placeholderRestoreTarget(ph, "", "")).toBeNull();
+  });
+
+  it("does nothing for a row that is not holding a placeholder", () => {
+    expect(placeholderRestoreTarget("Textured PEI", "Whatever", "Peer")).toBeNull();
+  });
+});
+
+/**
+ * GH #1153 (Codex P2): the backstop ACTS on recognition, so recognition must
+ * be the complete generated grammar — names are free-form, and a prefix match
+ * alone let a user's own `__sync-staging-custom` be silently renamed.
+ */
+describe("isGeneratedPlaceholder", () => {
+  it("accepts exactly what placeholderFor produces", () => {
+    expect(
+      isGeneratedPlaceholder(placeholderFor("64b7f0000000000000000001", "deadbeef")),
+    ).toBe(true);
+  });
+
+  it("rejects a user name that merely carries the prefix", () => {
+    expect(isGeneratedPlaceholder("__sync-staging-custom")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-deadbeef-nothexhexhexhexhexhexhex!")).toBe(false);
+    // Wrong widths — a 7-hex nonce or a 23-hex id is not the generator's.
+    expect(isGeneratedPlaceholder("__sync-staging-deadbee-64b7f0000000000000000001")).toBe(false);
+    expect(isGeneratedPlaceholder("__sync-staging-deadbeef-64b7f000000000000000001")).toBe(false);
+    expect(isGeneratedPlaceholder(42)).toBe(false);
+    expect(isGeneratedPlaceholder(null)).toBe(false);
   });
 });
