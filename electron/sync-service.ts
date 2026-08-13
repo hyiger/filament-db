@@ -1410,11 +1410,17 @@ export class SyncService extends EventEmitter {
             // RESOLVED BY DELETION: the tombstone must propagate, the name in
             // the trash is cosmetic, and the owner's staging filter
             // (`_deletedAt: null`) can never re-placeholder this row. Drain
-            // once aged; a young entry defers to its owner.
+            // once aged; a young entry defers to its owner. The drain result
+            // is DELIBERATELY unchecked here and in the gone-branch below
+            // (Codex P2, round 21 audited all six sites): these branches
+            // report nothing a failed drain could contradict, the row's own
+            // sync behaviour is already correct, and the entry simply retries
+            // on the next aged cycle (dequeueRestoreOn logs its own warning).
             if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
           } else if (!row) {
             // Gone entirely — nothing to hold; drain once aged (versioned on
-            // the observed stamp: the owner may have re-asserted).
+            // the observed stamp: the owner may have re-asserted). Result
+            // unchecked — same rationale as the tombstone branch above.
             if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
           } else {
             // LIVE row with a pending record — obligation 1, unconditionally.
@@ -1482,13 +1488,21 @@ export class SyncService extends EventEmitter {
                   { _id: row._id, name: entry.p },
                   { $set: { name: entry.o } },
                 );
-                await dequeueRestoreOn(migrations, entry, entry.at);
+                // Same clearance composition as the aged-mismatch branch
+                // (Codex P2, round 21): a restore whose record failed to
+                // drain must SAY so, or the leftover entry's next-cycle
+                // holdback reads as an unexplained new rename.
+                const drain = await dequeueRestoreOn(migrations, entry, entry.at);
+                const cleared = drain.accepted && drain.modified > 0;
                 notice = restored.modifiedCount
                   ? {
                       hold: true,
-                      text:
-                        `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}; ` +
-                        `held back this cycle and synced on the next.`,
+                      text: cleared
+                        ? `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}; ` +
+                          `held back this cycle and synced on the next.`
+                        : `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}, ` +
+                          `but its pending rename record could not be cleared; held back and ` +
+                          `retried on the next cycle.`,
                     }
                   : {
                       hold: true,
@@ -2037,9 +2051,18 @@ export class SyncService extends EventEmitter {
         if (!staged.modifiedCount) {
           // Nothing was written, and settlement never sees this row (it is
           // pushed to `stagedRenames` only below) — so the entry comes out
-          // HERE. A failed dequeue is harmless: the sweep re-examines the row
-          // next cycle, finds no placeholder, and drops the entry itself.
-          await dequeueRestoreOn(sideDb.collection("_migrations"), entry);
+          // HERE. A failed dequeue is NOT silently harmless (Codex P2, round
+          // 21): the young leftover record makes later sweeps hold this pair
+          // back as "being renamed" until it ages out — so name the real
+          // cause now. Owner drains are unversioned: an accepted zero-match
+          // means the entry is already gone, which is clearance too.
+          const drain = await dequeueRestoreOn(sideDb.collection("_migrations"), entry);
+          if (!drain.accepted) {
+            sweptHoldbacks.push(
+              `${collectionName} ${String(blocker._id)} kept its name, but its pending ` +
+                `rename record could not be cleared; held back and retried on the next cycle.`,
+            );
+          }
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: the row holding ${JSON.stringify(desiredName)} changed ` +
@@ -2178,8 +2201,19 @@ export class SyncService extends EventEmitter {
           );
           if (!row || !isStagingPlaceholder(row.name)) {
             // Its write landed (or a rollback restored it, or a human renamed
-            // it) — no placeholder remains, nothing to recover later.
-            await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+            // it) — no placeholder remains, nothing to recover later. The
+            // drain result MUST be checked (Codex P2, round 21): ignored, a
+            // failed cleanup reported success this cycle while the live
+            // entry made every later cycle fail as "being renamed" — for
+            // fifteen minutes, or forever if _migrations keeps failing.
+            // Unversioned owner drain: accepted zero-match = already gone.
+            const drain = await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+            if (!drain.accepted) {
+              sweptHoldbacks.push(
+                `${collectionName} ${String(staged.id)} settled cleanly, but its pending ` +
+                  `rename record could not be cleared; held back and retried on the next cycle.`,
+              );
+            }
             continue;
           }
           const taken = await staged.col.findOne(
@@ -2218,8 +2252,15 @@ export class SyncService extends EventEmitter {
             { $set: { name: staged.originalName } },
           );
           // Restored, or someone else moved it on — either way no placeholder
-          // remains under this entry's name, so it drains.
-          await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+          // remains under this entry's name, so it drains — checked, same as
+          // the landed-write branch above (Codex P2, round 21).
+          const drain = await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
+          if (!drain.accepted) {
+            sweptHoldbacks.push(
+              `${collectionName} ${String(staged.id)} settled cleanly, but its pending ` +
+                `rename record could not be cleared; held back and retried on the next cycle.`,
+            );
+          }
           if (!restored.modifiedCount) continue;
         } catch (settleErr) {
           // SURFACE it (Codex P1). Swallowing left the collection reporting

@@ -1935,6 +1935,128 @@ describe("SyncService — v1.12 sync expansion", () => {
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect(queue?.entries ?? []).toEqual([]);
     });
+
+    /** Pin every entries-emptying `$pull` on `_migrations` to a rejection.
+     *  `moderate` is the trick: validation applies only to documents that
+     *  ALREADY satisfy the validator, so the pre-seeded `entries: []` doc is
+     *  non-conforming and every enqueue passes freely — but once an entry
+     *  lands the doc conforms, and any update that would empty it (the
+     *  drains) is rejected. Deterministic, no mocking. */
+    const failEmptyingDrains = async (db: import("mongodb").Db) => {
+      // Upsert, not insert — the doc survives across tests on the shared servers.
+      await db.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [] } },
+        { upsert: true },
+      );
+      await db.command({
+        collMod: "_migrations",
+        validator: { $or: [{ _id: { $ne: QUEUE_ID } }, { "entries.0": { $exists: true } }] },
+        validationLevel: "moderate",
+        validationAction: "error",
+      });
+    };
+    const allowDrains = async (db: import("mongodb").Db) => {
+      await db.command({ collMod: "_migrations", validator: {}, validationLevel: "off" });
+    };
+
+    /**
+     * Codex P2, round 21: settlement drained its queue entry and IGNORED the
+     * result, so a landed rename whose `_migrations` cleanup failed reported
+     * SUCCESS — while the live entry made every later cycle fail as "being
+     * renamed by another sync service", for the age window or forever.
+     * The cycle that leaves the record behind must be the one that says so.
+     */
+    it("reports a settlement whose queue record could not be cleared, then converges", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      // The proven swap seed — local newer, so the remote adopts the swap and
+      // the staging (and its queue entry) happens on the REMOTE.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "dq-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "dq-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "dq-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "dq-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+      await failEmptyingDrains(remoteDb);
+
+      try {
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // The swap itself RESOLVED (both writes landed, no placeholder left)…
+        expect((await remoteDb.collection("bedtypes").findOne({ syncId: "dq-a" }))?.name).toBe("X");
+        expect((await remoteDb.collection("bedtypes").findOne({ syncId: "dq-b" }))?.name).toBe("Y");
+        expect(
+          await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+
+        // …but the cycle must NOT report success: the queue record survived.
+        const err = results.find((r) => r.collection === "bedtypes")?.error;
+        expect(err).toMatch(/pending rename record could not be cleared/i);
+        expect(err).not.toMatch(/Rename one of them/);
+        const queue = await remoteDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+        expect((queue?.entries ?? []).length).toBe(1);
+      } finally {
+        await allowDrains(remoteDb);
+      }
+
+      // Age the leftover record past the sweep window; the next cycle's aged
+      // sweep clears it (holding the pair back once more), and the one after
+      // is clean.
+      await remoteDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { "entries.$[].at": OLD } },
+      );
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toMatch(
+        /pending rename record/i,
+      );
+      sync.destroy(); sync = makeSync();
+      const third = await sync.sync();
+      expect(third.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      const drained = await remoteDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(drained?.entries ?? []).toEqual([]);
+    });
+
+    /**
+     * The sweep's own restore has the same obligation (round 21 class sweep):
+     * a restored placeholder whose record failed to drain must say so, not
+     * claim a clean "synced on the next".
+     */
+    it("says when a swept restore could not clear its record", async () => {
+      const localDb = localClient.db("filament-db");
+      const same = new Date(Date.now() - 60_000);
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}dq1`, material: "PEI", syncId: "dq-c", _deletedAt: null,
+        createdAt: same, updatedAt: same,
+      });
+      await failEmptyingDrains(localDb);
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $push: { entries: { c: "bedtypes", i: String(insertedId), o: "Shelf Q", p: `${PH}dq1`, at: OLD } } as never },
+      );
+
+      try {
+        sync = makeSync();
+        const results = await sync.sync();
+
+        // Restored — but honestly reported as un-drained.
+        expect((await localDb.collection("bedtypes").findOne({ syncId: "dq-c" }))?.name).toBe("Shelf Q");
+        const err = results.find((r) => r.collection === "bedtypes")?.error;
+        expect(err).toMatch(/was restored to .*but its pending rename record could not be cleared/i);
+        expect(err).not.toMatch(/synced on the next/i);
+      } finally {
+        await allowDrains(localDb);
+      }
+    });
   });
 
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
