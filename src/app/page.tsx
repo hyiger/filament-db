@@ -1,6 +1,24 @@
 "use client";
 
 import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { Suspense } from "react";
+import SearchParamsSync from "@/components/SearchParamsSync";
+import {
+  parseFilterParams,
+  presentFilterKeys,
+  nextFilterHref,
+  seedFilterState,
+  queryStringOf,
+  withCurrentValue,
+} from "@/lib/listFilterParams";
+import {
+  parseStoredPrefs,
+  HOME_FILTER_SPEC,
+  HOME_PREFS_KEY,
+  HOME_PERSISTED_KEYS,
+  DEFAULT_HOME_PREFS,
+  type HomePrefs,
+} from "@/lib/listFilterSpecs";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
@@ -21,7 +39,13 @@ import type { FilamentSummary } from "@/types/filament";
 import { getRemainingDisplay, getRemainingGrams, getSpoolCount } from "@/lib/inventoryStats";
 import { formatSkipReport } from "@/lib/importSkipReport";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
-import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
+import {
+  compareFilaments,
+  nextSortState,
+  earliestSpoolDate,
+  type SortKey,
+  type SortDir,
+} from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
 
@@ -162,21 +186,22 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 // quick filters would land a returning user on a filtered subset of their
 // catalog, which reads as "filaments missing". Loaded post-mount so SSR /
 // first paint stay on defaults (no hydration mismatch).
-const HOME_PREFS_KEY = "filamentdb-home-prefs";
 const SORT_KEY_VALUES: SortKey[] = ["name", "vendor", "type", "nozzle", "bed", "cost", "remaining", "purchased", "opened"];
 
-function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
-  if (typeof window === "undefined") return { sortKey: "name", sortDir: "asc" };
+function loadHomePrefs(): HomePrefs {
+  if (typeof window === "undefined") return DEFAULT_HOME_PREFS;
   try {
     const raw = window.localStorage.getItem(HOME_PREFS_KEY);
-    if (!raw) return { sortKey: "name", sortDir: "asc" };
+    if (!raw) return DEFAULT_HOME_PREFS;
     const p = JSON.parse(raw) as { sortKey?: unknown; sortDir?: unknown };
     return {
-      sortKey: SORT_KEY_VALUES.includes(p.sortKey as SortKey) ? (p.sortKey as SortKey) : "name",
-      sortDir: p.sortDir === "desc" ? "desc" : "asc",
+      sortKey: SORT_KEY_VALUES.includes(p.sortKey as SortKey)
+        ? (p.sortKey as SortKey)
+        : DEFAULT_HOME_PREFS.sortKey,
+      sortDir: p.sortDir === "desc" ? "desc" : DEFAULT_HOME_PREFS.sortDir,
     };
   } catch {
-    return { sortKey: "name", sortDir: "asc" };
+    return DEFAULT_HOME_PREFS;
   }
 }
 
@@ -184,6 +209,34 @@ function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
  *  (#1117 item h). Not a valid ObjectId, so it can never collide with a real
  *  location id. */
 const NEW_LOCATION_OPTION = "__new_location__";
+
+/**
+ * GH #1141: the filters this list mirrors into the URL.
+ *
+ * `family=1` is deliberately absent — it is an outbound API query param
+ * (`/api/filaments?family=1`), never a page URL param, so it is not state to
+ * carry. `?spool=` and friends on other routes are likewise unowned and are
+ * preserved by `serializeFilterParams`.
+ */
+/**
+ * Distinct type + vendor values for the filter dropdowns.
+ *
+ * Shared by the mount effect and the post-import refresh so the two cannot
+ * drift. Cheap distinct queries — the same endpoints /inventory uses.
+ */
+async function fetchFilterOptions(
+  signal: AbortSignal,
+): Promise<{ types: string[]; vendors: string[] }> {
+  const [typeList, vendorList] = await Promise.all([
+    fetch("/api/filaments/types", { signal }).then((r) => (r.ok ? r.json() : [])),
+    fetch("/api/filaments/vendors", { signal }).then((r) => (r.ok ? r.json() : [])),
+  ]);
+  return {
+    types: Array.isArray(typeList) ? typeList : [],
+    vendors: Array.isArray(vendorList) ? vendorList : [],
+  };
+}
+
 
 export default function Home() {
   const { t } = useTranslation();
@@ -232,7 +285,23 @@ export default function Home() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   // #831: gate the persist effect so it doesn't fire on the default state
   // before the post-mount load runs.
-  const homePrefsLoaded = useRef(false);
+  //
+  // STATE, not a ref (GH #1141, Codex P1). Effects in one commit run in
+  // declaration order, so a ref set by the seed effect is already true when the
+  // mirror effect below runs — in the SAME commit, still closed over the
+  // initial defaults. It then serialized those defaults over the URL that had
+  // just been read, and `/?type=PLA` landed on a bare `/`: the second run saw
+  // `window.location` not yet updated by the pending `router.replace`, found
+  // nothing to change, and never wrote the filter back. A state flag is only
+  // true from the commit AFTER the seed, so the mirror first runs with the
+  // seeded values.
+  const [seeded, setSeeded] = useState(false);
+  /** Preference keys the USER changed this session — the only ones written
+   *  back to storage. See the persist effect. */
+  const prefsTouchedRef = useRef<Set<(typeof HOME_PERSISTED_KEYS)[number]>>(new Set());
+  /** The query string this page last wrote, so its own replaceState does not
+   *  come back through SearchParamsSync as an external change. */
+  const ownUrlWriteRef = useRef<string | null>(null);
   const [importing, setImporting] = useState(false);
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -278,18 +347,175 @@ export default function Home() {
   // avoid a hydration mismatch), then persist on change. Mirrors /inventory.
   useEffect(() => {
     const p = loadHomePrefs();
-    setSortKey(p.sortKey); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
-    setSortDir(p.sortDir);
-    homePrefsLoaded.current = true;
+    // GH #1141: the URL wins over the persisted pref, for the keys it carries.
+    //
+    // Read post-mount, defaults-then-adopt — NOT a lazy `useState` initializer
+    // with a `typeof window` check, which produces different first renders on
+    // the two sides (the Codex P2 in src/app/locations/new/page.tsx).
+    // Sort falls back to the PERSISTED pref when the URL is silent, so a bare
+    // "/" still opens the way the user left it, while a link that carries the
+    // sort applies it for the visit. `seedFilterState` owns that rule for both
+    // this seed and the re-seed below — see its docblock.
+    const url = seedFilterState(window.location.search, HOME_FILTER_SPEC, p);
+
+    setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
+    setDebouncedSearch(url.search);
+    setTypeFilter(url.typeFilter);
+    setVendorFilter(url.vendorFilter);
+    setQuickFilter(url.quickFilter);
+    setShowOutOfStock(url.showOutOfStock);
+    setSortKey(url.sortKey);
+    setSortDir(url.sortDir);
+    setSeeded(true);
   }, []);
+
+  // GH #1141: mirror the filters into the URL — shareable, bookmarkable, and
+  // surviving a refresh.
+  //
+  // `replaceState`, not `pushState`: a history entry per dropdown change would
+  // make leaving the page take N Back presses. It must go through the patched
+  // `window.history` method, because Next copies its internal `__NA` marker
+  // onto the state and full-page-reloads a popstate entry without it.
+  //
+  // `nextFilterHref` returns null when nothing would change, and MERGES rather
+  // than rebuilding, so params this page does not own survive.
   useEffect(() => {
-    if (!homePrefsLoaded.current) return;
-    try {
-      window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify({ sortKey, sortDir }));
-    } catch {
-      /* ignore quota / disabled storage */
+    if (!seeded) return;
+    const href = nextFilterHref(
+      window.location,
+      HOME_FILTER_SPEC,
+      {
+        search: debouncedSearch,
+        typeFilter,
+        vendorFilter,
+        quickFilter,
+        showOutOfStock,
+        sortKey,
+        sortDir,
+      },
+      // The persisted sort, read fresh each run (Codex P2): the sticky keys
+      // must stay encoded while the VIEW's sort differs from the stored one,
+      // or clearing the last filter drops the URL to bare while the page
+      // still shows a shared link's sort — and a reload then silently swaps
+      // it for the persisted one. Bare means "use my prefs"; it has to be
+      // true before the URL is allowed to say it.
+      loadHomePrefs(),
+    );
+    if (href) {
+      // Record what we wrote so the re-seed can tell our own change from
+      // someone else's and not loop on it.
+      // Query component ONLY (Codex P2): the href keeps the hash, the echo
+      // through useSearchParams never has one, and a mismatched marker turns
+      // our own write into a "external" re-seed that clobbers live input.
+      ownUrlWriteRef.current = queryStringOf(href);
+      // Through the ROUTER, not `window.history` directly. A raw
+      // `replaceState` leaves the router's own model of the URL untouched, so
+      // `useSearchParams` keeps reporting the pre-write value — and a later
+      // Link click to the same route then looks like no change at all, which
+      // is exactly the navigation the re-seed exists to catch. Verified in the
+      // browser: with a raw replaceState the list stayed filtered under a bare
+      // URL. `scroll: false` keeps the list position; already debounced.
+      router.replace(href, { scroll: false });
     }
-  }, [sortKey, sortDir]);
+  }, [
+    seeded,
+    debouncedSearch,
+    typeFilter,
+    vendorFilter,
+    quickFilter,
+    showOutOfStock,
+    sortKey,
+    sortDir,
+    router,
+  ]);
+
+  // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
+  // The mount seed misses a client-side navigation to the SAME route —
+  // clicking the header's home link while filtered reuses this page, so the
+  // URL goes bare while the state stays filtered.
+  const reseedFromUrl = useCallback((nextSearch: string) => {
+    // Our own replaceState comes back through here; CONSUME the marker rather
+    // than just testing it (Codex P2). Left set, a later external navigation
+    // to the same query looks like another page write — type `pla`, click the
+    // header link to the bare route, press Back, and the URL returns to
+    // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
+    // One OBSERVATION, one chance (Codex P2, fourth marker pass). Consuming
+    // only on a match left the marker armed whenever our own write produced
+    // no observable change — a normalization-only replace (`?q=foo%20bar` →
+    // `q=foo+bar`) is invisible to useSearchParams, which already reported
+    // the canonical form. The stale marker then matched a LATER genuine
+    // navigation to that same query: click the bare header link, press Back,
+    // and the restored filtered URL was mistaken for our own echo — list
+    // unfiltered under a filtered URL, the original bug re-entered through
+    // the encoding. Whatever the next observed change is, the marker's write
+    // either was it, produced nothing observable, or was superseded; in all
+    // three it is spent.
+    const own = ownUrlWriteRef.current;
+    ownUrlWriteRef.current = null;
+    if (own === nextSearch) return;
+    const url = parseFilterParams(nextSearch, HOME_FILTER_SPEC);
+    const present = presentFilterKeys(nextSearch, HOME_FILTER_SPEC);
+    setSearch(url.search);
+    setDebouncedSearch(url.search);
+    setTypeFilter(url.typeFilter);
+    setVendorFilter(url.vendorFilter);
+    setQuickFilter(url.quickFilter);
+    setShowOutOfStock(url.showOutOfStock);
+    // Sort is PERSISTED, so an absent param means "unchanged", not "default"
+    // (GH #1141, Codex P2). Clicking the header link while filtered navigates
+    // to a bare `/`; resetting to the fallback there would then have the
+    // persist effect below overwrite the user's saved sort with `name`/`asc` —
+    // a stored preference destroyed by a navigation that never mentioned it.
+    // Same rule as the mount seed, applied to the CURRENT state rather than
+    // the stored one; functional updates keep the callback free of state deps.
+    setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
+    setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
+    // Any touch still armed here is DEAD: a real one was consumed by the
+    // persist effect in the same commit as its state change, which necessarily
+    // ran before this external navigation could be processed. What survives is
+    // an armed-but-noop touch (a handler that did not change state), and it
+    // must not authorize persisting the values this re-seed just adopted.
+    prefsTouchedRef.current.clear();
+  }, []);
+  // Persist ONLY what the user chose (GH #1141, Codex P1).
+  //
+  // Sticky keys are now emitted into every non-bare URL, which is what makes a
+  // shared link deterministic — but it also means every shared link MENTIONS
+  // the sort. An ungated persist effect would therefore let a friend's link
+  // permanently overwrite the recipient's saved preference just by being
+  // opened. Tracking which keys the user actually touched, and merging those
+  // over whatever is stored, keeps "applies to this visit" and "is my
+  // preference" separate.
+  //
+  // Per-key rather than a single boolean because the record is one blob:
+  // a boolean cannot express "store the direction I just changed, leave the
+  // sort key alone".
+  useEffect(() => {
+    if (!seeded || prefsTouchedRef.current.size === 0) return;
+    try {
+      // Tolerant parse (Codex P2): a corrupt blob must not throw here — the
+      // catch below would skip the setItem, so nothing would ever overwrite
+      // the bad value and persistence would be dead until storage was cleared
+      // by hand. Parsed as `{}`, it merges against defaults and THIS write
+      // replaces it: the write path is the one chance to heal.
+      const stored = parseStoredPrefs(
+        window.localStorage.getItem(HOME_PREFS_KEY),
+      ) as Partial<HomePrefs>;
+      const live: HomePrefs = { sortKey, sortDir };
+      const next: HomePrefs = { ...DEFAULT_HOME_PREFS, ...stored };
+      for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
+      window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify(next));
+      // CONSUME the touches (Codex P2). A touch is an authorization for ONE
+      // write — the user's change, which has now been stored. Left armed, it
+      // authorized every LATER state change too, including URL-derived ones:
+      // open a shared sort link, change the sort yourself, press Back, and the
+      // re-seed restored the link's values while the stale touch let this
+      // effect write them over the choice you just made.
+      prefsTouchedRef.current.clear();
+    } catch {
+      /* ignore quota / disabled storage / a corrupt stored blob */
+    }
+  }, [seeded, sortKey, sortDir]);
 
   // #717: load locations for the per-spool "move to" dropdowns. Best-effort —
   // if it fails the panel just shows the ids' current selection with no
@@ -305,7 +531,13 @@ export default function Home() {
 
   // Debounce search input by 300ms
   useEffect(() => {
-    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    // Trimmed at the debounce (Codex P2): the parser trims on read, so an
+    // untrimmed live value made the view disagree with its own mirrored URL —
+    // `" pla "` filtered differently before and after a refresh. The INPUT
+    // keeps the raw text (trimming state mid-typing would eat the space the
+    // user just typed); everything downstream — the fetch and the mirror —
+    // reads the canonical form.
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(timer);
   }, [search]);
 
@@ -347,13 +579,6 @@ export default function Home() {
       }
       const data = await res.json();
       setFilaments(data);
-      // Derive filter options from unfiltered results (initial load / no filters)
-      if (!debouncedSearch && !typeFilter && !vendorFilter) {
-        const typeList = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
-        const vendorList = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
-        setTypes(typeList);
-        setVendors(vendorList);
-      }
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -362,28 +587,49 @@ export default function Home() {
     }
   }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
-  // Refresh the type / vendor filter dropdowns from the full, unfiltered
-  // filament list. fetchFilaments only recomputes these when no filter
-  // is active, so an import performed while a filter is on would leave
-  // the dropdowns stale without this. GH #292: own AbortController so it
-  // doesn't race the main list fetch un-cancellably or setState after
-  // unmount.
+  // GH #795 / #1141: the type + vendor dropdown options come from dedicated
+  // distinct-value endpoints, NOT from the list response.
+  //
+  // They used to be derived from an UNFILTERED list fetch, which made them a
+  // side effect of having no filter active. That breaks the moment a filter is
+  // seeded from the URL (#1141): the seeded fetch is filtered, the derivation
+  // is skipped, and the Type <select> renders with only "All types" — so a
+  // shared /?type=PLA link shows a filter that is invisible AND unclearable.
+  //
+  // These endpoints are cheap distinct queries and are what /inventory already
+  // uses. GH #292: own AbortController so this doesn't race the list fetch
+  // un-cancellably or setState after unmount.
   const refreshFilterOptions = useCallback(async () => {
     filterOptionsAcRef.current?.abort();
     const ac = new AbortController();
     filterOptionsAcRef.current = ac;
     try {
-      const res = await fetch("/api/filaments", { signal: ac.signal });
-      if (!res.ok) return;
-      const all = await res.json();
+      const { types: t1, vendors: v1 } = await fetchFilterOptions(ac.signal);
       if (ac.signal.aborted) return;
-      setTypes([...new Set(all.map((f: Filament) => f.type))].sort() as string[]);
-      setVendors([...new Set(all.map((f: Filament) => f.vendor))].sort() as string[]);
-    } catch (err) {
-      // Non-fatal — the list itself still refreshed via fetchFilaments.
-      if (err instanceof DOMException && err.name === "AbortError") return;
+      setTypes(t1);
+      setVendors(v1);
+    } catch {
+      /* best-effort: the dropdowns keep their current options */
     }
   }, []);
+
+  // Populate them once on mount, independently of the list fetch and of
+  // whatever filter the URL seeded. Fetched inline (rather than calling
+  // `refreshFilterOptions`) so the state updates land in a `.then`, which is
+  // the shape `react-hooks/set-state-in-effect` accepts and the same one
+  // /inventory uses.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchFilterOptions(ac.signal)
+      .then(({ types: t1, vendors: v1 }) => {
+        if (ac.signal.aborted) return;
+        setTypes(t1);
+        setVendors(v1);
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
+
 
   // Close import/export dropdown on outside click
   useEffect(() => {
@@ -732,6 +978,10 @@ export default function Home() {
 
   const handleSort = (key: SortKey) => {
     const next = nextSortState({ sortKey, sortDir }, key);
+    // The ONLY place a user chooses a sort here, so the only place that may
+    // record one (GH #1141, Codex P1). See the persist effect.
+    prefsTouchedRef.current.add("sortKey");
+    prefsTouchedRef.current.add("sortDir");
     setSortKey(next.sortKey);
     setSortDir(next.sortDir);
   };
@@ -1408,6 +1658,11 @@ export default function Home() {
   };
 
   return (
+    <>
+      {/* GH #1141: only THIS child suspends, so the page still prerenders. */}
+      <Suspense fallback={null}>
+        <SearchParamsSync onExternalChange={reseedFromUrl} />
+      </Suspense>
     <main id="main-content" className="w-full px-4 py-8">
       {/* GH #411: visually-hidden h1 so screen-reader users navigating
           by heading land on the page title. Sighted users already get
@@ -1643,7 +1898,7 @@ export default function Home() {
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allTypes")}</option>
-          {types.map((tp) => (
+          {withCurrentValue(types, typeFilter).map((tp) => (
             <option key={tp} value={tp}>
               {tp}
             </option>
@@ -1655,7 +1910,7 @@ export default function Home() {
           className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allVendors")}</option>
-          {vendors.map((vn) => (
+          {withCurrentValue(vendors, vendorFilter).map((vn) => (
             <option key={vn} value={vn}>
               {vn}
             </option>
@@ -1840,5 +2095,6 @@ export default function Home() {
         />
       )}
     </main>
+    </>
   );
 }

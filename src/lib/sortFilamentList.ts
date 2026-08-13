@@ -21,17 +21,29 @@
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingPct, type InventoryFilament } from "@/lib/inventoryStats";
 
-export type SortKey =
-  | "name"
-  | "vendor"
-  | "type"
-  | "nozzle"
-  | "bed"
-  | "cost"
-  | "remaining"
-  | "purchased"
-  | "opened";
-export type SortDir = "asc" | "desc";
+/**
+ * The allowed sort values, as runtime arrays.
+ *
+ * GH #1141 validates these — a shared or hand-edited link can carry
+ * `?sort=nonsense`, and a page seeded from an unchecked string would sit in a
+ * state its own controls cannot represent. Deriving the unions from the arrays
+ * keeps them in step: adding a key to one without the other is a type error.
+ */
+export const SORT_KEYS = [
+  "name",
+  "vendor",
+  "type",
+  "nozzle",
+  "bed",
+  "cost",
+  "remaining",
+  "purchased",
+  "opened",
+] as const;
+export const SORT_DIRS = ["asc", "desc"] as const;
+
+export type SortKey = (typeof SORT_KEYS)[number];
+export type SortDir = (typeof SORT_DIRS)[number];
 
 /** #941: earliest date (across ALL of a filament's spools, retired included —
  * a purchase/open date is a historical fact regardless of retirement) for the

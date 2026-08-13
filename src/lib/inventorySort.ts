@@ -14,15 +14,29 @@
  * "blanks always sink to the bottom regardless of direction" rule.
  */
 
-export type InventoryGroupBy = "location" | "type" | "vendor" | "none";
-export type InventorySortKey =
-  | "remaining"
-  | "name"
-  | "type"
-  | "vendor"
-  | "purchase"
-  | "opened";
-export type InventorySortDir = "asc" | "desc";
+/**
+ * The allowed values, as runtime arrays.
+ *
+ * GH #1141 needs to VALIDATE these — a shared or hand-edited link can carry
+ * `?group=nonsense`, and a page seeded from an unchecked string would sit in a
+ * state its own controls cannot represent. Declaring the arrays and deriving
+ * the unions from them keeps the two in step: adding a sort key to the union
+ * without adding it here is a type error, not a silently unaccepted param.
+ */
+export const INVENTORY_GROUP_BYS = ["location", "type", "vendor", "none"] as const;
+export const INVENTORY_SORT_KEYS = [
+  "remaining",
+  "name",
+  "type",
+  "vendor",
+  "purchase",
+  "opened",
+] as const;
+export const INVENTORY_SORT_DIRS = ["asc", "desc"] as const;
+
+export type InventoryGroupBy = (typeof INVENTORY_GROUP_BYS)[number];
+export type InventorySortKey = (typeof INVENTORY_SORT_KEYS)[number];
+export type InventorySortDir = (typeof INVENTORY_SORT_DIRS)[number];
 
 /** Minimal row shape the transforms need; the page's `SpoolRow` is assignable. */
 export interface InventoryRow {
