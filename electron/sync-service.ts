@@ -1425,7 +1425,8 @@ export class SyncService extends EventEmitter {
               // the drain can fail, the entry then stays aged, and a notice
               // claiming clearance would lie every cycle of a persistent
               // _migrations failure.
-              const cleared = await dequeueRestoreOn(migrations, entry, entry.at);
+              const drain = await dequeueRestoreOn(migrations, entry, entry.at);
+              const cleared = drain.accepted && drain.modified > 0;
               if (
                 row &&
                 typeof row.syncId === "string" &&
@@ -1520,6 +1521,20 @@ export class SyncService extends EventEmitter {
             console.log(
               `[sync] ${collectionName}: restored ${JSON.stringify(entry.o)} onto ${entry.i} (GH #1153)`,
             );
+            // Quarantine even on SUCCESS (Codex P1) — the last branch that
+            // did not, and the window is the same as everywhere else: another
+            // service can enqueue and stage this very row between this
+            // restore and the slim reads, with coveredIds (built from OUR
+            // snapshot) blinding the backstop. The rule is now uniform: every
+            // queue entry over a live row holds its pair for the cycle. The
+            // restored name syncs on the next one.
+            if (strandedSyncId) {
+              quarantinedSyncIds.add(strandedSyncId);
+              sweptHoldbacks.push(
+                `${collectionName} ${entry.i} was restored to ${JSON.stringify(entry.o)}; ` +
+                  `held back this cycle and synced on the next.`,
+              );
+            }
           } else if (strandedSyncId) {
             // The conditional restore no-matched — someone moved the row
             // between our read and the write. Unknown state: hold it back
@@ -1695,23 +1710,25 @@ export class SyncService extends EventEmitter {
       migrations: ReturnType<Db["collection"]>,
       entry: RenameStagingRestoreKey,
       observedAt?: Date,
-    ): Promise<boolean> => {
+    ): Promise<{ accepted: boolean; modified: number }> => {
       const match: Document = { c: entry.c, i: entry.i, o: entry.o, p: entry.p };
       if (observedAt !== undefined) match.at = { $eq: observedAt };
       try {
-        await migrations.updateOne(
+        const res = await migrations.updateOne(
           { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
           { $pull: { entries: match } as Document },
         );
-        // An accepted write is a clearance even at zero matches — the entry
-        // is gone either way. Only a REJECTED write is a failure, and the
-        // caller decides what that means: most sites tolerate it (the sweep
-        // re-examines next cycle), but the aged drain's notice must not
-        // claim the record was cleared when it was not (Codex P2).
-        return true;
+        // Acceptance and effect are DIFFERENT facts (Codex P2). For the
+        // owner's unversioned drains, an accepted zero-match means the entry
+        // is already gone — clearance either way. For the sweep's VERSIONED
+        // drain, an accepted zero-match can mean a re-asserted twin with a
+        // fresh stamp survived the pull — the record is still queued, and a
+        // notice claiming clearance would lie. The caller composes its claim
+        // from `modified`, not from acceptance.
+        return { accepted: true, modified: res.modifiedCount ?? 0 };
       } catch (err) {
         console.warn(`[sync] ${entry.c}: could not dequeue a staging-restore entry.`, err);
-        return false;
+        return { accepted: false, modified: 0 };
       }
     };
     await sweepSide(localDb, localCol, remoteCol);

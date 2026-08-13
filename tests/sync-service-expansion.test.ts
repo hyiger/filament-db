@@ -1426,12 +1426,20 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(row?.name).toBe("Shelf A");
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect(queue?.entries ?? []).toEqual([]);
-      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
       for (const db of [localDb, remoteDb]) {
         expect(
           await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
         ).toBe(0);
       }
+      // The restored pair holds back for THIS cycle (the uniform window
+      // rule: every queue entry over a live row quarantines its pair) with
+      // an honest informational notice, then converges on the next.
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/was restored to/i);
+      expect(err).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
     });
 
     /**
@@ -1481,7 +1489,14 @@ describe("SyncService — v1.12 sync expansion", () => {
       sync.destroy(); sync = makeSync();
       const second = await sync.sync();
       expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-b" }))?.name).toBe("Shelf B");
-      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      // The restoring cycle holds the pair back (uniform window rule) with
+      // the informational notice; the THIRD cycle is fully clean.
+      const secondErr = second.find((r) => r.collection === "bedtypes")?.error;
+      expect(secondErr).toMatch(/was restored to/i);
+      expect(secondErr).not.toMatch(/Rename one of them/);
+      sync.destroy(); sync = makeSync();
+      const third = await sync.sync();
+      expect(third.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
     });
 
     /**
