@@ -74,6 +74,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
 
       - name: Install dependencies
+        # GH #1155: nothing in this gate launches Electron — the tests import
+        # the electron module type-only, electron:typecheck is tsc against the
+        # tarball's .d.ts, and the smoke server is plain node. The ~110 MB
+        # binary electron's postinstall fetches off GitHub's release CDN is
+        # therefore pure flake surface (six 503/fetch-failed reds on
+        # 2026-08-12 alone). install.js honors this env and exits before any
+        # network I/O. release.yml's build legs keep their own un-flagged
+        # `npm ci` — electron-builder needs the real binary THERE.
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: npm ci
 
       - name: Lint
@@ -154,6 +164,16 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
 
       - name: Install dependencies
+        # GH #1155: nothing in this gate launches Electron — the tests import
+        # the electron module type-only, electron:typecheck is tsc against the
+        # tarball's .d.ts, and the smoke server is plain node. The ~110 MB
+        # binary electron's postinstall fetches off GitHub's release CDN is
+        # therefore pure flake surface (six 503/fetch-failed reds on
+        # 2026-08-12 alone). install.js honors this env and exits before any
+        # network I/O. release.yml's build legs keep their own un-flagged
+        # `npm ci` — electron-builder needs the real binary THERE.
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: npm ci
 
       - name: Build (standalone)
