@@ -2314,16 +2314,82 @@ export class SyncService extends EventEmitter {
       );
     }
 
+    // Round 22: quarantine means "names must not transfer", not "nothing may
+    // happen". The classifier below answers whether a pair's branch writes
+    // ONLY tombstone/purge flags — those never carry a name, and blocking
+    // them left a deleted peer unable to resolve its own stranding: with the
+    // original name taken, every cycle re-quarantined the pair and the
+    // deletion never propagated (Codex P2). It MUST mirror the row loop's
+    // branch ladder below — purge arms and the delete-wins arms (GH #317
+    // `>=` tie rule, NaN-safe `?? 0`) are `$set` flag writes; both-deleted
+    // and both-purged are no-ops; everything else (insert, resurrect,
+    // both-active LWW) is a replaceOne/insert that carries a name. Drift
+    // between this predicate and the ladder reopens one bug or the other.
+    const pairWritesFlagsOnly = (l: Document, r: Document): boolean => {
+      if (l._purged === true || r._purged === true) return true;
+      const lDel = l._deletedAt != null;
+      const rDel = r._deletedAt != null;
+      if (lDel && rDel) return true;
+      if (lDel && !rDel) {
+        return (
+          (SyncService.readTimestamp(l._deletedAt) ?? 0) >=
+          (SyncService.readUpdatedAt(r) ?? 0)
+        );
+      }
+      if (!lDel && rDel) {
+        return (
+          (SyncService.readTimestamp(r._deletedAt) ?? 0) >=
+          (SyncService.readUpdatedAt(l) ?? 0)
+        );
+      }
+      return false;
+    };
+
     // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
     try {
       for (const syncId of allSyncIds) {
+        // Round 22 (Codex P1): a staging by ANOTHER service can land in the
+        // window between the sweep's scans and the slim reads above — such a
+        // placeholder is invisible to the sweep's quarantine, and if its row
+        // is edited so its timestamp wins LWW while the owner stalls, this
+        // pass would copy the temporary name to the peer. Any STRICT-grammar
+        // placeholder observed in the slim snapshot is therefore quarantined
+        // right here. Strict grammar only — a user's prefix-shaped name must
+        // never be held (the backstop's own rule). Our OWN staged rows can't
+        // trip this: the slim snapshot predates every staging this pass
+        // performs, so it still carries their original names.
+        if (!quarantinedSyncIds.has(syncId)) {
+          const lSlim = localBySyncId.get(syncId);
+          const rSlim = remoteBySyncId.get(syncId);
+          const phDoc =
+            typeof lSlim?.name === "string" && isGeneratedPlaceholder(lSlim.name)
+              ? lSlim
+              : typeof rSlim?.name === "string" && isGeneratedPlaceholder(rSlim.name)
+                ? rSlim
+                : null;
+          if (phDoc) {
+            quarantinedSyncIds.add(syncId);
+            sweptHoldbacks.push(
+              `${collectionName} ${String(phDoc._id)} is mid-rename by another sync ` +
+                `service; its temporary name is held back this cycle and resolved by ` +
+                `the owner or the next sweep.`,
+            );
+          }
+        }
         // GH #1153 (Codex P2): a row the sweep left holding an unresolved
-        // placeholder is excluded from transfer this cycle — see the
-        // quarantine set's docblock. Marked processed anyway, so a blocker
-        // check treats it as "no write coming", which is the truth.
+        // placeholder is excluded from NAME transfer this cycle — see the
+        // quarantine set's docblock. Flag-only outcomes still run (round 22:
+        // tombstone/purge propagation is what RESOLVES a stranding whose
+        // peer was deleted — see pairWritesFlagsOnly above). Marked
+        // processed anyway, so a blocker check treats it as "no name write
+        // coming", which is the truth on both paths.
         if (quarantinedSyncIds.has(syncId)) {
-          processedSyncIds.add(syncId);
-          continue;
+          const lQ = localBySyncId.get(syncId);
+          const rQ = remoteBySyncId.get(syncId);
+          if (!(lQ && rQ && pairWritesFlagsOnly(lQ, rQ))) {
+            processedSyncIds.add(syncId);
+            continue;
+          }
         }
         // Marked at the TOP, not the bottom: the body is full of `continue`s
         // and a trailing add would be skipped by every one of them. Including

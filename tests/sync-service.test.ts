@@ -369,8 +369,19 @@ describe("every quarantine reports (source invariant)", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync("electron/sync-service.ts", "utf8");
 
+    // THREE sites since round 22: the two sweep loops' hoisted quarantines,
+    // plus the row loop's slim-snapshot guard (a staging by another service
+    // can land between the sweep's scans and the slim reads — any
+    // strict-grammar placeholder observed there is quarantined at the gate).
     const adds = src.match(/quarantinedSyncIds\.add\(/g) ?? [];
-    expect(adds.length).toBe(2);
+    expect(adds.length).toBe(3);
+    // The slim-snapshot guard is grammar-gated: its add site sits in the row
+    // loop next to an isGeneratedPlaceholder test, before the quarantine gate.
+    const loopStart = src.indexOf("for (const syncId of allSyncIds)");
+    expect(loopStart).toBeGreaterThan(-1);
+    const guardRegion = src.slice(loopStart, src.indexOf("processedSyncIds.add(syncId)", loopStart));
+    expect(guardRegion).toContain("isGeneratedPlaceholder");
+    expect(guardRegion).toContain("quarantinedSyncIds.add(syncId)");
 
     const centralPushes =
       src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];
