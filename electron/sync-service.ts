@@ -1373,7 +1373,7 @@ export class SyncService extends EventEmitter {
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
-            { projection: { name: 1, syncId: 1 } },
+            { projection: { name: 1, syncId: 1, _deletedAt: 1, _purged: 1 } },
           );
           if (!row || row.name !== entry.p) {
             // Gone, landed, or human-renamed — nothing to recover. Only an
@@ -1381,6 +1381,19 @@ export class SyncService extends EventEmitter {
             // enqueue-to-update window), and the drain is versioned on the
             // observed stamp: the owner may have re-asserted since this
             // sweep's snapshot.
+            if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
+            continue;
+          }
+          // RESOLVED BY DELETION (Codex P2): a user may deal with a stranded
+          // row by trashing or purging it. The name no longer needs
+          // restoration — a tombstoned row is outside the partial index, and
+          // a placeholder name in the trash is cosmetic — and quarantining it
+          // would block the one thing that still matters: the TOMBSTONE
+          // propagating to the peer. So: never quarantine, never restore,
+          // never report; drain the entry once aged (a young entry defers to
+          // its owner, as everywhere else). The loop's own predicates decide
+          // tombstoned-ness, per the #1146 rule.
+          if (row._deletedAt != null || row._purged === true) {
             if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
             continue;
           }
@@ -1453,7 +1466,10 @@ export class SyncService extends EventEmitter {
       // Grammar backstop. STAGING_PREFIX is `__sync-staging-` — word chars
       // and hyphens only, safe as a literal anchored regex.
       const strays = await col
-        .find({ name: { $regex: `^${STAGING_PREFIX}` } }, { projection: { name: 1, syncId: 1 } })
+        .find(
+          { name: { $regex: `^${STAGING_PREFIX}` } },
+          { projection: { name: 1, syncId: 1, _deletedAt: 1, _purged: 1 } },
+        )
         .toArray()
         .catch(() => [] as Document[]);
       for (const stray of strays) {
@@ -1466,6 +1482,9 @@ export class SyncService extends EventEmitter {
         // is treated as an artifact; anything else is presumed a user's name
         // and left entirely alone — not even reported.
         if (!isGeneratedPlaceholder(stray.name)) continue;
+        // Tombstoned = resolved by deletion — same rule as the queue path:
+        // let the tombstone sync; the name in the trash is cosmetic.
+        if (stray._deletedAt != null || stray._purged === true) continue;
         if (coveredIds.has(String(stray._id))) continue; // queue already handled it
         try {
           // FRESH re-check (Codex P2): the queue snapshot above predates this
@@ -1536,9 +1555,17 @@ export class SyncService extends EventEmitter {
             );
           }
         } catch (err) {
-          // Same rule as the queue path's catch: a row recognized as a
-          // generated placeholder must not sync because a later step failed.
+          // Same rule as the queue path's catch (Codex P2, both halves): a
+          // row recognized as a generated placeholder must not sync because a
+          // later step failed — and the failure must reach the USER, not just
+          // the console, or the cycle reads green while the placeholder
+          // stands indefinitely.
           if (typeof stray.syncId === "string") quarantinedSyncIds.add(stray.syncId);
+          sweptConflicts.push(
+            `${collectionName} ${String(stray._id)} holds the temporary name ` +
+              `${JSON.stringify(stray.name)} and could not be recovered this cycle. ` +
+              `Rename it manually if this persists.`,
+          );
           console.warn(
             `[sync] ${collectionName}: placeholder backstop failed for ${String(stray._id)}.`,
             err,

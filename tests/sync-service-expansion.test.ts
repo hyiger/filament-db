@@ -1686,6 +1686,52 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * Resolved by deletion (Codex P2): a user may deal with a stranded row by
+     * trashing it. The name no longer needs restoring — but quarantining the
+     * pair blocked the one thing that still matters: the tombstone
+     * propagating to the peer, forever.
+     */
+    it("lets a trashed stranded row propagate its tombstone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const deletedAt = new Date();
+
+      // Stranded (placeholder name, original taken), then TRASHED by the user.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}x9`, material: "PEI", syncId: "sw-j", _deletedAt: deletedAt,
+        createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf F", material: "PEI", syncId: "sw-j", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      // The occupier that made the stranding permanent.
+      for (const db of [localDb, remoteDb]) {
+        await db.collection("bedtypes").insertOne({
+          name: "Shelf F2", material: "PEI", syncId: "sw-j-occ", _deletedAt: null,
+          createdAt: older, updatedAt: older,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf F2", p: `${PH}x9`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The deletion reached the peer, the entry drained, and nothing about
+      // this row failed the collection.
+      const remote = await remoteDb.collection("bedtypes").findOne({ syncId: "sw-j" });
+      expect(remote?._deletedAt).not.toBeNull();
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
      * The free-form-name case (Codex P2): a user may name a row with the
      * placeholder PREFIX. The backstop must not touch it — not rename it to
      * its peer's value, not report it — because acting on recognition is
