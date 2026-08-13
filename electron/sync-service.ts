@@ -1330,9 +1330,16 @@ export class SyncService extends EventEmitter {
       peerCol: ReturnType<Db["collection"]>,
     ): Promise<void> => {
       const migrations = db.collection("_migrations");
-      const queueDoc = await migrations
-        .findOne({ _id: RESTORE_QUEUE_ID as unknown as ObjectId })
-        .catch(() => null);
+      // A failed read THROWS (Codex P2, and its sibling one page down): the
+      // sweep's whole contract is "no unresolved placeholder syncs", and a
+      // read converted to an empty result silently waives it — queued
+      // placeholders would go unquarantined into the LWW loop while the
+      // cycle reads green. A throw fails the collection through trySync,
+      // dependents cascade-skip, and the next cycle retries: the same
+      // thrown-failure posture the trim established.
+      const queueDoc = await migrations.findOne({
+        _id: RESTORE_QUEUE_ID as unknown as ObjectId,
+      });
       const rawEntries: unknown[] = Array.isArray(queueDoc?.entries) ? queueDoc.entries : [];
       const entries = rawEntries.filter(isRestoreEntry).filter((e) => e.c === collectionName);
       // Drop malformed entries outright — one bad record must not abort the
@@ -1465,13 +1472,13 @@ export class SyncService extends EventEmitter {
 
       // Grammar backstop. STAGING_PREFIX is `__sync-staging-` — word chars
       // and hyphens only, safe as a literal anchored regex.
+      // Same rule as the queue read above: a failed SCAN is not "no strays".
       const strays = await col
         .find(
           { name: { $regex: `^${STAGING_PREFIX}` } },
           { projection: { name: 1, syncId: 1, _deletedAt: 1, _purged: 1 } },
         )
-        .toArray()
-        .catch(() => [] as Document[]);
+        .toArray();
       for (const stray of strays) {
         // STRICT grammar, not the prefix (Codex P2). The backstop ACTS on
         // recognition alone — it rewrites the name to the peer's, or fails
