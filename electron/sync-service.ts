@@ -1314,6 +1314,14 @@ export class SyncService extends EventEmitter {
     // row it cannot answer for is reported, never guessed — inventing a name
     // is a product decision this machinery is not allowed to make.
     const sweptConflicts: string[] = [];
+    /** Informational one-cycle HOLD-BACKS (Codex P2) — the window quarantines
+     * over rows holding their real names. Distinct from `sweptConflicts`,
+     * which is for genuine strandings: these carry no name contention, so
+     * they must not ride the nameConflicts channel and earn the false "two
+     * rows want the same name … Rename one of them" preamble. They still
+     * FAIL the collection (dependents must not run over a held-back pair);
+     * they just say the truth. */
+    const sweptHoldbacks: string[] = [];
     /** SyncIds of rows left holding an UNRESOLVED placeholder (Codex P2).
      * Reporting is not enough: the row still entered the row loop, and a user
      * edit bumping its `updatedAt` while stranded made the placeholder the
@@ -1413,6 +1421,11 @@ export class SyncService extends EventEmitter {
               // here too, with the same carve-outs as the young branch. One
               // held-back cycle per drained record over a live row — the
               // entry is gone next cycle, so it cannot recur.
+              // Drain FIRST, then say what actually happened (Codex P2):
+              // the drain can fail, the entry then stays aged, and a notice
+              // claiming clearance would lie every cycle of a persistent
+              // _migrations failure.
+              const cleared = await dequeueRestoreOn(migrations, entry, entry.at);
               if (
                 row &&
                 typeof row.syncId === "string" &&
@@ -1420,12 +1433,14 @@ export class SyncService extends EventEmitter {
                 row._purged !== true
               ) {
                 quarantinedSyncIds.add(row.syncId);
-                sweptConflicts.push(
-                  `${collectionName} ${entry.i} had a pending rename record; held back ` +
-                    `this cycle while it was cleared, and retried on the next.`,
+                sweptHoldbacks.push(
+                  cleared
+                    ? `${collectionName} ${entry.i} had a pending rename record; held back ` +
+                        `this cycle while it was cleared, and retried on the next.`
+                    : `${collectionName} ${entry.i} has a pending rename record that could ` +
+                        `not be cleared; held back and retried on the next cycle.`,
                 );
               }
-              await dequeueRestoreOn(migrations, entry, entry.at);
             } else if (
               row &&
               typeof row.syncId === "string" &&
@@ -1444,7 +1459,7 @@ export class SyncService extends EventEmitter {
               // can appear on them, and quarantining would re-block the
               // tombstone from propagating.
               quarantinedSyncIds.add(row.syncId);
-              sweptConflicts.push(
+              sweptHoldbacks.push(
                 `${collectionName} ${entry.i} is being renamed by another sync ` +
                   `service; held back this cycle and retried on the next.`,
               );
@@ -1680,17 +1695,24 @@ export class SyncService extends EventEmitter {
       migrations: ReturnType<Db["collection"]>,
       entry: RenameStagingRestoreKey,
       observedAt?: Date,
-    ): Promise<void> => {
+    ): Promise<boolean> => {
       const match: Document = { c: entry.c, i: entry.i, o: entry.o, p: entry.p };
       if (observedAt !== undefined) match.at = { $eq: observedAt };
-      await migrations
-        .updateOne(
+      try {
+        await migrations.updateOne(
           { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
           { $pull: { entries: match } as Document },
-        )
-        .catch((err: unknown) => {
-          console.warn(`[sync] ${entry.c}: could not dequeue a staging-restore entry.`, err);
-        });
+        );
+        // An accepted write is a clearance even at zero matches — the entry
+        // is gone either way. Only a REJECTED write is a failure, and the
+        // caller decides what that means: most sites tolerate it (the sweep
+        // re-examines next cycle), but the aged drain's notice must not
+        // claim the record was cleared when it was not (Codex P2).
+        return true;
+      } catch (err) {
+        console.warn(`[sync] ${entry.c}: could not dequeue a staging-restore entry.`, err);
+        return false;
+      }
     };
     await sweepSide(localDb, localCol, remoteCol);
     await sweepSide(remoteDb, remoteCol, localCol);
@@ -2113,6 +2135,10 @@ export class SyncService extends EventEmitter {
     if (sweptConflicts.length > 0) {
       result.nameConflicts = (result.nameConflicts ?? 0) + sweptConflicts.length;
     }
+    // Hold-backs FAIL the collection without the collision preamble — they
+    // carry no name contention, so "Rename one of them" would be a false
+    // diagnosis for a pair that converges by itself next cycle (Codex P2).
+    // Rendered at the end with the other additive messages.
 
     // GH #1142: settle any placeholder whose real write never landed.
     //
@@ -2556,6 +2582,13 @@ export class SyncService extends EventEmitter {
     // not merely count them.
     if (strandedNotices.length > 0) {
       result.error = `${result.error ? `${result.error} ` : ""}${strandedNotices.join(" ")}`;
+    }
+
+    if (sweptHoldbacks.length > 0) {
+      // Informational, additive, and still a FAILURE: dependents must not run
+      // over a held-back pair, but the user must not be told to rename
+      // anything (Codex P2 — these are not collisions).
+      result.error = `${result.error ? `${result.error} ` : ""}${sweptHoldbacks.join(" ")}`;
     }
 
     if (heldBack > 0) {

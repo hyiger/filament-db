@@ -1552,7 +1552,10 @@ describe("SyncService — v1.12 sync expansion", () => {
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect(queue?.entries ?? []).toEqual([]);
       expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-l" }))?.name).toBe("Crash Left");
-      expect(first.find((r) => r.collection === "bedtypes")?.error).toMatch(/held back/i);
+      const firstErr = first.find((r) => r.collection === "bedtypes")?.error;
+      expect(firstErr).toMatch(/held back/i);
+      expect(firstErr).toMatch(/was cleared/i); // the drain succeeded, and the notice says so
+      expect(firstErr).not.toMatch(/Rename one of them/);
 
       // No record left ⇒ the very next cycle converges normally.
       sync.destroy(); sync = makeSync();
@@ -1603,7 +1606,11 @@ describe("SyncService — v1.12 sync expansion", () => {
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((queue?.entries ?? []).length).toBe(1);
       expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-e" }))?.name).toBe("Mid Stage");
-      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/held back this cycle/i);
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/held back this cycle/i);
+      // Informational, not a collision: the "Rename one of them" preamble
+      // would be a false diagnosis for a pair that converges by itself.
+      expect(err).not.toMatch(/Rename one of them/);
     });
 
     /**
