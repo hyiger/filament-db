@@ -27,6 +27,11 @@ import {
   CAUSE_LEAD,
 } from "../src/lib/renameStaging";
 import {
+  repairMalformedTombstones,
+  TOMBSTONE_COLLECTIONS,
+  type MinimalTombstoneCollection,
+} from "../src/lib/malformedTombstones";
+import {
   retombstonePurgedZombies,
   type MinimalZombieCollection,
 } from "../src/lib/purgedZombies";
@@ -620,6 +625,29 @@ export class SyncService extends EventEmitter {
           console.log(
             `[sync] ${side}: re-tombstoned ${zombies} purged zombie filament(s) (GH #1004)`,
           );
+        }
+        // GH #1152: heal unreadable tombstones (the raw-driver `_deletedAt:
+        // ""` shape) on BOTH peers before any copy. The write-site guards
+        // below stop the engine from spreading the value; this removes what
+        // already exists — without it, a peer still carrying the shape
+        // re-copies it forward on the next whole-document LWW transfer. Every
+        // synced collection can hold a tombstone, unlike `_purged`, which is
+        // a filaments-only concept. Epoch stamp: LWW-arithmetic-preserving —
+        // see the helper's docblock for why NOT `new Date()` and NOT null.
+        for (const collectionName of TOMBSTONE_COLLECTIONS) {
+          // Re-checked per iteration (Codex P2): destroy() can flip `aborted`
+          // while an awaited repair is in flight, and the service contract is
+          // that only the operation already in flight may finish — not six
+          // more repairs against a database the user just switched away from.
+          if (this.aborted) break;
+          const healed = await repairMalformedTombstones(
+            dbHandle.collection(collectionName) as unknown as MinimalTombstoneCollection,
+          );
+          if (healed > 0) {
+            console.log(
+              `[sync] ${side}: repaired ${healed} unreadable tombstone(s) in ${collectionName} (GH #1152)`,
+            );
+          }
         }
         // Re-check AFTER the zombie repair (Codex P2). `destroy()` can set
         // `aborted` while that await is in flight, and the trim is a SEPARATE
@@ -2085,13 +2113,37 @@ export class SyncService extends EventEmitter {
             if (localPurged && !remotePurged) {
               await remoteCol.updateOne(
                 { _id: remoteDoc._id },
-                { $set: { _purged: true, _deletedAt: localDoc._deletedAt ?? new Date() } },
+                // GH #1152: `??` passed a raw `_deletedAt: ""` straight
+                // through — the fallback means "stamp a tombstone when there
+                // is not one", and an unreadable value is not one. The purge
+                // tombstone's timestamp never participates in LWW (the purge
+                // branch precedes both delete arms and both-purged is a
+                // no-op), so `new Date()` is inert here and matches
+                // retombstonePurgedZombies' stamp.
+                {
+                  $set: {
+                    _purged: true,
+                    _deletedAt:
+                      SyncService.readTimestamp(localDoc._deletedAt) != null
+                        ? localDoc._deletedAt
+                        : new Date(),
+                  },
+                },
               );
               result.deleted++;
             } else if (!localPurged && remotePurged) {
               await localCol.updateOne(
                 { _id: localDoc._id },
-                { $set: { _purged: true, _deletedAt: remoteDoc._deletedAt ?? new Date() } },
+                // GH #1152 — mirror of the local arm above.
+                {
+                  $set: {
+                    _purged: true,
+                    _deletedAt:
+                      SyncService.readTimestamp(remoteDoc._deletedAt) != null
+                        ? remoteDoc._deletedAt
+                        : new Date(),
+                  },
+                },
               );
               result.deleted++;
             }
@@ -2113,7 +2165,23 @@ export class SyncService extends EventEmitter {
             const localDeletedAt = SyncService.readTimestamp(localDoc._deletedAt) ?? 0;
             const remoteUpdatedAt = SyncService.readUpdatedAt(remoteDoc) ?? 0;
             if (localDeletedAt >= remoteUpdatedAt) {
-              await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { _deletedAt: localDoc._deletedAt } });
+              // GH #1152: same verbatim-write class as the purge sites, but
+              // the fallback here is EPOCH, not `new Date()` — this tombstone
+              // DOES participate in LWW (the branch above compared it), and it
+              // won with an effective timestamp of 0. Stamping now would
+              // promote it into a fresh delete that beats older live edits on
+              // future cycles; epoch preserves the arithmetic that just ran.
+              await remoteCol.updateOne(
+                { _id: remoteDoc._id },
+                {
+                  $set: {
+                    _deletedAt:
+                      SyncService.readTimestamp(localDoc._deletedAt) != null
+                        ? localDoc._deletedAt
+                        : new Date(0),
+                  },
+                },
+              );
               result.deleted++;
             } else {
               // Remote was updated strictly after local delete — resurrect locally
@@ -2148,7 +2216,18 @@ export class SyncService extends EventEmitter {
             const remoteDeletedAt = SyncService.readTimestamp(remoteDoc._deletedAt) ?? 0;
             const localUpdatedAt = SyncService.readUpdatedAt(localDoc) ?? 0;
             if (remoteDeletedAt >= localUpdatedAt) {
-              await localCol.updateOne({ _id: localDoc._id }, { $set: { _deletedAt: remoteDoc._deletedAt } });
+              // GH #1152 — mirror of the toRemote arm; epoch for the same reason.
+              await localCol.updateOne(
+                { _id: localDoc._id },
+                {
+                  $set: {
+                    _deletedAt:
+                      SyncService.readTimestamp(remoteDoc._deletedAt) != null
+                        ? remoteDoc._deletedAt
+                        : new Date(0),
+                  },
+                },
+              );
               result.deleted++;
             } else {
               const full = await hydrateLocal(localDoc);
