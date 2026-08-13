@@ -222,6 +222,43 @@ export function planRenameStaging(
   return { staged, unsatisfiable };
 }
 
+/**
+ * May the blocker be moved aside, given a FRESH read of its source row?
+ *
+ * Staging a blocker is a bet that its own pending write — later in this same
+ * pass — will rename it away, vacating the name for good. The write's body is
+ * hydrated from the source document AT WRITE TIME, so the only honest way to
+ * predict it is to read that same document now (Codex P1, sixth pass — the
+ * previous check compared the blocker's fresh name against its SNAPSHOT
+ * desired name, and a source renamed after the snapshot made the two diverge:
+ * staging was authorized for a rename that was no longer coming, and the
+ * placeholder could never be settled).
+ *
+ * The table, and why each row refuses:
+ *  - not a string: the source is gone or malformed — no rename is provably
+ *    coming, and hydration at write time will skip the copy entirely;
+ *  - equal to the blocker's current name: nothing will move the blocker off
+ *    this name. This one clause covers three distinct histories at once — the
+ *    write already LANDED (it transferred exactly this name), the write is a
+ *    no-op rename, and the source was REVERTED to match after the snapshot;
+ *  - a staging placeholder: the source row is itself moved aside on its own
+ *    side, and the pending write would transfer the placeholder text verbatim
+ *    onto this peer — the propagation this module exists to prevent.
+ *
+ * A residual race remains by construction: the source can change between this
+ * read and the blocker's write, and without transactions that window cannot
+ * be zero. It shrinks from pass-length to the gap between two adjacent
+ * writes, and settlement now names anything that still slips through.
+ */
+export function pendingRenameCanFreeName(
+  freshSourceName: unknown,
+  blockerCurrentName: string,
+): boolean {
+  if (typeof freshSourceName !== "string") return false;
+  if (isStagingPlaceholder(freshSourceName)) return false;
+  return freshSourceName !== blockerCurrentName;
+}
+
 /** Facts about a row left holding a staging placeholder. */
 export interface StrandedPlaceholder {
   collection: string;

@@ -17,6 +17,7 @@ import {
   isStagingPlaceholder,
   placeholderFor,
   planRenameStaging,
+  pendingRenameCanFreeName,
   strandedPlaceholderNotice,
   withStrandingNotice,
   strandingNoticeOf,
@@ -1393,29 +1394,49 @@ export class SyncService extends EventEmitter {
 
         const blockerSyncId = typeof blocker.syncId === "string" ? blocker.syncId : null;
         const blockerName = typeof blocker.name === "string" ? blocker.name : null;
-        if (
-          !blockerSyncId ||
-          !blockerName ||
-          !stageableOn(col).has(String(blocker._id)) ||
-          // The plan is a SNAPSHOT; re-derive its rule from fresh state
-          // (Codex P1). Staging is legitimate only while the blocker's own
-          // rewrite is still PENDING — the plan checked that against
-          // pre-pass names, but by now the blocker's write may have LANDED,
-          // in which case its fresh name IS its final one and nothing will
-          // ever move it again: staging it can never be settled, because the
-          // name settlement would restore is the one this retry is about to
-          // take. The planner's contested-destination refusal closes this
-          // for rows it can SEE; this closes it for requesters it cannot —
-          // a resurrect is not in the intent graph (its LWW writes the
-          // deleted side), yet its E11000 lands in this same catch.
-          desiredNameOn(col, blockerSyncId) === blockerName
-        ) {
+        const refuseStaging = () => {
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           console.warn(
             `[sync] ${collectionName}: cannot apply name ${JSON.stringify(desiredName)} — ` +
               `held by a row this pass will not rewrite on this side. Rename one of them.`,
           );
           return false;
+        };
+        if (!blockerSyncId || !blockerName || !stageableOn(col).has(String(blocker._id))) {
+          return refuseStaging();
+        }
+
+        // The plan is a SNAPSHOT; staging additionally needs FRESH proof that
+        // the blocker's own pending write will rename it away (Codex P1, twice
+        // over). The first version of this check compared the blocker's fresh
+        // name against its SNAPSHOT desired name — half-fresh, and the half
+        // matters: the pending write hydrates the CURRENT source document at
+        // write time, so a source renamed after the snapshot (a user reverting
+        // a name mid-pass) diverges from `desiredNameOn`, and staging was
+        // authorized for a rename that was no longer coming. Settlement could
+        // not restore the placeholder, because the name it would restore had
+        // been taken by the retry this staging enabled.
+        //
+        // So read the SAME document the pending write will hydrate — the
+        // blocker's source-side pair, by the `_id` the snapshot map carries —
+        // and judge against what it says NOW. The decision table (landed
+        // write, no-op rename, mid-pass revert, vanished source, placeholder
+        // contagion) lives in `pendingRenameCanFreeName`, pure and tested.
+        // This also subsumes the previous check: a landed write makes the
+        // fresh source name equal the blocker's fresh name. The planner still
+        // covers what only IT can see (contested destinations, immovable
+        // chains); this covers what only fresh state can.
+        const sourceSnap = (col === remoteCol ? localBySyncId : remoteBySyncId).get(
+          blockerSyncId,
+        );
+        const sourceFresh = sourceSnap
+          ? await (col === remoteCol ? localCol : remoteCol).findOne(
+              { _id: sourceSnap._id },
+              { projection: { name: 1 } },
+            )
+          : null;
+        if (!pendingRenameCanFreeName(sourceFresh?.name, blockerName)) {
+          return refuseStaging();
         }
 
         // CONDITIONAL on what was observed (Codex P1). Between the findOne and

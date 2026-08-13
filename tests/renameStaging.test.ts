@@ -5,6 +5,7 @@ import {
   placeholderFor,
   strandedPlaceholderNotice,
   withStrandingNotice,
+  pendingRenameCanFreeName,
   strandingNoticeOf,
   STAGING_PREFIX,
   type RenameIntent,
@@ -205,6 +206,42 @@ describe("planRenameStaging with contested destinations", () => {
     );
     expect(plan.staged.map((s) => s.id).sort()).toEqual(["A", "B"]);
     expect(plan.unsatisfiable).toEqual([]);
+  });
+});
+
+/**
+ * GH #1142 (Codex P1, sixth pass): the runtime staging predicate, judged
+ * against a FRESH read of the blocker's source row — the same document its
+ * pending write will hydrate. The mid-pass mutation that makes this matter (a
+ * user reverting a source name between the snapshot and the write) cannot be
+ * induced from the DB harness, so the decision table is pinned here and the
+ * wiring is structural: sync-service passes `sourceFresh?.name` straight in.
+ */
+describe("pendingRenameCanFreeName", () => {
+  it("authorizes when the pending write will genuinely rename the blocker", () => {
+    expect(pendingRenameCanFreeName("Drybox 2", "Drybox 1")).toBe(true);
+  });
+
+  it("refuses when the fresh source name EQUALS the blocker's current name", () => {
+    // One clause, three histories: the write already landed (it transferred
+    // exactly this name), the write is a no-op rename, or the source was
+    // reverted to match after the snapshot. In all three nothing will ever
+    // move the blocker off this name, so a placeholder could not be settled.
+    expect(pendingRenameCanFreeName("Drybox 1", "Drybox 1")).toBe(false);
+  });
+
+  it("refuses when the source is gone or malformed — no rename provably coming", () => {
+    expect(pendingRenameCanFreeName(undefined, "Drybox 1")).toBe(false);
+    expect(pendingRenameCanFreeName(null, "Drybox 1")).toBe(false);
+    expect(pendingRenameCanFreeName(42, "Drybox 1")).toBe(false);
+  });
+
+  it("refuses when the source itself holds a staging placeholder", () => {
+    // The pending write would transfer the placeholder text verbatim onto
+    // this peer — the exact propagation this module exists to prevent.
+    expect(
+      pendingRenameCanFreeName(`${STAGING_PREFIX}abc123-def`, "Drybox 1"),
+    ).toBe(false);
   });
 });
 
