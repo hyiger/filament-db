@@ -246,6 +246,28 @@ export function nextFilterHref<S extends FilterSpec>(
 }
 
 /**
+ * The query component of an href, without the `?` and WITHOUT the fragment.
+ *
+ * For the own-write marker (GH #1141, Codex P2, third pass): the pages record
+ * what they hand to `router.replace` so the echo through `useSearchParams` can
+ * be told apart from an external navigation. `nextFilterHref` preserves the
+ * hash — correctly, the skip link's `#main-content` must survive a write — but
+ * `useSearchParams().toString()` never contains one. A naive
+ * `href.slice(indexOf("?") + 1)` therefore stored `q=pla#main-content` while
+ * the echo reported `q=pla`: the marker never matched, the page misclassified
+ * its own write as external, and the re-seed clobbered live input — with the
+ * debounce trim, typing `"pla "` and pausing ate the separator space.
+ */
+export function queryStringOf(href: string): string {
+  // The fragment bounds the search: a `?` inside the hash is fragment text,
+  // not a query delimiter (`/#section?fake=1` has no query at all).
+  const h = href.indexOf("#");
+  const beforeHash = h === -1 ? href : href.slice(0, h);
+  const q = beforeHash.indexOf("?");
+  return q === -1 ? "" : beforeHash.slice(q + 1);
+}
+
+/**
  * The option list for a `<select>` whose current value may not be in it.
  *
  * A URL-supplied `?type=` / `?vendor=` is free text — the values come from the

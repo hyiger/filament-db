@@ -5,6 +5,7 @@ import {
   nextFilterHref,
   presentFilterKeys,
   seedFilterState,
+  queryStringOf,
   oneOf,
   boolParam,
   textParam,
@@ -438,5 +439,32 @@ describe("seedFilterState", () => {
 
   it("treats an unparseable sticky value as silence, not as a reset", () => {
     expect(seedFilterState("sort=bogus", SPEC2, { sortKey: "cost" }).sortKey).toBe("cost");
+  });
+});
+
+/**
+ * GH #1141 (Codex P2, third pass). The own-write marker must store exactly
+ * what `useSearchParams().toString()` will echo — which never includes a
+ * fragment, while `nextFilterHref` (correctly) preserves one. A marker with
+ * the hash baked in never matches, so the page misclassifies its own write as
+ * an external navigation and the re-seed clobbers live input.
+ */
+describe("queryStringOf", () => {
+  it("strips the fragment the skip link leaves on the URL", () => {
+    expect(queryStringOf("/?q=pla#main-content")).toBe("q=pla");
+  });
+
+  it("returns the query alone when there is no fragment", () => {
+    expect(queryStringOf("/inventory?q=pla&group=vendor")).toBe("q=pla&group=vendor");
+  });
+
+  it("returns empty for a bare path, with or without a fragment", () => {
+    expect(queryStringOf("/")).toBe("");
+    expect(queryStringOf("/#main-content")).toBe("");
+  });
+
+  it("ignores a ? that appears inside the fragment", () => {
+    // A hash may itself contain a ?; only the real query counts.
+    expect(queryStringOf("/#section?fake=1")).toBe("");
   });
 });

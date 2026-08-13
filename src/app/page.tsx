@@ -8,6 +8,7 @@ import {
   presentFilterKeys,
   nextFilterHref,
   seedFilterState,
+  queryStringOf,
   withCurrentValue,
 } from "@/lib/listFilterParams";
 import {
@@ -403,7 +404,10 @@ export default function Home() {
     if (href) {
       // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.
-      ownUrlWriteRef.current = href.includes("?") ? href.slice(href.indexOf("?") + 1) : "";
+      // Query component ONLY (Codex P2): the href keeps the hash, the echo
+      // through useSearchParams never has one, and a mismatched marker turns
+      // our own write into a "external" re-seed that clobbers live input.
+      ownUrlWriteRef.current = queryStringOf(href);
       // Through the ROUTER, not `window.history` directly. A raw
       // `replaceState` leaves the router's own model of the URL untouched, so
       // `useSearchParams` keeps reporting the pre-write value — and a later
