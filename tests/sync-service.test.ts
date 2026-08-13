@@ -390,4 +390,21 @@ describe("every quarantine reports (source invariant)", () => {
     const fallbacks = src.match(/was held back this cycle by placeholder recovery/g) ?? [];
     expect(fallbacks.length).toBe(2);
   });
+
+  it("the loop catch carries BOTH notice channels onto the thrown error", async () => {
+    // Codex P2, round 20: `trySync` keeps only the thrown message, and the
+    // post-loop rendering never runs on this path — so a catch that carried
+    // `strandedNotices` alone silently dropped every hold-back report for the
+    // cycle whenever an unrelated transfer threw later in the same pass. The
+    // path needs a mid-loop I/O failure, which a real driver cannot produce
+    // deterministically, so the composition is pinned at the source: the
+    // catch block must fold BOTH channels into the carried notice.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync("electron/sync-service.ts", "utf8");
+
+    const catchStart = src.indexOf("} catch (loopErr) {");
+    expect(catchStart).toBeGreaterThan(-1);
+    const catchBlock = src.slice(catchStart, src.indexOf("throw loopErr;", catchStart));
+    expect(catchBlock).toContain("[...strandedNotices, ...sweptHoldbacks]");
+  });
 });

@@ -2533,9 +2533,14 @@ export class SyncService extends EventEmitter {
     } catch (loopErr) {
       await settleStagedRenames();
       // `trySync` discards this result object and keeps only the message, so
-      // on THIS path the stranding has to ride the error instead.
-      if (strandedNotices.length > 0) {
-        throw withStrandingNotice(loopErr, strandedNotices.join(" "));
+      // on THIS path everything has to ride the error instead — BOTH channels
+      // (Codex P2, round 20): the hold-backs render only in the post-loop
+      // block this throw never reaches, so carrying strandings alone dropped
+      // a quarantined pair's report whenever an unrelated transfer threw
+      // later in the same cycle.
+      const carried = [...strandedNotices, ...sweptHoldbacks];
+      if (carried.length > 0) {
+        throw withStrandingNotice(loopErr, carried.join(" "));
       }
       throw loopErr;
     }
