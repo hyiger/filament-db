@@ -1382,12 +1382,21 @@ export class SyncService extends EventEmitter {
         // unquarantined on precisely the cycles where something is already
         // wrong.
         let strandedSyncId: string | null = null;
+        /** Did the row read itself succeed? An entry whose row could not even
+         * be INSPECTED cannot be quarantined (no syncId was observed) while
+         * `coveredIds` keeps the backstop away from it too — so nothing can
+         * make the safety promise for it, and the collection must fail
+         * (Codex P2, the read-failure posture one more level down). Distinct
+         * from a row observed WITHOUT a syncId: that row never enters the LWW
+         * maps and cannot spread, so continuing is safe there. */
+        let rowInspected = false;
         const young = Date.now() - entry.at.getTime() < SWEEP_MIN_AGE_MS;
         try {
           const row = await col.findOne(
             { _id: new ObjectId(entry.i) },
             { projection: { name: 1, syncId: 1, _deletedAt: 1, _purged: 1 } },
           );
+          rowInspected = true;
           if (!row || row.name !== entry.p) {
             // Gone, landed, or human-renamed — nothing to recover. Only an
             // AGED entry may be drained (young + not-holding is exactly the
@@ -1458,6 +1467,13 @@ export class SyncService extends EventEmitter {
             quarantinedSyncIds.add(strandedSyncId);
           }
         } catch (err) {
+          if (!rowInspected) {
+            // The row read itself failed: nothing observed, nothing
+            // quarantinable, backstop blinded by coveredIds. The sweep cannot
+            // make its promise for this collection — fail it, like every
+            // other failed read here.
+            throw err;
+          }
           // Keep the entry; next cycle retries. One bad row must not abort
           // the collection's sweep — but a row OBSERVED holding its
           // placeholder must not sync just because a later step failed.
