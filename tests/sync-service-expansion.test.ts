@@ -1475,7 +1475,10 @@ describe("SyncService — v1.12 sync expansion", () => {
       const first = await sync.sync();
       // Reported and FAILED — the placeholder is visible in the UI and the
       // collection must not read as green around it.
-      expect(first.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+      const firstTakenErr = first.find((r) => r.collection === "bedtypes")?.error;
+      expect(firstTakenErr).toMatch(/rename it back manually/i);
+      // Self-describing stranding, no false collision preamble (round 18).
+      expect(firstTakenErr).not.toMatch(/Rename one of them/);
       const kept = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((kept?.entries ?? []).length).toBe(1);
 
@@ -1762,13 +1765,20 @@ describe("SyncService — v1.12 sync expansion", () => {
       sync = makeSync();
       const results = await sync.sync();
 
-      // The peer's name survives, the stranding is reported, and the row and
-      // record are both UNTOUCHED — youth forbids restore and drain alike.
+      // The peer's name survives and the row and record are both UNTOUCHED —
+      // youth forbids restore and drain alike. The report is a HOLD, not a
+      // stranding (Codex P2, round 18): this state is usually a healthy owner
+      // between staging and settlement, and telling the user to rename a row
+      // the owner is about to fix was a false prescription. A crash-stranded
+      // row ages into the real stranding text at the bound.
       expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe("Shelf E");
       expect((await localDb.collection("bedtypes").findOne({ syncId: "sw-i" }))?.name).toBe(`${PH}x8`);
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((queue?.entries ?? []).length).toBe(1);
-      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/rename it back manually/i);
+      const err = results.find((r) => r.collection === "bedtypes")?.error;
+      expect(err).toMatch(/mid-rename by another sync service/i);
+      expect(err).not.toMatch(/rename it back manually/i);
+      expect(err).not.toMatch(/Rename one of them/);
     });
 
     /**

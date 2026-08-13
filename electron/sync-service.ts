@@ -1450,16 +1450,17 @@ export class SyncService extends EventEmitter {
                 };
               }
             } else if (young) {
-              // Holding, but the entry is fresh — report without touching row
-              // or record; the owning pass (or the next aged sweep) resolves.
+              // Holding, but the entry is fresh — usually a healthy owner
+              // between staging and settlement, resolving in seconds (Codex
+              // P2, round 18: the stranding text told the user to rename a
+              // row the owner was about to fix). A crash-stranded row ages
+              // into the real stranding report at the bound. Touch nothing.
               notice = {
-                hold: false,
-                text: strandedPlaceholderNotice({
-                  collection: collectionName,
-                  id: entry.i,
-                  originalName: entry.o,
-                  placeholderName: entry.p,
-                }),
+                hold: true,
+                text:
+                  `${collectionName} ${entry.i} is mid-rename by another sync service; ` +
+                  `its temporary name is held back this cycle and resolved by the owner ` +
+                  `or the next aged sweep.`,
               };
             } else {
               const taken = await col.findOne(
@@ -1513,14 +1514,15 @@ export class SyncService extends EventEmitter {
           // Post-observation failure: the quarantine already happened at the
           // hoist; only the message remains.
           if (strandedSyncId) {
+            // An I/O failure mid-recovery, not a name collision — the
+            // holdback channel says so; a persistent failure re-reports every
+            // cycle, and the hint names the manual escape.
             notice = {
-              hold: false,
-              text: strandedPlaceholderNotice({
-                collection: collectionName,
-                id: entry.i,
-                originalName: entry.o,
-                placeholderName: entry.p,
-              }),
+              hold: true,
+              text:
+                `${collectionName} ${entry.i} holds the temporary name ${JSON.stringify(entry.p)} ` +
+                `and recovery failed this cycle; held back and retried on the next. ` +
+                `Rename it manually if this persists.`,
             };
           }
           console.warn(`[sync] ${collectionName}: staging-restore sweep failed for ${entry.i}.`, err);
@@ -1580,16 +1582,14 @@ export class SyncService extends EventEmitter {
               isRestoreEntry(e) && e.c === collectionName && e.i === String(stray._id),
           );
           if (lateEntry) {
-            // Enqueued after the snapshot: defer the ACTION to its owner;
-            // the hoisted quarantine already holds the pair.
+            // Enqueued after the snapshot — by definition FRESH, an active
+            // owner mid-pass (Codex P2, round 18's named analog): defer the
+            // ACTION to it, hold the pair, and say mid-flight, not stranded.
             notice = {
-              hold: false,
-              text: strandedPlaceholderNotice({
-                collection: collectionName,
-                id: String(stray._id),
-                originalName: lateEntry.o,
-                placeholderName: lateEntry.p,
-              }),
+              hold: true,
+              text:
+                `${collectionName} ${String(stray._id)} is being renamed by another sync ` +
+                `service; held back this cycle and retried on the next.`,
             };
           } else {
             const peer =
@@ -1649,12 +1649,13 @@ export class SyncService extends EventEmitter {
             }
           }
         } catch (err) {
+          // I/O failure, not a collision — same rule as the queue path's catch.
           notice = {
-            hold: false,
+            hold: true,
             text:
               `${collectionName} ${String(stray._id)} holds the temporary name ` +
-              `${JSON.stringify(stray.name)} and could not be recovered this cycle. ` +
-              `Rename it manually if this persists.`,
+              `${JSON.stringify(stray.name)} and recovery failed this cycle; held back ` +
+              `and retried on the next. Rename it manually if this persists.`,
           };
           console.warn(
             `[sync] ${collectionName}: placeholder backstop failed for ${String(stray._id)}.`,
@@ -2125,9 +2126,12 @@ export class SyncService extends EventEmitter {
     // (the #1142 posture — a reported, recoverable stall beats an invisible
     // one). The notices are already seeded into `strandedNotices` above, so
     // they ride the same rendering as a fresh stranding.
-    if (sweptConflicts.length > 0) {
-      result.nameConflicts = (result.nameConflicts ?? 0) + sweptConflicts.length;
-    }
+    // Sweep strandings are SELF-DESCRIBING and are NOT counted into
+    // nameConflicts (Codex P2, round 18): that counter feeds the "two rows
+    // want the same name … Rename one of them" preamble, which is the row
+    // loop's real-collision diagnosis — false for a placeholder stranding,
+    // whose own notice already says exactly what to do. The notices still
+    // FAIL the collection through the strandedNotices rendering below.
     // Hold-backs FAIL the collection without the collision preamble — they
     // carry no name contention, so "Rename one of them" would be a false
     // diagnosis for a pair that converges by itself next cycle (Codex P2).
