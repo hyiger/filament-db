@@ -1249,6 +1249,17 @@ export class SyncService extends EventEmitter {
     }[] = [];
     /** Rows this pass left holding a placeholder, for the result message. */
     const strandedNotices: string[] = [];
+    /**
+     * SyncIds whose loop iteration has started (and, since iterations are
+     * sequential, has finished for every id but the current one). The one
+     * fact about a blocker that neither the plan nor any name can encode
+     * (Codex P1, seventh pass): whether its write is still COMING. Names
+     * cannot, because a third party renaming the target after the iteration
+     * completed breaks the equality that detects a landed write — the fresh
+     * source still differs from the perturbed target, staging looks
+     * legitimate, and no write remains to replace the placeholder.
+     */
+    const processedSyncIds = new Set<string>();
     const stagingNonce = new ObjectId().toHexString().slice(-8);
 
     /**
@@ -1402,7 +1413,18 @@ export class SyncService extends EventEmitter {
           );
           return false;
         };
-        if (!blockerSyncId || !blockerName || !stageableOn(col).has(String(blocker._id))) {
+        if (
+          !blockerSyncId ||
+          !blockerName ||
+          !stageableOn(col).has(String(blocker._id)) ||
+          // The blocker's own iteration must still be AHEAD (Codex P1). Once
+          // it has run, no write remains this pass, and the name checks below
+          // can no longer prove it: a third party renaming the target
+          // afterwards re-opens the gap between fresh source and fresh target
+          // that normally means "rename pending". Set membership is the only
+          // signal that survives arbitrary concurrent renames.
+          processedSyncIds.has(blockerSyncId)
+        ) {
           return refuseStaging();
         }
 
@@ -1616,6 +1638,11 @@ export class SyncService extends EventEmitter {
     // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
     try {
       for (const syncId of allSyncIds) {
+        // Marked at the TOP, not the bottom: the body is full of `continue`s
+        // and a trailing add would be skipped by every one of them. Including
+        // the CURRENT id is harmless — `syncId` is unique per collection, so
+        // a blocker (a different _id on the same col) can never carry it.
+        processedSyncIds.add(syncId);
         const localDoc = localBySyncId.get(syncId);
         const remoteDoc = remoteBySyncId.get(syncId);
 
