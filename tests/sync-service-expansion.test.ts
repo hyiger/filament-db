@@ -1517,6 +1517,53 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * The aged-drain window (Codex P1): draining a dead record over a LIVE
+     * row leaves the same resume race the young branch closed — a suspended
+     * owner can stage between the row read and the slim reads, with the
+     * backstop blinded by coveredIds. The drain proceeds, but the pair sits
+     * this one cycle out.
+     */
+    it("holds a live pair back for the cycle that drains its aged record", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // Live row holding its ORIGINAL name — the LWW winner — with a dead
+      // (aged) record from a pre-stage crash.
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: "Crash Left (edited)", material: "PEI", syncId: "sw-l", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Crash Left", material: "PEI", syncId: "sw-l", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Crash Left", p: `${PH}xb`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const first = await sync.sync();
+
+      // The record drained, the pair held back one cycle and reported.
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-l" }))?.name).toBe("Crash Left");
+      expect(first.find((r) => r.collection === "bedtypes")?.error).toMatch(/held back/i);
+
+      // No record left ⇒ the very next cycle converges normally.
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-l" }))?.name).toBe(
+        "Crash Left (edited)",
+      );
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
      * The multi-writer race (Codex P2): two services share one database, and
      * an entry is durable BEFORE its row is staged. A concurrent sweep that
      * judged a YOUNG entry would misread the enqueue-to-update window — the

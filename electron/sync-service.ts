@@ -1404,6 +1404,27 @@ export class SyncService extends EventEmitter {
             // observed stamp: the owner may have re-asserted since this
             // sweep's snapshot.
             if (!young) {
+              // Draining a dead record does NOT close the window (Codex P1,
+              // the suspension race one branch over): an owner suspended past
+              // the age bound can resume AFTER this read, stage, and pause
+              // again — and coveredIds, built from the snapshot that carried
+              // this entry, keeps the backstop away from the fresh
+              // placeholder. So a live, non-tombstoned row is quarantined
+              // here too, with the same carve-outs as the young branch. One
+              // held-back cycle per drained record over a live row — the
+              // entry is gone next cycle, so it cannot recur.
+              if (
+                row &&
+                typeof row.syncId === "string" &&
+                row._deletedAt == null &&
+                row._purged !== true
+              ) {
+                quarantinedSyncIds.add(row.syncId);
+                sweptConflicts.push(
+                  `${collectionName} ${entry.i} had a pending rename record; held back ` +
+                    `this cycle while it was cleared, and retried on the next.`,
+                );
+              }
               await dequeueRestoreOn(migrations, entry, entry.at);
             } else if (
               row &&
