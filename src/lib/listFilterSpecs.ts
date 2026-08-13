@@ -18,6 +18,7 @@ import {
   oneOf,
   boolParam,
   textParam,
+  exactTextParam,
   type FilterSpec,
 } from "@/lib/listFilterParams";
 import { KNOWN_LOCATION_KINDS } from "@/lib/locationKind";
@@ -75,8 +76,12 @@ export const HOME_PERSISTED_KEYS = ["sortKey", "sortDir"] as const;
 
 export const HOME_FILTER_SPEC = {
   search: { param: "q", fallback: "", ...textParam },
-  typeFilter: { param: "type", fallback: "", ...textParam },
-  vendorFilter: { param: "vendor", fallback: "", ...textParam },
+  // Exact keys into stored data, NOT trimmed — the schema does not trim
+  // type/vendor and the API compares them with $eq, so a stored "PLA " must
+  // round-trip byte-exact (Codex P2). Search stays `textParam`: it is a
+  // substring query whose live value the debounce canonicalizes the same way.
+  typeFilter: { param: "type", fallback: "", ...exactTextParam },
+  vendorFilter: { param: "vendor", fallback: "", ...exactTextParam },
   quickFilter: { param: "quick", fallback: "all" as QuickFilter, parse: oneOf(QUICK_FILTERS) },
   showOutOfStock: { param: "oos", fallback: false, ...boolParam },
   sortKey: {
@@ -135,8 +140,9 @@ export const INVENTORY_FILTER_SPEC = {
   // state kept filtering — and re-choosing the option already shown may emit
   // no change event, so the filter would be invisible AND unclearable.
   kind: { param: "kind", fallback: "", parse: oneOf(["", ...KNOWN_LOCATION_KINDS]) },
-  type: { param: "type", fallback: "", ...textParam },
-  vendor: { param: "vendor", fallback: "", ...textParam },
+  // Exact keys, untrimmed — see the home spec's twin comment (Codex P2).
+  type: { param: "type", fallback: "", ...exactTextParam },
+  vendor: { param: "vendor", fallback: "", ...exactTextParam },
   includeRetired: {
     param: "includeRetired",
     fallback: DEFAULT_INVENTORY_PREFS.includeRetired,

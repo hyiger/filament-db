@@ -84,6 +84,28 @@ describe("list filter specs", () => {
 });
 
 /**
+ * GH #1141 (Codex P2, fourth pass): type and vendor are EXACT keys into
+ * stored data — the schema does not trim them and the APIs compare with $eq —
+ * so their parsers must not editorialize. Pinned on the REAL specs, because
+ * the exactTextParam unit tests alone would stay green if someone swapped an
+ * entry back to the trimming textParam.
+ */
+describe("exact-key params are untrimmed", () => {
+  const entries = [
+    ["home.typeFilter", HOME_FILTER_SPEC.typeFilter],
+    ["home.vendorFilter", HOME_FILTER_SPEC.vendorFilter],
+    ["inventory.type", INVENTORY_FILTER_SPEC.type],
+    ["inventory.vendor", INVENTORY_FILTER_SPEC.vendor],
+  ] as const;
+
+  for (const [label, entry] of entries) {
+    it(`${label} round-trips edge whitespace byte-exact`, () => {
+      expect(entry.parse("PLA "), label).toBe("PLA ");
+    });
+  }
+});
+
+/**
  * The invariant the key-set comparison above CANNOT catch (Codex P1 review):
  * `groupBy` is both persisted and sticky, so a writer that forgets to record
  * the touch passes every test above while silently never persisting — or, the

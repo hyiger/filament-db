@@ -9,6 +9,7 @@ import {
   oneOf,
   boolParam,
   textParam,
+  exactTextParam,
   type FilterSpec,
 } from "@/lib/listFilterParams";
 
@@ -466,5 +467,35 @@ describe("queryStringOf", () => {
   it("ignores a ? that appears inside the fragment", () => {
     // A hash may itself contain a ?; only the real query counts.
     expect(queryStringOf("/#section?fake=1")).toBe("");
+  });
+});
+
+/**
+ * GH #1141 (Codex P2, fourth pass). Type and vendor are EXACT keys into
+ * stored data — the schema trims `name` but not these, and the list APIs
+ * compare them with `$eq` — so a stored `"PLA "` is a selectable value that
+ * must round-trip byte-exact. `textParam`'s trim broke the refresh: select
+ * it, filter correctly, reload, and the parsed `"PLA"` matches nothing.
+ */
+describe("exactTextParam", () => {
+  const SPEC4 = {
+    type: { param: "type", fallback: "", ...exactTextParam },
+  } satisfies FilterSpec;
+
+  it("round-trips a value with edge whitespace byte-exact", () => {
+    const q = serializeFilterParams("", SPEC4, { type: "PLA " });
+    expect(q).toBe("type=PLA+");
+    expect(parseFilterParams(q, SPEC4).type).toBe("PLA ");
+  });
+
+  it("treats an empty param as absent, like its trimming sibling", () => {
+    expect(parseFilterParams("type=", SPEC4).type).toBe("");
+    expect(exactTextParam.parse("")).toBeNull();
+  });
+
+  it("faithfully passes a whitespace-only value through", () => {
+    // `?type=%20` filters on a literal space — probably an empty result, but
+    // exact means exact; editorializing here is how the round trip broke.
+    expect(parseFilterParams("type=%20", SPEC4).type).toBe(" ");
   });
 });

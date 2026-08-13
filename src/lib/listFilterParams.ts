@@ -96,13 +96,31 @@ export const boolParam = {
   serialize: (v: boolean): string => (v ? "1" : "0"),
 };
 
-/** Free text: any non-empty string. Trimmed, because a link ending in `%20`
- *  would otherwise filter on whitespace and show nothing. */
+/** Free text the USER TYPES — a substring query. Trimmed, because the pages
+ *  canonicalize the live value the same way (the debounce trims), so the
+ *  trimmed form IS the value; a link ending in `%20` would otherwise filter
+ *  on whitespace and show nothing. Use `exactTextParam` for values that are
+ *  keys into stored data. */
 export const textParam = {
   parse: (raw: string): string | null => {
     const t = raw.trim();
     return t === "" ? null : t;
   },
+};
+
+/**
+ * Free text that is an EXACT KEY into stored data — type and vendor
+ * (GH #1141, Codex P2, and the distinction is the finding). The Filament
+ * schema trims `name` but NOT `type`/`vendor`, and the list APIs compare both
+ * with exact `$eq` — so a stored `"PLA "` is a legitimately selectable value,
+ * and trimming it at the URL boundary broke the round trip: select it, filter
+ * correctly, refresh, and the parsed `"PLA"` matches nothing. The stored
+ * bytes are the value; the URL layer may not editorialize them. (A lone
+ * `?type=%20` therefore filters on a space, faithfully — GH #1149 tracks
+ * normalizing the FIELDS, after which this could trim again.)
+ */
+export const exactTextParam = {
+  parse: (raw: string): string | null => (raw === "" ? null : raw),
 };
 
 /**
