@@ -1403,7 +1403,31 @@ export class SyncService extends EventEmitter {
             // enqueue-to-update window), and the drain is versioned on the
             // observed stamp: the owner may have re-asserted since this
             // sweep's snapshot.
-            if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
+            if (!young) {
+              await dequeueRestoreOn(migrations, entry, entry.at);
+            } else if (
+              row &&
+              typeof row.syncId === "string" &&
+              row._deletedAt == null &&
+              row._purged !== true
+            ) {
+              // A YOUNG entry quarantines its pair through the whole staging
+              // window (Codex P1), not only once the placeholder is visible:
+              // the owner can stage BETWEEN this read and the slim reads
+              // below, at which point coveredIds blinds the backstop and the
+              // fresh placeholder would ride LWW to the peer. Held back one
+              // cycle and reported honestly — this row is not stranded, its
+              // owner is mid-flight (or crashed pre-stage, which the aged
+              // sweep resolves). Tombstoned rows are exempt: the owner's
+              // staging filter requires `_deletedAt: null`, so no placeholder
+              // can appear on them, and quarantining would re-block the
+              // tombstone from propagating.
+              quarantinedSyncIds.add(row.syncId);
+              sweptConflicts.push(
+                `${collectionName} ${entry.i} is being renamed by another sync ` +
+                  `service; held back this cycle and retried on the next.`,
+              );
+            }
             continue;
           }
           // RESOLVED BY DELETION (Codex P2): a user may deal with a stranded

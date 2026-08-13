@@ -1523,19 +1523,23 @@ describe("SyncService — v1.12 sync expansion", () => {
      * row still holds its original name — as "resolved" and drain the record
      * the owning pass is about to depend on. Age is the discriminator.
      */
-    it("leaves a YOUNG entry alone even when the row looks resolved", async () => {
+    it("holds a YOUNG entry's pair back without touching the record", async () => {
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
-      const same = new Date(Date.now() - 60_000);
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
 
-      // The window shape: row holds its ORIGINAL name; the entry is fresh.
+      // The window shape: row holds its ORIGINAL name, the entry is fresh —
+      // and the row is the LWW winner, so pre-quarantine it would have synced
+      // mid-window (Codex P1: the owner can stage between the sweep and the
+      // slim reads, at which point the backstop is blinded by coveredIds).
       const { insertedId } = await localDb.collection("bedtypes").insertOne({
-        name: "Mid Stage", material: "PEI", syncId: "sw-e", _deletedAt: null,
-        createdAt: same, updatedAt: same,
+        name: "Mid Stage (edited)", material: "PEI", syncId: "sw-e", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
       });
       await remoteDb.collection("bedtypes").insertOne({
         name: "Mid Stage", material: "PEI", syncId: "sw-e", _deletedAt: null,
-        createdAt: same, updatedAt: same,
+        createdAt: older, updatedAt: older,
       });
       await localDb.collection("_migrations").updateOne(
         { _id: QUEUE_ID as never },
@@ -1544,12 +1548,15 @@ describe("SyncService — v1.12 sync expansion", () => {
       );
 
       sync = makeSync();
-      await sync.sync();
+      const results = await sync.sync();
 
       // The entry SURVIVES — only a dead pass's entries are the sweep's to
-      // judge, and this one is younger than the bound.
+      // judge — and the PAIR sat the cycle out: the peer keeps its name
+      // despite losing LWW, with the hold-back reported honestly.
       const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((queue?.entries ?? []).length).toBe(1);
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "sw-e" }))?.name).toBe("Mid Stage");
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/held back this cycle/i);
     });
 
     /**
