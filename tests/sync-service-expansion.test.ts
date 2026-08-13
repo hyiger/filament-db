@@ -898,6 +898,428 @@ describe("SyncService — v1.12 sync expansion", () => {
   // Mongoose then can't find it by name at all, because a String schema
   // setter applies to QUERY values too.
 
+  describe("contended renames are staged, not deadlocked (GH #1142)", () => {
+    /**
+     * The reported repro, verbatim, and it fails on `main`: two rows with the
+     * SAME syncIds on both peers and their names SWAPPED. Whichever paired row
+     * is copied first wants a name the other still holds, the partial-unique
+     * `name` index rejects it, and reversing the order only changes which one
+     * fails — the pair is a cycle.
+     *
+     * It is not transient. It repeats every cycle, and via `trySync` a failure
+     * in a parent collection cascade-skips its dependents, so one swapped pair
+     * stalls most of sync indefinitely.
+     */
+    it("resolves a cross-peer name SWAP instead of erroring forever", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "swap-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "swap-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "swap-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "swap-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The collection completed instead of aborting on E11000.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+
+      // Local is newer for both, so the remote adopts the swap...
+      const a = await remoteDb.collection("bedtypes").findOne({ syncId: "swap-a" });
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "swap-b" });
+      expect(a!.name).toBe("X");
+      expect(b!.name).toBe("Y");
+
+      // ...and no placeholder was left behind.
+      const leftovers = await remoteDb
+        .collection("bedtypes")
+        .countDocuments({ name: { $regex: "^__sync-staging-" } });
+      expect(leftovers).toBe(0);
+    });
+
+    /**
+     * GH #1142 (Codex P1). "Paired" was not the right condition either.
+     *
+     * A paired blocker's own LWW can copy in the OPPOSITE direction, so
+     * nothing rewrites its name on THIS target — the placeholder is stranded,
+     * and its later copy the other way can propagate `__sync-staging-…` to the
+     * other peer. Cleanup cannot rescue it by then, because the row it made
+     * way for owns its original name.
+     *
+     * Here local A is newer and wants "X" on the remote, while remote B
+     * currently owns "X" and is NEWER than local B — so B's copy runs
+     * remote -> local and never rewrites B on the remote.
+     */
+    it("refuses to stage a blocker whose copy runs the OTHER way", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "dir-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Bee", material: "PEI", syncId: "dir-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "dir-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        // remote B is NEWER, so B copies remote -> local and keeps "X" here.
+        { name: "X", material: "PEI", syncId: "dir-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // B keeps its real name on the remote — never staged, never stranded.
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "dir-b" });
+      expect(b!.name).toBe("X");
+      // And no placeholder leaked to EITHER peer.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
+     * GH #1142 (Codex P1): a TRASHED row must not enter the holder graph.
+     *
+     * The unique index is partial on `_deletedAt: null`, so a trashed row
+     * named "X" does not occupy that slot — GH #213 name reuse depends on it.
+     * Letting one in made it the "holder" whenever it sorted first, and a
+     * trashed row never vacates, so the fixpoint declared the chain immovable
+     * and refused a swap that was perfectly resolvable, every cycle.
+     */
+    it("resolves a swap even when a TRASHED row shares one of the names", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // A trashed "X" on the remote, inserted FIRST so it sorts ahead of the
+      // active blocker in the holder map.
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "X", material: "PEI", syncId: "tomb-x",
+        _deletedAt: older, createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "tswap-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "tswap-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "tswap-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "X", material: "PEI", syncId: "tswap-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+
+      // The swap went through despite the tombstone sharing a name.
+      const a = await remoteDb.collection("bedtypes").findOne({ syncId: "tswap-a" });
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "tswap-b" });
+      expect(a!.name).toBe("X");
+      expect(b!.name).toBe("Y");
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+      ).toBe(0);
+    });
+
+    /**
+     * GH #1142 (Codex P1): the whole CHAIN has to terminate, not just the
+     * first hop. A -> B, B -> C, and C standing still: a one-hop check stages
+     * B for A, A takes "B", and B can then never take "C" — settlement cannot
+     * restore B either, because A owns its original name. B would be left as
+     * `__sync-staging-…` permanently.
+     */
+    it("refuses a rename chain whose far end is immovable", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
+
+      // The chain lives on the REMOTE (the target): A wants B's name, B wants
+      // C's, and C never moves. Local names are what gets copied over.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "ch-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Cee", material: "PEI", syncId: "ch-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        // Equal timestamps on C, so nothing is copied for it either way; its
+        // local name just has to be distinct here.
+        { name: "Seaside", material: "PEI", syncId: "ch-c", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "ch-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "ch-b", _deletedAt: null, createdAt: older, updatedAt: older },
+        // Equal timestamps: C never moves, so "Cee" is never vacated.
+        { name: "Cee", material: "PEI", syncId: "ch-c", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // NOTHING was moved aside, so nothing can be stranded.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // B still has its real name on the remote — the one a one-hop check
+      // would have left as a placeholder.
+      const b = await remoteDb.collection("bedtypes").findOne({ syncId: "ch-b" });
+      expect(b!.name).toBe("Bee");
+      const c = await remoteDb.collection("bedtypes").findOne({ syncId: "ch-c" });
+      expect(c!.name).toBe("Cee");
+    });
+
+    /**
+     * GH #1142 (Codex P1, second pass): the holder graph must use MONGODB's
+     * predicate, not JS truthiness. `{_deletedAt: null}` matches null AND
+     * missing and nothing else, so a raw `_deletedAt: ""` — Mongoose casts an
+     * empty string to null on a Date path, the driver stores it verbatim, and
+     * `trimEntityNames` documents the same shape at its own `== null` test —
+     * sits OUTSIDE the partial unique index and can never block a write.
+     *
+     * `!d._deletedAt` let such a row in as a holder. Sorted first it won the
+     * name slot, never vacated (nothing is copying it), and the fixpoint then
+     * declared a perfectly resolvable swap immovable — every cycle, forever.
+     */
+    it("ignores a raw _deletedAt:\"\" row, which the partial index does not cover", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
+
+      // A pure two-row swap on the remote: A wants B's name and B wants A's.
+      // Resolvable by staging one of them aside.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esd-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Aye", material: "PEI", syncId: "esd-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        // The ghost, paired at equal timestamps so nothing is copied for it —
+        // it exists only to sit in the graph.
+        { name: "Bee", material: "PEI", syncId: "esd-ghost", _deletedAt: "", createdAt: older, updatedAt: same },
+      ]);
+      // Inserted FIRST on the target side so it wins the "Bee" slot in the
+      // holder map — first holder wins, which is what made this bite.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esd-ghost", _deletedAt: "", createdAt: older, updatedAt: same },
+        { name: "Aye", material: "PEI", syncId: "esd-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "esd-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The swap goes through — no conflict reported.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-a" }))!.name).toBe("Bee");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-b" }))!.name).toBe("Aye");
+      // The ghost is untouched, and nothing was left holding a placeholder.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esd-ghost" }))!.name).toBe("Bee");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    /**
+     * GH #1142 (Codex P1, third pass): the staging PREDICTOR has to classify
+     * deletion the way the LOOP does, not merely the way the index does.
+     *
+     * `desiredNameOn` used JS truthiness while the loop uses `_deletedAt !=
+     * null`. They disagree on exactly one stored value — the empty string —
+     * and there the loop takes the DELETE branch (resurrecting on the other
+     * side) while the predictor claimed a rename on this one. The blocker got
+     * staged for a write that never came, and the resurrect's fresh
+     * `hydrateRemote` read copied `__sync-staging-…` onto the OTHER peer,
+     * where nothing tracks it and settlement never looks.
+     *
+     * Distinct from the `_deletedAt: ""` case above, which pins the HOLDER
+     * GRAPH: there the ghost is paired at equal timestamps, so `desiredNameOn`
+     * short-circuits before ever reaching the deletion test.
+     *
+     * SEED CONSTRAINTS, all load-bearing:
+     *  - remote B needs a REAL `updatedAt`; at epoch 0 the delete propagates
+     *    instead of resurrecting and the cross-peer half is lost;
+     *  - local B's `_deletedAt` must be the literal `""` — a real Date returns
+     *    null even pre-fix and the test proves nothing;
+     *  - remote B needs `_deletedAt: null` so it is inside the partial index
+     *    and findable as the blocker.
+     */
+    it("will not stage a blocker whose pair is a raw _deletedAt:\"\" row", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bee", material: "PEI", syncId: "esn-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Zed", material: "PEI", syncId: "esn-b", _deletedAt: "", createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Aye", material: "PEI", syncId: "esn-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Bee", material: "PEI", syncId: "esn-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // NOTHING may hold a placeholder — on either peer. The local one is the
+      // one that used to escape entirely: `stagedRenames` never tracked it, so
+      // no settlement pass could have restored it.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // Both peers keep their seeded names: the case is reported, not forced.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esn-a" }))!.name).toBe("Aye");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "esn-b" }))!.name).toBe("Bee");
+    });
+
+    /**
+     * The same defect through the PURGE branch. The loop's first both-exist
+     * arm fires on `_purged` and writes only the flags — no name — so a paired
+     * row with a purge zombie on one side (`_purged: true` with a live
+     * `_deletedAt`) is just as immovable as a deleted one.
+     *
+     * Seeded on `bedtypes` DELIBERATELY: `retombstonePurgedZombies` repairs
+     * `filaments` only, so a filaments-based test would pass on the migration
+     * rather than on this guard.
+     */
+    it("will not stage a blocker whose pair is a purge zombie", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Pea", material: "PEI", syncId: "pz-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Qew", material: "PEI", syncId: "pz-b", _deletedAt: null, _purged: true, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Ehh", material: "PEI", syncId: "pz-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Pea", material: "PEI", syncId: "pz-b", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "pz-a" }))!.name).toBe("Ehh");
+    });
+
+    /**
+     * GH #1142 (Codex P1, fifth pass): a CONTESTED destination must refuse the
+     * whole tangle, because the cached plan cannot follow mid-pass reality.
+     *
+     * The state: the SOURCE holds duplicate active names ("Y" twice), which the
+     * trim refuses to index ("resolve them and restart") while the sync
+     * continues paired-only — so the writes still run against the indexed
+     * target. Pre-fix, the A↔B swap resolved first, C then E11000'd against
+     * the now-final A, and the SNAPSHOT plan still authorized staging A: C
+     * took "Y", and settlement could not restore A because "Y" was occupied.
+     * A stayed `__sync-staging-…` permanently.
+     *
+     * Post-fix nothing is written for the contested tangle at all — three
+     * reported conflicts, both peers byte-identical to the seed. The trim's
+     * own message already tells the user the real remedy (dedupe the source).
+     */
+    it("refuses a contested destination instead of stranding the winner", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+
+      // The source needs duplicate active names, so its unique index (created
+      // by the harness beforeEach) has to go — mirroring the real precondition.
+      await localDb.collection("bedtypes").dropIndex("name_1");
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Y", material: "PEI", syncId: "cd-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "X", material: "PEI", syncId: "cd-b", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Y", material: "PEI", syncId: "cd-c", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "X", material: "PEI", syncId: "cd-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Y", material: "PEI", syncId: "cd-b", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Z", material: "PEI", syncId: "cd-c", _deletedAt: null, createdAt: older, updatedAt: older },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // NOTHING holds a placeholder — the pre-fix outcome was exactly one,
+      // stranded on remote A after C took the name settlement would restore.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      // The target is untouched: refused, not half-applied.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-a" }))!.name).toBe("X");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-b" }))!.name).toBe("Y");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "cd-c" }))!.name).toBe("Z");
+      // And it is REPORTED, not silent.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeTruthy();
+    });
+
+    /**
+     * The unsatisfiable case: a row this pass is NOT moving already holds the
+     * name. Staging cannot help, so it must be reported and BOTH peers left
+     * alone — writing anyway would clobber a record the user still wants.
+     */
+    it("reports an unsatisfiable name conflict without clobbering the holder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date();
+      const same = new Date(Date.now() - 60_000);
+
+      // Local A is newer and wants "Taken" on the remote. Remote B holds
+      // "Taken" and is NOT moving — its timestamps match, so no copy happens
+      // for it at all. Both rows are PAIRED, so nothing reaches the insert
+      // path; the only conflict is the one under test.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Taken", material: "PEI", syncId: "unsat-a", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Squat", material: "PEI", syncId: "unsat-b", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Original", material: "PEI", syncId: "unsat-a", _deletedAt: null, createdAt: older, updatedAt: older },
+        { name: "Taken", material: "PEI", syncId: "unsat-b", _deletedAt: null, createdAt: older, updatedAt: same },
+      ]);
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // GH #1142 (Codex P1): it must SURFACE. A counter nothing reads left the
+      // cycle reporting idle while a whole-document update was silently
+      // skipped and would fail identically forever.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/name conflict/i);
+
+      // The immovable holder is untouched — that is the point.
+      const holder = await remoteDb.collection("bedtypes").findOne({ syncId: "unsat-b" });
+      expect(holder!.name).toBe("Taken");
+      // And no placeholder was stranded on it.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+  });
+
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
     /**
      * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as

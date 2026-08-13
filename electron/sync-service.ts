@@ -14,6 +14,16 @@ import {
   type MinimalTrimDb,
 } from "../src/lib/trimEntityNames";
 import {
+  isStagingPlaceholder,
+  placeholderFor,
+  planRenameStaging,
+  pendingRenameCanFreeName,
+  strandedPlaceholderNotice,
+  withStrandingNotice,
+  strandingNoticeOf,
+  CAUSE_LEAD,
+} from "../src/lib/renameStaging";
+import {
   retombstonePurgedZombies,
   type MinimalZombieCollection,
 } from "../src/lib/purgedZombies";
@@ -62,6 +72,22 @@ export function isDuplicateKeyError(err: unknown): boolean {
 }
 
 /**
+ * A duplicate-key violation on the unique `name` index (GH #1142).
+ *
+ * Distinct from `isDuplicateKeyError`, which deliberately matches only
+ * `syncId` — that one means "another process already inserted this row", a
+ * benign race. A `name` violation means two DIFFERENT records want one name,
+ * which needs the staging path rather than a shrug.
+ */
+export function isNameDuplicateKeyError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+  if (e.code !== 11000) return false;
+  if (!e.keyPattern || typeof e.keyPattern !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(e.keyPattern, "name");
+}
+
+/**
  * Extract the database name from a MongoDB connection URI.
  *
  * The DB name is the path segment after the authority:
@@ -104,22 +130,51 @@ export function getDbNameFromUri(uri: string): string {
  * `user is not allowed to do action [update] on [db.coll]`) and by code 13
  * (the more reliable signal, but not always populated on every wrapped
  * error path). Either is sufficient. See GH #143.
+ *
+ * ## Composed errors: classify the CAUSE, re-attach the notice (GH #1142)
+ *
+ * Two things break when a caller wraps a driver error in its own Error, which
+ * `strandedPlaceholderError` does:
+ *
+ *  1. `new Error(msg, {cause})` does NOT inherit `code`, so the "more reliable
+ *     signal" above silently disappears — a genuine `code: 13` whose text does
+ *     not match the regex used to produce the hint and now produces nothing.
+ *     So classification reads through `cause` when there is one.
+ *  2. The auth branch REPLACES the whole message, discarding anything the
+ *     caller put in it. Ordering cannot save a composed message — the function
+ *     never reads the original. So a stranding notice is re-attached at the
+ *     END, outside the auth/redact decision, where no present or future
+ *     rewriting branch can drop it.
+ *
+ * The notice is cause-free by construction (see `strandedPlaceholderNotice`),
+ * so re-attaching it cannot itself trip the regex on the next pass.
  */
 export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
-  const message = err instanceof Error ? err.message : "Sync failed";
+  // Classify the CAUSE when the error carries one — that is where the driver's
+  // own message and `code` survive.
+  const cause = err instanceof Error && err.cause !== undefined ? err.cause : err;
+  const message =
+    cause instanceof Error ? cause.message : err instanceof Error ? err.message : "Sync failed";
   const code =
-    err && typeof err === "object" && "code" in err
-      ? (err as { code: unknown }).code
+    cause && typeof cause === "object" && "code" in cause
+      ? (cause as { code: unknown }).code
       : undefined;
 
   const isAuthError =
     /user is not allowed to do action/i.test(message) || code === 13;
 
-  if (isAuthError) {
-    return `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`;
-  }
+  const body = isAuthError
+    ? `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`
+    : message;
 
-  return message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+  // A stranded row needs manual recovery and is announced exactly once, so it
+  // survives whichever branch ran above.
+  const notice = strandingNoticeOf(err);
+  const full = notice ? `${notice} ${CAUSE_LEAD}${body}` : body;
+
+  // Redact LAST, over the WHOLE string: the notice quotes user-typed entity
+  // names, and the body may carry a connection string.
+  return full.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
 }
 
 export interface SyncStatus {
@@ -155,6 +210,13 @@ interface SyncResult {
    * not resolve.
    */
   error?: string | null;
+  /**
+   * GH #1142: rows whose name could not be applied because a row this pass is
+   * NOT moving already holds it. Reported rather than forced — writing anyway
+   * would clobber a record the user still wants. Non-fatal for the collection
+   * by itself; see the paired/unpaired split where this is consumed.
+   */
+  nameConflicts?: number;
 }
 
 /**
@@ -1114,7 +1176,13 @@ export class SyncService extends EventEmitter {
     // cycle (default every 5 min) just to compare four metadata fields —
     // on an Atlas hybrid install with photo-attached spools that's tens
     // to hundreds of MB of metered egress per cycle.
-    const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1 };
+    // GH #1142 adds `name`: the rename-staging predicate has to know whether a
+    // blocker's own copy would rewrite its name on THIS side, which means
+    // comparing the two sides' names. It is a short string, so it does not
+    // reopen the GH #511 egress problem — that was about pulling full bodies
+    // (base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[])
+    // for every row on every cycle, which the hydrate helpers still avoid.
+    const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1, name: 1 };
     const localDocs = await localCol.find({}, { projection: SLIM_PROJECTION }).toArray();
     const remoteDocs = await remoteCol.find({}, { projection: SLIM_PROJECTION }).toArray();
 
@@ -1151,7 +1219,393 @@ export class SyncService extends EventEmitter {
       );
     };
 
+    // ── GH #1142: stage a contended rename instead of deadlocking ────────
+    //
+    // Every entity collection has a partial-unique `name` index, and this loop
+    // writes each row's whole document straight at the target with no
+    // awareness that the name it is about to write is currently held by a
+    // DIFFERENT row the same pass is about to move. Three shapes:
+    //
+    //   cycle  — local A="X" B="Y", remote A="Y" B="X". No ordering works;
+    //            reversing only changes which row fails.
+    //   chain  — A wants the name B is about to vacate.
+    //   unsat  — two rows genuinely want one name and neither is moving.
+    //
+    // The failure is permanent, not transient: it repeats every cycle, and via
+    // `trySync` a failure in `locations` cascade-skips filaments and print
+    // history, so one swapped pair stalls most of sync.
+    //
+    // Handled REACTIVELY rather than by a pre-pass, deliberately: a pre-pass
+    // would have to recompute every row's LWW outcome before the loop, which
+    // means a second copy of the decision logic that can drift from the real
+    // one. Here the real write is attempted, and only an actual name collision
+    // triggers staging — so the healthy path is untouched and there is no
+    // second decision to keep in step.
+    const stagedRenames: {
+      col: typeof localCol;
+      id: ObjectId;
+      originalName: string;
+      placeholderName: string;
+    }[] = [];
+    /** Rows this pass left holding a placeholder, for the result message. */
+    const strandedNotices: string[] = [];
+    /**
+     * SyncIds whose loop iteration has started (and, since iterations are
+     * sequential, has finished for every id but the current one). The one
+     * fact about a blocker that neither the plan nor any name can encode
+     * (Codex P1, seventh pass): whether its write is still COMING. Names
+     * cannot, because a third party renaming the target after the iteration
+     * completed breaks the equality that detects a landed write — the fresh
+     * source still differs from the perturbed target, staging looks
+     * legitimate, and no write remains to replace the placeholder.
+     */
+    const processedSyncIds = new Set<string>();
+    const stagingNonce = new ObjectId().toHexString().slice(-8);
+
+    /**
+     * Run a write that sets `name`; on a name collision, move the blocking row
+     * aside and retry ONCE.
+     *
+     * Staging is legitimate ONLY when the blocker's own LWW outcome writes to
+     * THIS target with a different name — then its real name lands moments
+     * later. Anything else is the unsatisfiable case: report it and leave both
+     * peers alone rather than clobbering a record the user still wants.
+     *
+     * "Paired" is NOT that condition, and the gap is the whole hazard (Codex
+     * P1). A paired row's LWW can copy in the OPPOSITE direction, or do
+     * nothing on an equal timestamp — in either case nothing rewrites its name
+     * on this target, so the placeholder is stranded, and a later copy in the
+     * other direction can propagate `__sync-staging-…` to the other peer. By
+     * then cleanup cannot restore it either, because the row it made way for
+     * owns its original name.
+     */
+    /**
+     * The name this pass will write for `syncId` on `col`, or null when it
+     * writes nothing there.
+     *
+     * Re-derives only the DIRECTION of the LWW decision — a small, total
+     * comparison — rather than the whole branch tree, which is what would
+     * drift. Deliberately conservative: every branch it cannot model (a purge,
+     * a delete, a resurrect, an equal timestamp, a missing side) answers null,
+     * which downgrades the case to "unsatisfiable, reported" rather than
+     * risking a stranded placeholder.
+     *
+     * ## The property this actually has (Codex P1, second pass)
+     *
+     * Not "it mirrors the loop exactly" — it does not, and claiming so is how
+     * the previous version drifted. The true, scoped claim is: FOR A ROW THAT
+     * IS LIVE ON `col` — the only rows `stageableOn` can ask about, since its
+     * filter is the index predicate — the only branch that rewrites the name
+     * is the both-active LWW one. The purge branch writes flags only;
+     * delete-propagation writes `_deletedAt` only; and both resurrect arms
+     * write on the DELETED side, which that same filter excludes.
+     *
+     * The guards below therefore have to use the LOOP's classifications, not
+     * lookalikes: `_purged === true` and `_deletedAt != null`, matching the
+     * `localPurged`/`localDeleted` derivations further down. Truthiness
+     * disagrees with `!= null` on exactly one stored value — the empty string,
+     * which the driver writes verbatim and Mongoose never casts — and there
+     * the loop takes the DELETE branch (resurrecting on the other side) while
+     * the predictor was claiming a rename on this one. The blocker was then
+     * staged for a write that never came, and the fresh `hydrateRemote` read
+     * could copy `__sync-staging-…` to the other peer before settlement ever
+     * noticed.
+     *
+     * The cost of being wrong in the safe direction is one reported cycle: a
+     * delete or purge frees the name in the same pass without renaming, so
+     * treating that pair as a permanent holder stalls the collection once
+     * (and cascade-skips its dependents) before converging cleanly. That is
+     * the trade this function was always making; it is not free.
+     */
+    const desiredNameOn = (col: typeof localCol, syncId: string): string | null => {
+      const localDoc = localBySyncId.get(syncId);
+      const remoteDoc = remoteBySyncId.get(syncId);
+      if (!localDoc || !remoteDoc) return null; // unpaired: nothing writes it here
+      // Purge first, mirroring the loop's branch order — its purge arm is
+      // tested before either delete arm and writes no name at all.
+      if (localDoc._purged === true || remoteDoc._purged === true) return null;
+      if (localDoc._deletedAt != null || remoteDoc._deletedAt != null) return null;
+
+      const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
+      const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
+      if (localTime === remoteTime) return null;
+
+      const targetIsRemote = localTime > remoteTime;
+      if (targetIsRemote !== (col === remoteCol)) return null; // writes the OTHER side
+      const source = targetIsRemote ? localDoc : remoteDoc;
+      return typeof source.name === "string" ? source.name : null;
+    };
+
+    /**
+     * Which rows may be moved aside on `col`, computed ONCE per target.
+     *
+     * Delegated to the pure planner because the answer needs the whole rename
+     * GRAPH, not one hop (Codex P1). Checking only that the immediate blocker
+     * will be rewritten strands it whenever its own destination is itself
+     * blocked: with A->B, B->C and C standing still, A takes B's name and B can
+     * then never take C — and settlement cannot restore B, because A owns its
+     * original name. The planner runs unsatisfiability backwards to a fixpoint,
+     * so a blocked far end refuses the whole chain while a true cycle still
+     * resolves.
+     */
+    const stagingPlans = new Map<typeof localCol, Set<string>>();
+    const stageableOn = (col: typeof localCol): Set<string> => {
+      const cached = stagingPlans.get(col);
+      if (cached) return cached;
+      const docs = col === remoteCol ? remoteDocs : localDocs;
+      const intents = docs
+        // INDEXED rows only (Codex P1, twice). The unique index is partial on
+        // `_deletedAt: null`, so a trashed row named "X" does NOT occupy that
+        // slot — GH #213 name reuse depends on it. Letting one into the graph
+        // made it the "holder" whenever it sorted first, and a trashed row
+        // never vacates, so the fixpoint declared the whole chain immovable
+        // and refused a swap that was perfectly resolvable — every cycle.
+        //
+        // The predicate is MongoDB's own, not JS truthiness. `{_deletedAt:
+        // null}` matches null AND missing and nothing else, so a raw
+        // `_deletedAt: ""` — which Mongoose casts to null on a Date path but
+        // the driver stores verbatim, the shape `trimEntityNames` documents at
+        // its own `== null` test — is OUTSIDE the index. `!d._deletedAt` let
+        // that row in as a holder, reintroducing the immovable-chain stall for
+        // a row that could never have blocked the write in the first place.
+        .filter((d) => d._deletedAt == null && typeof d.name === "string")
+        .map((d) => {
+          const syncId = typeof d.syncId === "string" ? d.syncId : null;
+          const desired = syncId ? desiredNameOn(col, syncId) : null;
+          return {
+            id: String(d._id),
+            currentName: d.name as string,
+            desiredName: desired ?? (d.name as string),
+            willWrite: desired !== null,
+          };
+        });
+      const plan = planRenameStaging(intents, stagingNonce);
+      const ids = new Set(plan.staged.map((st) => st.id));
+      stagingPlans.set(col, ids);
+      return ids;
+    };
+
+    const writeWithRenameStaging = async (
+      col: typeof localCol,
+      targetId: ObjectId,
+      desiredName: unknown,
+      write: () => Promise<unknown>,
+    ): Promise<boolean> => {
+      try {
+        await write();
+        return true;
+      } catch (err) {
+        if (!isNameDuplicateKeyError(err) || typeof desiredName !== "string") throw err;
+
+        const blocker = await col.findOne(
+          { name: desiredName, _deletedAt: null },
+          { projection: { _id: 1, syncId: 1, name: 1 } },
+        );
+        if (!blocker || String(blocker._id) === String(targetId)) throw err;
+
+        const blockerSyncId = typeof blocker.syncId === "string" ? blocker.syncId : null;
+        const blockerName = typeof blocker.name === "string" ? blocker.name : null;
+        const refuseStaging = () => {
+          result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          console.warn(
+            `[sync] ${collectionName}: cannot apply name ${JSON.stringify(desiredName)} — ` +
+              `held by a row this pass will not rewrite on this side. Rename one of them.`,
+          );
+          return false;
+        };
+        if (
+          !blockerSyncId ||
+          !blockerName ||
+          !stageableOn(col).has(String(blocker._id)) ||
+          // The blocker's own iteration must still be AHEAD (Codex P1). Once
+          // it has run, no write remains this pass, and the name checks below
+          // can no longer prove it: a third party renaming the target
+          // afterwards re-opens the gap between fresh source and fresh target
+          // that normally means "rename pending". Set membership is the only
+          // signal that survives arbitrary concurrent renames.
+          processedSyncIds.has(blockerSyncId)
+        ) {
+          return refuseStaging();
+        }
+
+        // The plan is a SNAPSHOT; staging additionally needs FRESH proof that
+        // the blocker's own pending write will rename it away (Codex P1, twice
+        // over). The first version of this check compared the blocker's fresh
+        // name against its SNAPSHOT desired name — half-fresh, and the half
+        // matters: the pending write hydrates the CURRENT source document at
+        // write time, so a source renamed after the snapshot (a user reverting
+        // a name mid-pass) diverges from `desiredNameOn`, and staging was
+        // authorized for a rename that was no longer coming. Settlement could
+        // not restore the placeholder, because the name it would restore had
+        // been taken by the retry this staging enabled.
+        //
+        // So read the SAME document the pending write will hydrate — the
+        // blocker's source-side pair, by the `_id` the snapshot map carries —
+        // and judge against what it says NOW. The decision table (landed
+        // write, no-op rename, mid-pass revert, vanished source, placeholder
+        // contagion) lives in `pendingRenameCanFreeName`, pure and tested.
+        // This also subsumes the previous check: a landed write makes the
+        // fresh source name equal the blocker's fresh name. The planner still
+        // covers what only IT can see (contested destinations, immovable
+        // chains); this covers what only fresh state can.
+        const sourceSnap = (col === remoteCol ? localBySyncId : remoteBySyncId).get(
+          blockerSyncId,
+        );
+        const sourceFresh = sourceSnap
+          ? await (col === remoteCol ? localCol : remoteCol).findOne(
+              { _id: sourceSnap._id },
+              { projection: { name: 1 } },
+            )
+          : null;
+        if (!pendingRenameCanFreeName(sourceFresh?.name, blockerName)) {
+          return refuseStaging();
+        }
+
+        // CONDITIONAL on what was observed (Codex P1). Between the findOne and
+        // this update another app or syncer can rename or delete the blocker;
+        // an `_id`-only filter would overwrite that concurrent change with a
+        // placeholder, the retry would then take a name its owner had just
+        // released, and cleanup could never restore the original because it is
+        // now occupied. A zero-match means the world moved — report rather
+        // than force.
+        const placeholder = placeholderFor(String(blocker._id), stagingNonce);
+        const staged = await col.updateOne(
+          { _id: blocker._id, name: blockerName, _deletedAt: null },
+          { $set: { name: placeholder } },
+        );
+        if (!staged.modifiedCount) {
+          result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          console.warn(
+            `[sync] ${collectionName}: the row holding ${JSON.stringify(desiredName)} changed ` +
+              `while being moved aside; leaving both rows alone this cycle.`,
+          );
+          return false;
+        }
+        // Remember it so an unsettled placeholder can be restored below — a
+        // row left named `__sync-staging-…` is visible in the UI and worse
+        // than the collision we were avoiding.
+        stagedRenames.push({
+          col,
+          id: blocker._id as ObjectId,
+          originalName: blockerName,
+          placeholderName: placeholder,
+        });
+        try {
+          await write();
+        } catch (retryErr) {
+          // ROLL BACK IMMEDIATELY (Codex P2). A throw here used to exit
+          // `syncCollection` through `trySync`, skipping settlement entirely,
+          // so the row would keep the temporary name indefinitely. Settlement
+          // now runs on that path too (see the loop's catch), which makes this
+          // the fast path rather than the only chance.
+          //
+          // Deliberately NOT composing a stranding message here. The blocker is
+          // still in `stagedRenames`, and settlement is the SINGLE place that
+          // reports what it could not restore — reporting in both named the
+          // same row twice, and named only this row while a late failure
+          // strands every row moved aside earlier in the pass as well.
+          await col
+            .updateOne({ _id: blocker._id, name: placeholder }, { $set: { name: blockerName } })
+            .catch((rollbackErr: unknown) => {
+              console.error(
+                `[sync] ${collectionName}: could not roll ${String(blocker._id)} back to ` +
+                  `${JSON.stringify(blockerName)}; leaving it to settlement.`,
+                rollbackErr,
+              );
+              return null;
+            });
+          throw retryErr;
+        }
+        return true;
+      }
+    };
+
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
+
+    // GH #1142: settle any placeholder whose real write never landed.
+    //
+    // A row is moved aside on the expectation that its own write follows
+    // moments later. If that write did not happen — its branch threw, the row
+    // was skipped, the LWW went the other way — it is left named
+    // `__sync-staging-…`, which is VISIBLE in the UI and worse than the
+    // collision being avoided. Restore the original name when it is free
+    // again; if it is not, leave the placeholder and report, because
+    // overwriting the row that took it would destroy real data.
+    //
+    // A FUNCTION, called on EVERY exit from the row loop (Codex P1). Inline
+    // after the loop, it was skipped entirely whenever the loop threw — and
+    // `stagedRenames` accumulates ACROSS iterations, so one late failure
+    // abandoned every row moved aside earlier in the pass, silently and with
+    // no later-cycle sweep to catch it.
+    const settleStagedRenames = async (): Promise<void> => {
+      // Drained, so a second call cannot re-report or re-restore.
+      const pending = stagedRenames.splice(0, stagedRenames.length);
+      for (const staged of pending) {
+        try {
+          const row = await staged.col.findOne(
+            { _id: staged.id },
+            { projection: { name: 1 } },
+          );
+          if (!row || !isStagingPlaceholder(row.name)) continue; // its write landed
+          const taken = await staged.col.findOne(
+            { name: staged.originalName, _deletedAt: null, _id: { $ne: staged.id } },
+            { projection: { _id: 1 } },
+          );
+          if (taken) {
+            // NAME the row, do not just count it (Codex P1). This branch and the
+            // catch below are the two REACHABLE producers of a permanent
+            // placeholder — no race, no privilege change — and until now their
+            // only trace was a console line plus a counter whose rendering could
+            // be overwritten entirely (see the `heldBack` note at the end).
+            result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+            strandedNotices.push(
+              strandedPlaceholderNotice({
+                collection: collectionName,
+                id: String(staged.id),
+                originalName: staged.originalName,
+                placeholderName: staged.placeholderName,
+              }),
+            );
+            console.warn(
+              `[sync] ${collectionName}: left a staging placeholder on ${String(staged.id)} — ` +
+                `${JSON.stringify(staged.originalName)} was taken while it was moved aside.`,
+            );
+            continue;
+          }
+          // CONDITIONAL on the placeholder we actually put there (Codex P1).
+          // Another app or syncer can write this row between the read above and
+          // here; an `_id`-only filter would overwrite that newer real name with
+          // the old one — and because the concurrent write may already have
+          // copied its `updatedAt`, the peers could end up with different names
+          // at an EQUAL timestamp, which LWW then never repairs.
+          const restored = await staged.col.updateOne(
+            { _id: staged.id, name: staged.placeholderName },
+            { $set: { name: staged.originalName } },
+          );
+          if (!restored.modifiedCount) continue; // someone else moved it on
+        } catch (settleErr) {
+          // SURFACE it (Codex P1). Swallowing left the collection reporting
+          // success with a placeholder still stored, and nothing scans for stale
+          // placeholders on a later cycle — worse, a row staged after its own
+          // write landed shares its source's `updatedAt`, so LWW does no copy
+          // and never repairs it either.
+          result.nameConflicts = (result.nameConflicts ?? 0) + 1;
+          strandedNotices.push(
+            strandedPlaceholderNotice({
+              collection: collectionName,
+              id: String(staged.id),
+              originalName: staged.originalName,
+              placeholderName: staged.placeholderName,
+            }),
+          );
+          console.error(
+            `[sync] ${collectionName}: could not restore ${JSON.stringify(staged.originalName)} ` +
+              `on ${String(staged.id)}; it still holds a staging placeholder.`,
+            settleErr,
+          );
+        }
+      }
+    };
 
     // Process all unique syncIds from both sides — BOTH-SIDES ROWS FIRST.
     //
@@ -1181,172 +1635,215 @@ export class SyncService extends EventEmitter {
       );
     }
 
-    for (const syncId of allSyncIds) {
-      const localDoc = localBySyncId.get(syncId);
-      const remoteDoc = remoteBySyncId.get(syncId);
+    // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
+    try {
+      for (const syncId of allSyncIds) {
+        // Marked at the TOP, not the bottom: the body is full of `continue`s
+        // and a trailing add would be skipped by every one of them. Including
+        // the CURRENT id is harmless — `syncId` is unique per collection, so
+        // a blocker (a different _id on the same col) can never carry it.
+        processedSyncIds.add(syncId);
+        const localDoc = localBySyncId.get(syncId);
+        const remoteDoc = remoteBySyncId.get(syncId);
 
-      if (localDoc && !remoteDoc) {
-        // Local-only: push to remote.
-        //
-        // GH #439: catch E11000 on `syncId` and treat as a no-op. Two
-        // processes pointed at the same Atlas (desktop client + Docker
-        // instance, two desktops sharing an Atlas) can both pass this
-        // "local-only" branch concurrently when their first sync
-        // cycles overlap. The `syncId` unique index is the right place
-        // to serialize them; the loser of the race just observes the
-        // doc already exists. Without this branch the second insert
-        // bubbled up as a collection-level failure in `trySync` and
-        // the whole sync cycle reported "partial".
-        const full = await hydrateLocal(localDoc);
-        if (!full) continue;
-        const doc = this.stripForTransfer(full);
-        const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
-        try {
-          await remoteCol.insertOne({ ...transformed, _id: new ObjectId() });
-          result.pushed++;
-        } catch (err: unknown) {
-          if (!isDuplicateKeyError(err)) throw err;
-          // Other process won the race — the doc is already there,
-          // future cycles will see it via the existing-on-both branch.
-        }
-      } else if (!localDoc && remoteDoc) {
-        // Remote-only: pull to local. Same E11000 guard symmetry — a
-        // concurrent sync from another instance could have already
-        // pulled the same doc to a shared local store.
-        const full = await hydrateRemote(remoteDoc);
-        if (!full) continue;
-        const doc = this.stripForTransfer(full);
-        const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
-        try {
-          await localCol.insertOne({ ...transformed, _id: new ObjectId() });
-          result.pulled++;
-        } catch (err: unknown) {
-          if (!isDuplicateKeyError(err)) throw err;
-        }
-      } else if (localDoc && remoteDoc) {
-        // Both exist: handle conflicts
-        const localDeleted = localDoc._deletedAt != null;
-        const remoteDeleted = remoteDoc._deletedAt != null;
-        const localPurged = localDoc._purged === true;
-        const remotePurged = remoteDoc._purged === true;
-
-        // `_purged` is the "delete forever" tombstone (see Filament model
-        // doc comment). It's a one-way flag — once set on either peer, it
-        // wins over any other state, including a remote update that
-        // happened after the local purge. Without this branch, a hard
-        // delete on one peer was getting resurrected from the other side
-        // on the next sync cycle (#213).
-        if (localPurged || remotePurged) {
-          if (localPurged && !remotePurged) {
-            await remoteCol.updateOne(
-              { _id: remoteDoc._id },
-              { $set: { _purged: true, _deletedAt: localDoc._deletedAt ?? new Date() } },
-            );
-            result.deleted++;
-          } else if (!localPurged && remotePurged) {
-            await localCol.updateOne(
-              { _id: localDoc._id },
-              { $set: { _purged: true, _deletedAt: remoteDoc._deletedAt ?? new Date() } },
-            );
-            result.deleted++;
+        if (localDoc && !remoteDoc) {
+          // Local-only: push to remote.
+          //
+          // GH #439: catch E11000 on `syncId` and treat as a no-op. Two
+          // processes pointed at the same Atlas (desktop client + Docker
+          // instance, two desktops sharing an Atlas) can both pass this
+          // "local-only" branch concurrently when their first sync
+          // cycles overlap. The `syncId` unique index is the right place
+          // to serialize them; the loser of the race just observes the
+          // doc already exists. Without this branch the second insert
+          // bubbled up as a collection-level failure in `trySync` and
+          // the whole sync cycle reported "partial".
+          const full = await hydrateLocal(localDoc);
+          if (!full) continue;
+          const doc = this.stripForTransfer(full);
+          const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
+          try {
+            await remoteCol.insertOne({ ...transformed, _id: new ObjectId() });
+            result.pushed++;
+          } catch (err: unknown) {
+            if (!isDuplicateKeyError(err)) throw err;
+            // Other process won the race — the doc is already there,
+            // future cycles will see it via the existing-on-both branch.
           }
-          // else: both already purged — nothing to do
-          continue;
-        }
+        } else if (!localDoc && remoteDoc) {
+          // Remote-only: pull to local. Same E11000 guard symmetry — a
+          // concurrent sync from another instance could have already
+          // pulled the same doc to a shared local store.
+          const full = await hydrateRemote(remoteDoc);
+          if (!full) continue;
+          const doc = this.stripForTransfer(full);
+          const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
+          try {
+            await localCol.insertOne({ ...transformed, _id: new ObjectId() });
+            result.pulled++;
+          } catch (err: unknown) {
+            if (!isDuplicateKeyError(err)) throw err;
+          }
+        } else if (localDoc && remoteDoc) {
+          // Both exist: handle conflicts
+          const localDeleted = localDoc._deletedAt != null;
+          const remoteDeleted = remoteDoc._deletedAt != null;
+          const localPurged = localDoc._purged === true;
+          const remotePurged = remoteDoc._purged === true;
 
-        if (localDeleted && remoteDeleted) {
-          // Both soft-deleted (in trash) — nothing to do
-          continue;
-        }
-
-        if (localDeleted && !remoteDeleted) {
-          // Deleted locally — propagate if the deletion is at least as
-          // recent as the remote update. GH #317: `>=` (not `>`) so the
-          // delete wins on a timestamp tie — an equal-millisecond
-          // delete-right-after-edit must not resurrect the row. NaN-safe
-          // via readTimestamp ?? 0.
-          const localDeletedAt = SyncService.readTimestamp(localDoc._deletedAt) ?? 0;
-          const remoteUpdatedAt = SyncService.readUpdatedAt(remoteDoc) ?? 0;
-          if (localDeletedAt >= remoteUpdatedAt) {
-            await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { _deletedAt: localDoc._deletedAt } });
-            result.deleted++;
-          } else {
-            // Remote was updated strictly after local delete — resurrect locally
-            const full = await hydrateRemote(remoteDoc);
-            if (full) {
-              const doc = this.stripForTransfer(full);
-              const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
-              const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
-              // GH #1004 F3: replaceOne, not $set. A whole-doc LWW copy must
-              // also DELETE fields the source no longer has — the $unset
-              // un-pinning flows (#951/#969/#971 un-pin a variant override so
-              // GH #106 inheritance resumes) leave a field absent on the
-              // source; $set can't remove it, and the equal-updatedAt result
-              // then freezes the divergence forever. `transformed` is the
-              // stripped source (no _id/__v), so replaceOne keeps the target
-              // _id. Targeted flag $sets above stay $set (they mutate one key).
-              await localCol.replaceOne({ _id: localDoc._id }, { ...transformed, _deletedAt: null });
-              result.pulled++;
+          // `_purged` is the "delete forever" tombstone (see Filament model
+          // doc comment). It's a one-way flag — once set on either peer, it
+          // wins over any other state, including a remote update that
+          // happened after the local purge. Without this branch, a hard
+          // delete on one peer was getting resurrected from the other side
+          // on the next sync cycle (#213).
+          if (localPurged || remotePurged) {
+            if (localPurged && !remotePurged) {
+              await remoteCol.updateOne(
+                { _id: remoteDoc._id },
+                { $set: { _purged: true, _deletedAt: localDoc._deletedAt ?? new Date() } },
+              );
+              result.deleted++;
+            } else if (!localPurged && remotePurged) {
+              await localCol.updateOne(
+                { _id: localDoc._id },
+                { $set: { _purged: true, _deletedAt: remoteDoc._deletedAt ?? new Date() } },
+              );
+              result.deleted++;
             }
+            // else: both already purged — nothing to do
+            continue;
           }
-          continue;
-        }
 
-        if (!localDeleted && remoteDeleted) {
-          // Mirror of the branch above — delete wins on a tie (GH #317).
-          const remoteDeletedAt = SyncService.readTimestamp(remoteDoc._deletedAt) ?? 0;
-          const localUpdatedAt = SyncService.readUpdatedAt(localDoc) ?? 0;
-          if (remoteDeletedAt >= localUpdatedAt) {
-            await localCol.updateOne({ _id: localDoc._id }, { $set: { _deletedAt: remoteDoc._deletedAt } });
-            result.deleted++;
-          } else {
+          if (localDeleted && remoteDeleted) {
+            // Both soft-deleted (in trash) — nothing to do
+            continue;
+          }
+
+          if (localDeleted && !remoteDeleted) {
+            // Deleted locally — propagate if the deletion is at least as
+            // recent as the remote update. GH #317: `>=` (not `>`) so the
+            // delete wins on a timestamp tie — an equal-millisecond
+            // delete-right-after-edit must not resurrect the row. NaN-safe
+            // via readTimestamp ?? 0.
+            const localDeletedAt = SyncService.readTimestamp(localDoc._deletedAt) ?? 0;
+            const remoteUpdatedAt = SyncService.readUpdatedAt(remoteDoc) ?? 0;
+            if (localDeletedAt >= remoteUpdatedAt) {
+              await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { _deletedAt: localDoc._deletedAt } });
+              result.deleted++;
+            } else {
+              // Remote was updated strictly after local delete — resurrect locally
+              const full = await hydrateRemote(remoteDoc);
+              if (full) {
+                const doc = this.stripForTransfer(full);
+                const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
+                const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
+                // GH #1004 F3: replaceOne, not $set. A whole-doc LWW copy must
+                // also DELETE fields the source no longer has — the $unset
+                // un-pinning flows (#951/#969/#971 un-pin a variant override so
+                // GH #106 inheritance resumes) leave a field absent on the
+                // source; $set can't remove it, and the equal-updatedAt result
+                // then freezes the divergence forever. `transformed` is the
+                // stripped source (no _id/__v), so replaceOne keeps the target
+                // _id. Targeted flag $sets above stay $set (they mutate one key).
+                // GH #1142: a resurrect sets a name too, and can contend.
+                if (
+                  await writeWithRenameStaging(localCol, localDoc._id as ObjectId, transformed.name, () =>
+                    localCol.replaceOne({ _id: localDoc._id }, { ...transformed, _deletedAt: null }),
+                  )
+                ) {
+                  result.pulled++;
+                }
+              }
+            }
+            continue;
+          }
+
+          if (!localDeleted && remoteDeleted) {
+            // Mirror of the branch above — delete wins on a tie (GH #317).
+            const remoteDeletedAt = SyncService.readTimestamp(remoteDoc._deletedAt) ?? 0;
+            const localUpdatedAt = SyncService.readUpdatedAt(localDoc) ?? 0;
+            if (remoteDeletedAt >= localUpdatedAt) {
+              await localCol.updateOne({ _id: localDoc._id }, { $set: { _deletedAt: remoteDoc._deletedAt } });
+              result.deleted++;
+            } else {
+              const full = await hydrateLocal(localDoc);
+              if (full) {
+                const doc = this.stripForTransfer(full);
+                const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
+                const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
+                // GH #1004 F3: replaceOne so a whole-doc copy also drops fields
+                // the source no longer carries (see the toLocal branch above).
+                // GH #1142: see the toLocal resurrect above.
+                if (
+                  await writeWithRenameStaging(remoteCol, remoteDoc._id as ObjectId, transformed.name, () =>
+                    remoteCol.replaceOne({ _id: remoteDoc._id }, { ...transformed, _deletedAt: null }),
+                  )
+                ) {
+                  result.pushed++;
+                }
+              }
+            }
+            continue;
+          }
+
+          // Both active — last-write-wins. GH #317: NaN-safe timestamps so
+          // a doc missing `updatedAt` doesn't stall the merge (it sorts as
+          // epoch 0 rather than making every comparison false).
+          const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
+          const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
+
+          if (localTime > remoteTime) {
+            // Local is newer — push to remote
             const full = await hydrateLocal(localDoc);
             if (full) {
               const doc = this.stripForTransfer(full);
               const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
               const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
-              // GH #1004 F3: replaceOne so a whole-doc copy also drops fields
-              // the source no longer carries (see the toLocal branch above).
-              await remoteCol.replaceOne({ _id: remoteDoc._id }, { ...transformed, _deletedAt: null });
-              result.pushed++;
+              // GH #1004 F3: replaceOne so the LWW copy drops fields the source
+              // deleted (un-pin $unset flows); $set would freeze the divergence.
+              // GH #1142: a rename may want a name another row still holds.
+              if (
+                await writeWithRenameStaging(remoteCol, remoteDoc._id as ObjectId, transformed.name, () =>
+                  remoteCol.replaceOne({ _id: remoteDoc._id }, transformed),
+                )
+              ) {
+                result.updated++;
+              }
+            }
+          } else if (remoteTime > localTime) {
+            // Remote is newer — pull to local
+            const full = await hydrateRemote(remoteDoc);
+            if (full) {
+              const doc = this.stripForTransfer(full);
+              const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
+              const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
+              // GH #1004 F3: replaceOne (see the toRemote branch above).
+              // GH #1142: see the toRemote branch above.
+              if (
+                await writeWithRenameStaging(localCol, localDoc._id as ObjectId, transformed.name, () =>
+                  localCol.replaceOne({ _id: localDoc._id }, transformed),
+                )
+              ) {
+                result.updated++;
+              }
             }
           }
-          continue;
+          // Equal timestamps — no action needed
         }
-
-        // Both active — last-write-wins. GH #317: NaN-safe timestamps so
-        // a doc missing `updatedAt` doesn't stall the merge (it sorts as
-        // epoch 0 rather than making every comparison false).
-        const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
-        const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
-
-        if (localTime > remoteTime) {
-          // Local is newer — push to remote
-          const full = await hydrateLocal(localDoc);
-          if (full) {
-            const doc = this.stripForTransfer(full);
-            const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
-            const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
-            // GH #1004 F3: replaceOne so the LWW copy drops fields the source
-            // deleted (un-pin $unset flows); $set would freeze the divergence.
-            await remoteCol.replaceOne({ _id: remoteDoc._id }, transformed);
-            result.updated++;
-          }
-        } else if (remoteTime > localTime) {
-          // Remote is newer — pull to local
-          const full = await hydrateRemote(remoteDoc);
-          if (full) {
-            const doc = this.stripForTransfer(full);
-            const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
-            const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
-            // GH #1004 F3: replaceOne (see the toRemote branch above).
-            await localCol.replaceOne({ _id: localDoc._id }, transformed);
-            result.updated++;
-          }
-        }
-        // Equal timestamps — no action needed
       }
+
+    } catch (loopErr) {
+      await settleStagedRenames();
+      // `trySync` discards this result object and keeps only the message, so
+      // on THIS path the stranding has to ride the error instead.
+      if (strandedNotices.length > 0) {
+        throw withStrandingNotice(loopErr, strandedNotices.join(" "));
+      }
+      throw loopErr;
     }
+
+    await settleStagedRenames();
 
     // GH #1116 (Codex P1): a HELD-BACK collection must read as a FAILED
     // prerequisite, or `trySync` lets its dependents run against a partial
@@ -1361,10 +1858,41 @@ export class SyncService extends EventEmitter {
     // The counts above stay real — the paired copies DID happen, so a user's
     // rename still propagates and the collection can converge. Only the
     // dependents wait.
-    if (heldBack > 0) {
+    // GH #1142 (Codex P1): a name conflict has to reach the user.
+    //
+    // Incrementing a counter nothing reads left `trySync` treating the
+    // collection as successful and the cycle reporting `idle`, while a
+    // whole-document update was silently skipped and would fail identically
+    // every cycle — permanent divergence with no signal at all.
+    //
+    // This is deliberately stricter than the paired/unpaired split agreed for
+    // the SWAP case: a swap now RESOLVES, so anything still counted here is
+    // the unsatisfiable kind — a row that will never sync until a human
+    // renames one of the two. Cascade-skipping dependents is over-strict for
+    // that (both rows exist on both peers, so refs still resolve), but a
+    // reported, recoverable stall beats an invisible one.
+    if ((result.nameConflicts ?? 0) > 0 && !result.error) {
       result.error =
+        `${result.nameConflicts} name conflict(s) could not be applied — two rows want ` +
+        `the same name and neither can give it up. Rename one of them.`;
+    }
+    // A row left holding `__sync-staging-…` needs a HUMAN, and nothing scans
+    // for stale placeholders on a later cycle — the equal-`updatedAt` case
+    // documented above is never repaired by LWW either. So name the rows, do
+    // not merely count them.
+    if (strandedNotices.length > 0) {
+      result.error = `${result.error ? `${result.error} ` : ""}${strandedNotices.join(" ")}`;
+    }
+
+    if (heldBack > 0) {
+      // APPEND (Codex P1). This used to ASSIGN, so a held-back collection that
+      // also stranded a placeholder reported only the hold-back — and that text
+      // blames the trim pass, sending the user somewhere the actual problem is
+      // not. Both facts are true at once and both need saying.
+      const held =
         `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +
         `collection, so its names cannot be matched safely yet`;
+      result.error = result.error ? `${result.error} Also: ${held}` : held;
     }
 
     return result;
