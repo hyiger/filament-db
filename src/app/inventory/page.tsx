@@ -550,6 +550,10 @@ export default function InventoryPage() {
     setGroupBy((cur) => (present.has("groupBy") ? url.groupBy : cur));
     setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
     setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
+    // Any touch still armed here is DEAD — a real one was consumed by the
+    // persist effect at its own commit, before this navigation could be
+    // processed. See the home page's twin comment.
+    prefsTouchedRef.current.clear();
   }, []);
 
   // Persist ONLY what the user chose (GH #1141, Codex P1).
@@ -574,6 +578,11 @@ export default function InventoryPage() {
       const next: InventoryPrefs = { ...DEFAULT_INVENTORY_PREFS, ...stored };
       for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
       window.localStorage.setItem(INVENTORY_PREFS_KEY, JSON.stringify(next));
+      // CONSUME the touches (Codex P2). A touch authorizes ONE write — the
+      // change that armed it, now stored. Left armed, it authorized every
+      // later state change too, letting a Back through an old shared URL
+      // overwrite the preference the user had just set. Mirrors the home page.
+      prefsTouchedRef.current.clear();
     } catch {
       /* ignore quota / disabled storage / a corrupt stored blob */
     }

@@ -444,6 +444,12 @@ export default function Home() {
     // the stored one; functional updates keep the callback free of state deps.
     setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
     setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
+    // Any touch still armed here is DEAD: a real one was consumed by the
+    // persist effect in the same commit as its state change, which necessarily
+    // ran before this external navigation could be processed. What survives is
+    // an armed-but-noop touch (a handler that did not change state), and it
+    // must not authorize persisting the values this re-seed just adopted.
+    prefsTouchedRef.current.clear();
   }, []);
   // Persist ONLY what the user chose (GH #1141, Codex P1).
   //
@@ -467,6 +473,13 @@ export default function Home() {
       const next: HomePrefs = { ...DEFAULT_HOME_PREFS, ...stored };
       for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
       window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify(next));
+      // CONSUME the touches (Codex P2). A touch is an authorization for ONE
+      // write — the user's change, which has now been stored. Left armed, it
+      // authorized every LATER state change too, including URL-derived ones:
+      // open a shared sort link, change the sort yourself, press Back, and the
+      // re-seed restored the link's values while the stale touch let this
+      // effect write them over the choice you just made.
+      prefsTouchedRef.current.clear();
     } catch {
       /* ignore quota / disabled storage / a corrupt stored blob */
     }
