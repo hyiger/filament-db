@@ -1732,15 +1732,48 @@ export class SyncService extends EventEmitter {
     const localBySyncId = new Map(localDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
     const remoteBySyncId = new Map(remoteDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
 
+    /** A LIVE row currently named by the staging grammar. Strict grammar (a
+     * user's prefix-shaped name never matches); tombstoned/purged rows are
+     * excluded per the round-24 rule — deletion must propagate and a trash
+     * name is cosmetic. Shared by the round-25 snapshot scan below and the
+     * hydrate guard here. */
+    const isLivePlaceholder = (d: Document | null | undefined): d is Document =>
+      d != null &&
+      typeof d.name === "string" &&
+      isGeneratedPlaceholder(d.name) &&
+      d._deletedAt == null &&
+      d._purged !== true;
+
     // Hydrate the full document only when a branch actually needs the body
-    // (push / pull / update / resurrect). Returns null if the doc vanished
-    // between the slim read and now (physical delete — doesn't happen in
-    // this app's soft-delete-only model, but guard defensively so a null
-    // can't be spread into an insert/update).
-    const hydrateLocal = (slim: Document): Promise<Document | null> =>
-      localCol.findOne({ _id: slim._id });
-    const hydrateRemote = (slim: Document): Promise<Document | null> =>
-      remoteCol.findOne({ _id: slim._id });
+    // (push / pull / update / resurrect). Returns null when the doc vanished
+    // between the slim read and now, AND (round 26, Codex P1) when the
+    // hydrated body is a LIVE staging placeholder: another service can stage
+    // a row between the slim reads above and this hydrate, so the round-25
+    // scan saw the real name while the body now carries the temporary one —
+    // and every name-carrying write below copies the hydrated body verbatim
+    // to the peer. One enforcement point: every consumer's existing
+    // `if (!full) continue;` skips the pair, with the hold-back reported
+    // here. Our OWN staged blockers can never trip this — staging only
+    // stages a blocker whose pending copy runs TOWARD the col it was staged
+    // on, so a staged row is always the copy's TARGET; the source hydrated
+    // here is the other side, still under its real name. No quarantine entry
+    // is needed either: blocker lookups are FRESH reads by name, and this
+    // row no longer holds its real name in the database.
+    const holdHydratedPlaceholder = (full: Document | null): Document | null => {
+      if (isLivePlaceholder(full)) {
+        sweptHoldbacks.push(
+          `${collectionName} ${String(full._id)} is mid-rename by another sync ` +
+            `service; its temporary name is held back this cycle and resolved by ` +
+            `the owner or the next sweep.`,
+        );
+        return null;
+      }
+      return full;
+    };
+    const hydrateLocal = async (slim: Document): Promise<Document | null> =>
+      holdHydratedPlaceholder(await localCol.findOne({ _id: slim._id }));
+    const hydrateRemote = async (slim: Document): Promise<Document | null> =>
+      holdHydratedPlaceholder(await remoteCol.findOne({ _id: slim._id }));
 
     // GH #732: on a filament UPDATE the whole spools array is overwritten by
     // the source. If the source spool lacks an instanceId (a pre-#732 peer) we
@@ -1915,11 +1948,19 @@ export class SyncService extends EventEmitter {
         .map((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
+          // Round 23 (Codex P1): a QUARANTINED row's name-carrying write is
+          // blocked at the row-loop gate this cycle, so the plan must not
+          // bet on it. willWrite: true here let an earlier pair stage the
+          // quarantined row aside and take its name — then the gate skipped
+          // the promised write and settlement could not restore (the name
+          // was occupied). It stays in the graph as a HOLDER (it really does
+          // occupy its index slot); it just cannot vacate.
+          const blocked = syncId !== null && quarantinedSyncIds.has(syncId);
           return {
             id: String(d._id),
             currentName: d.name as string,
             desiredName: desired ?? (d.name as string),
-            willWrite: desired !== null,
+            willWrite: desired !== null && !blocked,
           };
         });
       const plan = planRenameStaging(intents, stagingNonce);
@@ -2314,16 +2355,93 @@ export class SyncService extends EventEmitter {
       );
     }
 
+    // Round 22 (Codex P1), HOISTED in round 25: a staging by ANOTHER service
+    // can land in the window between the sweep's scans and the slim reads —
+    // such a placeholder is invisible to the sweep's quarantine, and if its
+    // row is edited so its timestamp wins LWW while the owner stalls, this
+    // pass would copy the temporary name to the peer. The scan runs HERE,
+    // over the complete slim snapshot, BEFORE any pair can invoke rename
+    // staging — discovered at the pair's own loop turn (the original shape),
+    // an earlier pair could still stage the pair's real-named side aside and
+    // manufacture the round-23 stranding all over again for guard-time
+    // quarantines. Strict grammar only (a user's prefix-shaped name never
+    // holds), LIVE rows only (round 24: a tombstoned placeholder is resolved
+    // by deletion, and for an unpaired one the insert branch is the only
+    // path that propagates the tombstone — the trashed name is cosmetic).
+    // Our OWN staged rows can't trip this: the slim snapshot predates every
+    // staging this pass performs, so it still carries their original names.
+    for (const syncId of allSyncIds) {
+      if (quarantinedSyncIds.has(syncId)) continue;
+      const lSlim = localBySyncId.get(syncId);
+      const rSlim = remoteBySyncId.get(syncId);
+      const phDoc = isLivePlaceholder(lSlim) ? lSlim : isLivePlaceholder(rSlim) ? rSlim : null;
+      if (phDoc) {
+        quarantinedSyncIds.add(syncId);
+        sweptHoldbacks.push(
+          `${collectionName} ${String(phDoc._id)} is mid-rename by another sync ` +
+            `service; its temporary name is held back this cycle and resolved by ` +
+            `the owner or the next sweep.`,
+        );
+      }
+    }
+    // Round 23 (Codex P1): mark EVERY quarantine — sweep-time and the
+    // scan-window ones found just above — as processed BEFORE any pair runs.
+    // `processedSyncIds` means "no name write coming" to the blocker check,
+    // and for a quarantined row that is the truth from the cycle's start —
+    // not from its own loop turn. Deferred, an EARLIER pair could still
+    // stage it aside (the plan exclusion is the first line; this is the
+    // write-time backstop) and take a name its skipped write could never
+    // reclaim.
+    for (const q of quarantinedSyncIds) processedSyncIds.add(q);
+
+    // Round 22: quarantine means "names must not transfer", not "nothing may
+    // happen". The classifier below answers whether a pair's branch writes
+    // ONLY tombstone/purge flags — those never carry a name, and blocking
+    // them left a deleted peer unable to resolve its own stranding: with the
+    // original name taken, every cycle re-quarantined the pair and the
+    // deletion never propagated (Codex P2). It MUST mirror the row loop's
+    // branch ladder below — purge arms and the delete-wins arms (GH #317
+    // `>=` tie rule, NaN-safe `?? 0`) are `$set` flag writes; both-deleted
+    // and both-purged are no-ops; everything else (insert, resurrect,
+    // both-active LWW) is a replaceOne/insert that carries a name. Drift
+    // between this predicate and the ladder reopens one bug or the other.
+    const pairWritesFlagsOnly = (l: Document, r: Document): boolean => {
+      if (l._purged === true || r._purged === true) return true;
+      const lDel = l._deletedAt != null;
+      const rDel = r._deletedAt != null;
+      if (lDel && rDel) return true;
+      if (lDel && !rDel) {
+        return (
+          (SyncService.readTimestamp(l._deletedAt) ?? 0) >=
+          (SyncService.readUpdatedAt(r) ?? 0)
+        );
+      }
+      if (!lDel && rDel) {
+        return (
+          (SyncService.readTimestamp(r._deletedAt) ?? 0) >=
+          (SyncService.readUpdatedAt(l) ?? 0)
+        );
+      }
+      return false;
+    };
+
     // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
     try {
       for (const syncId of allSyncIds) {
         // GH #1153 (Codex P2): a row the sweep left holding an unresolved
-        // placeholder is excluded from transfer this cycle — see the
-        // quarantine set's docblock. Marked processed anyway, so a blocker
-        // check treats it as "no write coming", which is the truth.
+        // placeholder is excluded from NAME transfer this cycle — see the
+        // quarantine set's docblock. Flag-only outcomes still run (round 22:
+        // tombstone/purge propagation is what RESOLVES a stranding whose
+        // peer was deleted — see pairWritesFlagsOnly above). Marked
+        // processed anyway, so a blocker check treats it as "no name write
+        // coming", which is the truth on both paths.
         if (quarantinedSyncIds.has(syncId)) {
-          processedSyncIds.add(syncId);
-          continue;
+          const lQ = localBySyncId.get(syncId);
+          const rQ = remoteBySyncId.get(syncId);
+          if (!(lQ && rQ && pairWritesFlagsOnly(lQ, rQ))) {
+            processedSyncIds.add(syncId);
+            continue;
+          }
         }
         // Marked at the TOP, not the bottom: the body is full of `continue`s
         // and a trailing add would be skipped by every one of them. Including

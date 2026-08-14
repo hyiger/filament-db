@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 /**
  * GH #607 Phase 1 — "Check for OpenPrintTag updates" dialog.
@@ -41,6 +42,9 @@ interface Props {
   /** Called after a successful sync so the page can refresh. */
   onApplied: () => void;
   onClose: () => void;
+  /** GH #1150: open the link picker in "change" mode (the page owns the
+   *  OptLinkDialog state; this dialog closes itself first). */
+  onChangeLink: () => void;
 }
 
 function formatValue(v: OptValue): string {
@@ -49,7 +53,7 @@ function formatValue(v: OptValue): string {
   return String(v);
 }
 
-export default function OptResyncDialog({ filamentId, onApplied, onClose }: Props) {
+export default function OptResyncDialog({ filamentId, onApplied, onClose, onChangeLink }: Props) {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -57,7 +61,13 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose }: Prop
   const [data, setData] = useState<CheckResponse | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
+  const [removing, setRemoving] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+  // While the shared ConfirmDialog is up, this dialog's own Escape/Tab
+  // handling must stand down — both listen on `document`, and Escape would
+  // otherwise dismiss BOTH layers at once.
+  const confirmOpenRef = useRef(false);
+  const confirm = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -89,6 +99,7 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose }: Prop
   // Escape to close + Tab focus trap (mirrors ConfirmDialog's mechanics).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (confirmOpenRef.current) return;
       if (e.key === "Escape") {
         e.preventDefault();
         onClose();
@@ -148,8 +159,46 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose }: Prop
     }
   }, [selected, filamentId, toast, t, onApplied, onClose]);
 
+  const handleRemoveLink = useCallback(async () => {
+    confirmOpenRef.current = true;
+    const ok = await confirm({
+      title: t("resync.removeConfirmTitle"),
+      message: t("resync.removeConfirm"),
+      confirmLabel: t("resync.removeLink"),
+      destructive: true,
+    });
+    confirmOpenRef.current = false;
+    if (!ok) return;
+    setRemoving(true);
+    try {
+      const res = await fetch(`/api/filaments/${filamentId}/openprinttag/link`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        toast(t("resync.removeFailed"), "error");
+        return;
+      }
+      toast(t("resync.removed"), "success");
+      onApplied();
+      onClose();
+    } catch {
+      toast(t("resync.removeFailed"), "error");
+    } finally {
+      setRemoving(false);
+    }
+  }, [confirm, filamentId, toast, t, onApplied, onClose]);
+
   const changes = data?.changes ?? [];
   const hasConflicts = changes.some((c) => c.kind === "conflict");
+  // GH #1150: the link-management actions show whenever the filament IS
+  // linked — including the materialGone dead end (linked, found: false),
+  // which is exactly where "remove or re-point the link" is the only remedy.
+  // A FAILED check keeps them too (Codex P2): this dialog only opens from
+  // the "Check for updates" button, which is gated on _hasOwnOptLink, so the
+  // filament is linked by construction — and the DELETE endpoint needs no
+  // upstream fetch, so an unreachable OPT database must not re-create the
+  // very dead end #1150 is about.
+  const showLinkActions = !loading && (error !== null || data?.linked === true);
 
   return (
     <div
@@ -245,11 +294,34 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose }: Prop
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700">
+        <div className="flex items-center gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700">
+          {showLinkActions && (
+            <div className="flex items-center gap-2 mr-auto">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onChangeLink();
+                }}
+                disabled={applying || removing}
+                className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t("resync.changeLink")}
+              </button>
+              <button
+                type="button"
+                onClick={handleRemoveLink}
+                disabled={removing || applying}
+                className="px-3 py-1.5 text-sm rounded border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {t("resync.removeLink")}
+              </button>
+            </div>
+          )}
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+            className="ml-auto px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
           >
             {t("resync.cancel")}
           </button>

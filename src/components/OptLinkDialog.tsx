@@ -31,11 +31,15 @@ interface Props {
   /** Called after a successful link so the page can refresh. */
   onLinked: () => void;
   onClose: () => void;
+  /** GH #1150: "change" retitles the dialog and explains that update
+   *  tracking is rebuilt against the newly picked material. The POST
+   *  overwrites an existing link either way. */
+  mode?: "link" | "change";
 }
 
 const MAX_RESULTS = 50;
 
-export default function OptLinkDialog({ filamentId, onLinked, onClose }: Props) {
+export default function OptLinkDialog({ filamentId, onLinked, onClose, mode = "link" }: Props) {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -137,7 +141,7 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose }: Props) 
       className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50 p-4"
       role="dialog"
       aria-modal="true"
-      aria-label={t("optLink.title")}
+      aria-label={mode === "change" ? t("optLink.changeTitle") : t("optLink.title")}
       onClick={onClose}
     >
       <div
@@ -146,7 +150,9 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose }: Props) 
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-lg font-semibold">{t("optLink.title")}</h2>
+          <h2 className="text-lg font-semibold">
+            {mode === "change" ? t("optLink.changeTitle") : t("optLink.title")}
+          </h2>
           <button
             type="button"
             onClick={onClose}
@@ -161,6 +167,11 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose }: Props) 
 
         <div className="px-5 py-4 overflow-y-auto">
           <p className="text-xs text-gray-500 mb-3">{t("optLink.help")}</p>
+          {mode === "change" && (
+            <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+              {t("optLink.changeNote")}
+            </p>
+          )}
           {loading && <p className="text-sm text-gray-500">{t("optLink.loading")}</p>}
           {!loading && error && <p className="text-sm text-red-500">{error}</p>}
           {!loading && !error && (

@@ -369,8 +369,48 @@ describe("every quarantine reports (source invariant)", () => {
     const { readFileSync } = await import("node:fs");
     const src = readFileSync("electron/sync-service.ts", "utf8");
 
+    // THREE sites since round 22: the two sweep loops' hoisted quarantines,
+    // plus the row loop's slim-snapshot guard (a staging by another service
+    // can land between the sweep's scans and the slim reads — any
+    // strict-grammar placeholder observed there is quarantined at the gate).
     const adds = src.match(/quarantinedSyncIds\.add\(/g) ?? [];
-    expect(adds.length).toBe(2);
+    expect(adds.length).toBe(3);
+    // The slim-snapshot scan is HOISTED (round 25): it runs over the whole
+    // snapshot BEFORE the row loop, and the processedSyncIds seeding runs
+    // after it — so no pair can invoke rename staging against a row either
+    // pass will quarantine. Discovered at the pair's own loop turn, an
+    // earlier pair could stage a guard-quarantined pair's real-named side
+    // aside — the round-23 manufactured stranding, reintroduced.
+    const scanStart = src.indexOf("const isLivePlaceholder");
+    expect(scanStart).toBeGreaterThan(-1);
+    const scanLoop = src.indexOf("for (const syncId of allSyncIds)", scanStart);
+    expect(scanLoop).toBeGreaterThan(scanStart);
+    const seeding = src.indexOf("for (const q of quarantinedSyncIds) processedSyncIds.add(q);");
+    expect(seeding).toBeGreaterThan(scanLoop);
+    const rowLoop = src.indexOf("for (const syncId of allSyncIds)", scanLoop + 1);
+    expect(rowLoop).toBeGreaterThan(seeding);
+    const scanRegion = src.slice(scanStart, seeding);
+    expect(scanRegion).toContain("isGeneratedPlaceholder");
+    expect(scanRegion).toContain("quarantinedSyncIds.add(syncId)");
+    // The row loop itself contains no quarantine site any more.
+    expect(src.slice(rowLoop, src.indexOf("} catch (loopErr)"))).not.toContain(
+      "quarantinedSyncIds.add(",
+    );
+
+    // Round 26: the snapshot-to-hydrate window is closed INSIDE the hydrate
+    // helpers — one enforcement point every name-carrying consumer inherits.
+    // A raw findOne hydrate that bypasses holdHydratedPlaceholder reopens
+    // the copy-the-placeholder-to-the-peer window for stagings that land
+    // after the slim reads.
+    const hydrateBlock = src.slice(
+      src.indexOf("const holdHydratedPlaceholder"),
+      src.indexOf("const fetchTargetSpoolIds"),
+    );
+    expect(hydrateBlock).toContain("isLivePlaceholder(full)");
+    const localDef = src.slice(src.indexOf("const hydrateLocal"), src.indexOf("const hydrateRemote"));
+    expect(localDef).toContain("holdHydratedPlaceholder(");
+    const remoteDef = src.slice(src.indexOf("const hydrateRemote"), src.indexOf("const fetchTargetSpoolIds"));
+    expect(remoteDef).toContain("holdHydratedPlaceholder(");
 
     const centralPushes =
       src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];

@@ -2057,6 +2057,200 @@ describe("SyncService — v1.12 sync expansion", () => {
         await allowDrains(localDb);
       }
     });
+
+    /**
+     * Round 22 (Codex P2): quarantine means "names must not transfer", not
+     * "nothing may happen". A stranded pair whose PEER was deleted used to be
+     * blocked forever — the blanket skip stopped the delete-wins branch, the
+     * name stayed taken, and every cycle re-quarantined. Flag-only outcomes
+     * now run through the quarantine, so the deletion propagates, the row
+     * tombstones, and the next sweep drains the entry via the tombstone
+     * pass-through.
+     */
+    it("lets a deleted peer tombstone a stranded placeholder row, then converges", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const edited = new Date(Date.now() - 120_000);
+      const deletedAt = new Date(Date.now() - 60_000); // deletion NEWER than the edit
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}dp1`, material: "PEI", syncId: "dp-a", _deletedAt: null,
+        createdAt: edited, updatedAt: edited,
+      });
+      // The occupier that keeps the original name taken — the stranding.
+      await localDb.collection("bedtypes").insertOne({
+        name: "Shelf DP", material: "PEI", syncId: "dp-occ", _deletedAt: null,
+        createdAt: edited, updatedAt: edited,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf DP", material: "PEI", syncId: "dp-occ", _deletedAt: null,
+        createdAt: edited, updatedAt: edited,
+      });
+      // The PEER of the stranded row: deleted, and the deletion wins LWW.
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf DP old", material: "PEI", syncId: "dp-a",
+        _deletedAt: deletedAt, createdAt: edited, updatedAt: edited,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf DP", p: `${PH}dp1`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const first = await sync.sync();
+      // The stranding is still reported this cycle (the name IS taken)…
+      expect(first.find((r) => r.collection === "bedtypes")?.error).toMatch(
+        /rename it back manually/i,
+      );
+      // …but the deletion propagated THROUGH the quarantine: flag-only write.
+      const row = await localDb.collection("bedtypes").findOne({ syncId: "dp-a" });
+      expect(row?._deletedAt).not.toBeNull();
+      // And no placeholder reached the peer.
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+      ).toBe(0);
+
+      // Next cycle: the tombstone pass-through drains the entry silently.
+      sync.destroy(); sync = makeSync();
+      const second = await sync.sync();
+      expect(second.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      const queue = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    /**
+     * The carve-out's own guard: when the DELETION LOSES (the stranded row
+     * was edited after the peer's delete), the pair is a resurrect — a
+     * name-carrying write — and must stay blocked, or the placeholder would
+     * be copied onto the peer as its resurrected name.
+     */
+    it("still blocks a resurrect that would carry the placeholder to the peer", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const deletedAt = new Date(Date.now() - 120_000);
+      const edited = new Date(Date.now() - 60_000); // edit NEWER than the deletion
+
+      const { insertedId } = await localDb.collection("bedtypes").insertOne({
+        name: `${PH}dp2`, material: "PEI", syncId: "dp-b", _deletedAt: null,
+        createdAt: deletedAt, updatedAt: edited,
+      });
+      await localDb.collection("bedtypes").insertOne({
+        name: "Shelf DQ", material: "PEI", syncId: "dq-occ", _deletedAt: null,
+        createdAt: deletedAt, updatedAt: deletedAt,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf DQ", material: "PEI", syncId: "dq-occ", _deletedAt: null,
+        createdAt: deletedAt, updatedAt: deletedAt,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Shelf DQ old", material: "PEI", syncId: "dp-b",
+        _deletedAt: deletedAt, createdAt: deletedAt, updatedAt: deletedAt,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(insertedId), o: "Shelf DQ", p: `${PH}dp2`, at: OLD }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(
+        /rename it back manually/i,
+      );
+      // The peer stays tombstoned — NOT resurrected under the temporary name.
+      const peer = await remoteDb.collection("bedtypes").findOne({ syncId: "dp-b" });
+      expect(peer?._deletedAt).not.toBeNull();
+      expect(peer?.name).toBe("Shelf DQ old");
+      // The stranded row keeps its placeholder locally (still reported).
+      expect(
+        (await localDb.collection("bedtypes").findOne({ syncId: "dp-b" }))?.name,
+      ).toBe(`${PH}dp2`);
+    });
+
+    /**
+     * Round 24 (Codex P2): a TOMBSTONED placeholder row must not be
+     * quarantined by the slim-snapshot guard — for an unpaired one, the
+     * insert branch is the only path that propagates the tombstone, and the
+     * grammar backstop deliberately leaves tombstoned strays alone. Blanket
+     * grammar quarantine skipped that insert every cycle, permanently.
+     */
+    it("propagates an unpaired TRASHED placeholder row's tombstone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const when = new Date(Date.now() - 60_000);
+      // STRICT grammar (8-hex nonce + 24-hex id) so the guard would match it.
+      const strictPh = `__sync-staging-deadbeef-${"a".repeat(24)}`;
+
+      await localDb.collection("bedtypes").insertOne({
+        name: strictPh, material: "PEI", syncId: "tp-a",
+        _deletedAt: when, createdAt: when, updatedAt: when,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The tombstone reached the peer (unpaired insert ran)…
+      const peer = await remoteDb.collection("bedtypes").findOne({ syncId: "tp-a" });
+      expect(peer).not.toBeNull();
+      expect(peer?._deletedAt).not.toBeNull();
+      // …and nothing about it failed the collection: trash names are cosmetic.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
+     * Round 23 (Codex P1): a quarantined row still holding its REAL name
+     * must be unavailable to blocker staging. Before the fix, an earlier
+     * pair wanting that name found the quarantined row movable (the plan
+     * knew nothing of quarantine, and processedSyncIds was only stamped at
+     * the row's own loop turn), staged it aside and took the name — then the
+     * gate skipped the quarantined row's promised write, and settlement
+     * could not restore because the earlier row now occupied the original.
+     * A stranding manufactured by the machinery itself.
+     */
+    it("never stages a quarantined blocker — refuses the conflict instead", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date(Date.now() - 60_000);
+
+      // Pair qa iterates FIRST (insertion order): local A wants "Quar N"
+      // onto the remote, where quarantined B still holds it.
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Quar N", material: "PEI", syncId: "qa", _deletedAt: null, createdAt: older, updatedAt: newer },
+        { name: "Quar M", material: "PEI", syncId: "qb", _deletedAt: null, createdAt: older, updatedAt: newer },
+      ]);
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Quar N old", material: "PEI", syncId: "qa", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      const { insertedId: bRemote } = await remoteDb.collection("bedtypes").insertOne({
+        // B is MOVABLE on its own merits: its pair renames it to "Quar M".
+        name: "Quar N", material: "PEI", syncId: "qb", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      // A YOUNG queue entry over remote B — the sweep quarantines the pair
+      // while B still holds its real name (the round-18 window case).
+      await remoteDb.collection("_migrations").updateOne(
+        { _id: QUEUE_ID as never },
+        { $set: { entries: [{ c: "bedtypes", i: String(bRemote), o: "Quar B orig", p: `${PH}q3`, at: new Date() }] } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The conflict is REFUSED, not resolved by staging a row whose write
+      // this cycle will never run.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeDefined();
+      // B keeps its real name; A's copy did not land.
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "qb" }))?.name).toBe("Quar N");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "qa" }))?.name).toBe("Quar N old");
+      // And the machinery manufactured NO stranding: zero placeholders.
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
   });
 
   describe("purge zombies are repaired on BOTH peers before the trim (GH #1116)", () => {
