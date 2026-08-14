@@ -358,6 +358,26 @@ export function buildOptLinkUpdate(
 }
 
 /**
+ * GH #1150 — the exact inverse of `buildOptLinkUpdate`: the `$unset` document
+ * that removes a link. Defined HERE, next to the link's `$set`, so the two
+ * path lists cannot drift — an unlink that misses a path leaves a dangling
+ * half-link (a stranded `openprinttagSnapshot` is provenance for a material
+ * the filament no longer references). The values are ignored by `$unset`;
+ * `""` is MongoDB's conventional placeholder.
+ *
+ * Deliberately NOT routed through the generic PUT: `openprinttagSnapshot` is
+ * server-owned there (`SERVER_OWNED_FILAMENT_FIELDS`) and relaxing that strip
+ * would reopen the provenance-forgery surface it exists to close.
+ */
+export function buildOptUnlinkUpdate(): Record<string, ""> {
+  return {
+    "settings.openprinttag_uuid": "",
+    "settings.openprinttag_slug": "",
+    openprinttagSnapshot: "",
+  };
+}
+
+/**
  * Issue #753 (approach A) — prune a mapped OPT payload so that creating it as a
  * VARIANT of `parentEffective` carries only the fields that are DISTINCT from
  * the parent. Every inheritable field whose incoming OPT value EXACTLY equals

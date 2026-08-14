@@ -1192,6 +1192,50 @@
             }
           }
         }
+      },
+      "delete": {
+        "summary": "Remove the OpenPrintTag link from a filament",
+        "description": "Removes exactly what linking wrote: `settings.openprinttag_slug`, `settings.openprinttag_uuid`, and the `openprinttagSnapshot` provenance. Field values are never touched. Requires no upstream fetch, so a link whose material has vanished from the OpenPrintTag database can still be removed. Idempotent — unlinking an unlinked filament returns 200. (GH #1150)",
+        "tags": [
+          "Filaments"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filament ObjectId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Link removed (or was already absent). Returns the fresh document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "unlinked": {
+                      "type": "boolean"
+                    },
+                    "filament": {
+                      "$ref": "#/components/schemas/Filament"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filament id"
+          },
+          "404": {
+            "description": "No live filament with that id"
+          }
+        }
       }
     },
     "/api/filaments/{id}/calibration": {
