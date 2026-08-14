@@ -9,6 +9,7 @@ import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { nozzleFilamentRefFilter, nozzlePrinterRefFilter } from "@/lib/entityDependents";
 import { validateNozzlePrinterAssignment } from "@/lib/nozzlePrinterAssignment";
 
 export async function GET(
@@ -164,13 +165,9 @@ export async function DELETE(
     // restored, which would resurrect a dangling nozzle ref if the nozzle
     // were deleted in the meantime. Only `_purged` tombstones are gone
     // forever and don't block.
-    const referencingCount = await Filament.countDocuments({
-      _purged: { $ne: true },
-      $or: [
-        { compatibleNozzles: id },
-        { "calibrations.nozzle": id },
-      ],
-    });
+    // Predicate shared with GH #1149's dependents counter — see
+    // src/lib/entityDependents.ts; the two must not drift.
+    const referencingCount = await Filament.countDocuments(nozzleFilamentRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(
         `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove it from those filaments (or permanently delete the trashed ones) first.`,
@@ -183,10 +180,7 @@ export async function DELETE(
     // guard above): printers have no trash/restore loop, so a soft-deleted
     // printer's refs can never resurrect — and counting them would block
     // the delete with no way for the user to clear the reference.
-    const printerCount = await Printer.countDocuments({
-      _deletedAt: null,
-      installedNozzles: id,
-    });
+    const printerCount = await Printer.countDocuments(nozzlePrinterRefFilter(id));
     if (printerCount > 0) {
       return errorResponse(
         `Cannot delete this nozzle — it is installed on ${printerCount} printer${printerCount !== 1 ? "s" : ""}. Remove it from those printers first.`,

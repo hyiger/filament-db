@@ -1,0 +1,305 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useTranslation } from "@/i18n/TranslationProvider";
+import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
+
+/**
+ * GH #1149 — Data health: the trim-collision resolution surface.
+ *
+ * Rows the #1116 name-trim migration refused to repair (a stored `"X "`
+ * blocked by an active `"X"`, or a whitespace-only name) were previously
+ * reported only on a console the desktop user never sees. This page lists
+ * them — rendering names through JSON.stringify so the whitespace is finally
+ * VISIBLE — and offers the two safe resolutions:
+ *
+ *   - Delete, only when nothing depends on the row (it is a plain duplicate
+ *     of the row that already won the name). The server-side delete guards
+ *     back this gate up — the client check is a courtesy.
+ *   - Rename (prefilled with `"X (2)"`), which frees the canonical spelling
+ *     without touching a single reference.
+ *
+ * Both act through the existing id-addressed routes — the blocked row is
+ * unreachable by NAME through Mongoose (the GH #1116 mechanism itself), but
+ * perfectly reachable by id, and the still-unsettled migration then repairs
+ * and settles on its next throttled pass.
+ */
+
+interface Dependents {
+  total: number;
+  breakdown: Record<string, number>;
+}
+
+interface Conflict {
+  collection: "filaments" | "nozzles" | "printers" | "bedtypes" | "locations";
+  name: string;
+  id: string;
+  trimsTo: string | null;
+  reason: "collision" | "empty-name";
+  collidesWith: { id: string; name: string } | null;
+  dependents: Dependents;
+}
+
+/** The id-addressed routes the resolutions act through. */
+const ROUTE_BY_COLLECTION: Record<Conflict["collection"], string> = {
+  filaments: "/api/filaments",
+  nozzles: "/api/nozzles",
+  printers: "/api/printers",
+  bedtypes: "/api/bed-types",
+  locations: "/api/locations",
+};
+
+export default function DataHealthPage() {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const confirm = useConfirm();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+  const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // Refetch helper for the ACTION handlers (event handlers, not effects —
+  // the react-hooks/set-state-in-effect rule does not apply there).
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/name-conflicts");
+      if (!res.ok) throw new Error();
+      const body = (await res.json()) as { conflicts: Conflict[] };
+      setConflicts(body.conflicts);
+      setError(false);
+    } catch {
+      setError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // The mount fetch is an inline IIFE with a cancelled flag — the repo's
+  // set-state-in-effect rule traces INTO a named callback invoked from an
+  // effect body and flags its setStates, but accepts this exact shape (the
+  // pattern OptResyncDialog established; the CI lint proved the difference).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/name-conflicts");
+        if (!res.ok) throw new Error();
+        const body = (await res.json()) as { conflicts: Conflict[] };
+        if (cancelled) return;
+        setConflicts(body.conflicts);
+        setError(false);
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleDelete = useCallback(
+    async (c: Conflict) => {
+      const ok = await confirm({
+        title: t("health.deleteConfirmTitle"),
+        message: t(
+          c.collection === "filaments"
+            ? "health.deleteConfirm.trash"
+            : "health.deleteConfirm.permanent",
+          { name: JSON.stringify(c.name) },
+        ),
+        confirmLabel: t("health.action.delete"),
+        destructive: true,
+      });
+      if (!ok) return;
+      setBusy(true);
+      try {
+        const res = await fetch(`${ROUTE_BY_COLLECTION[c.collection]}/${c.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          toast(body?.error ?? t("health.actionFailed"), "error");
+          return;
+        }
+        toast(t("health.deleted"), "success");
+        await load();
+      } catch {
+        toast(t("health.actionFailed"), "error");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [confirm, t, toast, load],
+  );
+
+  const handleRename = useCallback(
+    async (c: Conflict) => {
+      const name = renameValue.trim();
+      if (name === "") return;
+      setBusy(true);
+      try {
+        const res = await fetch(`${ROUTE_BY_COLLECTION[c.collection]}/${c.id}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name }),
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          toast(body?.error ?? t("health.actionFailed"), "error");
+          return;
+        }
+        toast(t("health.renamed"), "success");
+        setRenaming(null);
+        await load();
+      } catch {
+        toast(t("health.actionFailed"), "error");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [renameValue, t, toast, load],
+  );
+
+  return (
+    <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
+      <Link href="/settings" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+        ← {t("settings.title")}
+      </Link>
+      <h1 className="text-3xl font-bold mt-2 mb-2">{t("health.title")}</h1>
+      <p className="text-gray-500 text-sm mb-2">{t("health.subtitle")}</p>
+      {/* Phase 1 covers the database this server talks to; hybrid-remote
+          conflicts are a follow-up (stated so the card never over-claims). */}
+      <p className="text-xs text-gray-400 dark:text-gray-500 mb-8">{t("health.hybridNote")}</p>
+
+      {loading && <p className="text-sm text-gray-500">{t("health.loading")}</p>}
+      {!loading && error && (
+        <p className="text-sm text-red-500">{t("health.error")}</p>
+      )}
+      {!loading && !error && conflicts.length === 0 && (
+        <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
+          <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>
+        </div>
+      )}
+
+      <div className="space-y-4">
+        {conflicts.map((c) => {
+          const deletable = c.dependents.total === 0;
+          const depEntries = Object.entries(c.dependents.breakdown).filter(([, n]) => n > 0);
+          return (
+            <div
+              key={`${c.collection}-${c.id}`}
+              className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-4"
+            >
+              <div className="flex items-center gap-2 mb-1">
+                <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                  {t(`health.col.${c.collection}`)}
+                </span>
+                {/* JSON.stringify makes the invisible whitespace visible —
+                    the entire reason the row reads as a duplicate. */}
+                <code className="text-sm font-mono">{JSON.stringify(c.name)}</code>
+              </div>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                {c.reason === "empty-name"
+                  ? t("health.conflict.emptyName")
+                  : t("health.conflict.takenBy", {
+                      trimsTo: JSON.stringify(c.trimsTo ?? ""),
+                      twin: c.collidesWith ? JSON.stringify(c.collidesWith.name) : "?",
+                    })}
+              </p>
+              <p className="text-xs text-gray-500 mt-1">
+                {depEntries.length === 0
+                  ? t("health.dependents.none")
+                  : `${t("health.dependents")}: ${depEntries
+                      .map(([k, n]) => `${t(`health.dep.${k}`)}: ${n}`)
+                      .join(" · ")}`}
+              </p>
+              {/* GH #557 caveat: bedTypeTemps references are keyed by NAME,
+                  so a rename does NOT follow them — unlike every id-keyed
+                  dependent. Say so instead of letting the generic "rename
+                  it instead" hint promise reference preservation it can't
+                  deliver for this one dependent kind. */}
+              {c.collection === "bedtypes" &&
+                (c.dependents.breakdown.filamentBedTemps ?? 0) > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    {t("health.bedTempsRenameNote", {
+                      count: c.dependents.breakdown.filamentBedTemps,
+                    })}
+                  </p>
+                )}
+
+              <div className="flex items-center gap-2 mt-3">
+                {renaming === c.id ? (
+                  <>
+                    <input
+                      type="text"
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && !busy && renameValue.trim() !== "") {
+                          e.preventDefault();
+                          void handleRename(c);
+                        } else if (e.key === "Escape") {
+                          e.preventDefault();
+                          setRenaming(null);
+                        }
+                      }}
+                      autoFocus
+                      className="px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 flex-1"
+                      aria-label={t("health.action.rename")}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleRename(c)}
+                      disabled={busy || renameValue.trim() === ""}
+                      className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700"
+                    >
+                      {t("health.action.saveRename")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRenaming(null)}
+                      className="px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                      {t("resync.cancel")}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenaming(c.id);
+                        // `"X (2)"` frees the canonical spelling; the server's
+                        // unique index arbitrates if it is itself taken.
+                        setRenameValue(c.trimsTo ? `${c.trimsTo} (2)` : "");
+                      }}
+                      disabled={busy}
+                      className="px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                    >
+                      {t("health.action.rename")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDelete(c)}
+                      disabled={busy || !deletable}
+                      title={deletable ? undefined : t("health.deleteBlockedHint")}
+                      className="px-3 py-1 text-sm rounded border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {t("health.action.delete")}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </main>
+  );
+}

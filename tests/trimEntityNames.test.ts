@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  type TrimNameConflict,
+  scanTrimConflicts,
   TRIMMABLE_COLLECTIONS,
   EDGE_WHITESPACE_PATTERN,
   castNameLikeSchema,
@@ -98,6 +100,118 @@ describe("hasEdgeWhitespace", () => {
   });
 });
 
+/** GH #1149 widened TrimNameConflict; this fills the identity fields for
+ *  fixtures that only exercise collection/name/active. */
+function asConflict(c: {
+  collection: TrimNameConflict["collection"];
+  name: string;
+  active: boolean;
+}): TrimNameConflict {
+  return { ...c, id: "x", trimsTo: null, reason: "empty-name", collidesWith: null };
+}
+
+describe("scanTrimConflicts (GH #1149)", () => {
+  /** One fixture per classification arm, shared with the migration run so
+   *  the parity assertion sweeps every branch of the shared classifier. */
+  const FIXTURES = {
+    locations: [
+      { _id: "l1", name: "Drybox #1" },
+      { _id: "l2", name: "Drybox #1 " }, // collision with an active twin
+    ],
+    nozzles: [{ _id: "n1", name: "   " }], // whitespace-only
+    filaments: [
+      { _id: "z", name: "X", _deletedAt: null, _purged: true }, // hidden zombie
+      { _id: "v", name: "X ", _deletedAt: null }, // clash vs zombie → inactive
+      { _id: "t", name: " PLA", _deletedAt: null }, // trimmable → NOT a conflict
+    ],
+    printers: [{ _id: "p1", name: "  ", _deletedAt: "2026-01-01" }], // tombstoned
+  };
+
+  it("classifies exactly as the migration does (parity)", async () => {
+    // Fresh copies — the migration MUTATES (it trims " PLA").
+    const scanned = await scanTrimConflicts(makeDb(structuredClone(FIXTURES)).db);
+    const migrated = await trimEntityNames(makeDb(structuredClone(FIXTURES)).db);
+    expect(scanned).toEqual(migrated.conflicts);
+    // And the fixture genuinely exercises all three shapes.
+    expect(scanned.map((c) => c.reason).sort()).toEqual([
+      "collision", "collision", "empty-name", "empty-name",
+    ]);
+    expect(scanned.some((c) => !c.active)).toBe(true);
+  });
+
+  it("matches the migration on an ordered MUTUAL-trim pair (no stored twin)", async () => {
+    // " X" and "X " with no stored "X": the migration trims the FIRST and the
+    // second then collides against the freshly-written "X" — a mid-pass
+    // write a per-row classification can't see. The scan emulates the claim.
+    const PAIR = {
+      locations: [
+        { _id: "m1", name: " X" },
+        { _id: "m2", name: "X " },
+      ],
+    };
+    const scanned = await scanTrimConflicts(makeDb(structuredClone(PAIR)).db);
+    const migrated = await trimEntityNames(makeDb(structuredClone(PAIR)).db);
+    expect(migrated.trimmed).toBe(1);
+    expect(scanned).toEqual(migrated.conflicts);
+    expect(scanned).toEqual([
+      {
+        collection: "locations", name: "X ", active: true,
+        id: "m2", trimsTo: "X", reason: "collision",
+        collidesWith: { id: "m1", name: "X" },
+      },
+    ]);
+  });
+
+  it("a hidden-zombie CLAIMER makes the pair's conflict inactive, like the real clash branch", async () => {
+    // The zombie " Z" trims first (it is in the partial index, so its write
+    // claims "Z" for the later clash check) but is invisible — so the later
+    // row's conflict must be INACTIVE, exactly as the migration classifies
+    // it via resolvableByAHuman.
+    const PAIR = {
+      filaments: [
+        { _id: "z1", name: " Z", _deletedAt: null, _purged: true },
+        { _id: "v1", name: "Z ", _deletedAt: null },
+      ],
+    };
+    const scanned = await scanTrimConflicts(makeDb(structuredClone(PAIR)).db);
+    const migrated = await trimEntityNames(makeDb(structuredClone(PAIR)).db);
+    expect(scanned).toEqual(migrated.conflicts);
+    expect(scanned).toEqual([
+      {
+        collection: "filaments", name: "Z ", active: false,
+        id: "v1", trimsTo: "Z", reason: "collision",
+        collidesWith: { id: "z1", name: "Z" },
+      },
+    ]);
+  });
+
+  it("performs zero writes and builds no index", async () => {
+    const { db, store } = makeDb(structuredClone(FIXTURES));
+    let writes = 0;
+    const counting: MinimalTrimDb = {
+      collection(name: string) {
+        const real = db.collection(name);
+        return {
+          find: (f: Record<string, unknown>, o?: Record<string, unknown>) => real.find(f, o),
+          updateOne: async () => {
+            writes++;
+            return {};
+          },
+          createIndex: async () => {
+            writes++;
+            return {};
+          },
+        };
+      },
+    };
+    const conflicts = await scanTrimConflicts(counting);
+    expect(conflicts.length).toBe(4);
+    expect(writes).toBe(0);
+    // The trimmable row is untouched — scanning must never repair.
+    expect(store.filaments.find((r) => r._id === "t")?.name).toBe(" PLA");
+  });
+});
+
 describe("trimEntityNames", () => {
   it("trims stored names across every collection", async () => {
     const { db, store } = makeDb({
@@ -133,7 +247,11 @@ describe("trimEntityNames", () => {
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
     expect(res.conflicts).toEqual([
-      { collection: "locations", name: "Drybox #1 ", active: true },
+      {
+        collection: "locations", name: "Drybox #1 ", active: true,
+        id: "l2", trimsTo: "Drybox #1", reason: "collision",
+        collidesWith: { id: "l1", name: "Drybox #1" },
+      },
     ]);
     // Untouched — still visible and editable in the app.
     expect(store.locations[1].name).toBe("Drybox #1 ");
@@ -143,7 +261,12 @@ describe("trimEntityNames", () => {
     const { db, store } = makeDb({ nozzles: [{ _id: "n1", name: "   " }] });
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
-    expect(res.conflicts).toEqual([{ collection: "nozzles", name: "   ", active: true }]);
+    expect(res.conflicts).toEqual([
+      {
+        collection: "nozzles", name: "   ", active: true,
+        id: "n1", trimsTo: null, reason: "empty-name", collidesWith: null,
+      },
+    ]);
     expect(store.nozzles[0].name).toBe("   ");
   });
 
@@ -161,7 +284,11 @@ describe("trimEntityNames", () => {
     });
     const res = await trimEntityNames(db);
     expect(res.conflicts).toEqual([
-      { collection: "locations", name: "Shelf ", active: true },
+      {
+        collection: "locations", name: "Shelf ", active: true,
+        id: "v", trimsTo: "Shelf", reason: "collision",
+        collidesWith: { id: "z", name: "Shelf" },
+      },
     ]);
   });
 
@@ -171,7 +298,10 @@ describe("trimEntityNames", () => {
     });
     const res = await trimEntityNames(db);
     expect(res.conflicts).toEqual([
-      { collection: "nozzles", name: "  ", active: true },
+      {
+        collection: "nozzles", name: "  ", active: true,
+        id: "n1", trimsTo: null, reason: "empty-name", collidesWith: null,
+      },
     ]);
   });
 
@@ -190,7 +320,12 @@ describe("trimEntityNames", () => {
     const res = await trimEntityNames(db);
     expect(res.trimmed).toBe(0);
     expect(res.conflicts).toEqual([
-      { collection: "filaments", name: "X ", active: false },
+      {
+        collection: "filaments", name: "X ", active: false,
+        id: "v", trimsTo: "X", reason: "collision",
+        // The zombie is the only clash, so it is named even though hidden.
+        collidesWith: { id: "z", name: "X" },
+      },
     ]);
   });
 
@@ -203,7 +338,11 @@ describe("trimEntityNames", () => {
     });
     const res = await trimEntityNames(db);
     expect(res.conflicts).toEqual([
-      { collection: "filaments", name: "X ", active: true },
+      {
+        collection: "filaments", name: "X ", active: true,
+        id: "b", trimsTo: "X", reason: "collision",
+        collidesWith: { id: "a", name: "X" },
+      },
     ]);
   });
 
@@ -217,7 +356,10 @@ describe("trimEntityNames", () => {
     });
     const res = await trimEntityNames(db);
     expect(res.conflicts).toEqual([
-      { collection: "filaments", name: "  ", active: false },
+      {
+        collection: "filaments", name: "  ", active: false,
+        id: "f1", trimsTo: null, reason: "empty-name", collidesWith: null,
+      },
     ]);
   });
 
@@ -231,7 +373,10 @@ describe("trimEntityNames", () => {
     });
     const res = await trimEntityNames(db);
     expect(res.conflicts).toEqual([
-      { collection: "filaments", name: "   ", active: false },
+      {
+        collection: "filaments", name: "   ", active: false,
+        id: "f1", trimsTo: null, reason: "empty-name", collidesWith: null,
+      },
     ]);
   });
 
@@ -366,7 +511,7 @@ describe("describeTrimResult", () => {
     // but the log should still say it exists.
     const line = describeTrimResult({
       trimmed: 0,
-      conflicts: [{ collection: "filaments", name: "  ", active: false }],
+      conflicts: [asConflict({ collection: "filaments", name: "  ", active: false })],
       skipped: [], deferred: [],
     });
     expect(line).toContain('filaments: "  "');
@@ -375,7 +520,7 @@ describe("describeTrimResult", () => {
   it("names every conflict, since the user has to resolve them by hand", () => {
     const line = describeTrimResult({
       trimmed: 2,
-      conflicts: [{ collection: "locations", name: "Drybox #1 ", active: true }],
+      conflicts: [asConflict({ collection: "locations", name: "Drybox #1 ", active: true })],
       skipped: [], deferred: [],
     });
     expect(line).toContain("trimmed 2");
@@ -640,7 +785,13 @@ describe("pre-write collision check (Codex P1)", () => {
     return trimEntityNames(db).then((res) => {
       expect(res.trimmed).toBe(0);
       expect(res.conflicts).toEqual([
-        { collection: "locations", name: "Drybox #1 ", active: true },
+        {
+          collection: "locations", name: "Drybox #1 ", active: true,
+          id: "l2", trimsTo: "Drybox #1", reason: "collision",
+          // The pre-write clash check names the twin even here — the missing
+          // index only removes the SERIALIZATION, not the lookup.
+          collidesWith: { id: "l1", name: "Drybox #1" },
+        },
       ]);
       expect(store.locations[1].name).toBe("Drybox #1 ");
     });
@@ -737,7 +888,7 @@ describe("trimBlockedCount", () => {
     expect(
       trimBlockedCount({
         ...base,
-        conflicts: [{ collection: "locations", name: "Shelf ", active: false }],
+        conflicts: [asConflict({ collection: "locations", name: "Shelf ", active: false })],
         deferred: [{ collection: "locations", reason: "legacy index" }],
       }),
     ).toBe(1);
@@ -747,7 +898,7 @@ describe("trimBlockedCount", () => {
     expect(
       trimBlockedCount({
         ...base,
-        conflicts: [{ collection: "filaments", name: "PLA ", active: true }],
+        conflicts: [asConflict({ collection: "filaments", name: "PLA ", active: true })],
         skipped: [{ collection: "nozzles", reason: "no index" }],
       }),
     ).toBe(2);
@@ -759,7 +910,7 @@ describe("trimBlockedCount", () => {
     expect(
       trimBlockedCount({
         ...base,
-        conflicts: [{ collection: "printers", name: "   ", active: false }],
+        conflicts: [asConflict({ collection: "printers", name: "   ", active: false })],
       }),
     ).toBe(0);
   });

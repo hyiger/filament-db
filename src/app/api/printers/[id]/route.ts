@@ -9,6 +9,7 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { printerCalibrationRefFilter } from "@/lib/entityDependents";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
 import {
   clearSpoolsFromOtherPrinters,
@@ -211,10 +212,9 @@ export async function DELETE(
     // restored, which would resurrect a dangling calibration printer ref if
     // the printer were deleted in the meantime. Only `_purged` tombstones
     // are gone forever and don't block.
-    const referencingCount = await Filament.countDocuments({
-      _purged: { $ne: true },
-      "calibrations.printer": id,
-    });
+    // Predicate shared with GH #1149's dependents counter — see
+    // src/lib/entityDependents.ts; the two must not drift.
+    const referencingCount = await Filament.countDocuments(printerCalibrationRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(
         `Cannot delete this printer — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove its calibrations from those filaments (or permanently delete the trashed ones) first.`,

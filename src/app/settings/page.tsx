@@ -39,6 +39,7 @@ export default function SettingsPage() {
           <SettingsTile href="/settings/network" title={t("settings.group.network")} description={t("settings.group.network.desc")} />
         )}
         <SettingsTile href="/settings/backup" title={t("settings.group.data")} description={t("settings.group.data.desc")} />
+        <SettingsTile href="/settings/health" title={t("settings.group.health")} description={t("settings.group.health.desc")} />
         <SettingsTile href="/settings/ai" title={t("settings.group.ai")} description={t("settings.group.ai.desc")} />
         <SettingsTile href="/settings/devices" title={t("settings.group.devices")} description={t("settings.group.devices.desc")} />
       </div>
