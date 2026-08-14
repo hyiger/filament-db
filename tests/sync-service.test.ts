@@ -397,6 +397,21 @@ describe("every quarantine reports (source invariant)", () => {
       "quarantinedSyncIds.add(",
     );
 
+    // Round 26: the snapshot-to-hydrate window is closed INSIDE the hydrate
+    // helpers — one enforcement point every name-carrying consumer inherits.
+    // A raw findOne hydrate that bypasses holdHydratedPlaceholder reopens
+    // the copy-the-placeholder-to-the-peer window for stagings that land
+    // after the slim reads.
+    const hydrateBlock = src.slice(
+      src.indexOf("const holdHydratedPlaceholder"),
+      src.indexOf("const fetchTargetSpoolIds"),
+    );
+    expect(hydrateBlock).toContain("isLivePlaceholder(full)");
+    const localDef = src.slice(src.indexOf("const hydrateLocal"), src.indexOf("const hydrateRemote"));
+    expect(localDef).toContain("holdHydratedPlaceholder(");
+    const remoteDef = src.slice(src.indexOf("const hydrateRemote"), src.indexOf("const fetchTargetSpoolIds"));
+    expect(remoteDef).toContain("holdHydratedPlaceholder(");
+
     const centralPushes =
       src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];
     expect(centralPushes.length).toBe(2);

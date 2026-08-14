@@ -1732,15 +1732,48 @@ export class SyncService extends EventEmitter {
     const localBySyncId = new Map(localDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
     const remoteBySyncId = new Map(remoteDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
 
+    /** A LIVE row currently named by the staging grammar. Strict grammar (a
+     * user's prefix-shaped name never matches); tombstoned/purged rows are
+     * excluded per the round-24 rule — deletion must propagate and a trash
+     * name is cosmetic. Shared by the round-25 snapshot scan below and the
+     * hydrate guard here. */
+    const isLivePlaceholder = (d: Document | null | undefined): d is Document =>
+      d != null &&
+      typeof d.name === "string" &&
+      isGeneratedPlaceholder(d.name) &&
+      d._deletedAt == null &&
+      d._purged !== true;
+
     // Hydrate the full document only when a branch actually needs the body
-    // (push / pull / update / resurrect). Returns null if the doc vanished
-    // between the slim read and now (physical delete — doesn't happen in
-    // this app's soft-delete-only model, but guard defensively so a null
-    // can't be spread into an insert/update).
-    const hydrateLocal = (slim: Document): Promise<Document | null> =>
-      localCol.findOne({ _id: slim._id });
-    const hydrateRemote = (slim: Document): Promise<Document | null> =>
-      remoteCol.findOne({ _id: slim._id });
+    // (push / pull / update / resurrect). Returns null when the doc vanished
+    // between the slim read and now, AND (round 26, Codex P1) when the
+    // hydrated body is a LIVE staging placeholder: another service can stage
+    // a row between the slim reads above and this hydrate, so the round-25
+    // scan saw the real name while the body now carries the temporary one —
+    // and every name-carrying write below copies the hydrated body verbatim
+    // to the peer. One enforcement point: every consumer's existing
+    // `if (!full) continue;` skips the pair, with the hold-back reported
+    // here. Our OWN staged blockers can never trip this — staging only
+    // stages a blocker whose pending copy runs TOWARD the col it was staged
+    // on, so a staged row is always the copy's TARGET; the source hydrated
+    // here is the other side, still under its real name. No quarantine entry
+    // is needed either: blocker lookups are FRESH reads by name, and this
+    // row no longer holds its real name in the database.
+    const holdHydratedPlaceholder = (full: Document | null): Document | null => {
+      if (isLivePlaceholder(full)) {
+        sweptHoldbacks.push(
+          `${collectionName} ${String(full._id)} is mid-rename by another sync ` +
+            `service; its temporary name is held back this cycle and resolved by ` +
+            `the owner or the next sweep.`,
+        );
+        return null;
+      }
+      return full;
+    };
+    const hydrateLocal = async (slim: Document): Promise<Document | null> =>
+      holdHydratedPlaceholder(await localCol.findOne({ _id: slim._id }));
+    const hydrateRemote = async (slim: Document): Promise<Document | null> =>
+      holdHydratedPlaceholder(await remoteCol.findOne({ _id: slim._id }));
 
     // GH #732: on a filament UPDATE the whole spools array is overwritten by
     // the source. If the source spool lacks an instanceId (a pre-#732 peer) we
@@ -2337,12 +2370,6 @@ export class SyncService extends EventEmitter {
     // path that propagates the tombstone — the trashed name is cosmetic).
     // Our OWN staged rows can't trip this: the slim snapshot predates every
     // staging this pass performs, so it still carries their original names.
-    const isLivePlaceholder = (d: Document | undefined): d is Document =>
-      d != null &&
-      typeof d.name === "string" &&
-      isGeneratedPlaceholder(d.name) &&
-      d._deletedAt == null &&
-      d._purged !== true;
     for (const syncId of allSyncIds) {
       if (quarantinedSyncIds.has(syncId)) continue;
       const lSlim = localBySyncId.get(syncId);
