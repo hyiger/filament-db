@@ -1184,6 +1184,42 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(res.status).toBe(403);
   });
 
+  it("DELETE serializes behind the per-filament mutex (no unlink mid-sync)", async () => {
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    // WARM the route first: the first call pays dbConnect's whole migration
+    // suite (>100 ms), which would let an UN-locked DELETE still be mid-init
+    // at the checkpoint below and pass this test vacuously — exactly the
+    // trap this test exists to rule out. Warmed, an un-serialized unlink
+    // lands in single-digit milliseconds.
+    const warm = await Filament.create({ name: "Warmup", vendor: "V", type: "PLA" });
+    await linkDELETE(unlinkReq(String(warm._id)), params(String(warm._id)));
+
+    const f = await Filament.create({
+      name: "Locked Unlink", vendor: "V", type: "PLA",
+      settings: { openprinttag_slug: "s", openprinttag_uuid: "u" },
+      openprinttagSnapshot: { density: 1 },
+    });
+
+    // Occupy the same lock the sync route holds for its whole critical
+    // section, then fire the DELETE — it must WAIT, not interleave.
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const lockHeld = runExclusive(filamentLockKey(String(f._id)), () => hold);
+
+    const delPromise = linkDELETE(unlinkReq(String(f._id)), params(String(f._id)));
+    await new Promise((r) => setTimeout(r, 150));
+    // The link is still intact — the unlink is queued behind the lock.
+    const during = await Filament.findById(f._id).lean();
+    expect(during.settings?.openprinttag_slug).toBe("s");
+
+    release();
+    await lockHeld;
+    const res = await delPromise;
+    expect(res.status).toBe(200);
+    const after = await Filament.findById(f._id).lean();
+    expect(after.settings?.openprinttag_slug).toBeUndefined();
+  });
+
   it("re-linking to a different material overwrites slug, uuid AND snapshot (the change-link contract)", async () => {
     const OTHER = {
       ...UPSTREAM_MATERIAL,

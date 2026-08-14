@@ -8,6 +8,7 @@ import {
 } from "@/lib/openprinttagBrowser";
 import { buildOptLinkUpdate, buildOptUnlinkUpdate } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * POST /api/filaments/{id}/openprinttag/link  (Issue #753, approach C)
@@ -135,11 +136,20 @@ export async function DELETE(
 
     await dbConnect();
 
-    const updated = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      { $unset: buildOptUnlinkUpdate() },
-      { returnDocument: "after" },
-    ).lean();
+    // Same per-filament mutex as the sync route (Codex P2): un-serialized,
+    // a sync entering its critical section moments before this unlink could
+    // read the old link, then re-write OPT field values AND recreate
+    // `openprinttagSnapshot` AFTER this DELETE returned success — a
+    // half-restored link the user explicitly removed. Inside the lock the
+    // two orders are both coherent: sync-then-unlink removes everything;
+    // unlink-then-sync finds no link and 4xxes.
+    const updated = await runExclusive(filamentLockKey(id), async () =>
+      Filament.findOneAndUpdate(
+        { _id: id, _deletedAt: null },
+        { $unset: buildOptUnlinkUpdate() },
+        { returnDocument: "after" },
+      ).lean(),
+    );
     if (!updated) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
