@@ -383,3 +383,76 @@ describe("isGeneratedPlaceholder", () => {
     expect(isGeneratedPlaceholder(null)).toBe(false);
   });
 });
+
+describe("planRenameStaging — requester/holder role split (GH #1151)", () => {
+  const N = "cafebabe";
+
+  it("stages a movable holder for a NON-holder requester, even under its own stored name", async () => {
+    // The common trash-restore shape: the deleted row resurrects under the
+    // very name it already stores — the old desired===current skip discarded
+    // exactly this request.
+    const plan = planRenameStaging(
+      [
+        { id: "dead", currentName: "X", desiredName: "X", willWrite: true, holdsName: false },
+        { id: "hold", currentName: "X", desiredName: "Y", willWrite: true },
+      ],
+      N,
+    );
+    expect(plan.staged.map((s) => s.id)).toEqual(["hold"]);
+    expect(plan.unsatisfiable).toEqual([]);
+  });
+
+  it("refuses a NON-holder requester against an immovable holder", async () => {
+    const plan = planRenameStaging(
+      [
+        { id: "dead", currentName: "X", desiredName: "X", willWrite: true, holdsName: false },
+        { id: "hold", currentName: "X", desiredName: "X", willWrite: false },
+      ],
+      N,
+    );
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable).toEqual([{ id: "dead", desiredName: "X", heldBy: "hold" }]);
+  });
+
+  it("a non-holder never blocks: a rename into its currentName sees a free destination", async () => {
+    const plan = planRenameStaging(
+      [
+        { id: "dead", currentName: "Z", desiredName: "Q", willWrite: true, holdsName: false },
+        { id: "mover", currentName: "A", desiredName: "Z", willWrite: true },
+      ],
+      N,
+    );
+    // Nothing to stage and nothing unsatisfiable — "Z" is not held.
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable).toEqual([]);
+  });
+
+  it("a non-holder sorted FIRST cannot shadow the real holder of its name", async () => {
+    const plan = planRenameStaging(
+      [
+        // Deleted row named "X" first — must NOT win the first-holder slot.
+        { id: "dead", currentName: "X", desiredName: "X", willWrite: false, holdsName: false },
+        { id: "hold", currentName: "X", desiredName: "Y", willWrite: true },
+        { id: "mover", currentName: "B", desiredName: "X", willWrite: true },
+      ],
+      N,
+    );
+    // The REAL holder is movable, so the mover's request stages it.
+    expect(plan.staged.map((s) => s.id)).toEqual(["hold"]);
+  });
+
+  it("a resurrect contesting a destination with a rename refuses BOTH", async () => {
+    const plan = planRenameStaging(
+      [
+        { id: "dead", currentName: "X", desiredName: "X", willWrite: true, holdsName: false },
+        { id: "mover", currentName: "B", desiredName: "X", willWrite: true },
+        { id: "hold", currentName: "X", desiredName: "Y", willWrite: true },
+      ],
+      N,
+    );
+    // No principled winner between the resurrect and the rename: neither may
+    // stage the holder, both are reported.
+    expect(plan.staged).toEqual([]);
+    expect(plan.unsatisfiable.map((u) => u.id).sort()).toEqual(["dead", "mover"]);
+  });
+});

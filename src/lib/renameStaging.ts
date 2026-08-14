@@ -59,6 +59,14 @@ export interface RenameIntent {
   /** False for a row that is present but not being written this pass. It can
    *  still block a name, and it can never be staged out of the way. */
   willWrite: boolean;
+  /**
+   * False for a row OUTSIDE the partial unique index — a soft-deleted row
+   * this pass will RESURRECT (GH #1151). Such a row may REQUEST a name (its
+   * resurrect writes the peer's name onto it) but holds no index slot: it can
+   * never block another write and can never be staged aside. Default true —
+   * every pre-#1151 intent is a holder, byte-identical behavior.
+   */
+  holdsName?: boolean;
 }
 
 export interface StagedRename {
@@ -150,6 +158,12 @@ export function planRenameStaging(
   // the FIRST holder wins the slot — matching what the index would enforce.
   const holderByName = new Map<string, RenameIntent>();
   for (const row of rows) {
+    // A non-holder must never win the first-holder-wins slot (GH #1151): a
+    // deleted row named "X" would shadow the REAL active holder that
+    // legitimately shares the name under the partial index (GH #213 reuse),
+    // and a non-holder "never vacates", so the fixpoint would wrongly
+    // declare the chain immovable.
+    if (row.holdsName === false) continue;
     if (!holderByName.has(row.currentName)) holderByName.set(row.currentName, row);
   }
 
@@ -173,7 +187,12 @@ export function planRenameStaging(
    */
   const canVacate = new Set<string>();
   for (const row of rows) {
-    if (row.willWrite && row.desiredName !== row.currentName) canVacate.add(row.id);
+    // For a NON-holder, "vacate" is vacuous — the set means "its write can
+    // proceed" (GH #1151). A resurrect restoring its own stored name still
+    // needs the index slot, so the desired!==current test is holder-only.
+    if (row.willWrite && (row.holdsName === false || row.desiredName !== row.currentName)) {
+      canVacate.add(row.id);
+    }
   }
 
   // A CONTESTED destination poisons every row that desires it (Codex P1).
@@ -195,7 +214,11 @@ export function planRenameStaging(
   // cannot rely on it vacating, and is knocked out by the ordinary rule.
   const desireCount = new Map<string, number>();
   for (const row of rows) {
-    if (row.willWrite && row.desiredName !== row.currentName) {
+    // Same predicate as the canVacate seed (GH #1151): a resurrect
+    // contesting a destination with a rename must poison BOTH — the
+    // stranding-safety argument above applies identically, and there is
+    // still no principled winner.
+    if (row.willWrite && (row.holdsName === false || row.desiredName !== row.currentName)) {
       desireCount.set(row.desiredName, (desireCount.get(row.desiredName) ?? 0) + 1);
     }
   }
@@ -222,7 +245,10 @@ export function planRenameStaging(
   const stagedIds = new Set<string>();
   for (const row of rows) {
     if (!row.willWrite) continue;
-    if (row.desiredName === row.currentName) continue;
+    // desired === current is a no-op only for a HOLDER (it already owns the
+    // slot). A non-holder resurrecting under its own stored name (GH #1151,
+    // the common trash-restore shape) still needs the slot freed.
+    if (row.holdsName !== false && row.desiredName === row.currentName) continue;
 
     const holder = holderByName.get(row.desiredName);
     if (!holder || holder.id === row.id) continue;
