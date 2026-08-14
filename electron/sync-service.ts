@@ -1866,15 +1866,18 @@ export class SyncService extends EventEmitter {
      * which downgrades the case to "unsatisfiable, reported" rather than
      * risking a stranded placeholder.
      *
-     * ## The property this actually has (Codex P1, second pass)
+     * ## The property this actually has (Codex P1, second pass; GH #1151)
      *
      * Not "it mirrors the loop exactly" — it does not, and claiming so is how
-     * the previous version drifted. The true, scoped claim is: FOR A ROW THAT
-     * IS LIVE ON `col` — the only rows `stageableOn` can ask about, since its
-     * filter is the index predicate — the only branch that rewrites the name
-     * is the both-active LWW one. The purge branch writes flags only;
-     * delete-propagation writes `_deletedAt` only; and both resurrect arms
-     * write on the DELETED side, which that same filter excludes.
+     * the previous version drifted. The true, scoped claim: for a row LIVE on
+     * `col`, the only branch that rewrites its name is the both-active LWW
+     * one (purge and delete-propagation write flags only); and for a row
+     * DELETED on `col`, the only name-writing branch is the resurrect — the
+     * live peer's body replacing the tombstoned one when the deletion
+     * strictly loses (the complement of the loop's GH #317 `>=` delete-wins
+     * rule). Both are modeled; everything else answers null. The deleted-side
+     * answer feeds `stageableOn`'s REQUESTER intents (`holdsName: false`),
+     * never its holders.
      *
      * The guards below therefore have to use the LOOP's classifications, not
      * lookalikes: `_purged === true` and `_deletedAt != null`, matching the
@@ -1891,7 +1894,10 @@ export class SyncService extends EventEmitter {
      * delete or purge frees the name in the same pass without renaming, so
      * treating that pair as a permanent holder stalls the collection once
      * (and cascade-skips its dependents) before converging cleanly. That is
-     * the trade this function was always making; it is not free.
+     * the trade this function was always making; it is not free. (The
+     * delete-PROPAGATION arm — a live holder about to be tombstoned,
+     * vacating its name without a rename — remains deliberately unmodeled:
+     * staging bets on a pending WRITE, and a tombstone has none.)
      */
     const desiredNameOn = (col: typeof localCol, syncId: string): string | null => {
       const localDoc = localBySyncId.get(syncId);
@@ -1900,7 +1906,26 @@ export class SyncService extends EventEmitter {
       // Purge first, mirroring the loop's branch order — its purge arm is
       // tested before either delete arm and writes no name at all.
       if (localDoc._purged === true || remoteDoc._purged === true) return null;
-      if (localDoc._deletedAt != null || remoteDoc._deletedAt != null) return null;
+      const localDeleted = localDoc._deletedAt != null;
+      const remoteDeleted = remoteDoc._deletedAt != null;
+      if (localDeleted && remoteDeleted) return null; // both trashed: no write
+      if (localDeleted !== remoteDeleted) {
+        // Resurrect arms (GH #1151). One side deleted: the loop either
+        // propagates the tombstone (deletion wins, GH #317 `>=` — a FLAG
+        // write, no name) or resurrects, replacing the DELETED side's body
+        // with the live side's — name included. So a name is written only on
+        // the deleted side's col, and only when the deletion strictly LOSES.
+        // NaN-safe `?? 0` mirrors the loop's own arithmetic (a raw
+        // `_deletedAt: ""` reads as time zero and loses to any real edit).
+        const deletedIsLocal = localDeleted;
+        if ((deletedIsLocal ? localCol : remoteCol) !== col) return null;
+        const deleted = deletedIsLocal ? localDoc : remoteDoc;
+        const live = deletedIsLocal ? remoteDoc : localDoc;
+        const deletedAt = SyncService.readTimestamp(deleted._deletedAt) ?? 0;
+        const liveTime = SyncService.readUpdatedAt(live) ?? 0;
+        if (deletedAt >= liveTime) return null; // delete wins: flags only
+        return typeof live.name === "string" ? live.name : null;
+      }
 
       const localTime = SyncService.readUpdatedAt(localDoc) ?? 0;
       const remoteTime = SyncService.readUpdatedAt(remoteDoc) ?? 0;
@@ -1930,38 +1955,51 @@ export class SyncService extends EventEmitter {
       if (cached) return cached;
       const docs = col === remoteCol ? remoteDocs : localDocs;
       const intents = docs
-        // INDEXED rows only (Codex P1, twice). The unique index is partial on
-        // `_deletedAt: null`, so a trashed row named "X" does NOT occupy that
-        // slot — GH #213 name reuse depends on it. Letting one into the graph
-        // made it the "holder" whenever it sorted first, and a trashed row
-        // never vacates, so the fixpoint declared the whole chain immovable
-        // and refused a swap that was perfectly resolvable — every cycle.
-        //
-        // The predicate is MongoDB's own, not JS truthiness. `{_deletedAt:
-        // null}` matches null AND missing and nothing else, so a raw
-        // `_deletedAt: ""` — which Mongoose casts to null on a Date path but
-        // the driver stores verbatim, the shape `trimEntityNames` documents at
-        // its own `== null` test — is OUTSIDE the index. `!d._deletedAt` let
-        // that row in as a holder, reintroducing the immovable-chain stall for
-        // a row that could never have blocked the write in the first place.
-        .filter((d) => d._deletedAt == null && typeof d.name === "string")
-        .map((d) => {
+        .filter((d) => typeof d.name === "string")
+        .flatMap((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
           // Round 23 (Codex P1): a QUARANTINED row's name-carrying write is
           // blocked at the row-loop gate this cycle, so the plan must not
-          // bet on it. willWrite: true here let an earlier pair stage the
-          // quarantined row aside and take its name — then the gate skipped
-          // the promised write and settlement could not restore (the name
-          // was occupied). It stays in the graph as a HOLDER (it really does
-          // occupy its index slot); it just cannot vacate.
+          // bet on it — for either role.
           const blocked = syncId !== null && quarantinedSyncIds.has(syncId);
-          return {
-            id: String(d._id),
-            currentName: d.name as string,
-            desiredName: desired ?? (d.name as string),
-            willWrite: desired !== null && !blocked,
-          };
+          // The HOLDER role is scoped to INDEXED rows only (Codex P1, twice).
+          // The unique index is partial on `_deletedAt: null`, so a trashed
+          // row named "X" does NOT occupy that slot — GH #213 name reuse
+          // depends on it. Letting one in as a holder made it win the
+          // first-holder slot and "never vacate", declaring resolvable
+          // chains immovable every cycle. The predicate is MongoDB's own,
+          // not JS truthiness: `{_deletedAt: null}` matches null AND missing
+          // only, so a raw `_deletedAt: ""` is OUTSIDE the index.
+          if (d._deletedAt == null) {
+            return [
+              {
+                id: String(d._id),
+                currentName: d.name as string,
+                desiredName: desired ?? (d.name as string),
+                willWrite: desired !== null && !blocked,
+              },
+            ];
+          }
+          // GH #1151 — the REQUESTER role for rows the holder filter
+          // excludes: a soft-deleted row this pass will resurrect writes the
+          // live peer's name onto this col, so the planner must see the
+          // request (or a movable holder of that name is never staged and
+          // the resurrect takes the nameConflicts exit, cascade-skipping
+          // dependents). `holdsName: false`: it occupies no index slot, can
+          // never block, can never be staged aside. Deleted rows with no
+          // predicted resurrect are omitted entirely — they neither hold
+          // nor request.
+          if (desired === null) return [];
+          return [
+            {
+              id: String(d._id),
+              currentName: d.name as string,
+              desiredName: desired,
+              willWrite: !blocked,
+              holdsName: false as const,
+            },
+          ];
         });
       const plan = planRenameStaging(intents, stagingNonce);
       const ids = new Set(plan.staged.map((st) => st.id));
