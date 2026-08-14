@@ -62,9 +62,8 @@ export default function DataHealthPage() {
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // No synchronous setState before the first await (the repo's
-  // react-hooks/set-state-in-effect rule): `loading` starts true and only
-  // ever flips after the fetch settles, so refetches update in place.
+  // Refetch helper for the ACTION handlers (event handlers, not effects —
+  // the react-hooks/set-state-in-effect rule does not apply there).
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/name-conflicts");
@@ -79,9 +78,30 @@ export default function DataHealthPage() {
     }
   }, []);
 
+  // The mount fetch is an inline IIFE with a cancelled flag — the repo's
+  // set-state-in-effect rule traces INTO a named callback invoked from an
+  // effect body and flags its setStates, but accepts this exact shape (the
+  // pattern OptResyncDialog established; the CI lint proved the difference).
   useEffect(() => {
-    void load();
-  }, [load]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/name-conflicts");
+        if (!res.ok) throw new Error();
+        const body = (await res.json()) as { conflicts: Conflict[] };
+        if (cancelled) return;
+        setConflicts(body.conflicts);
+        setError(false);
+      } catch {
+        if (!cancelled) setError(true);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
