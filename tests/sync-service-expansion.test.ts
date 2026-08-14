@@ -1320,6 +1320,142 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("a resurrect can stage its movable blocker (GH #1151)", () => {
+    /**
+     * THE headline: restoring a filament from the trash on one peer, where
+     * its name was meanwhile taken by a row that is itself about to be
+     * renamed. Pre-#1151 the resurrect was invisible to the staging planner
+     * (the intent filter excluded deleted rows), so this reported "Rename
+     * one of them" and cascade-skipped dependents for a conflict the
+     * machinery could resolve — in ONE cycle, as pinned here.
+     */
+    it("resolves a resurrect whose name is held by a movable row, in one cycle", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date(Date.now() - 60_000);
+
+      // Pair rs-a: local trashed at `older`; remote live, edited at `newer`
+      // → the deletion loses, so the pass resurrects LOCAL rs-a as "X".
+      await localDb.collection("bedtypes").insertOne({
+        name: "X stale", material: "PEI", syncId: "rs-a",
+        _deletedAt: older, createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "X", material: "PEI", syncId: "rs-a", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      // Pair rs-b: LOCAL holds "X" but its own LWW renames it to "Y"
+      // (remote newer) — a perfectly movable blocker.
+      await localDb.collection("bedtypes").insertOne({
+        name: "X", material: "PEI", syncId: "rs-b", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "Y", material: "PEI", syncId: "rs-b", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      const a = await localDb.collection("bedtypes").findOne({ syncId: "rs-a" });
+      expect(a?._deletedAt).toBeNull();
+      expect(a?.name).toBe("X");
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "rs-b" }))?.name).toBe("Y");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+      const queue = await localDb.collection("_migrations").findOne({ _id: "renameStagingRestores" as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    it("resolves the mirror direction (resurrect on the REMOTE)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date(Date.now() - 60_000);
+
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "M stale", material: "PEI", syncId: "rm-a",
+        _deletedAt: older, createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("bedtypes").insertOne({
+        name: "M", material: "PEI", syncId: "rm-a", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "M", material: "PEI", syncId: "rm-b", _deletedAt: null,
+        createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("bedtypes").insertOne({
+        name: "N", material: "PEI", syncId: "rm-b", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+      const a = await remoteDb.collection("bedtypes").findOne({ syncId: "rm-a" });
+      expect(a?._deletedAt).toBeNull();
+      expect(a?.name).toBe("M");
+      expect((await remoteDb.collection("bedtypes").findOne({ syncId: "rm-b" }))?.name).toBe("N");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+
+    it("still refuses a resurrect against a genuinely immovable holder", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 120_000);
+      const newer = new Date(Date.now() - 60_000);
+
+      await localDb.collection("bedtypes").insertOne({
+        name: "K stale", material: "PEI", syncId: "im-a",
+        _deletedAt: older, createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "K", material: "PEI", syncId: "im-a", _deletedAt: null,
+        createdAt: older, updatedAt: newer,
+      });
+      // The holder's pair is at EQUAL timestamps — no write, immovable.
+      const same = new Date(Date.now() - 90_000);
+      await localDb.collection("bedtypes").insertOne({
+        name: "K", material: "PEI", syncId: "im-b", _deletedAt: null,
+        createdAt: older, updatedAt: same,
+      });
+      // Same timestamp = no write in either direction, so the holder is
+      // immovable no matter what the remote copy is named (it must differ
+      // here anyway: the remote's unique index already has im-a's "K").
+      await remoteDb.collection("bedtypes").insertOne({
+        name: "K remote", material: "PEI", syncId: "im-b", _deletedAt: null,
+        createdAt: older, updatedAt: same,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // Reported, not resolved — and nothing was staged or clobbered.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeDefined();
+      expect(
+        (await localDb.collection("bedtypes").findOne({ syncId: "im-a" }))?._deletedAt,
+      ).not.toBeNull();
+      expect((await localDb.collection("bedtypes").findOne({ syncId: "im-b" }))?.name).toBe("K");
+      for (const db of [localDb, remoteDb]) {
+        expect(
+          await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
+        ).toBe(0);
+      }
+    });
+  });
+
   describe("unreadable tombstones are healed and never spread (GH #1152)", () => {
     /**
      * The raw-driver `_deletedAt: ""` shape sits between the engine's two
