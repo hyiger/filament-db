@@ -303,14 +303,15 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
                   onClose();
                   onChangeLink();
                 }}
-                className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700"
+                disabled={applying || removing}
+                className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {t("resync.changeLink")}
               </button>
               <button
                 type="button"
                 onClick={handleRemoveLink}
-                disabled={removing}
+                disabled={removing || applying}
                 className="px-3 py-1.5 text-sm rounded border border-red-300 dark:border-red-800 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {t("resync.removeLink")}

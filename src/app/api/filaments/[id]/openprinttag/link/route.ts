@@ -82,11 +82,19 @@ export async function POST(
     // between the findOne above and this update doesn't mutate a tombstoned
     // row (mirrors the sync route, GH #629). runValidators is harmless here —
     // we only $set the linkage + snapshot, no schema-validated field values.
-    const updated = await Filament.findOneAndUpdate(
-      { _id: filament._id, _deletedAt: null },
-      { $set },
-      { returnDocument: "after", runValidators: true, context: "query" },
-    ).lean();
+    // Inside the per-filament mutex (GH #1150 round 2, Codex P2): a sync
+    // holding its locked critical section must not have this write land
+    // between its read and its final write — that would pair the NEW slug
+    // with provenance rebuilt from the OLD material. The upstream fetch and
+    // material lookup above deliberately stay OUTSIDE the lock (they don't
+    // depend on the filament).
+    const updated = await runExclusive(filamentLockKey(id), async () =>
+      Filament.findOneAndUpdate(
+        { _id: filament._id, _deletedAt: null },
+        { $set },
+        { returnDocument: "after", runValidators: true, context: "query" },
+      ).lean(),
+    );
     if (!updated) {
       return NextResponse.json(
         { error: "Filament was deleted before the link could complete" },

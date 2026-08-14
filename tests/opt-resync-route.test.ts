@@ -1220,6 +1220,31 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(after.settings?.openprinttag_slug).toBeUndefined();
   });
 
+  it("link POST serializes behind the per-filament mutex too", async () => {
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    // Warm first — same vacuous-pass trap as the DELETE serialization test.
+    const warm = await Filament.create({ name: "Warm Link", vendor: "V", type: "PLA" });
+    await linkPOST(linkReq(String(warm._id), UPSTREAM_MATERIAL.slug), params(String(warm._id)));
+
+    const f = await Filament.create({ name: "Locked Link", vendor: "V", type: "PLA" });
+    let release!: () => void;
+    const hold = new Promise<void>((r) => (release = r));
+    const lockHeld = runExclusive(filamentLockKey(String(f._id)), () => hold);
+
+    const postPromise = linkPOST(linkReq(String(f._id), UPSTREAM_MATERIAL.slug), params(String(f._id)));
+    await new Promise((r) => setTimeout(r, 150));
+    // The link write is queued behind the lock — nothing landed yet.
+    const during = await Filament.findById(f._id).lean();
+    expect(during.settings?.openprinttag_slug).toBeUndefined();
+
+    release();
+    await lockHeld;
+    const res = await postPromise;
+    expect(res.status).toBe(200);
+    const after = await Filament.findById(f._id).lean();
+    expect(after.settings?.openprinttag_slug).toBe(UPSTREAM_MATERIAL.slug);
+  });
+
   it("re-linking to a different material overwrites slug, uuid AND snapshot (the change-link contract)", async () => {
     const OTHER = {
       ...UPSTREAM_MATERIAL,
