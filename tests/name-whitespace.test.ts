@@ -199,7 +199,13 @@ describe("trimEntityNames against a real database (#1116)", () => {
       // `active` distinguishes a conflict that can actually make two hybrid
       // peers disagree about identity from a permanent, harmless one on a
       // tombstone — only the former gates a sync (GH #1116, Codex P1).
-      { collection: "locations", name: "Drybox #1 ", active: true },
+      // GH #1149 enriched the shape with the row identities the resolution
+      // surface acts through.
+      {
+        collection: "locations", name: "Drybox #1 ", active: true,
+        id: expect.any(String), trimsTo: "Drybox #1", reason: "collision",
+        collidesWith: { id: expect.any(String), name: "Drybox #1" },
+      },
     ]);
     // Both rows still exist — visible and editable, not silently merged.
     expect(await Location.countDocuments({})).toBe(2);
