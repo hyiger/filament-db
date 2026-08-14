@@ -60,6 +60,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
   let checkGET: typeof import("@/app/api/filaments/[id]/openprinttag/check/route").GET;
   let syncPOST: typeof import("@/app/api/filaments/[id]/openprinttag/sync/route").POST;
   let linkPOST: typeof import("@/app/api/filaments/[id]/openprinttag/link/route").POST;
+  let linkDELETE: typeof import("@/app/api/filaments/[id]/openprinttag/link/route").DELETE;
   let importPOST: typeof import("@/app/api/openprinttag/import/route").POST;
   let detailGET: typeof import("@/app/api/filaments/[id]/route").GET;
 
@@ -86,6 +87,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     checkGET = (await import("@/app/api/filaments/[id]/openprinttag/check/route")).GET;
     syncPOST = (await import("@/app/api/filaments/[id]/openprinttag/sync/route")).POST;
     linkPOST = (await import("@/app/api/filaments/[id]/openprinttag/link/route")).POST;
+    linkDELETE = (await import("@/app/api/filaments/[id]/openprinttag/link/route")).DELETE;
     importPOST = (await import("@/app/api/openprinttag/import/route")).POST;
     detailGET = (await import("@/app/api/filaments/[id]/route")).GET;
 
@@ -116,6 +118,13 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify({ slug }),
+    });
+  }
+
+  function unlinkReq(id: string, headers: Record<string, string> = {}) {
+    return new NextRequest(`http://localhost:3456/api/filaments/${id}/openprinttag/link`, {
+      method: "DELETE",
+      headers,
     });
   }
 
@@ -1092,4 +1101,117 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.color).toBe("#111111");
     expect(fresh.openprinttagSnapshot ?? undefined).toBeUndefined();
   });
+  // ── GH #1150: unlink + re-link ───────────────────────────────────────
+
+  it("DELETE removes exactly the three link paths and nothing else", async () => {
+    const f = await Filament.create({
+      name: "Unlink Me", vendor: "Prusament", type: "PLA",
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+        // An unrelated bag key must survive the unlink untouched.
+        compatible_printers_condition: "printer_model=~/(MK4S)/",
+      },
+      openprinttagSnapshot: { density: 1.24 },
+    });
+
+    const res = await linkDELETE(unlinkReq(String(f._id)), params(String(f._id)));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.unlinked).toBe(true);
+
+    const row = await Filament.findById(f._id).lean();
+    expect(row.settings?.openprinttag_slug).toBeUndefined();
+    expect(row.settings?.openprinttag_uuid).toBeUndefined();
+    expect(row.openprinttagSnapshot).toBeUndefined();
+    expect(row.settings?.compatible_printers_condition).toBe("printer_model=~/(MK4S)/");
+
+    // The detail GET flips the UI gate back to "Link to OpenPrintTag".
+    const detail = await detailGET(
+      new NextRequest(`http://localhost:3456/api/filaments/${String(f._id)}`),
+      params(String(f._id)),
+    );
+    expect((await detail.json())._hasOwnOptLink).toBe(false);
+  });
+
+  it("DELETE is idempotent — unlinking an unlinked filament is a 200", async () => {
+    const f = await Filament.create({ name: "Never Linked", vendor: "V", type: "PLA" });
+    const first = await linkDELETE(unlinkReq(String(f._id)), params(String(f._id)));
+    expect(first.status).toBe(200);
+    const second = await linkDELETE(unlinkReq(String(f._id)), params(String(f._id)));
+    expect(second.status).toBe(200);
+  });
+
+  it("DELETE needs no upstream fetch — a vanished material can still be unlinked", async () => {
+    // The materialGone dead end: the slug is no longer in the OPT db.
+    dbMock.mockRejectedValue(new Error("network down"));
+    const f = await Filament.create({
+      name: "Gone Upstream", vendor: "V", type: "PLA",
+      settings: { openprinttag_slug: "no-longer-exists", openprinttag_uuid: "u" },
+      openprinttagSnapshot: { density: 1 },
+    });
+    const res = await linkDELETE(unlinkReq(String(f._id)), params(String(f._id)));
+    expect(res.status).toBe(200);
+    const row = await Filament.findById(f._id).lean();
+    expect(row.settings?.openprinttag_slug).toBeUndefined();
+  });
+
+  it("DELETE rejects a bad id with 400 and a missing/trashed row with 404", async () => {
+    const bad = await linkDELETE(unlinkReq("nope"), params("nope"));
+    expect(bad.status).toBe(400);
+
+    const ghost = String(new mongoose.Types.ObjectId());
+    const missing = await linkDELETE(unlinkReq(ghost), params(ghost));
+    expect(missing.status).toBe(404);
+
+    const trashed = await Filament.create({
+      name: "Trashed Linked", vendor: "V", type: "PLA",
+      settings: { openprinttag_slug: "s" }, _deletedAt: new Date(),
+    });
+    const res = await linkDELETE(unlinkReq(String(trashed._id)), params(String(trashed._id)));
+    expect(res.status).toBe(404);
+    // The tombstoned row keeps its link — nothing was mutated.
+    const row = await Filament.findById(trashed._id).lean();
+    expect(row.settings?.openprinttag_slug).toBe("s");
+  });
+
+  it("DELETE is CSRF-guarded like every mutating route", async () => {
+    const f = await Filament.create({ name: "CSRF Unlink", vendor: "V", type: "PLA" });
+    const res = await linkDELETE(
+      unlinkReq(String(f._id), { "sec-fetch-site": "cross-site" }),
+      params(String(f._id)),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("re-linking to a different material overwrites slug, uuid AND snapshot (the change-link contract)", async () => {
+    const OTHER = {
+      ...UPSTREAM_MATERIAL,
+      slug: "other-brand-petg-blue",
+      uuid: "22222222-2222-5222-a222-222222222222",
+      name: "PETG Blue",
+      type: "PETG",
+      density: 1.27,
+    };
+    dbMock.mockResolvedValue({
+      brands: [], materials: [UPSTREAM_MATERIAL, OTHER],
+      cachedAt: new Date(0).toISOString(), totalFFF: 2, totalSLA: 0,
+    });
+    const f = await Filament.create({ name: "Repoint", vendor: "V", type: "PLA" });
+
+    const first = await linkPOST(linkReq(String(f._id), UPSTREAM_MATERIAL.slug), params(String(f._id)));
+    expect(first.status).toBe(200);
+    const afterFirst = await Filament.findById(f._id).lean();
+    expect(afterFirst.settings.openprinttag_slug).toBe(UPSTREAM_MATERIAL.slug);
+
+    const second = await linkPOST(linkReq(String(f._id), OTHER.slug), params(String(f._id)));
+    expect(second.status).toBe(200);
+    const afterSecond = await Filament.findById(f._id).lean();
+    expect(afterSecond.settings.openprinttag_slug).toBe(OTHER.slug);
+    expect(afterSecond.settings.openprinttag_uuid).toBe(OTHER.uuid);
+    // The provenance snapshot is rebuilt from the NEW material, so the next
+    // check classifies against it — not against the old link's offers.
+    expect(afterSecond.openprinttagSnapshot.density).toBe(1.27);
+  });
+
 });

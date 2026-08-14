@@ -6,7 +6,7 @@ import {
   fetchOpenPrintTagDatabase,
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
-import { buildOptLinkUpdate } from "@/lib/optResync";
+import { buildOptLinkUpdate, buildOptUnlinkUpdate } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
@@ -98,6 +98,57 @@ export async function POST(
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
       { error: "Failed to link OpenPrintTag material", detail: message },
+      { status: 500 },
+    );
+  }
+}
+
+/**
+ * DELETE /api/filaments/{id}/openprinttag/link  (GH #1150)
+ *
+ * Removes the OpenPrintTag link — the exact three paths the POST writes
+ * (`settings.openprinttag_slug`, `settings.openprinttag_uuid`,
+ * `openprinttagSnapshot`) and nothing else: field values the material once
+ * offered stay on the filament untouched. No upstream fetch is needed — the
+ * link can (and should) be removable even when the material is gone from the
+ * OPT database, which is precisely the dead-end this endpoint unblocks.
+ *
+ * Idempotent: unlinking an unlinked filament is a 200 (`$unset` on absent
+ * paths is a no-op), so a double-click or client retry is harmless.
+ *
+ * Responses:
+ *   { error: ... } 400/404          — bad id / no live filament
+ *   { unlinked: true, filament }    — link removed + fresh doc
+ */
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
+  try {
+    const { id } = await params;
+    if (!mongoose.isValidObjectId(id)) {
+      return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
+    }
+
+    await dbConnect();
+
+    const updated = await Filament.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
+      { $unset: buildOptUnlinkUpdate() },
+      { returnDocument: "after" },
+    ).lean();
+    if (!updated) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ unlinked: true, filament: updated });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json(
+      { error: "Failed to remove OpenPrintTag link", detail: message },
       { status: 500 },
     );
   }
