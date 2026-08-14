@@ -115,6 +115,24 @@ export interface TrimNameConflict {
    * that collection's sync forever with no user-accessible resolution.
    */
   active: boolean;
+  /**
+   * The blocked row's `_id` (GH #1149). The row is unreachable by NAME
+   * through Mongoose — the schema's trim setter casts query values — so the
+   * id is the ONLY handle a resolution surface can act through (the
+   * id-addressed PUT/DELETE routes are unaffected by the setter).
+   */
+  id: string;
+  /** What the name would trim to; null when trimming empties it. */
+  trimsTo: string | null;
+  /** Why the row was left alone. */
+  reason: "collision" | "empty-name";
+  /**
+   * The active row already holding the trimmed name, when the pre-write
+   * clash check saw it. Null on the empty-name case (nothing to collide
+   * with) and on the E11000 race catch (the winner isn't re-queried — by
+   * the time a surface renders this, the next pass's scan names it).
+   */
+  collidesWith: { id: string; name: string } | null;
 }
 
 export interface TrimEntityNamesResult {
@@ -307,6 +325,191 @@ function isDuplicateKeyError(err: unknown): boolean {
   return /E11000|duplicate key/i.test(String((err as { message?: unknown }).message ?? ""));
 }
 
+/** What one candidate row should become. The write loop acts on it; the
+ *  read-only scan collects the `conflict` arm. ONE decision point, so the
+ *  GH #1149 surface and the migration cannot classify a row differently —
+ *  `tests/trimEntityNames.test.ts` pins scan-vs-migrate parity on shared
+ *  fixtures. */
+type TrimCandidateDecision =
+  | { kind: "skip" }
+  | { kind: "conflict"; conflict: TrimNameConflict }
+  | { kind: "trimmable"; next: string; active: boolean };
+
+async function classifyTrimCandidate(
+  collection: MinimalCollection,
+  collectionName: TrimmableCollection,
+  doc: { _id: unknown; name?: unknown; _deletedAt?: unknown; _purged?: unknown },
+  isHidden: (row: { _purged?: unknown }) => boolean,
+): Promise<TrimCandidateDecision> {
+  if (typeof doc.name !== "string") return { kind: "skip" };
+  if (!hasEdgeWhitespace(doc.name)) return { kind: "skip" };
+  // A `_purged` row is NOT active for gating purposes, even when its
+  // `_deletedAt` is still null (Codex P1 round 2).
+  //
+  // The previous version leaned on the `purgedZombies` migration having
+  // re-tombstoned it — which is precisely the assumption
+  // `SyncService.sync()` documents as unsafe: the REMOTE never runs
+  // `dbConnect` at all, and the local side may sync before it does. So an
+  // Atlas zombie (`_purged: true`, `_deletedAt: null`) with an
+  // untrimmable name would permanently block filament and print-history
+  // sync — the same unrecoverable, invisible failure the `active` flag
+  // was introduced to prevent, reached by another door.
+  //
+  // A purge marker is a one-way tombstone the sync engine already
+  // special-cases and the UI hides, so a human cannot resolve it. If such
+  // a row is still in the partial index the worst case is a loud,
+  // retryable E11000 on that collection — recoverable, and repaired by
+  // the zombie migration on the next connect. Being blocked forever with
+  // no signal is not.
+  const active = doc._deletedAt == null && !isHidden(doc);
+  const next = doc.name.trim();
+  if (next === "") {
+    // `name` is `required`, so a whitespace-only name can't be trimmed
+    // into a legal value. Report it rather than writing "" and making the
+    // document fail validation on its owner's next save.
+    return {
+      kind: "conflict",
+      conflict: {
+        collection: collectionName,
+        name: doc.name,
+        active,
+        id: String(doc._id),
+        trimsTo: null,
+        reason: "empty-name",
+        collidesWith: null,
+      },
+    };
+  }
+  // Check the target name BEFORE writing, rather than relying on the
+  // unique index to report the collision (Codex P1). On a database whose
+  // partial index is missing or stale — precisely the case `dbConnect`'s
+  // `coreModelIndexes` pass exists to repair, and it runs AFTER this one
+  // — both `"X"` and `"X "` would write through as `"X"`, and that later
+  // pass would then hit E11000, deliberately skip rebuilding the index,
+  // and leave two indistinguishable active rows with no uniqueness
+  // enforcement at all. Worse than the duplicate this migration exists to
+  // prevent.
+  //
+  // Only ACTIVE rows collide: every one of these indexes is partial on
+  // `_deletedAt: null`, so a trashed row may freely share a name (GH #213
+  // name reuse). The E11000 catch in the write loop stays as the race
+  // guard for a conflicting row created between this check and the write.
+  if (doc._deletedAt == null) {
+    const clash = await collection
+      .find({ name: next, _deletedAt: null }, { projection: { _id: 1, name: 1, _purged: 1 } })
+      .toArray();
+    const others = clash.filter((c) => String(c._id) !== String(doc._id));
+    if (others.length > 0) {
+      // The clash is real either way — the index covers `_deletedAt: null`
+      // rows including a purge zombie, so the write genuinely can't
+      // succeed. But whether it may GATE A SYNC depends on the CLASHING
+      // row too, not just the candidate (Codex P1, the mirror of the
+      // previous round): if the only thing in the way is a hidden
+      // untombstoned zombie, the user has nothing to act on — it isn't in
+      // the trash, and the remote never runs the migration that would
+      // repair it — so gating would block that collection forever.
+      const resolvableByAHuman = others.some((c) => !isHidden(c));
+      // Prefer naming a VISIBLE twin (a hidden zombie's id is nothing a
+      // surface can render an action for).
+      const visible = others.find((c) => !isHidden(c)) ?? others[0];
+      return {
+        kind: "conflict",
+        conflict: {
+          collection: collectionName,
+          name: doc.name,
+          active: active && resolvableByAHuman,
+          id: String(doc._id),
+          trimsTo: next,
+          reason: "collision",
+          collidesWith: {
+            id: String(visible._id),
+            name: typeof (visible as { name?: unknown }).name === "string"
+              ? ((visible as { name?: unknown }).name as string)
+              : next,
+          },
+        },
+      };
+    }
+  }
+  return { kind: "trimmable", next, active };
+}
+
+/**
+ * GH #1149 — the READ-ONLY twin of `trimEntityNames`: same candidate query,
+ * same per-row decision (`classifyTrimCandidate` is shared, so the two
+ * cannot drift), but NO index build and NO writes — safe to serve from an
+ * API route on demand. Returns every conflict the next migration pass would
+ * report; rows the migration would trim are simply not conflicts and are
+ * omitted.
+ *
+ * Unlike the migration it takes no index precautions, because it takes no
+ * writes for an index to serialize.
+ */
+export async function scanTrimConflicts(db: MinimalTrimDb): Promise<TrimNameConflict[]> {
+  const conflicts: TrimNameConflict[] = [];
+  for (const collectionName of TRIMMABLE_COLLECTIONS) {
+    const collection = db.collection(collectionName);
+    const honorsPurged = collectionName === "filaments";
+    const isHidden = (row: { _purged?: unknown }) =>
+      honorsPurged && row._purged === true;
+    const docs = await collection
+      .find(
+        { name: { $regex: EDGE_WHITESPACE_PATTERN } },
+        { projection: { name: 1, _deletedAt: 1, _purged: 1 } },
+      )
+      .toArray();
+    // The migration's clash checks see its OWN mid-pass writes: with " X"
+    // and "X " and no stored "X", it trims the first and the second then
+    // collides against the freshly-written "X". A per-row classification
+    // against un-mutated state misses that pair entirely, so the scan
+    // EMULATES the writes — same candidate order, and every name an earlier
+    // ACTIVE trimmable row would have claimed counts as taken. (What it
+    // cannot emulate is a mid-pass write FAILING under a legacy index — the
+    // migration defers those rather than conflicting, so the scan stays
+    // faithful for everything it reports.)
+    const claimed = new Map<string, { id: string; name: string; hidden: boolean }>();
+    for (const doc of docs) {
+      const decision = await classifyTrimCandidate(collection, collectionName, doc, isHidden);
+      if (decision.kind === "conflict") {
+        conflicts.push(decision.conflict);
+        continue;
+      }
+      if (decision.kind !== "trimmable") continue;
+      const earlier = claimed.get(decision.next);
+      if (earlier) {
+        // The migration's clash lookup would find the earlier row already
+        // holding the trimmed name. Same activeness rule as the real clash
+        // branch: a conflict gates only when the thing in the way is
+        // something a human can see (`resolvableByAHuman`) — a hidden
+        // zombie claimer makes it inactive.
+        conflicts.push({
+          collection: collectionName,
+          name: doc.name as string,
+          active: decision.active && !earlier.hidden,
+          id: String(doc._id),
+          trimsTo: decision.next,
+          reason: "collision",
+          collidesWith: { id: earlier.id, name: earlier.name },
+        });
+        continue;
+      }
+      // Only a write the migration would actually make claims the name for
+      // later clash checks: it writes tombstoned candidates too, but those
+      // are OUTSIDE the partial index and the clash lookup queries
+      // `_deletedAt: null` — so only rows IN the partial index claim
+      // (which includes a hidden zombie: null `_deletedAt`, `_purged`).
+      if (doc._deletedAt == null) {
+        claimed.set(decision.next, {
+          id: String(doc._id),
+          name: decision.next,
+          hidden: isHidden(doc),
+        });
+      }
+    }
+  }
+  return conflicts;
+}
+
 /**
  * Trim edge whitespace off every stored entity name.
  *
@@ -423,72 +626,13 @@ export async function trimEntityNames(
       .toArray();
 
     for (const doc of docs) {
-      if (typeof doc.name !== "string") continue;
-      if (!hasEdgeWhitespace(doc.name)) continue;
-      // A `_purged` row is NOT active for gating purposes, even when its
-      // `_deletedAt` is still null (Codex P1 round 2).
-      //
-      // The previous version leaned on the `purgedZombies` migration having
-      // re-tombstoned it — which is precisely the assumption
-      // `SyncService.sync()` documents as unsafe: the REMOTE never runs
-      // `dbConnect` at all, and the local side may sync before it does. So an
-      // Atlas zombie (`_purged: true`, `_deletedAt: null`) with an
-      // untrimmable name would permanently block filament and print-history
-      // sync — the same unrecoverable, invisible failure the `active` flag
-      // was introduced to prevent, reached by another door.
-      //
-      // A purge marker is a one-way tombstone the sync engine already
-      // special-cases and the UI hides, so a human cannot resolve it. If such
-      // a row is still in the partial index the worst case is a loud,
-      // retryable E11000 on that collection — recoverable, and repaired by
-      // the zombie migration on the next connect. Being blocked forever with
-      // no signal is not.
-      const active = doc._deletedAt == null && !isHidden(doc);
-      const next = doc.name.trim();
-      if (next === "") {
-        // `name` is `required`, so a whitespace-only name can't be trimmed
-        // into a legal value. Report it rather than writing "" and making the
-        // document fail validation on its owner's next save.
-        conflicts.push({ collection: collectionName, name: doc.name, active });
+      const decision = await classifyTrimCandidate(collection, collectionName, doc, isHidden);
+      if (decision.kind === "skip") continue;
+      if (decision.kind === "conflict") {
+        conflicts.push(decision.conflict);
         continue;
       }
-      // Check the target name BEFORE writing, rather than relying on the
-      // unique index to report the collision (Codex P1). On a database whose
-      // partial index is missing or stale — precisely the case `dbConnect`'s
-      // `coreModelIndexes` pass exists to repair, and it runs AFTER this one
-      // — both `"X"` and `"X "` would write through as `"X"`, and that later
-      // pass would then hit E11000, deliberately skip rebuilding the index,
-      // and leave two indistinguishable active rows with no uniqueness
-      // enforcement at all. Worse than the duplicate this migration exists to
-      // prevent.
-      //
-      // Only ACTIVE rows collide: every one of these indexes is partial on
-      // `_deletedAt: null`, so a trashed row may freely share a name (GH #213
-      // name reuse). The E11000 catch below stays as the race guard for a
-      // conflicting row created between this check and the write.
-      if (doc._deletedAt == null) {
-        const clash = await collection
-          .find({ name: next, _deletedAt: null }, { projection: { _id: 1, _purged: 1 } })
-          .toArray();
-        const others = clash.filter((c) => String(c._id) !== String(doc._id));
-        if (others.length > 0) {
-          // The clash is real either way — the index covers `_deletedAt: null`
-          // rows including a purge zombie, so the write genuinely can't
-          // succeed. But whether it may GATE A SYNC depends on the CLASHING
-          // row too, not just the candidate (Codex P1, the mirror of the
-          // previous round): if the only thing in the way is a hidden
-          // untombstoned zombie, the user has nothing to act on — it isn't in
-          // the trash, and the remote never runs the migration that would
-          // repair it — so gating would block that collection forever.
-          const resolvableByAHuman = others.some((c) => !isHidden(c));
-          conflicts.push({
-            collection: collectionName,
-            name: doc.name,
-            active: active && resolvableByAHuman,
-          });
-          continue;
-        }
-      }
+      const { next, active } = decision;
       try {
         // Conditional on the name we SCANNED (Codex P2). This runs on every
         // hybrid cycle while the app can still write to either database, so a
@@ -505,7 +649,15 @@ export async function trimEntityNames(
         trimmed++;
       } catch (err) {
         if (!isDuplicateKeyError(err)) throw err;
-        conflicts.push({ collection: collectionName, name: doc.name, active });
+        conflicts.push({
+          collection: collectionName,
+          name: doc.name as string,
+          active,
+          id: String(doc._id),
+          trimsTo: next,
+          reason: "collision",
+          collidesWith: null,
+        });
         // A row OUTSIDE the partial index cannot collide under the index this
         // repo intends — deleted rows may freely share a name (GH #213 name
         // reuse). So a duplicate key here proves the collection is running

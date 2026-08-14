@@ -9,6 +9,11 @@ import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import {
+  bedTypeCalibrationRefFilter,
+  bedTypePrinterRefFilter,
+  bedTypeTempRefFilter,
+} from "@/lib/entityDependents";
 
 export async function GET(
   _request: NextRequest,
@@ -108,10 +113,9 @@ export async function DELETE(
     // restored, which would resurrect a dangling calibration bedType ref if
     // the bed type were deleted in the meantime. Only `_purged` tombstones
     // are gone forever and don't block.
-    const referencingCount = await Filament.countDocuments({
-      _purged: { $ne: true },
-      "calibrations.bedType": id,
-    });
+    // Predicate shared with GH #1149's dependents counter — see
+    // src/lib/entityDependents.ts; the two must not drift.
+    const referencingCount = await Filament.countDocuments(bedTypeCalibrationRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(
         `Cannot delete this bed type — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove it from those filaments (or permanently delete the trashed ones) first.`,
@@ -129,10 +133,7 @@ export async function DELETE(
     // printers have no trash/restore loop, so a soft-deleted printer's
     // refs can never resurrect — and counting them would block the delete
     // with no way for the user to clear the reference.
-    const printerCount = await Printer.countDocuments({
-      _deletedAt: null,
-      installedBedTypes: id,
-    });
+    const printerCount = await Printer.countDocuments(bedTypePrinterRefFilter(id));
     if (printerCount > 0) {
       return errorResponse(
         `Cannot delete this bed type — it is installed on ${printerCount} printer${printerCount !== 1 ? "s" : ""}. Remove it from those printers first.`,
@@ -150,10 +151,7 @@ export async function DELETE(
     // mirror the calibration/printer guards above and the nozzle/location
     // delete guards elsewhere. GH #629: trashed filaments count here too
     // (restore would resurrect the dependency); `_purged` tombstones don't.
-    const bedTempCount = await Filament.countDocuments({
-      _purged: { $ne: true },
-      "bedTypeTemps.bedType": bedType.name,
-    });
+    const bedTempCount = await Filament.countDocuments(bedTypeTempRefFilter(bedType.name));
     if (bedTempCount > 0) {
       return errorResponse(
         `Cannot delete this bed type — ${bedTempCount} filament${bedTempCount !== 1 ? "s" : ""} (possibly including filaments in the trash) reference${bedTempCount === 1 ? "s" : ""} "${bedType.name}" in per-bed-type temperatures. Remove it from those filaments first.`,

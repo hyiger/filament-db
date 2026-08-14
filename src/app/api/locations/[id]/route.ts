@@ -14,6 +14,7 @@ import {
 } from "@/lib/locationDeleteBlockers";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { locationSpoolRefFilter } from "@/lib/entityDependents";
 import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 export async function GET(
@@ -143,7 +144,10 @@ export async function DELETE(
     }
     const locationOid = new mongoose.Types.ObjectId(id);
     const blockerRows = await Filament.aggregate([
-      { $match: { _purged: { $ne: true }, "spools.locationId": locationOid } },
+      // Predicate shared with GH #1149's dependents counter — see
+      // src/lib/entityDependents.ts; the two must not drift. Passed the
+      // ObjectId because $match performs no casting (the trap above).
+      { $match: locationSpoolRefFilter(locationOid) },
       {
         $project: {
           name: 1,

@@ -6691,6 +6691,104 @@
           }
         }
       }
+    },
+    "/api/name-conflicts": {
+      "get": {
+        "summary": "Scan for name conflicts the trim migration could not repair",
+        "description": "Read-only scan (no index build, no writes) using the same classification as the GH #1116 name-trim migration: rows whose stored name has edge whitespace and either collides with an active row when trimmed, or is whitespace-only. Only ACTIVE conflicts are returned, each enriched with per-collection dependent counts (the same predicates the entity DELETE guards refuse on) so a client can offer delete (zero dependents) vs rename. In hybrid deployments this covers the database this server talks to; remote-side conflicts are only visible to the desktop sync service. (GH #1149)",
+        "tags": [
+          "maintenance"
+        ],
+        "responses": {
+          "200": {
+            "description": "Active conflicts (empty array when healthy)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "conflicts": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "collection": {
+                            "type": "string",
+                            "enum": [
+                              "filaments",
+                              "nozzles",
+                              "printers",
+                              "bedtypes",
+                              "locations"
+                            ]
+                          },
+                          "id": {
+                            "type": "string",
+                            "description": "The blocked row's _id — resolution happens through the ordinary id-addressed PUT/DELETE routes (the row is unreachable by NAME through Mongoose)."
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "The stored name, untouched (edge whitespace intact)."
+                          },
+                          "trimsTo": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "What the name would trim to; null when trimming empties it."
+                          },
+                          "reason": {
+                            "type": "string",
+                            "enum": [
+                              "collision",
+                              "empty-name"
+                            ]
+                          },
+                          "active": {
+                            "type": "boolean"
+                          },
+                          "collidesWith": {
+                            "type": "object",
+                            "nullable": true,
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              }
+                            },
+                            "description": "The active row already holding the trimmed name, when known."
+                          },
+                          "dependents": {
+                            "type": "object",
+                            "properties": {
+                              "total": {
+                                "type": "integer"
+                              },
+                              "breakdown": {
+                                "type": "object",
+                                "additionalProperties": {
+                                  "type": "integer"
+                                }
+                              }
+                            },
+                            "description": "Counts by the same predicates the entity DELETE guards refuse on. total === 0 means the row is a plain duplicate, safe to delete."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Scan failed"
+          },
+          "503": {
+            "description": "Database unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
