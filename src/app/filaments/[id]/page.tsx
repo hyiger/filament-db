@@ -2565,6 +2565,7 @@ function FilamentDetail() {
           filamentId={String(filament._id)}
           onApplied={refetchFilament}
           onClose={() => setResyncOpen(false)}
+          onChangeLink={() => setLinkOpen(true)}
         />
       )}
       {linkOpen && (
@@ -2572,6 +2573,7 @@ function FilamentDetail() {
           filamentId={String(filament._id)}
           onLinked={refetchFilament}
           onClose={() => setLinkOpen(false)}
+          mode={filament._hasOwnOptLink ? "change" : "link"}
         />
       )}
       {ntagSizePromptOpen && (
