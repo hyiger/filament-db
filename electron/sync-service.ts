@@ -2381,12 +2381,20 @@ export class SyncService extends EventEmitter {
         if (!quarantinedSyncIds.has(syncId)) {
           const lSlim = localBySyncId.get(syncId);
           const rSlim = remoteBySyncId.get(syncId);
-          const phDoc =
-            typeof lSlim?.name === "string" && isGeneratedPlaceholder(lSlim.name)
-              ? lSlim
-              : typeof rSlim?.name === "string" && isGeneratedPlaceholder(rSlim.name)
-                ? rSlim
-                : null;
+          // LIVE placeholders only — the sweep's tombstone pass-through rule
+          // (round 24, Codex P2): a tombstoned/purged placeholder row is
+          // resolved by deletion, and for an UNPAIRED one the insert branch
+          // below is the only path that propagates the tombstone at all.
+          // Quarantining it skipped that insert every cycle, permanently.
+          // The trashed name is cosmetic; a restore-from-trash surfaces it
+          // to the grammar backstop as a live stray.
+          const isLivePlaceholder = (d: Document | undefined): d is Document =>
+            d != null &&
+            typeof d.name === "string" &&
+            isGeneratedPlaceholder(d.name) &&
+            d._deletedAt == null &&
+            d._purged !== true;
+          const phDoc = isLivePlaceholder(lSlim) ? lSlim : isLivePlaceholder(rSlim) ? rSlim : null;
           if (phDoc) {
             quarantinedSyncIds.add(syncId);
             sweptHoldbacks.push(

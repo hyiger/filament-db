@@ -2169,6 +2169,36 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
+     * Round 24 (Codex P2): a TOMBSTONED placeholder row must not be
+     * quarantined by the slim-snapshot guard — for an unpaired one, the
+     * insert branch is the only path that propagates the tombstone, and the
+     * grammar backstop deliberately leaves tombstoned strays alone. Blanket
+     * grammar quarantine skipped that insert every cycle, permanently.
+     */
+    it("propagates an unpaired TRASHED placeholder row's tombstone", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const when = new Date(Date.now() - 60_000);
+      // STRICT grammar (8-hex nonce + 24-hex id) so the guard would match it.
+      const strictPh = `__sync-staging-deadbeef-${"a".repeat(24)}`;
+
+      await localDb.collection("bedtypes").insertOne({
+        name: strictPh, material: "PEI", syncId: "tp-a",
+        _deletedAt: when, createdAt: when, updatedAt: when,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+
+      // The tombstone reached the peer (unpaired insert ran)…
+      const peer = await remoteDb.collection("bedtypes").findOne({ syncId: "tp-a" });
+      expect(peer).not.toBeNull();
+      expect(peer?._deletedAt).not.toBeNull();
+      // …and nothing about it failed the collection: trash names are cosmetic.
+      expect(results.find((r) => r.collection === "bedtypes")?.error).toBeUndefined();
+    });
+
+    /**
      * Round 23 (Codex P1): a quarantined row still holding its REAL name
      * must be unavailable to blocker staging. Before the fix, an earlier
      * pair wanting that name found the quarantined row movable (the plan
