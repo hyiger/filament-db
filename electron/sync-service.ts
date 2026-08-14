@@ -2322,16 +2322,49 @@ export class SyncService extends EventEmitter {
       );
     }
 
-    // Round 23 (Codex P1): mark every sweep-time quarantine as processed
-    // BEFORE any pair runs. `processedSyncIds` means "no name write coming"
-    // to the blocker check, and for a quarantined row that is the truth from
-    // the cycle's start — not from its own loop turn. Deferred to its turn,
-    // an EARLIER pair could still stage it aside (the plan exclusion above
-    // is the first line; this is the write-time backstop) and take a name
-    // its skipped write could never reclaim. Mid-loop quarantines (the
-    // scan-window guard below) need no seeding: they hold placeholder
-    // names, which no legitimate write ever desires, so they can never be
-    // found as blockers.
+    // Round 22 (Codex P1), HOISTED in round 25: a staging by ANOTHER service
+    // can land in the window between the sweep's scans and the slim reads —
+    // such a placeholder is invisible to the sweep's quarantine, and if its
+    // row is edited so its timestamp wins LWW while the owner stalls, this
+    // pass would copy the temporary name to the peer. The scan runs HERE,
+    // over the complete slim snapshot, BEFORE any pair can invoke rename
+    // staging — discovered at the pair's own loop turn (the original shape),
+    // an earlier pair could still stage the pair's real-named side aside and
+    // manufacture the round-23 stranding all over again for guard-time
+    // quarantines. Strict grammar only (a user's prefix-shaped name never
+    // holds), LIVE rows only (round 24: a tombstoned placeholder is resolved
+    // by deletion, and for an unpaired one the insert branch is the only
+    // path that propagates the tombstone — the trashed name is cosmetic).
+    // Our OWN staged rows can't trip this: the slim snapshot predates every
+    // staging this pass performs, so it still carries their original names.
+    const isLivePlaceholder = (d: Document | undefined): d is Document =>
+      d != null &&
+      typeof d.name === "string" &&
+      isGeneratedPlaceholder(d.name) &&
+      d._deletedAt == null &&
+      d._purged !== true;
+    for (const syncId of allSyncIds) {
+      if (quarantinedSyncIds.has(syncId)) continue;
+      const lSlim = localBySyncId.get(syncId);
+      const rSlim = remoteBySyncId.get(syncId);
+      const phDoc = isLivePlaceholder(lSlim) ? lSlim : isLivePlaceholder(rSlim) ? rSlim : null;
+      if (phDoc) {
+        quarantinedSyncIds.add(syncId);
+        sweptHoldbacks.push(
+          `${collectionName} ${String(phDoc._id)} is mid-rename by another sync ` +
+            `service; its temporary name is held back this cycle and resolved by ` +
+            `the owner or the next sweep.`,
+        );
+      }
+    }
+    // Round 23 (Codex P1): mark EVERY quarantine — sweep-time and the
+    // scan-window ones found just above — as processed BEFORE any pair runs.
+    // `processedSyncIds` means "no name write coming" to the blocker check,
+    // and for a quarantined row that is the truth from the cycle's start —
+    // not from its own loop turn. Deferred, an EARLIER pair could still
+    // stage it aside (the plan exclusion is the first line; this is the
+    // write-time backstop) and take a name its skipped write could never
+    // reclaim.
     for (const q of quarantinedSyncIds) processedSyncIds.add(q);
 
     // Round 22: quarantine means "names must not transfer", not "nothing may
@@ -2368,42 +2401,6 @@ export class SyncService extends EventEmitter {
     // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
     try {
       for (const syncId of allSyncIds) {
-        // Round 22 (Codex P1): a staging by ANOTHER service can land in the
-        // window between the sweep's scans and the slim reads above — such a
-        // placeholder is invisible to the sweep's quarantine, and if its row
-        // is edited so its timestamp wins LWW while the owner stalls, this
-        // pass would copy the temporary name to the peer. Any STRICT-grammar
-        // placeholder observed in the slim snapshot is therefore quarantined
-        // right here. Strict grammar only — a user's prefix-shaped name must
-        // never be held (the backstop's own rule). Our OWN staged rows can't
-        // trip this: the slim snapshot predates every staging this pass
-        // performs, so it still carries their original names.
-        if (!quarantinedSyncIds.has(syncId)) {
-          const lSlim = localBySyncId.get(syncId);
-          const rSlim = remoteBySyncId.get(syncId);
-          // LIVE placeholders only — the sweep's tombstone pass-through rule
-          // (round 24, Codex P2): a tombstoned/purged placeholder row is
-          // resolved by deletion, and for an UNPAIRED one the insert branch
-          // below is the only path that propagates the tombstone at all.
-          // Quarantining it skipped that insert every cycle, permanently.
-          // The trashed name is cosmetic; a restore-from-trash surfaces it
-          // to the grammar backstop as a live stray.
-          const isLivePlaceholder = (d: Document | undefined): d is Document =>
-            d != null &&
-            typeof d.name === "string" &&
-            isGeneratedPlaceholder(d.name) &&
-            d._deletedAt == null &&
-            d._purged !== true;
-          const phDoc = isLivePlaceholder(lSlim) ? lSlim : isLivePlaceholder(rSlim) ? rSlim : null;
-          if (phDoc) {
-            quarantinedSyncIds.add(syncId);
-            sweptHoldbacks.push(
-              `${collectionName} ${String(phDoc._id)} is mid-rename by another sync ` +
-                `service; its temporary name is held back this cycle and resolved by ` +
-                `the owner or the next sweep.`,
-            );
-          }
-        }
         // GH #1153 (Codex P2): a row the sweep left holding an unresolved
         // placeholder is excluded from NAME transfer this cycle — see the
         // quarantine set's docblock. Flag-only outcomes still run (round 22:

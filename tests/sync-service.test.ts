@@ -375,13 +375,27 @@ describe("every quarantine reports (source invariant)", () => {
     // strict-grammar placeholder observed there is quarantined at the gate).
     const adds = src.match(/quarantinedSyncIds\.add\(/g) ?? [];
     expect(adds.length).toBe(3);
-    // The slim-snapshot guard is grammar-gated: its add site sits in the row
-    // loop next to an isGeneratedPlaceholder test, before the quarantine gate.
-    const loopStart = src.indexOf("for (const syncId of allSyncIds)");
-    expect(loopStart).toBeGreaterThan(-1);
-    const guardRegion = src.slice(loopStart, src.indexOf("processedSyncIds.add(syncId)", loopStart));
-    expect(guardRegion).toContain("isGeneratedPlaceholder");
-    expect(guardRegion).toContain("quarantinedSyncIds.add(syncId)");
+    // The slim-snapshot scan is HOISTED (round 25): it runs over the whole
+    // snapshot BEFORE the row loop, and the processedSyncIds seeding runs
+    // after it — so no pair can invoke rename staging against a row either
+    // pass will quarantine. Discovered at the pair's own loop turn, an
+    // earlier pair could stage a guard-quarantined pair's real-named side
+    // aside — the round-23 manufactured stranding, reintroduced.
+    const scanStart = src.indexOf("const isLivePlaceholder");
+    expect(scanStart).toBeGreaterThan(-1);
+    const scanLoop = src.indexOf("for (const syncId of allSyncIds)", scanStart);
+    expect(scanLoop).toBeGreaterThan(scanStart);
+    const seeding = src.indexOf("for (const q of quarantinedSyncIds) processedSyncIds.add(q);");
+    expect(seeding).toBeGreaterThan(scanLoop);
+    const rowLoop = src.indexOf("for (const syncId of allSyncIds)", scanLoop + 1);
+    expect(rowLoop).toBeGreaterThan(seeding);
+    const scanRegion = src.slice(scanStart, seeding);
+    expect(scanRegion).toContain("isGeneratedPlaceholder");
+    expect(scanRegion).toContain("quarantinedSyncIds.add(syncId)");
+    // The row loop itself contains no quarantine site any more.
+    expect(src.slice(rowLoop, src.indexOf("} catch (loopErr)"))).not.toContain(
+      "quarantinedSyncIds.add(",
+    );
 
     const centralPushes =
       src.match(/\(notice\.hold \? sweptHoldbacks : sweptConflicts\)\.push\(notice\.text\);/g) ?? [];
