@@ -134,7 +134,22 @@ export async function GET(
     //               parent so inherited fields render correctly, then attach
     //               only `{ _id, name }` for the "Up to <parent>" link.
     let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
-    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null; inherits?: string | null } | null = null;
+    let parentSummary: {
+      _id: unknown; name?: string; vendor?: string; type?: string; color?: string;
+      cost?: number | null; density?: number | null; diameter?: number | null;
+      inherits?: string | null;
+      // GH #1148: every field the edit form renders as an INHERITED
+      // placeholder (FilamentForm's parentPh) must ride this projection —
+      // see the select below.
+      maxVolumetricSpeed?: number | null; minPrintSpeed?: number | null; maxPrintSpeed?: number | null;
+      dryingTemperature?: number | null; dryingTime?: number | null;
+      glassTempTransition?: number | null; heatDeflectionTemp?: number | null;
+      shoreHardnessA?: number | null; shoreHardnessD?: number | null;
+      shrinkageXY?: number | null; shrinkageZ?: number | null;
+      spoolWeight?: number | null; netFilamentWeight?: number | null;
+      transmissionDistance?: number | null; tdsUrl?: string | null;
+      temperatures?: Record<string, number | null> | null;
+    } | null = null;
     if (filament.parentId) {
       if (raw) {
         // `inherits` rides the projection for GH #1066: the form adopts a
@@ -142,7 +157,19 @@ export async function GET(
         // when neither the variant nor the parent supplies a top-level value
         // (the export masks the shadow whenever the resolved value is truthy).
         parentSummary = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-          .select("_id name vendor type color secondaryColors cost density diameter inherits")
+          // GH #1148 (Codex P2, widened to the class): the form's parentPh
+          // placeholders read 25 fields off `_parent`; this projection
+          // carried 3, so 22 inherited values — maxVolumetricSpeed among
+          // them — rendered blank on the EDIT page while the new-variant
+          // page (which fetches the parent doc whole) showed them. Keep in
+          // lockstep with the parentPh call sites in FilamentForm.
+          .select(
+            "_id name vendor type color secondaryColors cost density diameter inherits " +
+              "maxVolumetricSpeed minPrintSpeed maxPrintSpeed dryingTemperature dryingTime " +
+              "glassTempTransition heatDeflectionTemp shoreHardnessA shoreHardnessD " +
+              "shrinkageXY shrinkageZ spoolWeight netFilamentWeight transmissionDistance " +
+              "tdsUrl temperatures",
+          )
           .lean()) as typeof parentSummary;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
