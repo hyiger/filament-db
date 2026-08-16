@@ -119,7 +119,7 @@ From **Settings → Devices** (the **NFC Tools** card, Electron only):
 
 Erase covers both **OpenPrintTag** (SLIX2) and **OpenTag3D** (NTAG) tags — the app detects the chip and writes the matching blank capability container + empty NDEF message. If you remove the tag before confirming, the confirmation prompt automatically dismisses. Erasing a **Bambu Lab** tag is refused with a clear "read-only" message (these tags are RSA-signed and can't be erased).
 
-> **Erasing an NTAG needs the reader to answer the sizing query.** Before erasing, the app asks the chip its size (`GET_VERSION`) to confirm an NTAG really is on the reader — and unlike **Write NFC**, Erase has no "pick the tag type" fallback. A reader that refuses that query (the ACR1552U answers `SW 0x6900`) fails NTAG erase with a "couldn't confirm an NTAG (213/215/216) — refusing to erase" message. Tracked as #978. You rarely need it: a write rewrites the tag's capability container itself, so a tag an earlier write mis-sized is corrected by simply writing it again. OpenPrintTag (SLIX2) erase is unaffected.
+> **NTAG erase sizes the chip automatically, even on readers that refuse the sizing query.** Before erasing, the app asks the chip its size (`GET_VERSION`); on readers that refuse that query (the ACR1552U answers `SW 0x6900`) the app instead probes the chip's capacity directly with harmless page reads (216 → 215 → 213) and erases at the detected size — no prompt, no failure (#978). A tag an earlier write mis-sized is restored to its true size by the erase. OpenPrintTag (SLIX2) erase is unaffected.
 
 ### OpenPrintTag Binary Export
 
