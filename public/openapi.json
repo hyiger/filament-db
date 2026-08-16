@@ -1290,6 +1290,15 @@
             "example": "Smooth PEI"
           },
           {
+            "name": "printer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Printer NAME or ObjectId (same convention as bed_type). Selects the calibration tuned for that machine (GH #1047 Phase 0). Soft: an unknown printer falls back to the shareable printer-less defaults, then to any same-nozzle entry — never a new 404. With NO printer param the printer-less defaults are preferred (deterministic; previously the first matching entry won regardless of its printer)."
+          },
+          {
             "name": "format",
             "in": "query",
             "schema": {

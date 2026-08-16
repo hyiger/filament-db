@@ -57,6 +57,85 @@ describe("GET /api/filaments/[id]/calibration", () => {
     expect(json.calibration.extrusionMultiplier).toBe(0.98);
   });
 
+  describe("GH #1047 Phase 0 — printer scoping", () => {
+    async function seedTwoPrinters() {
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+      const xl = await Printer.create({ name: "XL", manufacturer: "Prusa", printerModel: "XL" });
+      const core = await Printer.create({
+        name: "CoreOne", manufacturer: "Prusa", printerModel: "CoreOne",
+      });
+      const f = await Filament.create({
+        name: "PETG", vendor: "X", type: "PETG",
+        calibrations: [
+          // Printer-scoped entries first, so "whatever sorts first" would
+          // pick the XL one and never the shareable default.
+          { nozzle: noz._id, printer: xl._id, pressureAdvance: 0.05 },
+          { nozzle: noz._id, printer: core._id, pressureAdvance: 0.09 },
+          { nozzle: noz._id, pressureAdvance: 0.02 }, // shareable default
+        ],
+      });
+      return { f, xl, core };
+    }
+
+    it("selects the calibration for the named printer", async () => {
+      const { f } = await seedTwoPrinters();
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=CoreOne`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.09);
+    });
+
+    it("accepts an ObjectId as well as a name (the bed_type convention)", async () => {
+      const { f, xl } = await seedTwoPrinters();
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${xl._id}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.05);
+    });
+
+    it("falls back to the shareable default for an UNKNOWN printer — never a 404", async () => {
+      const { f } = await seedTwoPrinters();
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=NoSuchPrinter`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.02);
+    });
+
+    it("with NO printer param prefers the shareable default (deterministic)", async () => {
+      // Behavior change, deliberate: the old code took whatever sorted first
+      // — here an XL-specific entry — for a caller that never named a
+      // printer. The printer-null default is what the bundle exporter
+      // already prefers when baking a preset.
+      const { f } = await seedTwoPrinters();
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.02);
+    });
+
+    it("still answers when only printer-scoped entries exist", async () => {
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.6 Brass", diameter: 0.6, type: "Brass" });
+      const xl = await Printer.create({ name: "XL2", manufacturer: "Prusa", printerModel: "XL" });
+      const f = await Filament.create({
+        name: "ASA", vendor: "X", type: "ASA",
+        calibrations: [{ nozzle: noz._id, printer: xl._id, pressureAdvance: 0.06 }],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.6`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.06);
+    });
+  });
+
   it("#872 — nozzle_type disambiguates same-diameter nozzles with distinct PA", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const diamond = await Nozzle.create({ name: "0.4 Diamondback", diameter: 0.4, type: "Diamondback" });

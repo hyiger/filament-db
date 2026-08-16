@@ -111,7 +111,9 @@ export async function GET(
     // Find calibration matching the nozzle diameter
     const calibrations = ((filament as NonNullable<typeof filament>).calibrations || []) as Array<{
       nozzle?: { diameter?: number; name?: string; type?: string; highFlow?: boolean };
-      printer?: { name?: string };
+      // `_id` is an ObjectId at runtime (populated doc); typed loosely like
+      // the bedType entry below so the lean() cast still overlaps.
+      printer?: { _id?: unknown; name?: string };
       bedType?: { _id?: string; name?: string; material?: string } | null;
       extrusionMultiplier?: number;
       maxVolumetricSpeed?: number;
@@ -134,6 +136,12 @@ export async function GET(
     const highFlowParam = searchParams.get("high_flow");
     const nozzleTypeParam = searchParams.get("nozzle_type");
     const bedTypeParam = searchParams.get("bed_type");
+    // GH #1047 Phase 0: the printer scope. `calibrations[].printer` has been
+    // populated since #107 but nothing could ASK for it, so a slicer on the
+    // XL got whichever same-nozzle entry happened to sort first — including
+    // one tuned for a different machine. Zero schema change; the full
+    // printer-scoped nozzle identity remains #1047's later phases.
+    const printerParam = searchParams.get("printer");
 
     const diameterMatches = calibrations.filter((cal) => {
       if (!cal.nozzle || Math.abs((cal.nozzle.diameter || 0) - nozzleDiameter) >= 0.01)
@@ -162,6 +170,36 @@ export async function GET(
         (cal) => (cal.nozzle?.type ?? "").trim().toLowerCase() === wanted,
       );
       if (typeMatches.length > 0) scopedMatches = typeMatches;
+    }
+
+    // GH #1047 Phase 0: narrow by PRINTER before the bed-type step, using the
+    // same name-or-ObjectId convention bed_type already uses. SOFT, matching
+    // the nozzle_type posture directly above — a printer match wins; else the
+    // shareable printer-null defaults; else the unscoped list, so a
+    // printer/data mismatch never turns a working lookup into a 404.
+    if (printerParam) {
+      const wanted = printerParam.trim().toLowerCase();
+      const printerMatches = scopedMatches.filter(
+        (cal) =>
+          (cal.printer?.name ?? "").trim().toLowerCase() === wanted ||
+          String(cal.printer?._id ?? "") === printerParam,
+      );
+      if (printerMatches.length > 0) {
+        scopedMatches = printerMatches;
+      } else {
+        // The shareable defaults (printer = null) are the right fallback for
+        // an unknown printer — they are what `prusaSlicerBundle` already
+        // prefers when baking a preset.
+        const defaults = scopedMatches.filter((cal) => !cal.printer);
+        if (defaults.length > 0) scopedMatches = defaults;
+      }
+    } else {
+      // No printer asked for: prefer the shareable defaults over a
+      // machine-specific entry. Deterministic where the old code took
+      // whatever sorted first — see the PR note; this is a small behavior
+      // change and the reason the param exists.
+      const defaults = scopedMatches.filter((cal) => !cal.printer);
+      if (defaults.length > 0) scopedMatches = defaults;
     }
 
     let match = scopedMatches[0];
