@@ -201,6 +201,10 @@ export default function DataHealthPage() {
     [renameValue, t, toast, load],
   );
 
+  // GH #1164: derived ONCE — the all-clear banner and the remote section
+  // must agree about what "remote conflicts exist" means.
+  const remoteConflicts = syncConflicts.filter((c) => c.side === "remote");
+
   return (
     <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
       <Link href="/settings" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
@@ -216,7 +220,11 @@ export default function DataHealthPage() {
       {!loading && error && (
         <p className="text-sm text-red-500">{t("health.error")}</p>
       )}
-      {!loading && !error && conflicts.length === 0 && (
+      {/* GH #1164 (Codex P2): the all-clear must account for BOTH databases.
+          With a clean local scan and a remote-only conflict — the primary
+          case this PR adds — the page otherwise rendered "your data is
+          healthy" directly above an amber conflict list. */}
+      {!loading && !error && conflicts.length === 0 && remoteConflicts.length === 0 && (
         <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
           <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>
         </div>
@@ -341,14 +349,12 @@ export default function DataHealthPage() {
           would read as two different problems. Resolution differs by shape:
           a pair that also exists locally is fixed above and propagates on
           the next sync; a remote-ONLY row has no local twin to act on. */}
-      {syncConflicts.some((c) => c.side === "remote") && (
+      {remoteConflicts.length > 0 && (
         <section className="mt-8">
           <h2 className="text-lg font-semibold mb-1">{t("health.remote.title")}</h2>
           <p className="text-sm text-gray-500 mb-3">{t("health.remote.subtitle")}</p>
           <div className="space-y-2">
-            {syncConflicts
-              .filter((c) => c.side === "remote")
-              .map((c) => (
+            {remoteConflicts.map((c) => (
                 <div
                   key={`${c.collection}-${c.name}`}
                   className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-3"
