@@ -3321,7 +3321,11 @@ function SpoolCard({
                 type="button"
                 onClick={() => setShowUsageHistory((s) => !s)}
                 aria-expanded={showUsageHistory}
-                className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 mb-1 flex items-center gap-1"
+                // GH #1069: this used to render in the same muted gray as the
+                // surrounding metadata, so users did not see it WAS a
+                // disclosure — the one place manual usage entries (with
+                // their job labels) can be reviewed went unfound.
+                className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline mb-1 flex items-center gap-1"
               >
                 <span aria-hidden="true">{showUsageHistory ? "▾" : "▸"}</span>
                 {t("detail.spool.usageHistory", { count: spool.usageHistory?.length ?? 0 })}
