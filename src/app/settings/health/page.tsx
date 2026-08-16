@@ -121,8 +121,24 @@ export default function DataHealthPage() {
     const api = window.electronAPI;
     if (!api?.getSyncStatus) return;
     let cancelled = false;
-    const apply = (st: { nameConflicts?: typeof syncConflicts }) => {
-      if (!cancelled) setSyncConflicts(st.nameConflicts ?? []);
+    // A COMPLETED cycle can copy a remote-only conflict INTO the local
+    // database (Codex P2) — after which the pair belongs in the actionable
+    // list above, not the read-only remote section whose copy says "resolve
+    // it above". The local scan is a mount-time snapshot, so refetch it
+    // whenever a cycle finishes. `lastSyncAt` changing is exactly that
+    // signal; progress ticks during a cycle carry the same value and are
+    // ignored, so this cannot loop.
+    let lastSeenSync: string | null = null;
+    const apply = (st: { nameConflicts?: typeof syncConflicts; lastSyncAt?: string | null }) => {
+      if (cancelled) return;
+      setSyncConflicts(st.nameConflicts ?? []);
+      const stamp = st.lastSyncAt ?? null;
+      if (stamp && stamp !== lastSeenSync) {
+        const first = lastSeenSync === null;
+        lastSeenSync = stamp;
+        // Skip the very first observation: that IS the mount snapshot.
+        if (!first) void load();
+      }
     };
     (async () => {
       try {
@@ -136,7 +152,7 @@ export default function DataHealthPage() {
       cancelled = true;
       unsub?.();
     };
-  }, []);
+  }, [load]);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
