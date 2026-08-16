@@ -242,7 +242,7 @@ export interface IFilament extends Document {
   tdsUrl: string | null;
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
-  settings: Record<string, string | null>;
+  settings: Record<string, string | string[] | null>;
   /**
    * GH #605 round 10: the durable parent-side promotion marker. A parent
    * promotion (performParentPromotion in src/lib/promoteParent.ts) stamps

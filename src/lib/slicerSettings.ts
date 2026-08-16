@@ -111,8 +111,16 @@ export function mergeSlicerSettings(
     // parent's stored wire value, so an unchanged Orca sync of an inherited
     // multi-line setting keeps inheriting instead of pinning a variant
     // override that severs GH #106 live inheritance.
-    const wireValue =
-      typeof value === "string" && /[\r\n]/.test(value) ? wrapIniString(value) : value;
+    // GH #678: multi-valued keys arrive as arrays — each ELEMENT gets the
+    // same wire-canonical newline wrap a scalar gets, so no element can
+    // split an emitted INI line on the next PrusaSlicer export.
+    const wireValue = Array.isArray(value)
+      ? value.map((el) =>
+          typeof el === "string" && /[\r\n]/.test(el) ? wrapIniString(el) : el,
+        )
+      : typeof value === "string" && /[\r\n]/.test(value)
+        ? wrapIniString(value)
+        : value;
     const serialized = JSON.stringify(wireValue ?? null);
     if (serialized.length > MAX_SETTING_VALUE_LENGTH) {
       return {

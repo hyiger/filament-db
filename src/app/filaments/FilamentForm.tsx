@@ -228,8 +228,13 @@ const DEFAULT_FILAMENT_TYPES = [
 
 function getSettingVal(data: Record<string, unknown> | undefined, key: string): string {
   if (!data?.settings) return "";
-  const settings = data.settings as Record<string, string | null>;
+  const settings = data.settings as Record<string, string | string[] | null>;
   const val = settings[key];
+  // GH #678: a multi-valued key (compatible_printers) is stored as an array;
+  // display it semicolon-joined — PrusaSlicer's own list separator. The SAME
+  // normalization feeds the seed and the dirty-compare, so an unedited
+  // multi-value field compares equal and never writes (array preserved).
+  if (Array.isArray(val)) return val.join(";");
   if (!val || val === "nil") return "";
   return val;
 }
@@ -900,7 +905,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // every unrelated save. A cleared field writes an explicit "" ("no
     // restriction" — PrusaSlicer shows the preset for every printer).
     if (form.compatPrinters !== getSettingVal(initialData, "compatible_printers")) {
-      settings.compatible_printers = form.compatPrinters || "";
+      // GH #678: `;` splits an edited value back into the array form when it
+      // yields multiple entries — the shape a multi-printer list is stored
+      // and exported in. A single entry stays a scalar (the common case,
+      // byte-identical to pre-#678).
+      const parts = form.compatPrinters
+        .split(";")
+        .map((p) => p.trim())
+        .filter((p) => p !== "");
+      settings.compatible_printers = parts.length > 1 ? parts : form.compatPrinters || "";
     }
     if (
       form.compatPrintersCondition !==

@@ -1552,9 +1552,14 @@ function FilamentDetail() {
                   PrusaSlicer" has a visible cause; it's editable on the
                   form's Slicer tab. */}
               {(() => {
-                const restriction =
+                const rawRestriction =
                   filament.settings?.compatible_printers_condition ||
                   filament.settings?.compatible_printers;
+                // GH #678: compatible_printers may be a multi-valued ARRAY
+                // now — render it joined the way PrusaSlicer lists read.
+                const restriction = Array.isArray(rawRestriction)
+                  ? rawRestriction.join("; ")
+                  : rawRestriction;
                 // On a VARIANT the detail doc's settings are parent-resolved,
                 // so the restriction may live in the PARENT's bag — the raw
                 // edit form then can't see or clear it. Point at the parent

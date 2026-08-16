@@ -20,7 +20,7 @@
  * Filament DB doesn't model (e.g. filament_ramming_parameters, start_filament_gcode).
  */
 
-import { serializeIniValue } from "./parseIni";
+import { serializeIniValue, serializeIniValueList } from "./parseIni";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
@@ -409,10 +409,10 @@ export function filamentToSlicerKeys(
   // set by the fan-out when THIS nozzle's diameter appears in the group with
   // both highFlow states (see perNozzleCondition).
   includeHfTerm = false,
-): Record<string, string | null> {
+): Record<string, string | string[] | null> {
   // Start with the settings bag as the base — these are passthrough
   // PrusaSlicer keys preserved from a previous import
-  const keys: Record<string, string | null> = { ...(filament.settings || {}) };
+  const keys: Record<string, string | string[] | null> = { ...(filament.settings || {}) };
 
   // GH #1021 (Codex P1 ×2 on #1022): legacy machine-derived nozzle conditions
   // (`nozzle_diameter[0]==D [or ...]`, persisted into `settings` by pre-#1021
@@ -585,7 +585,7 @@ export function filamentToSlicerKeys(
 function writeSection(
   lines: string[],
   name: string,
-  keys: Record<string, string | null>,
+  keys: Record<string, string | string[] | null>,
   overrides?: Record<string, string>,
 ) {
   lines.push(`[filament:${name}]`);
@@ -604,6 +604,11 @@ function writeSection(
     if (value === null) {
       // Preserve nil for settings bag values (means "inherit from parent" in PrusaSlicer)
       lines.push(`${key} = nil`);
+    } else if (Array.isArray(value)) {
+      // GH #678: a multi-valued bag entry (compatible_printers et al.) emits
+      // PrusaSlicer's coStrings form. String(value) would comma-join —
+      // which the slicer reads back as ONE value with commas in it.
+      lines.push(`${key} = ${serializeIniValueList(value)}`);
     } else if (value !== undefined) {
       // GH #1070: a raw \r/\n inside a bag value would split the emitted
       // `key = value` line — PrusaSlicer rejects the whole bundle over one

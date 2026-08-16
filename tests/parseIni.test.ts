@@ -6,6 +6,7 @@ import {
   decodeMultilineWireValue,
   wrapIniString,
   unwrapIniString,
+  serializeIniValueList,
 } from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
@@ -647,5 +648,28 @@ describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () =>
 
   it("serializes a bare newline (shorter than a quoted wrapper) via the unquoted path", () => {
     expect(serializeIniValue("\n")).toBe('"\\n"');
+  });
+});
+
+describe("serializeIniValueList (GH #678)", () => {
+  it("joins simple tokens with semicolons, unquoted", () => {
+    expect(serializeIniValueList(["A", "B"])).toBe("A;B");
+  });
+
+  it("quotes elements containing whitespace — the real compatible_printers shape", () => {
+    expect(
+      serializeIniValueList(["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"]),
+    ).toBe('"Bambu Lab P1S 0.4 nozzle";"Bambu Lab X1C 0.4 nozzle"');
+  });
+
+  it("quotes and escapes semicolons, quotes, backslashes and empties", () => {
+    expect(serializeIniValueList(['a;b'])).toBe('"a;b"');
+    expect(serializeIniValueList(['say "hi"'])).toBe('"say \\"hi\\""');
+    expect(serializeIniValueList(["back\\slash"])).toBe('"back\\\\slash"');
+    expect(serializeIniValueList([""])).toBe('""');
+  });
+
+  it("escapes newlines inside an element so the line cannot split", () => {
+    expect(serializeIniValueList(["a\nb"])).toBe('"a\\nb"');
   });
 });

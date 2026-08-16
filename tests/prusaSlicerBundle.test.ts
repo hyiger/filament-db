@@ -1094,6 +1094,49 @@ describe("generatePrusaSlicerBundle", () => {
 
   // --- GH #1070: raw newlines in bag values must not split the emitted line ---
 
+  describe("GH #678: multi-valued bag entries emit the coStrings form", () => {
+    const base = {
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      temperatures: {},
+    };
+
+    it("emits a compatible_printers array semicolon-joined with quoted elements", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Multi",
+          settings: {
+            compatible_printers: ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+          },
+        },
+      ]);
+      expect(bundle).toContain(
+        'compatible_printers = "Bambu Lab P1S 0.4 nozzle";"Bambu Lab X1C 0.4 nozzle"',
+      );
+      // The pre-#678 hazard: String(array) comma-joins, which PrusaSlicer
+      // reads back as ONE value with commas in it.
+      expect(bundle).not.toContain("nozzle,Bambu");
+    });
+
+    it("leaves scalar bag values untouched next to an array one", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Mixed",
+          settings: {
+            compatible_printers: ["A", "B"],
+            filament_soluble: "0",
+          },
+        },
+      ]);
+      expect(bundle).toContain("compatible_printers = A;B");
+      expect(bundle).toContain("filament_soluble = 0");
+    });
+  });
+
   describe("GH #1070: INI value escaping at the emit boundary", () => {
     const base = {
       vendor: "Test",

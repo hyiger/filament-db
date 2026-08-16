@@ -117,18 +117,37 @@ describe("parseBambuStudioProfile", () => {
     expect(parseBambuStudioProfile({ name: ["X"] }).filament.settings.filament_soluble).toBeUndefined();
   });
 
-  it("collapses a multi-element compatible_printers to its first element (#678 deferred)", () => {
-    // A faithful multi-printer round-trip can't store an array in the shared
-    // settings bag: the PrusaSlicer exporter would comma-join it into one
-    // invalid INI line, and the edit form String-casts + .replace()s several
-    // settings keys. So passthrough values stay scalar (unwrap → first element)
-    // and the multi-value round-trip is tracked on #678 as a larger,
-    // cross-exporter change.
+  it("preserves a multi-element compatible_printers as an array (#678)", () => {
+    // Every consumer is array-aware now: the PrusaSlicer exporter emits the
+    // coStrings form, Orca/Bambu exports pass arrays natively, the form
+    // displays a `;`-join, and inheritance compares element-wise. Single- and
+    // zero-element arrays keep the scalar collapse byte-identical (next test).
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
       compatible_printers: ["Bambu X1 0.4 nozzle", "Prusa MK4 0.4 nozzle"],
     });
+    expect(filament.settings.compatible_printers).toEqual([
+      "Bambu X1 0.4 nozzle",
+      "Prusa MK4 0.4 nozzle",
+    ]);
+  });
+
+  it("keeps the single-element scalar collapse byte-identical (#678)", () => {
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers: ["Bambu X1 0.4 nozzle"],
+    });
     expect(filament.settings.compatible_printers).toBe("Bambu X1 0.4 nozzle");
+  });
+
+  it("wire-wraps multi-line ELEMENTS of a multi-value key (#678)", () => {
+    // The same GH #1070 wire-canonical rule a scalar gets: a raw newline in
+    // an element would split the emitted INI line on the next export.
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers: ["Line1\nLine2", "Plain"],
+    });
+    expect(filament.settings.compatible_printers).toEqual(['"Line1\\nLine2"', "Plain"]);
   });
 
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {

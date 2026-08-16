@@ -141,6 +141,20 @@ export function wrapIniString(content: string): string {
 }
 
 /**
+ * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
+ * matching escape_strings_cstyle's coStrings convention: elements joined
+ * with `;`, an element quoted-escaped when it contains whitespace, `;`,
+ * a quote, a backslash, or is empty — a bare simple token rides unquoted.
+ * A comma-join (what String(array) would do) is NOT a list to PrusaSlicer;
+ * it reads back as one value with commas in it.
+ */
+export function serializeIniValueList(values: readonly string[]): string {
+  return values
+    .map((el) => (el === "" || /[\s;"\\]/.test(el) ? `"${escapeIniValueContent(el)}"` : el))
+    .join(";");
+}
+
+/**
  * Lenient inverse of `wrapIniString` for OUR OWN stored bag values: if the
  * value is quote-wrapped, strip the outer quotes and unescape; an UNQUOTED
  * single-line value with canonical escapes decodes too (r12 — it is wire,

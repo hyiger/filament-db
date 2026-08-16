@@ -450,8 +450,15 @@ export function splitInheritedImportSet(
         continue;
       }
       const filtered: Record<string, unknown> = {};
+      // GH #678: bag values may be ARRAYS now (multi-valued keys). Strict !==
+      // never equates two arrays, which would pin every parent-equal
+      // multi-value key as a variant override — element-wise compare instead.
+      const settingEqual = (a: unknown, b: unknown): boolean =>
+        Array.isArray(a) && Array.isArray(b)
+          ? a.length === b.length && a.every((v, i) => v === b[i])
+          : a === b;
       for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
-        if (parentSettings[sk] !== sv) filtered[sk] = sv;
+        if (!settingEqual(parentSettings[sk], sv)) filtered[sk] = sv;
       }
       set[key] = filtered;
       continue;
