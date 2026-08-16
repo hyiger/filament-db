@@ -62,9 +62,7 @@ interface ElectronAPI {
     productUrl?: string,
     ntagSize?: "NTAG213" | "NTAG215" | "NTAG216",
   ) => Promise<{ success: boolean }>;
-  /** GH #978: optional user-declared size ("NTAG213"|"NTAG215"|"NTAG216")
-   *  for GET_VERSION-dead readers — keep in lockstep with preload/main. */
-  nfcFormatTag: (ntagSize?: string) => Promise<{ success: boolean }>;
+  nfcFormatTag: () => Promise<{ success: boolean }>;
   nfcSetReadOnly: (readOnly: boolean) => Promise<{ success: boolean }>;
   onNfcStatusChange: (callback: (status: {
     readerConnected: boolean;

@@ -87,7 +87,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     productUrl?: string,
     ntagSize?: "NTAG213" | "NTAG215" | "NTAG216",
   ) => ipcRenderer.invoke("nfc-write-tag", payload, standard, productUrl, ntagSize),
-  nfcFormatTag: (ntagSize?: string) => ipcRenderer.invoke("nfc-format-tag", ntagSize),
+  nfcFormatTag: () => ipcRenderer.invoke("nfc-format-tag"),
   nfcSetReadOnly: (readOnly: boolean) => ipcRenderer.invoke("nfc-set-readonly", readOnly),
   onNfcStatusChange: (callback: (status: NfcStatus) => void) => {
     const handler = (_event: IpcRendererEvent, status: NfcStatus) => callback(status);

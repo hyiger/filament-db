@@ -1711,7 +1711,7 @@
   "settings.nfcReadOnlyBambu": "Bambu-Lab-Tags sind bereits schreibgeschützt und können nicht geändert werden.",
   "settings.nfcReadOnlyNotFormatted": "Dieser Tag enthält noch keine OpenPrintTag-Daten zum Sperren — schreiben Sie zuerst ein Filament darauf.",
   "settings.nfcReadOnlyNtagUnsupported": "Schreibschutz ist für OpenTag3D/NTAG-Tags nicht verfügbar — ihr Capability Container ist einmalig programmierbar und lässt sich nicht zurücksetzen. Schreibschutz funktioniert bei OpenPrintTag (SLIX2)-Tags.",
-  "settings.nfcNtagSizeUnknown": "Die Größe des NTAG konnte nicht ermittelt werden — es wurde nichts gelöscht. Wählen Sie bei der Abfrage den Tag-Typ (NTAG213/215/216), um ihn zu löschen.",
+  "settings.nfcNtagSizeUnknown": "Die Größe des NTAG konnte nicht ermittelt werden — es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
   "settings.nfcLoadedTag": "Aufgelegter Tag:",
   "settings.nfcLoadedBambu": "Bambu (schreibgeschützt)",
   "settings.nfcLoadedNtagOpenTag3d": "NTAG · OpenTag3D",
@@ -1833,6 +1833,5 @@
   "health.dep.ownSpools": "eigene Spulen",
   "health.dep.printHistoryJobs": "Druckaufträge",
   "health.dep.amsSlots": "AMS-Slots",
-  "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu.",
-  "settings.nfcEraseSizePrompt.body": "Der Leser konnte die Größe dieses Tags nicht ermitteln; zum Löschen wird der auf dem Tag aufgedruckte Typ benötigt. Eine zu groß gewählte Größe wird vor jedem Schreibvorgang durch eine Sicherheitsprüfung abgewiesen."
+  "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu."
 }

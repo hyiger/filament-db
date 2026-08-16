@@ -63,17 +63,21 @@ export type NtagEraseSizeDecision =
  * GH #978 — the Erase twin of {@link resolveNtagWriteSize}, and deliberately
  * simpler: Erase REFORMATS, so the existing CC is never an input (a lying CC
  * is exactly what an erase repairs). GET_VERSION stays authoritative when it
- * answers (restores a mis-formatted tag to its true size); otherwise the
- * user-declared size is used — the #973 posture the Write path adopted, with
- * the same brick-guard probe validating the pick before anything is written.
- * With neither, refuse: never guess a size that could run the zero-fill off
- * a smaller chip's end.
+ * answers; otherwise the PROBE-derived capacity is used — the service walks
+ * the size ladder (216 → 215 → 213) with non-mutating page reads, the same
+ * NAK-on-out-of-range behaviour the Write path's hardware-proven brick guard
+ * already trusts, just aimed at DERIVING the size instead of validating a
+ * pick. A user-declared size was rejected in review (round 2, Codex P1): an
+ * UNDERSIZED pick would zero-fill only part of the chip, stamp a smaller CC,
+ * and report success with stale bytes left beyond the new extent — probing
+ * closes both directions at once and removes the prompt entirely. With
+ * neither input, refuse: never guess.
  */
 export function resolveNtagEraseSize(opts: {
   verSize: number | null;
-  hintBytes: number | null;
+  probedBytes: number | null;
 }): NtagEraseSizeDecision {
-  const resolved = opts.verSize ?? opts.hintBytes;
+  const resolved = opts.verSize ?? opts.probedBytes;
   if (resolved == null) return { ok: false, error: "size_unknown" };
   return { ok: true, ndefBytes: resolved };
 }

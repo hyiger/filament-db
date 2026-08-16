@@ -188,21 +188,21 @@ describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
 
 describe("resolveNtagEraseSize (GH #978)", () => {
   it("GET_VERSION is authoritative when it answers", () => {
-    expect(resolveNtagEraseSize({ verSize: 496, hintBytes: 144 })).toEqual({
+    expect(resolveNtagEraseSize({ verSize: 496, probedBytes: 144 })).toEqual({
       ok: true,
       ndefBytes: 496,
     });
   });
 
-  it("falls back to the user-declared size on a GET_VERSION-dead reader", () => {
-    expect(resolveNtagEraseSize({ verSize: null, hintBytes: 872 })).toEqual({
+  it("falls back to the probe-derived capacity on a GET_VERSION-dead reader", () => {
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 872 })).toEqual({
       ok: true,
       ndefBytes: 872,
     });
   });
 
   it("refuses with size_unknown when neither is available — never guesses", () => {
-    expect(resolveNtagEraseSize({ verSize: null, hintBytes: null })).toEqual({
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: null })).toEqual({
       ok: false,
       error: "size_unknown",
     });

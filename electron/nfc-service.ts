@@ -927,6 +927,32 @@ export class NfcService extends EventEmitter {
    * HARDWARE-UNVERIFIED on this reader/transport — implemented to spec; the null
    * path keeps a wrong guess from ever corrupting a smaller chip.
    */
+  /**
+   * GH #978: derive an NTAG's NDEF capacity by PROBING, for GET_VERSION-dead
+   * readers (ACR1552U). Non-mutating FF B0 page reads at each larger size's
+   * top page, descending 216 → 215; a chip NAKs reads past its physical end
+   * (the same behaviour the write path's brick guard is built on, proven on
+   * the ACR1552U), so the first size whose top page reads is the chip's
+   * size. Falls through to the NTAG213 floor — the caller has already read
+   * the head, so 144 bytes is always physically present. A transport blip
+   * mid-probe can only UNDER-size (both probes fail → 213): the erase then
+   * cleans a smaller extent and stamps a smaller CC — recoverable by
+   * re-erasing — and never writes past the chip's end.
+   */
+  private async probeNtagCapacity(protocol: number): Promise<number> {
+    for (const bytes of [NTAG_NAME_TO_NDEF_BYTES.NTAG216, NTAG_NAME_TO_NDEF_BYTES.NTAG215]) {
+      const topPage = 4 + Math.ceil(bytes / 4) - 1;
+      const probeStart = Math.max(4, topPage - 3);
+      try {
+        await this.readNtagBurst(protocol, probeStart);
+        return bytes;
+      } catch {
+        // Smaller than this rung — try the next one down.
+      }
+    }
+    return NTAG_NAME_TO_NDEF_BYTES.NTAG213;
+  }
+
   private async getNtagNdefBytesViaGetVersion(protocol: number): Promise<number | null> {
     let resp: Buffer;
     try {
@@ -1369,11 +1395,11 @@ export class NfcService extends EventEmitter {
     }, { resetAfter: true });
   }
 
-  async formatTag(opts?: { ntagSize?: NtagSizeName }, signal?: AbortSignal): Promise<void> {
-    return this.runExclusive(() => this.formatTagImpl(opts?.ntagSize), signal); // GH #903/#915
+  async formatTag(signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.formatTagImpl(), signal); // GH #903/#915
   }
 
-  private async formatTagImpl(ntagSize?: NtagSizeName): Promise<void> {
+  private async formatTagImpl(): Promise<void> {
     // GH #583: a Bambu Lab tag is MIFARE Classic (ISO 14443) and read-only
     // (RSA-signed). The ISO 15693 `readBlock(0)` below would fail on it with
     // a raw "Read block 0 failed: SW=6a81" — opaque to the user. Detect it
@@ -1398,7 +1424,7 @@ export class NfcService extends EventEmitter {
     // connection so the guards apply to the tag actually present (Codex P2 #927).
     const head = await this.withConnection((protocol) => this.detectType2Head(protocol));
     if (head) {
-      return this.formatNtagImpl(ntagSize);
+      return this.formatNtagImpl();
     }
 
     return this.withConnection(async (protocol) => {
@@ -1468,7 +1494,7 @@ export class NfcService extends EventEmitter {
    * Capacity: a formatted NTAG's existing CC byte-2 gives the size; a blank one
    * is sized via GET_VERSION (refused if unknown — never guess).
    */
-  private async formatNtagImpl(ntagSize?: NtagSizeName): Promise<void> {
+  private async formatNtagImpl(): Promise<void> {
     return this.withConnection(async (protocol) => {
       // Re-read pages 0–3 in THIS mutating connection (Codex P2 #927): the probe's
       // head came from a separate connection in formatTagImpl, so a tag swapped
@@ -1508,48 +1534,34 @@ export class NfcService extends EventEmitter {
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
       // GH #978: GET_VERSION is CONFIRMED-REJECTED on some readers (ACR1552U,
       // SW 0x6900), which made Erase permanently impossible there while Write
-      // worked — an incoherent split for the same reader. Erase now accepts
-      // the same user-declared size the Write path does (the #973 posture),
-      // decided by the pure resolveNtagEraseSize: GET_VERSION authoritative
-      // when it answers, else the user's pick, else refuse. The MIFARE-vs-
-      // NTAG family proof on the user-size path rests on the SAME guards the
-      // hardware-proven Write path (and the dev CLI before it) relies on:
-      // the byte-0 NXP guard (detectType2Head), the CC 0xE1/0x00 guard
-      // above, the writeNtagPage [3,255] bound — plus the brick-guard probe
-      // below, which Erase previously lacked entirely. Deliberate,
+      // worked — an incoherent split for the same reader. When it is silent,
+      // the capacity is PROBE-DERIVED instead: descend the size ladder
+      // (216 → 215 → 213) with non-mutating page reads. This is the same
+      // NAK-on-out-of-range chip behaviour the Write path's hardware-proven
+      // brick guard already trusts, aimed at deriving the size rather than
+      // validating a pick. A user-declared size was REJECTED in review
+      // (Codex P1, round 2): an undersized pick would zero-fill only part of
+      // the chip, stamp a smaller CC, and report success with the old bytes
+      // still present beyond the new extent — probing closes the undersize
+      // AND oversize directions at once, with no prompt. The MIFARE-vs-NTAG
+      // family proof on this path rests on the same guards the Write path
+      // relies on: the byte-0 NXP guard (detectType2Head), the CC 0xE1/0x00
+      // guard above, and the writeNtagPage [3,255] bound. Deliberate,
       // signed-off posture change from GET_VERSION-only fail-closed.
-      const hintBytes = ntagSize != null ? NTAG_NAME_TO_NDEF_BYTES[ntagSize] : null;
-      const sizing = resolveNtagEraseSize({ verSize, hintBytes });
+      const probedBytes = verSize == null ? await this.probeNtagCapacity(protocol) : null;
+      const sizing = resolveNtagEraseSize({ verSize, probedBytes });
       if (!sizing.ok) {
+        // Unreachable in practice — detectType2Head already proved the head
+        // reads, so the probe always resolves at least the 213 floor. Kept
+        // for the resolver's refuse arm; honest message, no false remedies.
         throw new Error(
-          "NTAG_SIZE_UNKNOWN: Couldn't determine this NTAG's size — the reader didn't return a " +
-            "recognized GET_VERSION response. Choose the tag type (NTAG213/215/216) to erase it.",
+          "NTAG_SIZE_UNKNOWN: Couldn't determine this NTAG's size — nothing was erased. " +
+            "Re-seat the tag and try again.",
         );
       }
       // Resolved capacity drives BOTH the rewritten CC and the zero-fill.
       const wipeBytes = sizing.ndefBytes;
       const ndefBytes = sizing.ndefBytes; // size written into the CC
-
-      // GH #978 BRICK-GUARD (mirrors the Write path): when the resolved
-      // capacity runs past NTAG213's user area, PROBE-READ the last page that
-      // capacity implies BEFORE writing anything. A NAK proves the size —
-      // wrong user pick or mis-read GET_VERSION — overstates the chip;
-      // refusing here avoids writing into a smaller chip's lock/config pages
-      // AND stamping a CC that lies about the size. Sizes within the 213
-      // extent fit any NTAG and skip the probe.
-      const capacityTopPage = 4 + Math.ceil(ndefBytes / 4) - 1;
-      if (capacityTopPage > NTAG213_LAST_USER_PAGE) {
-        const probeStart = Math.max(4, capacityTopPage - 3);
-        try {
-          await this.readNtagBurst(protocol, probeStart);
-        } catch {
-          throw new Error(
-            `NTAG_TOO_SMALL_FOR_DATA: This tag is smaller than the selected size — it can't hold ` +
-              `${ndefBytes} bytes. Nothing was written; re-check the tag type` +
-              `${ntagSize ? ` (you selected ${ntagSize})` : ""}.`,
-          );
-        }
-      }
 
       // Fresh read/write CC to page 3 — clears any soft read-only nibble.
       await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
