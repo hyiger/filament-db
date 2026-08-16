@@ -28,7 +28,10 @@ import { OPENTAG3D_MIME } from "../src/lib/opentag3d";
 import {
   parseNtagNdefBytesFromGetVersion,
   resolveNtagWriteSize,
+  resolveNtagEraseSize,
   NTAG_NAME_TO_NDEF_BYTES,
+  NTAG_PHYSICAL_LAST_PAGE,
+  NTAG216_MAX_NDEF_BYTES,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
 import {
@@ -926,6 +929,51 @@ export class NfcService extends EventEmitter {
    * HARDWARE-UNVERIFIED on this reader/transport — implemented to spec; the null
    * path keeps a wrong guess from ever corrupting a smaller chip.
    */
+  /**
+   * GH #978 (round 8 — the fixed point): PROVE the full NTAG216 extent by
+   * reading its physical tail (page 227–230, config included), or report
+   * nothing. A successful read is a proof auth protection cannot fake; a
+   * NAK is ambiguous (absent page vs password-protected page — the PC/SC
+   * SWs don't distinguish them), so NO downward conclusion is ever drawn
+   * from one. Transport failures retry ×3 then fail closed
+   * (NTAG_PROBE_FAILED). Returns the 872-byte capacity on proof, null on a
+   * definitive NAK — the caller refuses as ambiguous.
+   */
+  private async proveFullNtag216(protocol: number): Promise<number | null> {
+    const probeStart = Math.max(4, NTAG_PHYSICAL_LAST_PAGE.NTAG216 - 3);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const data = await this.readNtagBurst(protocol, probeStart);
+        // A COMPLETE 16-byte burst is the proof (round 11, Codex P1): some
+        // readers return SW=9000 with a short payload — that proves nothing
+        // about pages 227-230, but it is also NOT a negative proof (round
+        // 12, Codex P2): the cause may be a transient/anomalous reader
+        // response. Short answers therefore join the TRANSPORT class —
+        // retried, and after three attempts the erase fails closed as
+        // INCONCLUSIVE (NTAG_PROBE_FAILED: re-seat and retry), never as
+        // the "reads prove it is not a full NTAG216" refusal.
+        if (data.length >= 16) return NTAG_NAME_TO_NDEF_BYTES.NTAG216;
+        if (attempt >= 3) {
+          throw new Error(
+            "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept returning " +
+              "incomplete responses, so nothing was erased. Re-seat the tag and try again.",
+          );
+        }
+        continue;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
+        if (definitiveNak) return null;
+        if (attempt >= 3) {
+          throw new Error(
+            "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept failing " +
+              "mid-probe, so nothing was erased. Re-seat the tag and try again.",
+          );
+        }
+      }
+    }
+  }
+
   private async getNtagNdefBytesViaGetVersion(protocol: number): Promise<number | null> {
     let resp: Buffer;
     try {
@@ -1505,15 +1553,36 @@ export class NfcService extends EventEmitter {
       // (the size is GET_VERSION's, never the old CC's). GET_VERSION works on the
       // ACR1552U in practice, so this is the rare edge case.
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
-      if (verSize == null) {
+      // GH #978: GET_VERSION is CONFIRMED-REJECTED on some readers (ACR1552U,
+      // SW 0x6900), which made Erase permanently impossible there while Write
+      // worked — an incoherent split for the same reader. When it is silent,
+      // the capacity is PROBE-DERIVED instead: descend the size ladder
+      // (216 → 215 → 213) with non-mutating page reads. This is the same
+      // NAK-on-out-of-range chip behaviour the Write path's hardware-proven
+      // brick guard already trusts, aimed at deriving the size rather than
+      // validating a pick. A user-declared size was REJECTED in review
+      // (Codex P1, round 2): an undersized pick would zero-fill only part of
+      // the chip, stamp a smaller CC, and report success with the old bytes
+      // still present beyond the new extent — probing closes the undersize
+      // AND oversize directions at once, with no prompt. The MIFARE-vs-NTAG
+      // family proof on this path rests on the same guards the Write path
+      // relies on: the byte-0 NXP guard (detectType2Head), the CC 0xE1/0x00
+      // guard above, and the writeNtagPage [3,255] bound. Deliberate,
+      // signed-off posture change from GET_VERSION-only fail-closed.
+      const provenBytes = verSize == null ? await this.proveFullNtag216(protocol) : null;
+      const sizing = resolveNtagEraseSize({ verSize, provenBytes });
+      if (!sizing.ok) {
         throw new Error(
-          "NTAG_SIZE_UNKNOWN: Couldn't confirm an NTAG (213/215/216) on the reader — refusing to erase. " +
-            "The reader didn't return a recognized NTAG GET_VERSION response.",
+          "NTAG_SIZE_AMBIGUOUS: This reader can't size the tag (GET_VERSION refused), and " +
+            "reads prove it is not a full NTAG216 — it is either a smaller NTAG or " +
+            "password-protected, which are indistinguishable here. Nothing was erased. " +
+            "Use Write NFC (which sizes the tag explicitly), or a reader that supports " +
+            "GET_VERSION.",
         );
       }
-      // Verified physical capacity drives BOTH the rewritten CC and the zero-fill.
-      const wipeBytes = verSize;
-      const ndefBytes = verSize; // size written into the CC
+      // Resolved capacity drives BOTH the rewritten CC and the zero-fill.
+      const wipeBytes = sizing.ndefBytes;
+      const ndefBytes = sizing.ndefBytes; // size written into the CC
 
       // Fresh read/write CC to page 3 — clears any soft read-only nibble.
       await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
@@ -1528,8 +1597,22 @@ export class NfcService extends EventEmitter {
       for (let page = 5, n = 0; page <= lastUserPage; page++, n++) {
         try {
           await this.writeNtagPage(protocol, page, zeroes);
-        } catch {
-          break; // past writable user memory
+        } catch (err) {
+          // Round 9 (Codex P1): the size is PROVEN (GET_VERSION or the
+          // full-extent read proof), so a write failure INSIDE that extent
+          // is an error — most likely password WRITE-protection (PROT=0
+          // with AUTH0 in user memory: reads succeed, writes NAK), possibly
+          // a fault. The old `break` treated it as end-of-tag and reported
+          // a partial wipe as SUCCESS, leaving protected old data behind. A
+          // partial mutation has already happened (CC + TLV + the prefix),
+          // so the honest outcome is a loud failure that says exactly that.
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `NTAG_WRITE_REFUSED: The tag refused the write at page ${page} of its proven ` +
+              `${lastUserPage - 4} user pages — it may be password write-protected. The erase ` +
+              `is INCOMPLETE: earlier pages were cleared, data from page ${page} on remains. ` +
+              `(${msg})`,
+          );
         }
         if (page < lastUserPage) {
           await new Promise((r) => setTimeout(r, 10));
