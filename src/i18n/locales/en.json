@@ -1835,6 +1835,5 @@
   "health.dep.amsSlots": "AMS slots",
   "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
   "settings.nfcNtagProbeFailed": "Couldn't verify the tag's size — the reader kept failing mid-probe, so nothing was erased. Re-seat the tag and try again.",
-  "settings.nfcNtagUnsupported": "This tag is smaller than an NTAG213 (NTAG210/212 are not supported) — nothing was erased.",
-  "settings.nfcNtagSizeConflict": "The tag's capability container claims more capacity than answered reads — it may be password-protected. Nothing was erased."
+  "settings.nfcNtagSizeAmbiguous": "This reader can't size the tag, and reads prove it is not a full NTAG216 — it is either a smaller NTAG or password-protected (indistinguishable here). Nothing was erased. Use Write NFC, which sizes the tag explicitly, or a reader that supports GET_VERSION."
 }

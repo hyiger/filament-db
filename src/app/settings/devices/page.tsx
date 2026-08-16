@@ -117,8 +117,7 @@ export default function DevicesSettingsPage() {
       if (raw.includes("BAMBU_READ_ONLY")) message = t("settings.nfcEraseBambuReadOnly");
       else if (raw.includes("NTAG_SIZE_UNKNOWN")) message = t("settings.nfcNtagSizeUnknown");
       else if (raw.includes("NTAG_PROBE_FAILED")) message = t("settings.nfcNtagProbeFailed");
-      else if (raw.includes("NTAG_UNSUPPORTED")) message = t("settings.nfcNtagUnsupported");
-      else if (raw.includes("NTAG_SIZE_CONFLICT")) message = t("settings.nfcNtagSizeConflict");
+      else if (raw.includes("NTAG_SIZE_AMBIGUOUS")) message = t("settings.nfcNtagSizeAmbiguous");
       setFormatResult({ ok: false, message });
     } finally {
       setFormatting(false);

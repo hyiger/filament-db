@@ -74,43 +74,38 @@ export const NTAG_PHYSICAL_LAST_PAGE: Record<NtagSizeName, number> = {
 /** Outcome of {@link resolveNtagEraseSize}. */
 export type NtagEraseSizeDecision =
   | { ok: true; ndefBytes: number }
-  | { ok: false; error: "size_unknown" | "cc_probe_conflict" };
+  | { ok: false; error: "size_unknown" | "size_ambiguous" };
 
 /**
- * GH #978 — the Erase twin of {@link resolveNtagWriteSize}, and deliberately
- * simpler: Erase REFORMATS, so the existing CC is never an input (a lying CC
- * is exactly what an erase repairs). GET_VERSION stays authoritative when it
- * answers; otherwise the PROBE-derived capacity is used — the service walks
- * the size ladder (216 → 215 → 213) with non-mutating page reads, the same
- * NAK-on-out-of-range behaviour the Write path's hardware-proven brick guard
- * already trusts, just aimed at DERIVING the size instead of validating a
- * pick. A user-declared size was rejected in review (round 2, Codex P1): an
- * UNDERSIZED pick would zero-fill only part of the chip, stamp a smaller CC,
- * and report success with stale bytes left beyond the new extent — probing
- * closes both directions at once and removes the prompt entirely. With
- * neither input, refuse: never guess.
+ * GH #978 — the Erase sizing decision, at its FIXED POINT (round 8).
+ *
+ * Every acceptance must be backed by a PROOF:
+ *   - GET_VERSION's answer (authoritative; auth protection cannot fake it);
+ *   - or reads covering the FULL NTAG216 extent (a successful read proves
+ *     pages exist — auth cannot fake that either).
+ *
+ * Anything else is refused as AMBIGUOUS, and this is not conservatism but
+ * an information-theoretic limit the review converged on across four
+ * rounds: any sub-216 probe conclusion requires at least one NAK, a NAK is
+ * indistinguishable from a password-protected in-range page at the PC/SC
+ * layer, and every heuristic tie-breaker fell — the user-pick undersized
+ * (r2), blanket NAK-demotion undersized on transport blips (r4), user-
+ * extent probes misread config tails (r6), and the CC cross-check broke in
+ * BOTH directions (r7: a protected 216 carries an 872 CC; a protected AND
+ * mis-formatted 216 carries a small one). So: a full-extent read proof or
+ * nothing. On a GET_VERSION-dead reader, NTAG216 tags erase hands-free;
+ * smaller-or-protected tags refuse with the Write path (which sizes
+ * explicitly and rewrites the CC) named as the recovery.
  */
 export function resolveNtagEraseSize(opts: {
   verSize: number | null;
-  probedBytes: number | null;
-  /** NDEF byte capacity the tag's OWN capability container claims (0 when
-   *  blank/none). Read from the same head the guards already validated. */
-  ccBytes: number;
+  /** Probe-proven byte capacity — the service reports it ONLY when reads
+   *  covered the full NTAG216 extent (no NAK involved); null otherwise. */
+  provenBytes: number | null;
 }): NtagEraseSizeDecision {
   if (opts.verSize != null) return { ok: true, ndefBytes: opts.verSize };
-  if (opts.probedBytes == null) return { ok: false, error: "size_unknown" };
-  // Round 7 (Codex P1) — the read/NAK asymmetry: a SUCCESSFUL read proves
-  // pages exist, but a NAK is ambiguous — absent page OR password-protected
-  // page (PROT=1 with AUTH0 between rungs), and PC/SC readers don't
-  // reliably distinguish the two SWs. So NAK-derived DOWN-sizing is only
-  // trusted when the tag's own CC agrees: a protected NTAG216 whose page-227
-  // probe auth-NAKs still carries its 872-byte CC, and probed(496) < cc(872)
-  // exposes the conflict — refuse, nothing written. The restore direction
-  // stays trusted: probed > cc means reads PROVED the pages exist (auth
-  // cannot fake a successful read), which is exactly the mis-formatted-
-  // small tag this feature repairs.
-  if (opts.probedBytes < opts.ccBytes) return { ok: false, error: "cc_probe_conflict" };
-  return { ok: true, ndefBytes: opts.probedBytes };
+  if (opts.provenBytes != null) return { ok: true, ndefBytes: opts.provenBytes };
+  return { ok: false, error: "size_ambiguous" };
 }
 
 /** Outcome of {@link resolveNtagWriteSize}. */

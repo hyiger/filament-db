@@ -930,74 +930,33 @@ export class NfcService extends EventEmitter {
    * path keeps a wrong guess from ever corrupting a smaller chip.
    */
   /**
-   * GH #978: derive an NTAG's NDEF capacity by PROBING, for GET_VERSION-dead
-   * readers (ACR1552U). Non-mutating FF B0 page reads at each size's top
-   * page, descending 216 → 215 → 213; a chip NAKs reads past its physical
-   * end (the same behaviour the write path's brick guard is built on, proven
-   * on the ACR1552U), so the first size whose top page reads is the chip's
-   * size. The 213 rung is PROBED TOO, not assumed (round 5, Codex P1): an
-   * NTAG210/212 passes the NXP head guard while GET_VERSION's parser
-   * deliberately returns null for it. Every rung probes its PHYSICAL last
-   * page (config tail — NTAG_PHYSICAL_LAST_PAGE), not its user extent
-   * (round 6): a smaller chip keeps its own dynamic-lock/config pages
-   * readable right after user memory, so a user-extent probe still
-   * succeeded on an NTAG212. A definitive NAK at the 213 rung refuses the
-   * erase (NTAG_UNSUPPORTED, nothing written). Only a
-   * DEFINITIVE chip NAK (an SW error — the chip answered) demotes or
-   * refuses; transport failures retry ×3 then FAIL CLOSED
-   * (NTAG_PROBE_FAILED, nothing written). The residual mis-size therefore
-   * requires a chip that returns a definitive NAK for a genuinely IN-RANGE
-   * page — not a reader blip.
+   * GH #978 (round 8 — the fixed point): PROVE the full NTAG216 extent by
+   * reading its physical tail (page 227–230, config included), or report
+   * nothing. A successful read is a proof auth protection cannot fake; a
+   * NAK is ambiguous (absent page vs password-protected page — the PC/SC
+   * SWs don't distinguish them), so NO downward conclusion is ever drawn
+   * from one. Transport failures retry ×3 then fail closed
+   * (NTAG_PROBE_FAILED). Returns the 872-byte capacity on proof, null on a
+   * definitive NAK — the caller refuses as ambiguous.
    */
-  private async probeNtagCapacity(protocol: number): Promise<number> {
-    for (const size of ["NTAG216", "NTAG215", "NTAG213"] as const) {
-      const bytes = NTAG_NAME_TO_NDEF_BYTES[size];
-      // PHYSICAL tail, not user extent (round 6, Codex P1): an NTAG212's
-      // dynamic-lock/config pages 36–39 read fine, so a user-extent probe
-      // at the 213 rung misclassified it and the erase zero-filled its
-      // config pages. The physical last page (config tail) is past a
-      // smaller chip's end entirely — see NTAG_PHYSICAL_LAST_PAGE.
-      const probeStart = Math.max(4, NTAG_PHYSICAL_LAST_PAGE[size] - 3);
-      // Round 4 (Codex P1): only a DEFINITIVE chip answer may demote a rung.
-      // readNtagBurst has two failure shapes — an SW error ("NTAG read page
-      // N failed: SW=…"), which means the chip ANSWERED and NAK'd the
-      // out-of-range read, and a transport throw from transmit(), which
-      // proves nothing about the chip. Treating every exception as
-      // "smaller" let a transient transmit blip classify a real 216 as a
-      // 215: the erase then stamped the smaller CC, wiped the shortened
-      // extent, and reported success with old data left beyond it. A
-      // transport failure is retried; if it persists the erase FAILS CLOSED
-      // with nothing written.
-      for (let attempt = 1; ; attempt++) {
-        try {
-          await this.readNtagBurst(protocol, probeStart);
-          return bytes;
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
-          if (definitiveNak) {
-            if (size === "NTAG213") {
-              // Below the smallest supported chip (an NTAG210/212 passes the
-              // NXP head guard but NAKs page 39): refuse, nothing written.
-              throw new Error(
-                "NTAG_UNSUPPORTED: This tag is smaller than an NTAG213 (NTAG210/212 are not " +
-                  "supported) — nothing was erased.",
-              );
-            }
-            break; // the chip answered: smaller than this rung
-          }
-          if (attempt >= 3) {
-            throw new Error(
-              "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept failing " +
-                "mid-probe, so nothing was erased. Re-seat the tag and try again.",
-            );
-          }
+  private async proveFullNtag216(protocol: number): Promise<number | null> {
+    const probeStart = Math.max(4, NTAG_PHYSICAL_LAST_PAGE.NTAG216 - 3);
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await this.readNtagBurst(protocol, probeStart);
+        return NTAG_NAME_TO_NDEF_BYTES.NTAG216;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
+        if (definitiveNak) return null;
+        if (attempt >= 3) {
+          throw new Error(
+            "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept failing " +
+              "mid-probe, so nothing was erased. Re-seat the tag and try again.",
+          );
         }
       }
     }
-    // Unreachable: the 213 rung either returned or threw above. Kept for
-    // the type system and as a fail-safe floor.
-    return NTAG_NAME_TO_NDEF_BYTES.NTAG213;
   }
 
   private async getNtagNdefBytesViaGetVersion(protocol: number): Promise<number | null> {
@@ -1595,29 +1554,15 @@ export class NfcService extends EventEmitter {
       // relies on: the byte-0 NXP guard (detectType2Head), the CC 0xE1/0x00
       // guard above, and the writeNtagPage [3,255] bound. Deliberate,
       // signed-off posture change from GET_VERSION-only fail-closed.
-      const probedBytes = verSize == null ? await this.probeNtagCapacity(protocol) : null;
-      // ccBytes: what the tag's own CC claims (same clamp as the write
-      // resolver) — the cross-check that catches password-protected tails
-      // (see resolveNtagEraseSize round 7).
-      const ccSizeByte = head[NTAG_CC_OFFSET + 2];
-      const ccBytes = Math.min(
-        Math.max(0, Number.isFinite(ccSizeByte) ? Math.trunc(ccSizeByte) : 0) * 8,
-        NTAG216_MAX_NDEF_BYTES,
-      );
-      const sizing = resolveNtagEraseSize({ verSize, probedBytes, ccBytes });
+      const provenBytes = verSize == null ? await this.proveFullNtag216(protocol) : null;
+      const sizing = resolveNtagEraseSize({ verSize, provenBytes });
       if (!sizing.ok) {
-        if (sizing.error === "cc_probe_conflict") {
-          throw new Error(
-            "NTAG_SIZE_CONFLICT: The tag's capability container claims more capacity than " +
-              "answered reads — it may be password-protected. Nothing was erased.",
-          );
-        }
-        // Unreachable in practice — detectType2Head already proved the head
-        // reads, so the probe always resolves at least the 213 floor. Kept
-        // for the resolver's refuse arm; honest message, no false remedies.
         throw new Error(
-          "NTAG_SIZE_UNKNOWN: Couldn't determine this NTAG's size — nothing was erased. " +
-            "Re-seat the tag and try again.",
+          "NTAG_SIZE_AMBIGUOUS: This reader can't size the tag (GET_VERSION refused), and " +
+            "reads prove it is not a full NTAG216 — it is either a smaller NTAG or " +
+            "password-protected, which are indistinguishable here. Nothing was erased. " +
+            "Use Write NFC (which sizes the tag explicitly), or a reader that supports " +
+            "GET_VERSION.",
         );
       }
       // Resolved capacity drives BOTH the rewritten CC and the zero-fill.
