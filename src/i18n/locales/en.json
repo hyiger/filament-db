@@ -1711,7 +1711,7 @@
   "settings.nfcReadOnlyBambu": "Bambu Lab tags are already read-only and can't be changed.",
   "settings.nfcReadOnlyNotFormatted": "This tag has no OpenPrintTag data to lock yet — write a filament to it first.",
   "settings.nfcReadOnlyNtagUnsupported": "Read-only isn't available for OpenTag3D/NTAG tags — their capability container is one-time-programmable, so it can't be undone. Read-only works on OpenPrintTag (SLIX2) tags.",
-  "settings.nfcNtagSizeUnknown": "Couldn't determine the NTAG's size. Try an NTAG 213, 215, or 216, or pre-format the tag.",
+  "settings.nfcNtagSizeUnknown": "Couldn't determine the NTAG's size, so nothing was erased. Pick the tag type (NTAG213/215/216) when prompted to erase it.",
   "settings.nfcLoadedTag": "Loaded tag:",
   "settings.nfcLoadedBambu": "Bambu (read-only)",
   "settings.nfcLoadedNtagOpenTag3d": "NTAG · OpenTag3D",
@@ -1833,5 +1833,6 @@
   "health.dep.ownSpools": "own spools",
   "health.dep.printHistoryJobs": "print jobs",
   "health.dep.amsSlots": "AMS slots",
-  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards."
+  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
+  "settings.nfcEraseSizePrompt.body": "The reader couldn't determine this tag's size, so the erase needs the type printed on the tag. Choosing a larger size than the actual chip is refused by a safety probe before anything is written."
 }

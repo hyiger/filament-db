@@ -5,6 +5,7 @@ import {
   resolveNtagWriteSize,
   NTAG_STORAGE_SIZE_TO_NDEF_BYTES,
   NTAG_NAME_TO_NDEF_BYTES,
+  resolveNtagEraseSize,
 } from "@/lib/ntagVersion";
 
 /**
@@ -182,5 +183,28 @@ describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
     // formatted + neither, CC 255 → min(872 ceiling, 144) = 144.
     expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 255, verSize: null, hintBytes: null }))
       .toEqual({ ok: true, ndefBytes: 144, needsFormat: false });
+  });
+});
+
+describe("resolveNtagEraseSize (GH #978)", () => {
+  it("GET_VERSION is authoritative when it answers", () => {
+    expect(resolveNtagEraseSize({ verSize: 496, hintBytes: 144 })).toEqual({
+      ok: true,
+      ndefBytes: 496,
+    });
+  });
+
+  it("falls back to the user-declared size on a GET_VERSION-dead reader", () => {
+    expect(resolveNtagEraseSize({ verSize: null, hintBytes: 872 })).toEqual({
+      ok: true,
+      ndefBytes: 872,
+    });
+  });
+
+  it("refuses with size_unknown when neither is available — never guesses", () => {
+    expect(resolveNtagEraseSize({ verSize: null, hintBytes: null })).toEqual({
+      ok: false,
+      error: "size_unknown",
+    });
   });
 });

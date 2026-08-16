@@ -9,6 +9,8 @@ import LabelPrinterSettings from "@/components/LabelPrinterSettings";
 import TsplPrinterSettings from "@/components/TsplPrinterSettings";
 import LabelFormatEditor from "@/components/LabelFormatEditor";
 import { useNtagDefaultSize, type NtagDefaultSize } from "@/hooks/useNtagDefaultSize";
+import NtagSizePromptDialog from "@/components/NtagSizePromptDialog";
+import type { NtagSizeName } from "@/lib/ntagVersion";
 
 export default function DevicesSettingsPage() {
   const { t } = useTranslation();
@@ -99,20 +101,35 @@ export default function DevicesSettingsPage() {
 
   const showFormatConfirmVisible = showFormatConfirm && nfcStatus.tagPresent;
 
-  const handleFormat = async () => {
+  const [eraseSizePromptOpen, setEraseSizePromptOpen] = useState(false);
+
+  // GH #978: retry-on-error size flow. The first attempt sends the remembered
+  // default (when concrete); on an NTAG_SIZE_UNKNOWN refusal with no explicit
+  // size — a GET_VERSION-dead reader like the ACR1552U — the size picker
+  // opens and the erase retries once with the pick. Try-then-prompt on
+  // purpose: it never prompts when GET_VERSION actually works, and it is
+  // robust to a stale best-effort `detected` state.
+  const handleFormat = async (ntagSizeOverride?: NtagSizeName) => {
     setShowFormatConfirm(false);
     setFormatting(true);
     setFormatResult(null);
+    const sizeArg =
+      ntagSizeOverride ?? (ntagDefaultSize !== "ask" ? ntagDefaultSize : undefined);
     try {
       if (!window.electronAPI?.nfcFormatTag) {
         throw new Error("NFC format not available — restart the app to load updated NFC support");
       }
-      await window.electronAPI.nfcFormatTag();
+      await window.electronAPI.nfcFormatTag(sizeArg);
       notifyTagErased();
       setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
       refreshDetected(); // tag is now blank — update the loaded-tag label (#927)
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
+      if (raw.includes("NTAG_SIZE_UNKNOWN") && sizeArg == null) {
+        // The reader can't size the chip and no size was declared — ask.
+        setEraseSizePromptOpen(true);
+        return; // formatting state cleared in finally; result set on retry
+      }
       let message = raw;
       if (raw.includes("BAMBU_READ_ONLY")) message = t("settings.nfcEraseBambuReadOnly");
       else if (raw.includes("NTAG_SIZE_UNKNOWN")) message = t("settings.nfcNtagSizeUnknown");
@@ -181,7 +198,7 @@ export default function DevicesSettingsPage() {
                 <p className="text-sm text-yellow-800 dark:text-yellow-300 mb-3">{t("settings.eraseConfirm")}</p>
                 <div className="flex gap-2 items-center">
                   <button
-                    onClick={handleFormat}
+                    onClick={() => handleFormat()}
                     disabled={formatting}
                     className="px-4 py-1.5 bg-yellow-700 text-white rounded text-sm hover:bg-yellow-600 disabled:opacity-50 transition-colors"
                   >
@@ -284,6 +301,17 @@ export default function DevicesSettingsPage() {
           <LabelFormatEditor />
         </div>
       </div>
+      {eraseSizePromptOpen && (
+        <NtagSizePromptDialog
+          body={t("settings.nfcEraseSizePrompt.body")}
+          onCancel={() => setEraseSizePromptOpen(false)}
+          onPick={(size, remember) => {
+            setEraseSizePromptOpen(false);
+            if (remember) setNtagDefaultSize(size);
+            void handleFormat(size);
+          }}
+        />
+      )}
     </main>
   );
 }

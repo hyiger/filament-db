@@ -54,6 +54,30 @@ export const NTAG216_MAX_NDEF_BYTES = 872;
  *  lock/config pages sit above its 144-byte user area). */
 export const NTAG213_NDEF_BYTES = 144;
 
+/** Outcome of {@link resolveNtagEraseSize}. */
+export type NtagEraseSizeDecision =
+  | { ok: true; ndefBytes: number }
+  | { ok: false; error: "size_unknown" };
+
+/**
+ * GH #978 — the Erase twin of {@link resolveNtagWriteSize}, and deliberately
+ * simpler: Erase REFORMATS, so the existing CC is never an input (a lying CC
+ * is exactly what an erase repairs). GET_VERSION stays authoritative when it
+ * answers (restores a mis-formatted tag to its true size); otherwise the
+ * user-declared size is used — the #973 posture the Write path adopted, with
+ * the same brick-guard probe validating the pick before anything is written.
+ * With neither, refuse: never guess a size that could run the zero-fill off
+ * a smaller chip's end.
+ */
+export function resolveNtagEraseSize(opts: {
+  verSize: number | null;
+  hintBytes: number | null;
+}): NtagEraseSizeDecision {
+  const resolved = opts.verSize ?? opts.hintBytes;
+  if (resolved == null) return { ok: false, error: "size_unknown" };
+  return { ok: true, ndefBytes: resolved };
+}
+
 /** Outcome of {@link resolveNtagWriteSize}. */
 export type NtagWriteSizeDecision =
   | { ok: true; ndefBytes: number; needsFormat: boolean }

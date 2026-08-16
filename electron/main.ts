@@ -1337,10 +1337,18 @@ ipcMain.handle("nfc-write-tag", async (event, payload: number[], standard?: unkn
   return { success: true };
 });
 
-ipcMain.handle("nfc-format-tag", async (event) => {
+ipcMain.handle("nfc-format-tag", async (event, ntagSize?: unknown) => {
   assertTrustedSender(event, "nfc-format-tag");
   if (!nfcService) throw new Error("NFC not initialized");
-  await withIpcTimeout((signal) => nfcService!.formatTag(signal), "nfc-format-tag");
+  // GH #978: optional user-declared NTAG size for GET_VERSION-dead readers —
+  // same validation as nfc-write-tag's ntagSize argument.
+  if (ntagSize !== undefined && !isNtagSizeName(ntagSize)) {
+    throw new Error("nfc-format-tag: ntagSize must be one of NTAG213/NTAG215/NTAG216");
+  }
+  await withIpcTimeout(
+    (signal) => nfcService!.formatTag({ ntagSize: ntagSize as NtagSizeName | undefined }, signal),
+    "nfc-format-tag",
+  );
   return { success: true };
 });
 
