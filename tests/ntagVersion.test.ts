@@ -189,21 +189,45 @@ describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
 
 describe("resolveNtagEraseSize (GH #978)", () => {
   it("GET_VERSION is authoritative when it answers", () => {
-    expect(resolveNtagEraseSize({ verSize: 496, probedBytes: 144 })).toEqual({
+    expect(resolveNtagEraseSize({ verSize: 496, probedBytes: 144, ccBytes: 872 })).toEqual({
       ok: true,
       ndefBytes: 496,
     });
   });
 
   it("falls back to the probe-derived capacity on a GET_VERSION-dead reader", () => {
-    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 872 })).toEqual({
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 872, ccBytes: 872 })).toEqual({
       ok: true,
       ndefBytes: 872,
     });
   });
 
-  it("refuses with size_unknown when neither is available — never guesses", () => {
-    expect(resolveNtagEraseSize({ verSize: null, probedBytes: null })).toEqual({
+  it("trusts a probe LARGER than the CC — reads proved the pages exist (the restore case)", () => {
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 496, ccBytes: 144 })).toEqual({
+      ok: true,
+      ndefBytes: 496,
+    });
+  });
+
+  it("refuses a probe SMALLER than the CC — a NAK is ambiguous (password-protected tail, r7)", () => {
+    // A protected NTAG216: page-227 probe auth-NAKs, page-131 reads → probed
+    // 496 while the tag's own CC claims 872. Downsizing here would wipe a
+    // partial extent and report success with stale protected data behind it.
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 496, ccBytes: 872 })).toEqual({
+      ok: false,
+      error: "cc_probe_conflict",
+    });
+  });
+
+  it("a blank CC (0) never conflicts", () => {
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: 144, ccBytes: 0 })).toEqual({
+      ok: true,
+      ndefBytes: 144,
+    });
+  });
+
+  it("refuses with size_unknown when neither source is available — never guesses", () => {
+    expect(resolveNtagEraseSize({ verSize: null, probedBytes: null, ccBytes: 872 })).toEqual({
       ok: false,
       error: "size_unknown",
     });

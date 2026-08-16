@@ -1835,5 +1835,6 @@
   "health.dep.amsSlots": "AMS-Slots",
   "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu.",
   "settings.nfcNtagProbeFailed": "Die Größe des Tags konnte nicht überprüft werden — der Leser schlug während der Prüfung wiederholt fehl; es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
-  "settings.nfcNtagUnsupported": "Dieser Tag ist kleiner als ein NTAG213 (NTAG210/212 werden nicht unterstützt) — es wurde nichts gelöscht."
+  "settings.nfcNtagUnsupported": "Dieser Tag ist kleiner als ein NTAG213 (NTAG210/212 werden nicht unterstützt) — es wurde nichts gelöscht.",
+  "settings.nfcNtagSizeConflict": "Der Capability Container des Tags meldet mehr Kapazität, als Lesezugriffe bestätigten — er ist möglicherweise passwortgeschützt. Es wurde nichts gelöscht."
 }

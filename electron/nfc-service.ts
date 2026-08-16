@@ -31,6 +31,7 @@ import {
   resolveNtagEraseSize,
   NTAG_NAME_TO_NDEF_BYTES,
   NTAG_PHYSICAL_LAST_PAGE,
+  NTAG216_MAX_NDEF_BYTES,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
 import {
@@ -1595,8 +1596,22 @@ export class NfcService extends EventEmitter {
       // guard above, and the writeNtagPage [3,255] bound. Deliberate,
       // signed-off posture change from GET_VERSION-only fail-closed.
       const probedBytes = verSize == null ? await this.probeNtagCapacity(protocol) : null;
-      const sizing = resolveNtagEraseSize({ verSize, probedBytes });
+      // ccBytes: what the tag's own CC claims (same clamp as the write
+      // resolver) — the cross-check that catches password-protected tails
+      // (see resolveNtagEraseSize round 7).
+      const ccSizeByte = head[NTAG_CC_OFFSET + 2];
+      const ccBytes = Math.min(
+        Math.max(0, Number.isFinite(ccSizeByte) ? Math.trunc(ccSizeByte) : 0) * 8,
+        NTAG216_MAX_NDEF_BYTES,
+      );
+      const sizing = resolveNtagEraseSize({ verSize, probedBytes, ccBytes });
       if (!sizing.ok) {
+        if (sizing.error === "cc_probe_conflict") {
+          throw new Error(
+            "NTAG_SIZE_CONFLICT: The tag's capability container claims more capacity than " +
+              "answered reads — it may be password-protected. Nothing was erased.",
+          );
+        }
         // Unreachable in practice — detectType2Head already proved the head
         // reads, so the probe always resolves at least the 213 floor. Kept
         // for the resolver's refuse arm; honest message, no false remedies.

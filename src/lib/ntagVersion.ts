@@ -74,7 +74,7 @@ export const NTAG_PHYSICAL_LAST_PAGE: Record<NtagSizeName, number> = {
 /** Outcome of {@link resolveNtagEraseSize}. */
 export type NtagEraseSizeDecision =
   | { ok: true; ndefBytes: number }
-  | { ok: false; error: "size_unknown" };
+  | { ok: false; error: "size_unknown" | "cc_probe_conflict" };
 
 /**
  * GH #978 — the Erase twin of {@link resolveNtagWriteSize}, and deliberately
@@ -93,10 +93,24 @@ export type NtagEraseSizeDecision =
 export function resolveNtagEraseSize(opts: {
   verSize: number | null;
   probedBytes: number | null;
+  /** NDEF byte capacity the tag's OWN capability container claims (0 when
+   *  blank/none). Read from the same head the guards already validated. */
+  ccBytes: number;
 }): NtagEraseSizeDecision {
-  const resolved = opts.verSize ?? opts.probedBytes;
-  if (resolved == null) return { ok: false, error: "size_unknown" };
-  return { ok: true, ndefBytes: resolved };
+  if (opts.verSize != null) return { ok: true, ndefBytes: opts.verSize };
+  if (opts.probedBytes == null) return { ok: false, error: "size_unknown" };
+  // Round 7 (Codex P1) — the read/NAK asymmetry: a SUCCESSFUL read proves
+  // pages exist, but a NAK is ambiguous — absent page OR password-protected
+  // page (PROT=1 with AUTH0 between rungs), and PC/SC readers don't
+  // reliably distinguish the two SWs. So NAK-derived DOWN-sizing is only
+  // trusted when the tag's own CC agrees: a protected NTAG216 whose page-227
+  // probe auth-NAKs still carries its 872-byte CC, and probed(496) < cc(872)
+  // exposes the conflict — refuse, nothing written. The restore direction
+  // stays trusted: probed > cc means reads PROVED the pages exist (auth
+  // cannot fake a successful read), which is exactly the mis-formatted-
+  // small tag this feature repairs.
+  if (opts.probedBytes < opts.ccBytes) return { ok: false, error: "cc_probe_conflict" };
+  return { ok: true, ndefBytes: opts.probedBytes };
 }
 
 /** Outcome of {@link resolveNtagWriteSize}. */
