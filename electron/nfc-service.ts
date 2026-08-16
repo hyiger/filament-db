@@ -30,6 +30,7 @@ import {
   resolveNtagWriteSize,
   resolveNtagEraseSize,
   NTAG_NAME_TO_NDEF_BYTES,
+  NTAG_PHYSICAL_LAST_PAGE,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
 import {
@@ -935,9 +936,12 @@ export class NfcService extends EventEmitter {
    * on the ACR1552U), so the first size whose top page reads is the chip's
    * size. The 213 rung is PROBED TOO, not assumed (round 5, Codex P1): an
    * NTAG210/212 passes the NXP head guard while GET_VERSION's parser
-   * deliberately returns null for it, and an assumed 144-byte floor would
-   * write past its user extent — a definitive NAK at the 213 rung refuses
-   * the erase instead (NTAG_UNSUPPORTED, nothing written). Only a
+   * deliberately returns null for it. Every rung probes its PHYSICAL last
+   * page (config tail — NTAG_PHYSICAL_LAST_PAGE), not its user extent
+   * (round 6): a smaller chip keeps its own dynamic-lock/config pages
+   * readable right after user memory, so a user-extent probe still
+   * succeeded on an NTAG212. A definitive NAK at the 213 rung refuses the
+   * erase (NTAG_UNSUPPORTED, nothing written). Only a
    * DEFINITIVE chip NAK (an SW error — the chip answered) demotes or
    * refuses; transport failures retry ×3 then FAIL CLOSED
    * (NTAG_PROBE_FAILED, nothing written). The residual mis-size therefore
@@ -945,13 +949,14 @@ export class NfcService extends EventEmitter {
    * page — not a reader blip.
    */
   private async probeNtagCapacity(protocol: number): Promise<number> {
-    for (const bytes of [
-      NTAG_NAME_TO_NDEF_BYTES.NTAG216,
-      NTAG_NAME_TO_NDEF_BYTES.NTAG215,
-      NTAG_NAME_TO_NDEF_BYTES.NTAG213,
-    ]) {
-      const topPage = 4 + Math.ceil(bytes / 4) - 1;
-      const probeStart = Math.max(4, topPage - 3);
+    for (const size of ["NTAG216", "NTAG215", "NTAG213"] as const) {
+      const bytes = NTAG_NAME_TO_NDEF_BYTES[size];
+      // PHYSICAL tail, not user extent (round 6, Codex P1): an NTAG212's
+      // dynamic-lock/config pages 36–39 read fine, so a user-extent probe
+      // at the 213 rung misclassified it and the erase zero-filled its
+      // config pages. The physical last page (config tail) is past a
+      // smaller chip's end entirely — see NTAG_PHYSICAL_LAST_PAGE.
+      const probeStart = Math.max(4, NTAG_PHYSICAL_LAST_PAGE[size] - 3);
       // Round 4 (Codex P1): only a DEFINITIVE chip answer may demote a rung.
       // readNtagBurst has two failure shapes — an SW error ("NTAG read page
       // N failed: SW=…"), which means the chip ANSWERED and NAK'd the
@@ -970,7 +975,7 @@ export class NfcService extends EventEmitter {
           const msg = err instanceof Error ? err.message : String(err);
           const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
           if (definitiveNak) {
-            if (bytes === NTAG_NAME_TO_NDEF_BYTES.NTAG213) {
+            if (size === "NTAG213") {
               // Below the smallest supported chip (an NTAG210/212 passes the
               // NXP head guard but NAKs page 39): refuse, nothing written.
               throw new Error(

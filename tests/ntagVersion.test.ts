@@ -5,6 +5,7 @@ import {
   resolveNtagWriteSize,
   NTAG_STORAGE_SIZE_TO_NDEF_BYTES,
   NTAG_NAME_TO_NDEF_BYTES,
+  NTAG_PHYSICAL_LAST_PAGE,
   resolveNtagEraseSize,
 } from "@/lib/ntagVersion";
 
@@ -206,5 +207,20 @@ describe("resolveNtagEraseSize (GH #978)", () => {
       ok: false,
       error: "size_unknown",
     });
+  });
+});
+
+describe("NTAG_PHYSICAL_LAST_PAGE (GH #978 r6)", () => {
+  it("each rung's physical tail lies BEYOND the next-smaller chip's extent", () => {
+    // The whole probe discrimination: a smaller chip's readable config tail
+    // must not satisfy a larger rung's probe. Datasheet totals: 45/135/231
+    // pages (0-indexed last page 44/134/230). And the 213 tail (44) is past
+    // the NTAG212's readable extent (its config ends at page 39).
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG213).toBe(44);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG215).toBe(134);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG216).toBe(230);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG213).toBeGreaterThan(39);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG215).toBeGreaterThan(NTAG_PHYSICAL_LAST_PAGE.NTAG213);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG216).toBeGreaterThan(NTAG_PHYSICAL_LAST_PAGE.NTAG215);
   });
 });

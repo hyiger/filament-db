@@ -54,6 +54,23 @@ export const NTAG216_MAX_NDEF_BYTES = 872;
  *  lock/config pages sit above its 144-byte user area). */
 export const NTAG213_NDEF_BYTES = 144;
 
+/**
+ * Physical LAST page of each supported NTAG (datasheet §8.5 memory
+ * organization): user memory, dynamic lock bytes AND config pages included.
+ * The capacity probe reads each rung's physical tail rather than its user
+ * extent (GH #978 round 6, Codex P1): smaller chips keep their own
+ * dynamic-lock/config pages READABLE right after user memory — an NTAG212's
+ * pages 36–39 read fine, so a user-extent probe at the NTAG213 rung
+ * misclassified it as a 213 and the erase zero-filled its config pages. The
+ * physical tail is past the smaller chip's end entirely, so it NAKs there.
+ * Reads of config pages on the true chip are non-mutating and unrestricted.
+ */
+export const NTAG_PHYSICAL_LAST_PAGE: Record<NtagSizeName, number> = {
+  NTAG213: 44,
+  NTAG215: 134,
+  NTAG216: 230,
+};
+
 /** Outcome of {@link resolveNtagEraseSize}. */
 export type NtagEraseSizeDecision =
   | { ok: true; ndefBytes: number }
