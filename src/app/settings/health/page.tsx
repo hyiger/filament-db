@@ -128,16 +128,26 @@ export default function DataHealthPage() {
     // whenever a cycle finishes. `lastSyncAt` changing is exactly that
     // signal; progress ticks during a cycle carry the same value and are
     // ignored, so this cannot loop.
+    // `seenInitial` is a SEPARATE flag, not `lastSeenSync === null`
+    // (Codex P2): null is a legitimate stamp — the app mounts mid-initial-
+    // sync, or after connection failures, with lastSyncAt still null — and
+    // conflating "unset" with "null" made the first REAL completion look
+    // like the mount snapshot, so its refetch was skipped.
+    let seenInitial = false;
     let lastSeenSync: string | null = null;
     const apply = (st: { nameConflicts?: typeof syncConflicts; lastSyncAt?: string | null }) => {
       if (cancelled) return;
       setSyncConflicts(st.nameConflicts ?? []);
       const stamp = st.lastSyncAt ?? null;
-      if (stamp && stamp !== lastSeenSync) {
-        const first = lastSeenSync === null;
+      if (!seenInitial) {
+        // The mount snapshot itself — record it, refetch nothing.
+        seenInitial = true;
         lastSeenSync = stamp;
-        // Skip the very first observation: that IS the mount snapshot.
-        if (!first) void load();
+        return;
+      }
+      if (stamp !== lastSeenSync) {
+        lastSeenSync = stamp;
+        void load();
       }
     };
     (async () => {
