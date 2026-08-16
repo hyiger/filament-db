@@ -212,7 +212,7 @@ export function parseIniValueList(value: string): string[] {
   return out;
 }
 
-export function serializeIniValueList(values: readonly string[]): string {
+export function serializeIniValueList(values: readonly unknown[]): string {
   // Round 12 (Codex P2): EVERY element is quoted, unconditionally — this
   // makes an emitted list SELF-DESCRIBING. A scalar's canonical wire form
   // escapes interior quotes (\"), so an unescaped `";"` separator between
@@ -221,7 +221,14 @@ export function serializeIniValueList(values: readonly string[]): string {
   // is indistinguishable from a scalar that legitimately CONTAINS a
   // semicolon (filament_vendor = ACME;Labs) — re-importing that mangled
   // the vendor to its first "element".
-  return values.map((el) => `"${escapeIniValueContent(el)}"`).join(";");
+  // Round 15 (Codex P2): elements are String-coerced HERE, at the single
+  // enforcement point. The bag is a Mixed field — the generic create/PUT
+  // API and slicer syncs can legitimately store [1, 2] — and passing a
+  // number to the string-only escapeIniValueContent threw
+  // "el.replace is not a function", 500ing both PrusaSlicer export routes.
+  // The singleton and Orca paths already coerce; this makes it universal
+  // so no caller can reintroduce the crash.
+  return values.map((el) => `"${escapeIniValueContent(String(el))}"`).join(";");
 }
 
 /**

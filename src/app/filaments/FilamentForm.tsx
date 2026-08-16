@@ -238,9 +238,11 @@ function getSettingVal(data: Record<string, unknown> | undefined, key: string): 
   // field (compatible_printers) seeds via getSettingListVal instead. The
   // SAME derivation feeds the unedited-restore pass, so an untouched
   // multi-value field maps back to its stored array on save.
-  if (Array.isArray(val)) return val[0] ?? "";
+  // Round 15: String-coerce — the Mixed bag can hold non-strings, and the
+  // declared string type would otherwise be a lie feeding form state.
+  if (Array.isArray(val)) return val[0] == null ? "" : String(val[0]);
   if (!val || val === "nil") return "";
-  return val;
+  return String(val);
 }
 
 /** GH #678: the LIST field's display — semicolon-joined, split back on save.
@@ -250,9 +252,9 @@ function getSettingListVal(data: Record<string, unknown> | undefined, key: strin
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
   const val = settings[key];
-  if (Array.isArray(val)) return val.join(";");
+  if (Array.isArray(val)) return val.map((el) => String(el)).join(";");
   if (!val || val === "nil") return "";
-  return val;
+  return String(val);
 }
 
 function extractPressureAdvance(data: Record<string, unknown> | undefined): string {

@@ -674,6 +674,14 @@ describe("serializeIniValueList (GH #678)", () => {
     expect(serializeIniValueList([""])).toBe('""');
   });
 
+  it("String-coerces non-string elements — the Mixed bag can hold numbers (r15)", () => {
+    // The generic create/PUT API and slicer syncs can store [1, 2]; passing
+    // a number to the string-only escaper threw and 500ed both PrusaSlicer
+    // export routes.
+    expect(serializeIniValueList([1, 2] as unknown as string[])).toBe('"1";"2"');
+    expect(serializeIniValueList([true, null] as unknown as string[])).toBe('"true";"null"');
+  });
+
   it("escapes newlines inside an element so the line cannot split", () => {
     expect(serializeIniValueList(["a\nb"])).toBe('"a\\nb"');
   });

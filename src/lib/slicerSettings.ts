@@ -84,7 +84,11 @@ export function settingValuesEqual(a: unknown, b: unknown): boolean {
 
 export function settingFlagIsOn(value: unknown): boolean {
   const scalar = Array.isArray(value) ? value[0] : value;
-  return scalar === "1";
+  // Round 15: String-coerce for parity with pre-#678's unwrap(), which did
+  // String(value[0]) — the Mixed bag can hold a numeric 1 from the generic
+  // API, and a bare === "1" would read it as OFF where the old collapse
+  // read it as ON.
+  return scalar == null ? false : String(scalar) === "1";
 }
 
 export const NEVER_BAGGED_KEYS = new Set([

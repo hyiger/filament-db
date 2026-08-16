@@ -404,6 +404,12 @@ describe("settingFlagIsOn (GH #678 r4)", () => {
     expect(settingFlagIsOn("nil")).toBe(false);
   });
 
+  it("String-coerces — a numeric 1 from the Mixed bag reads ON, as pre-#678 did (r15)", () => {
+    expect(settingFlagIsOn([1, 0] as unknown[])).toBe(true);
+    expect(settingFlagIsOn(1 as unknown)).toBe(true);
+    expect(settingFlagIsOn([0] as unknown[])).toBe(false);
+  });
+
   it("derives a multi-element array from its FIRST element — the pre-#678 read", () => {
     expect(settingFlagIsOn(["1", "1"])).toBe(true);
     expect(settingFlagIsOn(["1", "0"])).toBe(true);
