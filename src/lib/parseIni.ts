@@ -213,9 +213,25 @@ export function parseIniValueList(value: string): string[] {
 }
 
 export function serializeIniValueList(values: readonly string[]): string {
-  return values
-    .map((el) => (el === "" || /[\s;"\\]/.test(el) ? `"${escapeIniValueContent(el)}"` : el))
-    .join(";");
+  // Round 12 (Codex P2): EVERY element is quoted, unconditionally — this
+  // makes an emitted list SELF-DESCRIBING. A scalar's canonical wire form
+  // escapes interior quotes (\"), so an unescaped `";"` separator between
+  // quoted elements cannot occur inside one, and the strict all-quoted
+  // grammar below is unambiguous. Conditional quoting emitted `1;0`, which
+  // is indistinguishable from a scalar that legitimately CONTAINS a
+  // semicolon (filament_vendor = ACME;Labs) — re-importing that mangled
+  // the vendor to its first "element".
+  return values.map((el) => `"${escapeIniValueContent(el)}"`).join(";");
+}
+
+/**
+ * Does a value match the strict SELF-DESCRIBING list grammar our exporter
+ * emits — two or more fully-quoted elements joined by `;`? Only such values
+ * are list-parsed on generic keys; everything else is scalar content.
+ */
+const QUOTED_LIST_RE = /^"(?:[^"\\]|\\.)*"(?:;"(?:[^"\\]|\\.)*")+$/;
+export function isQuotedIniList(value: string): boolean {
+  return QUOTED_LIST_RE.test(value);
 }
 
 /**
@@ -513,11 +529,18 @@ export function parseIniFilaments(content: string): FilamentData[] {
           value !== "" &&
           !SCALAR_ONLY_INI_KEYS.has(key)
         ) {
-          const els = parseIniValueList(value);
-          if (els.length > 1) {
-            currentSettings[key] = els;
-          } else if (key === "compatible_printers") {
-            currentSettings[key] = els[0] ?? value;
+          // Round 12 (Codex P2): a GENERIC key list-parses ONLY when the
+          // value matches the strict all-quoted grammar our exporter emits
+          // — a bare `ACME;Labs` is scalar content (a vendor with a
+          // semicolon), not a list, and splitting it corrupted the field.
+          // compatible_printers stays allowlisted for the looser top-level
+          // `;` form because PrusaSlicer itself may emit simple unquoted
+          // tokens there, and its values are names, never free text.
+          if (key === "compatible_printers") {
+            const els = parseIniValueList(value);
+            currentSettings[key] = els.length > 1 ? els : (els[0] ?? value);
+          } else if (isQuotedIniList(value)) {
+            currentSettings[key] = parseIniValueList(value);
           } else {
             currentSettings[key] = value;
           }

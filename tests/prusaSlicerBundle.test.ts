@@ -1132,7 +1132,7 @@ describe("generatePrusaSlicerBundle", () => {
       // Single encoding: the raw newline becomes ONE \n escape inside ONE
       // set of quotes. A wrapped-at-ingestion element re-escaped here would
       // read `"\"Line1\\nLine2\""` — wrapper quotes as content.
-      expect(bundle).toContain('compatible_printers = "Line1\\nLine2";Plain');
+      expect(bundle).toContain('compatible_printers = "Line1\\nLine2";"Plain"');
     });
 
     it("leaves scalar bag values untouched next to an array one", () => {
@@ -1146,7 +1146,7 @@ describe("generatePrusaSlicerBundle", () => {
           },
         },
       ]);
-      expect(bundle).toContain("compatible_printers = A;B");
+      expect(bundle).toContain('compatible_printers = "A";"B"');
       expect(bundle).toContain("filament_soluble = 0");
     });
   });

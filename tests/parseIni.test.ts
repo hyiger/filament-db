@@ -653,8 +653,12 @@ describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () =>
 });
 
 describe("serializeIniValueList (GH #678)", () => {
-  it("joins simple tokens with semicolons, unquoted", () => {
-    expect(serializeIniValueList(["A", "B"])).toBe("A;B");
+  it("quotes EVERY element — lists are self-describing (r12)", () => {
+    // Conditional quoting emitted `1;0`, indistinguishable from a scalar
+    // that legitimately contains a semicolon (ACME;Labs) — corrupting it
+    // on re-import. All-quoted is the unambiguous grammar.
+    expect(serializeIniValueList(["A", "B"])).toBe('"A";"B"');
+    expect(serializeIniValueList(["1", "0"])).toBe('"1";"0"');
   });
 
   it("quotes elements containing whitespace — the real compatible_printers shape", () => {
@@ -724,19 +728,32 @@ describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () =
     expect(parsed[0].settings.compatible_printers).toBe("Bambu Lab P1S 0.4 nozzle");
   });
 
-  it("other multi-valued keys invert too — filament_soluble 1;0 becomes an array (r8)", () => {
+  it("other multi-valued keys invert on the STRICT quoted grammar (r8+r12)", () => {
     const ini = [
       "[filament:Flags]",
       "filament_vendor = V",
-      "filament_soluble = 1;0",
-      "filament_retract_length = 0.8;1.2",
+      'filament_soluble = "1";"0"',
+      'filament_retract_length = "0.8";"1.2"',
       "filament_cost = 25.5",
     ].join("\n");
     const parsed = parseIniFilaments(ini);
     expect(parsed[0].settings.filament_soluble).toEqual(["1", "0"]);
     expect(parsed[0].settings.filament_retract_length).toEqual(["0.8", "1.2"]);
-    // A scalar without a top-level semicolon is untouched.
     expect(parsed[0].settings.filament_cost).toBe("25.5");
+  });
+
+  it("a bare semicolon in scalar content is NOT a list — the r12 corruption guard", () => {
+    // The exporter emits scalar values verbatim, so a vendor named
+    // ACME;Labs rides as `filament_vendor = ACME;Labs`. r8's bare-semicolon
+    // inversion split it and the structured extraction kept only "ACME".
+    const ini = [
+      "[filament:SemiVendor]",
+      "filament_vendor = ACME;Labs",
+      "some_note_like = plain;scalar;content",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].vendor).toBe("ACME;Labs");
+    expect(parsed[0].settings.some_note_like).toBe("plain;scalar;content");
   });
 
   it("gcode/notes wire values are NEVER split — semicolons are content (r8)", () => {
