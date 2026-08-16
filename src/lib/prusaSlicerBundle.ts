@@ -20,7 +20,7 @@
  * Filament DB doesn't model (e.g. filament_ramming_parameters, start_filament_gcode).
  */
 
-import { serializeIniValue } from "./parseIni";
+import { serializeIniValue, serializeIniValueList } from "./parseIni";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
@@ -208,7 +208,9 @@ export function collapsePerNozzleImportSections(
   const out: CollapsedFilamentData[] = [];
   const seenGroups = new Set<string>();
   for (const f of filaments) {
-    const hint = (f.settings.filamentdb_nozzle ?? "").trim();
+    // Routing hints are always scalars; a (nonsensical) array here reads as absent.
+    const rawHint = f.settings.filamentdb_nozzle;
+    const hint = typeof rawHint === "string" ? rawHint.trim() : "";
     if (!hint) {
       // Pass through, but never persist routing hints / re-derived keys.
       const settings = { ...f.settings };
@@ -251,7 +253,8 @@ export function collapsePerNozzleImportSections(
       if (!("first_layer_bed_temperature" in f.settings)) delete temps.bedFirstLayer;
       if (Object.keys(temps).length === 0) delete collapsed.temperatures;
       if (!("inherits" in f.settings)) delete collapsed.inherits;
-      const fid = (f.settings.filamentdb_id ?? "").trim();
+      const rawFid = f.settings.filamentdb_id;
+      const fid = typeof rawFid === "string" ? rawFid.trim() : "";
       if (fid) collapsed.filamentdbId = fid; // GH #950: id-first resolution hint
       out.push(collapsed);
       continue;
@@ -260,7 +263,8 @@ export function collapsePerNozzleImportSections(
     const baseName = f.name.endsWith(` ${hint}`)
       ? f.name.slice(0, f.name.length - hint.length - 1).trim()
       : f.name;
-    const id = (f.settings.filamentdb_id ?? "").trim();
+    const rawId = f.settings.filamentdb_id;
+    const id = typeof rawId === "string" ? rawId.trim() : "";
     const groupKey = id ? `id:${id}` : `name:${baseName.toLowerCase()}`;
     if (seenGroups.has(groupKey)) continue; // a sibling already represents the base
     seenGroups.add(groupKey);
@@ -409,10 +413,10 @@ export function filamentToSlicerKeys(
   // set by the fan-out when THIS nozzle's diameter appears in the group with
   // both highFlow states (see perNozzleCondition).
   includeHfTerm = false,
-): Record<string, string | null> {
+): Record<string, string | string[] | null> {
   // Start with the settings bag as the base — these are passthrough
   // PrusaSlicer keys preserved from a previous import
-  const keys: Record<string, string | null> = { ...(filament.settings || {}) };
+  const keys: Record<string, string | string[] | null> = { ...(filament.settings || {}) };
 
   // GH #1021 (Codex P1 ×2 on #1022): legacy machine-derived nozzle conditions
   // (`nozzle_diameter[0]==D [or ...]`, persisted into `settings` by pre-#1021
@@ -585,7 +589,7 @@ export function filamentToSlicerKeys(
 function writeSection(
   lines: string[],
   name: string,
-  keys: Record<string, string | null>,
+  keys: Record<string, string | string[] | null>,
   overrides?: Record<string, string>,
 ) {
   lines.push(`[filament:${name}]`);
@@ -604,6 +608,22 @@ function writeSection(
     if (value === null) {
       // Preserve nil for settings bag values (means "inherit from parent" in PrusaSlicer)
       lines.push(`${key} = nil`);
+    } else if (Array.isArray(value)) {
+      // GH #678: a multi-valued bag entry (compatible_printers et al.) emits
+      // PrusaSlicer's coStrings form. String(value) would comma-join —
+      // which the slicer reads back as ONE value with commas in it.
+      // Round 14 (Codex P2): a SINGLETON array collapses to the scalar
+      // convention — the strict list grammar needs two elements, so an
+      // emitted one-element list would re-import as a quoted wire scalar
+      // and garble the next Orca export. Single-element array ≡ scalar is
+      // the parser convention everywhere else.
+      if (value.length === 0) {
+        lines.push(`${key} = `);
+      } else if (value.length === 1) {
+        lines.push(`${key} = ${serializeIniValue(String(value[0]), key)}`);
+      } else {
+        lines.push(`${key} = ${serializeIniValueList(value)}`);
+      }
     } else if (value !== undefined) {
       // GH #1070: a raw \r/\n inside a bag value would split the emitted
       // `key = value` line — PrusaSlicer rejects the whole bundle over one

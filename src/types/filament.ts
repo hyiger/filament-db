@@ -137,7 +137,7 @@ export interface FilamentDetail {
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;
-  settings: Record<string, string | null>;
+  settings: Record<string, string | string[] | null>;
   _inherited?: string[];
   _variants?: FilamentVariant[];
   /** Light parent summary attached when this filament is a variant. The

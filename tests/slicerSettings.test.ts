@@ -7,6 +7,8 @@ import {
   validateDottedSettingsPaths,
   MAX_SETTINGS_KEYS,
   MAX_SETTING_VALUE_LENGTH,
+  settingFlagIsOn,
+  settingValuesEqual,
 } from "@/lib/slicerSettings";
 
 /**
@@ -390,5 +392,38 @@ describe("validateDottedSettingsPaths (#1072)", () => {
 
   it("treats an undefined dotted value as null in the length check", () => {
     expect(validateDottedSettingsPaths({ "settings.a": undefined }, [])).toBeNull();
+  });
+});
+
+describe("settingFlagIsOn (GH #678 r4)", () => {
+  it("reads scalars as before", () => {
+    expect(settingFlagIsOn("1")).toBe(true);
+    expect(settingFlagIsOn("0")).toBe(false);
+    expect(settingFlagIsOn(null)).toBe(false);
+    expect(settingFlagIsOn(undefined)).toBe(false);
+    expect(settingFlagIsOn("nil")).toBe(false);
+  });
+
+  it("String-coerces — a numeric 1 from the Mixed bag reads ON, as pre-#678 did (r15)", () => {
+    expect(settingFlagIsOn([1, 0] as unknown[])).toBe(true);
+    expect(settingFlagIsOn(1 as unknown)).toBe(true);
+    expect(settingFlagIsOn([0] as unknown[])).toBe(false);
+  });
+
+  it("derives a multi-element array from its FIRST element — the pre-#678 read", () => {
+    expect(settingFlagIsOn(["1", "1"])).toBe(true);
+    expect(settingFlagIsOn(["1", "0"])).toBe(true);
+    expect(settingFlagIsOn(["0", "1"])).toBe(false);
+    expect(settingFlagIsOn([])).toBe(false);
+  });
+});
+
+describe("settingValuesEqual (GH #678 r7)", () => {
+  it("equates arrays element-wise and scalars by identity", () => {
+    expect(settingValuesEqual(["A", "B"], ["A", "B"])).toBe(true);
+    expect(settingValuesEqual(["A", "B"], ["A", "C"])).toBe(false);
+    expect(settingValuesEqual(["A"], "A")).toBe(false);
+    expect(settingValuesEqual("x", "x")).toBe(true);
+    expect(settingValuesEqual(null, null)).toBe(true);
   });
 });

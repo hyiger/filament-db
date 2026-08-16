@@ -27,6 +27,7 @@
  */
 
 import Filament from "@/models/Filament";
+import { settingValuesEqual } from "./slicerSettings";
 import {
   findSurvivorId,
   type MinimalNameCollection,
@@ -178,7 +179,7 @@ function settingsSelfHealUnset(
   for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
     // Only keys the section says should INHERIT (incoming matches parent); a
     // divergent value is written through mergeSettingsDotKeys' $set instead.
-    if (parentSettings[sk] !== sv) continue;
+    if (!settingValuesEqual(parentSettings[sk], sv)) continue; // GH #678 r7: array-aware
     // Clear ANY local override of that key — divergent OR parent-equal — so the
     // variant truly inherits and future parent edits propagate.
     if (Object.prototype.hasOwnProperty.call(variantSettings, sk)) {
