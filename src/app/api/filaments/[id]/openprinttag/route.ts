@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { settingFlagIsOn } from "@/lib/slicerSettings";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
@@ -106,8 +107,8 @@ export async function GET(
       dryingTemperature: resolved.dryingTemperature ?? null,
       dryingTime: resolved.dryingTime ?? null,
       transmissionDistance: resolved.transmissionDistance ?? null,
-      abrasive: resolved.settings?.filament_abrasive === "1",
-      soluble: resolved.settings?.filament_soluble === "1",
+      abrasive: settingFlagIsOn(resolved.settings?.filament_abrasive),
+      soluble: settingFlagIsOn(resolved.settings?.filament_soluble),
       shoreHardnessA: resolved.shoreHardnessA ?? null,
       shoreHardnessD: resolved.shoreHardnessD ?? null,
       optTags: resolved.optTags ?? [],

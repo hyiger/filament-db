@@ -34,6 +34,7 @@ import {
 } from "@/lib/calibrationScope";
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
+import { settingFlagIsOn } from "@/lib/slicerSettings";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -226,18 +227,58 @@ const DEFAULT_FILAMENT_TYPES = [
   "POM", "PP", "HIPS", "PVA", "PET-GF", "PPA", "IGLIDUR",
 ];
 
+/** GH #678 r17: the ONE derivation of what a scalar control shows for an
+ *  array-valued setting — first element, String-coerced (the Mixed bag can
+ *  hold numbers), null/absent as "". `getSettingVal` seeds through it and
+ *  the unedited-restore pass mirrors through it, so the seed and its mirror
+ *  cannot drift apart — they did twice (r9's join mirror, r15's uncoerced
+ *  comparison), each time flattening a stored array on an unrelated save. */
+function displayFirstElement(arr: readonly unknown[]): string {
+  return arr[0] == null ? "" : String(arr[0]);
+}
+
 function getSettingVal(data: Record<string, unknown> | undefined, key: string): string {
   if (!data?.settings) return "";
-  const settings = data.settings as Record<string, string | null>;
+  const settings = data.settings as Record<string, string | string[] | null>;
   const val = settings[key];
+  // GH #678 round 9: an array displays its FIRST element — the pre-#678
+  // read semantics for every scalar control. A ';'-join fed into an
+  // <input type="number"> is sanitized by browsers to an EMPTY control
+  // (Codex P2), hiding the imported value entirely. The one list-shaped
+  // field (compatible_printers) seeds via getSettingListVal instead. The
+  // SAME derivation feeds the unedited-restore pass, so an untouched
+  // multi-value field maps back to its stored array on save.
+  // Round 15: String-coerce — the Mixed bag can hold non-strings, and the
+  // declared string type would otherwise be a lie feeding form state.
+  if (Array.isArray(val)) return displayFirstElement(val);
   if (!val || val === "nil") return "";
-  return val;
+  return String(val);
+}
+
+/** GH #678: the LIST field's display — semicolon-joined, split back on save.
+ *  Only compatible_printers uses this; its seed and dirty-compare must both
+ *  go through it so an unedited list never writes. */
+function getSettingListVal(data: Record<string, unknown> | undefined, key: string): string {
+  if (!data?.settings) return "";
+  const settings = data.settings as Record<string, string | string[] | null>;
+  const val = settings[key];
+  if (Array.isArray(val)) return val.map((el) => String(el)).join(";");
+  if (!val || val === "nil") return "";
+  return String(val);
 }
 
 function extractPressureAdvance(data: Record<string, unknown> | undefined): string {
   if (!data?.settings) return "";
-  const settings = data.settings as Record<string, string | null>;
-  const gcode = settings.start_filament_gcode;
+  const settings = data.settings as Record<string, string | string[] | null>;
+  const raw = settings.start_filament_gcode;
+  // GH #678 rounds 2+11: an array scans its FIRST element only — the same
+  // convention every reader follows (and pre-#678's collapse semantics).
+  // Scanning ALL elements (the round-2 join) derived a PA the textarea
+  // doesn't display: ["", "M572 S0.04"] seeded a blank textarea plus a
+  // populated PA field, and the submit then synthesized a scalar M572 line
+  // that no longer matched the blank first-element seed — the restore pass
+  // read it as edited and the per-extruder array was lost on any save.
+  const gcode = Array.isArray(raw) ? raw[0] : raw;
   if (!gcode) return "";
   // Match M572 S<value> — take the first occurrence
   const match = gcode.match(/M572\s+S([\d.]+)/);
@@ -325,8 +366,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
     glassTempTransition: initialData?.glassTempTransition?.toString() || "",
     heatDeflectionTemp: initialData?.heatDeflectionTemp?.toString() || "",
-    abrasive: getSettingVal(initialData, "filament_abrasive") === "1",
-    soluble: getSettingVal(initialData, "filament_soluble") === "1",
+    abrasive: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_abrasive"]),
+    soluble: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_soluble"]),
     optTags: initialData?.optTags || [],
     fanMinSpeed: getSettingVal(initialData, "min_fan_speed"),
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
@@ -336,7 +377,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     auxFanSpeed: getSettingVal(initialData, "additional_cooling_fan_speed"),
     fanBelowLayerTime: getSettingVal(initialData, "fan_below_layer_time"),
     slowDownMinSpeed: getSettingVal(initialData, "slow_down_min_speed"),
-    activateAirFiltration: getSettingVal(initialData, "activate_air_filtration") === "1",
+    activateAirFiltration: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["activate_air_filtration"]),
     retractLength: getSettingVal(initialData, "filament_retract_length"),
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
@@ -348,7 +389,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     filamentLoadTime: getSettingVal(initialData, "filament_load_time"),
     filamentUnloadTime: getSettingVal(initialData, "filament_unload_time"),
     rammingParameters: getSettingVal(initialData, "filament_ramming_parameters"),
-    wipe: getSettingVal(initialData, "filament_wipe") === "1",
+    wipe: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_wipe"]),
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
@@ -385,7 +426,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // `printer_model=~/(COREONE|...)/`), which silently hides the synced
     // preset on every other printer — and, pre-#1066, nothing in the app
     // showed or cleared it.
-    compatPrinters: getSettingVal(initialData, "compatible_printers"),
+    compatPrinters: getSettingListVal(initialData, "compatible_printers"),
     compatPrintersCondition: getSettingVal(initialData, "compatible_printers_condition"),
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
@@ -899,8 +940,23 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // so an unconditional write would destroy the nil inheritance marker on
     // every unrelated save. A cleared field writes an explicit "" ("no
     // restriction" — PrusaSlicer shows the preset for every printer).
-    if (form.compatPrinters !== getSettingVal(initialData, "compatible_printers")) {
-      settings.compatible_printers = form.compatPrinters || "";
+    if (form.compatPrinters !== getSettingListVal(initialData, "compatible_printers")) {
+      // GH #678: `;` splits an edited value back into the array form when it
+      // yields multiple entries — the shape a multi-printer list is stored
+      // and exported in. A single entry stays a scalar (the common case,
+      // byte-identical to pre-#678).
+      const parts = form.compatPrinters
+        .split(";")
+        .map((p) => p.trim())
+        .filter((p) => p !== "");
+      // Round 16 (Codex P2): store the NORMALIZED value in every arm. The
+      // raw field could keep a stray separator ("A;" after deleting the
+      // second entry) or surrounding whitespace, which the exporters then
+      // emit as the printer NAME — matching nothing and hiding the preset.
+      // parts is already trimmed and empty-filtered: >1 is the list, 1 is
+      // the scalar, 0 clears the restriction.
+      settings.compatible_printers =
+        parts.length > 1 ? parts : parts.length === 1 ? parts[0] : "";
     }
     if (
       form.compatPrintersCondition !==
@@ -928,6 +984,52 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       settings.start_filament_gcode = wrapIniString(`M572 S${form.pressureAdvance}`);
     } else {
       settings.start_filament_gcode = undefined;
+    }
+
+    // GH #678 round 2 (Codex P1): every form-backed key above was SEEDED
+    // through getSettingVal's ';'-join, so an UNEDITED multi-element value
+    // would write back as its flattened join and silently destroy the
+    // array on any save. ONE enforcement point instead of thirty per-field
+    // guards: an outgoing scalar equal to the stored array's join is the
+    // unedited case BY CONSTRUCTION — restore the stored array. An edited
+    // value no longer equals the join and writes as the user typed it.
+    // (compatible_printers has its own edited-only split above; its
+    // unedited case never reaches the bag at all.)
+    {
+      const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
+      // Round 3 (Codex P1): checkbox-backed keys don't seed via the join —
+      // they seed settingFlagIsOn(...) and write back "1"/"0", so
+      // join-identity can never detect their unedited case. Their unedited
+      // test mirrors the seed via the SAME helper. Keep this set in
+      // lockstep with the settingFlagIsOn seeds above.
+      const CHECKBOX_SETTING_KEYS = new Set([
+        "filament_abrasive",
+        "filament_soluble",
+        "activate_air_filtration",
+        "filament_wipe",
+      ]);
+      for (const [k, v] of Object.entries(settings)) {
+        const sv = stored[k];
+        if (!Array.isArray(sv)) continue;
+        // A blank first element seeds "", and the `|| undefined` submit
+        // writes turn an untouched "" into undefined — which JSON-omits the
+        // key and would silently DELETE the stored array (round 10, Codex
+        // P2). Outgoing undefined therefore normalizes to the "" it came
+        // from before the unedited comparison. Anything non-string/non-
+        // undefined is not a form-written scalar; leave it alone.
+        const outgoing = typeof v === "string" ? v : v === undefined ? "" : null;
+        if (outgoing === null) continue;
+        // Every unedited test mirrors its field's SEED derivation exactly:
+        // checkboxes via settingFlagIsOn, everything else via the
+        // first-element display getSettingVal produces (round 9 — the
+        // join mirror matched a join seed that no longer exists).
+        // compatible_printers never reaches this loop (its write is
+        // edited-only, guarded on the join comparison above).
+        const unedited = CHECKBOX_SETTING_KEYS.has(k)
+          ? outgoing === (settingFlagIsOn(sv) ? "1" : "0")
+          : outgoing === displayFirstElement(sv);
+        if (unedited) (settings as Record<string, unknown>)[k] = sv;
+      }
     }
 
     try {

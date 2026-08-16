@@ -1248,6 +1248,50 @@ describe("rowToImport — formula-prefix strip (GH #627)", () => {
  * (GH #403 / #473): incoming == parent → skip (keep inheriting); stale
  * diverging local override → $unset; incoming != parent → $set.
  */
+describe("splitInheritedImportSet — multi-valued settings equality (GH #678)", () => {
+  const parent = {
+    vendor: "Acme",
+    type: "PLA",
+    settings: {
+      compatible_printers: ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+      filament_soluble: "0",
+    },
+  };
+
+  it("does not pin a parent-equal ARRAY setting — strict !== never equates arrays", () => {
+    const { set } = splitInheritedImportSet(
+      {
+        name: "V",
+        settings: {
+          compatible_printers: ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+          filament_soluble: "0",
+        },
+      },
+      { settings: {} },
+      parent,
+    );
+    expect(set.settings).toEqual({});
+  });
+
+  it("writes a DIVERGENT array setting through", () => {
+    const { set } = splitInheritedImportSet(
+      { name: "V", settings: { compatible_printers: ["Only One 0.4 nozzle"] } },
+      { settings: {} },
+      parent,
+    );
+    expect(set.settings).toEqual({ compatible_printers: ["Only One 0.4 nozzle"] });
+  });
+
+  it("array-vs-scalar difference is a difference", () => {
+    const { set } = splitInheritedImportSet(
+      { name: "V", settings: { filament_soluble: ["0", "1"] } },
+      { settings: {} },
+      parent,
+    );
+    expect(set.settings).toEqual({ filament_soluble: ["0", "1"] });
+  });
+});
+
 describe("splitInheritedImportSet (GH #628)", () => {
   const parent = {
     vendor: "Acme",

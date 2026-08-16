@@ -216,7 +216,7 @@ export interface ParsedFilament {
   temperatures: ParsedTemperatures;
   bedTypeTemps: ParsedBedTypeTemp[];
   /** Unknown / round-trippable keys. Goes into `settings` on the model. */
-  settings: Record<string, string>;
+  settings: Record<string, string | string[]>;
 }
 
 export interface CalibrationHints {
@@ -411,13 +411,37 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
       if (!isChamberKey || calibrationHints.chamberTemp != null) continue;
       // else: disabled/ineffective chamber → fall through and store the raw key.
     }
-    // NOTE (#678, deferred): unwrap() collapses a multi-element array to its
-    // first element, so a multi-printer `compatible_printers` loses the rest on
-    // a Bambu/Orca round-trip. A faithful fix can't just store the array here —
-    // the `settings` bag is shared by the PrusaSlicer exporter (which would
-    // comma-join an array into one invalid INI line) and the edit form (which
-    // String-casts + `.replace()`s several keys). Round-tripping multi-valued
-    // keys needs arch-aware serialization in each exporter; tracked on #678.
+    // GH #678: a genuinely multi-valued key (compatible_printers with
+    // several printer/nozzle combos is the concrete case) is stored AS an
+    // array — every consumer is array-aware now: the PrusaSlicer exporter
+    // emits the coStrings form via serializeIniValueList, the Orca/Bambu
+    // exporter passes arrays through natively, the edit form displays a
+    // `;`-join and splits it back, and splitInheritedImportSet compares
+    // arrays element-wise. Each element gets the same wire-canonical
+    // newline wrap a scalar gets. Single- and zero-element arrays keep the
+    // scalar collapse below BYTE-IDENTICAL — the Orca/Bambu one-element
+    // convention is the overwhelmingly common case and every existing
+    // round-trip and string-equality path depends on it.
+    // GH #678 round 5 (Codex P1): `compatible_printers_condition` is a
+    // single EXPRESSION, not a list — the multi-value preservation exists
+    // for genuine lists like compatible_printers. Preserving an array here
+    // would bypass the #1021 legacy-condition ingestion strip entirely
+    // (stripLegacyMachineCondition's grammar is string-only, by design), so
+    // a pre-upgrade multi-extruder profile could re-persist the
+    // machine-derived restriction and hide the preset again. First-element
+    // collapse keeps the pre-#678 semantics and keeps the guard sound.
+    const isScalarOnlyKey = key === "compatible_printers_condition";
+    if (Array.isArray(value) && value.length > 1 && !isScalarOnlyKey) {
+      // Elements are stored RAW (round 2, Codex P2): arrays never ride the
+      // scalar `key = value` INI path — the PrusaSlicer emitter runs them
+      // through serializeIniValueList, which quotes/escapes newlines itself,
+      // and the Orca/Bambu exporter passes raw arrays natively. Wrapping
+      // elements here double-encoded them on the Prusa side and exported
+      // escape text as CONTENT on the Orca side. The scalar wire-canonical
+      // rule below is unchanged.
+      filament.settings[key] = value.map((el) => String(el));
+      continue;
+    }
     const s = unwrap(value);
     if (s == null) continue;
     // GH #1070 / Codex P2 round 2 on PR #1086: the settings bag is

@@ -1368,4 +1368,32 @@ describe("Bambu Studio importer routes", () => {
       expect(resolveFilament(fresh, freshParent).settings.ram).toBe("v2");
     });
   });
+  it("persists a multi-element compatible_printers as an array and re-exports it (GH #678)", async () => {
+    const f = await Filament.create({ name: "Multi CP", vendor: "V", type: "PLA" });
+    const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+    const res = await POST(
+      jsonReq(
+        `http://localhost/api/filaments/${f._id}/bambustudio`,
+        minimalProfile({
+          compatible_printers: ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+        }),
+      ),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const row = await Filament.findById(f._id).lean();
+    expect(row.settings.compatible_printers).toEqual([
+      "Bambu Lab P1S 0.4 nozzle",
+      "Bambu Lab X1C 0.4 nozzle",
+    ]);
+
+    // The Orca/Bambu exporter passes the array through natively — the
+    // re-exported preset keeps BOTH printers (the #678 data loss).
+    const { generateOrcaSlicerProfiles } = await import("@/lib/orcaSlicerBundle");
+    const profiles = generateOrcaSlicerProfiles([row]);
+    const emitted = profiles[0].compatible_printers;
+    expect(emitted).toEqual(["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"]);
+  });
+
 });
