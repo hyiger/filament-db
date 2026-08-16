@@ -958,11 +958,26 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // unedited case never reaches the bag at all.)
     {
       const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
+      // Round 3 (Codex P1): checkbox-backed keys don't seed via the join —
+      // they seed `getSettingVal(...) === "1"` and write back "1"/"0", so
+      // join-identity can never detect their unedited case. Their unedited
+      // test mirrors that exact derivation instead: the outgoing scalar
+      // equals what the seed computed FROM the stored array. Keep this set
+      // in lockstep with the `=== "1"` seeds above.
+      const CHECKBOX_SETTING_KEYS = new Set([
+        "filament_abrasive",
+        "filament_soluble",
+        "activate_air_filtration",
+        "filament_wipe",
+      ]);
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
-        if (Array.isArray(sv) && typeof v === "string" && v === sv.join(";")) {
-          (settings as Record<string, unknown>)[k] = sv;
-        }
+        if (!Array.isArray(sv) || typeof v !== "string") continue;
+        const joined = sv.join(";");
+        const unedited = CHECKBOX_SETTING_KEYS.has(k)
+          ? v === (joined === "1" ? "1" : "0")
+          : v === joined;
+        if (unedited) (settings as Record<string, unknown>)[k] = sv;
       }
     }
 
