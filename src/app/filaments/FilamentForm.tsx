@@ -2001,7 +2001,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <label htmlFor="filament-max-vol-speed" className={labelClass} title={t("form.tooltip.maxVol")}>
             {t("form.maxVolumetricSpeed")}
           </label>
-          <input id="filament-max-vol-speed" type="number" step="0.1" min="0" className={inputClass}
+          <input id="filament-max-vol-speed" type="number" step="any" min="0" className={inputClass}
             value={form.maxVolumetricSpeed}
             onChange={(e) => setForm({ ...form, maxVolumetricSpeed: e.target.value })}
             placeholder={parentPh("maxVolumetricSpeed")}
