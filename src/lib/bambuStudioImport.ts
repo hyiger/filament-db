@@ -423,10 +423,14 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     // convention is the overwhelmingly common case and every existing
     // round-trip and string-equality path depends on it.
     if (Array.isArray(value) && value.length > 1) {
-      filament.settings[key] = value.map((el) => {
-        const s = String(el);
-        return /[\r\n]/.test(s) ? wrapIniString(s) : s;
-      });
+      // Elements are stored RAW (round 2, Codex P2): arrays never ride the
+      // scalar `key = value` INI path — the PrusaSlicer emitter runs them
+      // through serializeIniValueList, which quotes/escapes newlines itself,
+      // and the Orca/Bambu exporter passes raw arrays natively. Wrapping
+      // elements here double-encoded them on the Prusa side and exported
+      // escape text as CONTENT on the Orca side. The scalar wire-canonical
+      // rule below is unchanged.
+      filament.settings[key] = value.map((el) => String(el));
       continue;
     }
     const s = unwrap(value);

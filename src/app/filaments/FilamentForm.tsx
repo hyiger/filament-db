@@ -241,8 +241,12 @@ function getSettingVal(data: Record<string, unknown> | undefined, key: string): 
 
 function extractPressureAdvance(data: Record<string, unknown> | undefined): string {
   if (!data?.settings) return "";
-  const settings = data.settings as Record<string, string | null>;
-  const gcode = settings.start_filament_gcode;
+  const settings = data.settings as Record<string, string | string[] | null>;
+  const raw = settings.start_filament_gcode;
+  // GH #678 round 2 (Codex P1): a multi-element gcode is an array now —
+  // .match on it threw during form initialization. Join for the scan; the
+  // stored array itself is preserved by the unedited-restore pass on save.
+  const gcode = Array.isArray(raw) ? raw.join("\n") : raw;
   if (!gcode) return "";
   // Match M572 S<value> — take the first occurrence
   const match = gcode.match(/M572\s+S([\d.]+)/);
@@ -941,6 +945,25 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       settings.start_filament_gcode = wrapIniString(`M572 S${form.pressureAdvance}`);
     } else {
       settings.start_filament_gcode = undefined;
+    }
+
+    // GH #678 round 2 (Codex P1): every form-backed key above was SEEDED
+    // through getSettingVal's ';'-join, so an UNEDITED multi-element value
+    // would write back as its flattened join and silently destroy the
+    // array on any save. ONE enforcement point instead of thirty per-field
+    // guards: an outgoing scalar equal to the stored array's join is the
+    // unedited case BY CONSTRUCTION — restore the stored array. An edited
+    // value no longer equals the join and writes as the user typed it.
+    // (compatible_printers has its own edited-only split above; its
+    // unedited case never reaches the bag at all.)
+    {
+      const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(settings)) {
+        const sv = stored[k];
+        if (Array.isArray(sv) && typeof v === "string" && v === sv.join(";")) {
+          (settings as Record<string, unknown>)[k] = sv;
+        }
+      }
     }
 
     try {

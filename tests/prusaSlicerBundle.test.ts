@@ -1121,6 +1121,20 @@ describe("generatePrusaSlicerBundle", () => {
       expect(bundle).not.toContain("nozzle,Bambu");
     });
 
+    it("escapes a raw multi-line ELEMENT exactly once (#678 r2 — no double-encode)", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "MLElem",
+          settings: { compatible_printers: ["Line1\nLine2", "Plain"] },
+        },
+      ]);
+      // Single encoding: the raw newline becomes ONE \n escape inside ONE
+      // set of quotes. A wrapped-at-ingestion element re-escaped here would
+      // read `"\"Line1\\nLine2\""` — wrapper quotes as content.
+      expect(bundle).toContain('compatible_printers = "Line1\\nLine2";Plain');
+    });
+
     it("leaves scalar bag values untouched next to an array one", () => {
       const bundle = generatePrusaSlicerBundle([
         {

@@ -140,14 +140,16 @@ describe("parseBambuStudioProfile", () => {
     expect(filament.settings.compatible_printers).toBe("Bambu X1 0.4 nozzle");
   });
 
-  it("wire-wraps multi-line ELEMENTS of a multi-value key (#678)", () => {
-    // The same GH #1070 wire-canonical rule a scalar gets: a raw newline in
-    // an element would split the emitted INI line on the next export.
+  it("stores multi-value ELEMENTS raw — the list serializer owns escaping (#678 r2)", () => {
+    // Arrays never ride the scalar `key = value` INI path: the PrusaSlicer
+    // emitter escapes each element via serializeIniValueList, and Orca
+    // passes raw arrays natively. Wrapping at ingestion double-encoded on
+    // the Prusa side and exported escape text as CONTENT on the Orca side.
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
       compatible_printers: ["Line1\nLine2", "Plain"],
     });
-    expect(filament.settings.compatible_printers).toEqual(['"Line1\\nLine2"', "Plain"]);
+    expect(filament.settings.compatible_printers).toEqual(["Line1\nLine2", "Plain"]);
   });
 
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {
