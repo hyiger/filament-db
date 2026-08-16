@@ -222,7 +222,7 @@
   "dashboard.dryDue.never": "never dried",
   "dashboard.dryDue.more": "…and {count} more not shown.",
   "dashboard.recentPrints": "Recent prints",
-  "dashboard.recentPrints.empty": "No print jobs logged yet. Manual spool usage is tracked separately on each filament and in Analytics.",
+  "dashboard.recentPrints.empty": "No print jobs logged yet. Jobs are recorded through the REST API (POST /api/print-history) by slicer or printer integrations — none ship built-in yet. Manual spool usage is tracked separately on each filament and in Analytics.",
   "common.clear": "Clear",
   "common.cancel": "Cancel",
   "common.copy": "Copy {value}",
@@ -1833,5 +1833,6 @@
   "health.dep.ownSpools": "own spools",
   "health.dep.printHistoryJobs": "print jobs",
   "health.dep.amsSlots": "AMS slots",
-  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards."
+  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
+  "analytics.jobsApiHint": "recorded via the REST API"
 }

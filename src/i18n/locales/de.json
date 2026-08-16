@@ -222,7 +222,7 @@
   "dashboard.dryDue.never": "nie getrocknet",
   "dashboard.dryDue.more": "…und {count} weitere, nicht angezeigt.",
   "dashboard.recentPrints": "Letzte Drucke",
-  "dashboard.recentPrints.empty": "Noch keine Druckaufträge erfasst. Manueller Spulenverbrauch wird separat pro Filament und in der Analyse erfasst.",
+  "dashboard.recentPrints.empty": "Noch keine Druckaufträge erfasst. Aufträge werden über die REST-API (POST /api/print-history) von Slicer- oder Drucker-Integrationen aufgezeichnet — bisher ist keine integriert. Manuelle Spulennutzung wird separat je Filament und in der Analyse erfasst.",
   "common.clear": "Leeren",
   "common.cancel": "Abbrechen",
   "common.copy": "{value} kopieren",
@@ -1833,5 +1833,6 @@
   "health.dep.ownSpools": "eigene Spulen",
   "health.dep.printHistoryJobs": "Druckaufträge",
   "health.dep.amsSlots": "AMS-Slots",
-  "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu."
+  "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu.",
+  "analytics.jobsApiHint": "über die REST-API erfasst"
 }
