@@ -231,10 +231,25 @@ function getSettingVal(data: Record<string, unknown> | undefined, key: string): 
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
   const val = settings[key];
-  // GH #678: a multi-valued key (compatible_printers) is stored as an array;
-  // display it semicolon-joined — PrusaSlicer's own list separator. The SAME
-  // normalization feeds the seed and the dirty-compare, so an unedited
-  // multi-value field compares equal and never writes (array preserved).
+  // GH #678 round 9: an array displays its FIRST element — the pre-#678
+  // read semantics for every scalar control. A ';'-join fed into an
+  // <input type="number"> is sanitized by browsers to an EMPTY control
+  // (Codex P2), hiding the imported value entirely. The one list-shaped
+  // field (compatible_printers) seeds via getSettingListVal instead. The
+  // SAME derivation feeds the unedited-restore pass, so an untouched
+  // multi-value field maps back to its stored array on save.
+  if (Array.isArray(val)) return val[0] ?? "";
+  if (!val || val === "nil") return "";
+  return val;
+}
+
+/** GH #678: the LIST field's display — semicolon-joined, split back on save.
+ *  Only compatible_printers uses this; its seed and dirty-compare must both
+ *  go through it so an unedited list never writes. */
+function getSettingListVal(data: Record<string, unknown> | undefined, key: string): string {
+  if (!data?.settings) return "";
+  const settings = data.settings as Record<string, string | string[] | null>;
+  const val = settings[key];
   if (Array.isArray(val)) return val.join(";");
   if (!val || val === "nil") return "";
   return val;
@@ -395,7 +410,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // `printer_model=~/(COREONE|...)/`), which silently hides the synced
     // preset on every other printer — and, pre-#1066, nothing in the app
     // showed or cleared it.
-    compatPrinters: getSettingVal(initialData, "compatible_printers"),
+    compatPrinters: getSettingListVal(initialData, "compatible_printers"),
     compatPrintersCondition: getSettingVal(initialData, "compatible_printers_condition"),
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
@@ -909,7 +924,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // so an unconditional write would destroy the nil inheritance marker on
     // every unrelated save. A cleared field writes an explicit "" ("no
     // restriction" — PrusaSlicer shows the preset for every printer).
-    if (form.compatPrinters !== getSettingVal(initialData, "compatible_printers")) {
+    if (form.compatPrinters !== getSettingListVal(initialData, "compatible_printers")) {
       // GH #678: `;` splits an edited value back into the array form when it
       // yields multiple entries — the shape a multi-printer list is stored
       // and exported in. A single entry stays a scalar (the common case,
@@ -973,12 +988,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
         if (!Array.isArray(sv) || typeof v !== "string") continue;
-        // Checkbox keys mirror the seed derivation via the SAME helper
-        // (settingFlagIsOn), so seed and restore stay lockstep by
-        // construction; text keys mirror the join seed.
+        // Every unedited test mirrors its field's SEED derivation exactly:
+        // checkboxes via settingFlagIsOn, everything else via the
+        // first-element display getSettingVal produces (round 9 — the
+        // join mirror matched a join seed that no longer exists).
+        // compatible_printers never reaches this loop (its write is
+        // edited-only, guarded on the join comparison above).
         const unedited = CHECKBOX_SETTING_KEYS.has(k)
           ? v === (settingFlagIsOn(sv) ? "1" : "0")
-          : v === sv.join(";");
+          : v === (sv[0] ?? "");
         if (unedited) (settings as Record<string, unknown>)[k] = sv;
       }
     }
