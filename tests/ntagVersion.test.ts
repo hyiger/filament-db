@@ -5,6 +5,8 @@ import {
   resolveNtagWriteSize,
   NTAG_STORAGE_SIZE_TO_NDEF_BYTES,
   NTAG_NAME_TO_NDEF_BYTES,
+  NTAG_PHYSICAL_LAST_PAGE,
+  resolveNtagEraseSize,
 } from "@/lib/ntagVersion";
 
 /**
@@ -182,5 +184,52 @@ describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
     // formatted + neither, CC 255 → min(872 ceiling, 144) = 144.
     expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 255, verSize: null, hintBytes: null }))
       .toEqual({ ok: true, ndefBytes: 144, needsFormat: false });
+  });
+});
+
+describe("resolveNtagEraseSize (GH #978, round-8 fixed point)", () => {
+  it("GET_VERSION is authoritative when it answers", () => {
+    expect(resolveNtagEraseSize({ verSize: 496, provenBytes: null })).toEqual({
+      ok: true,
+      ndefBytes: 496,
+    });
+    // ...even over a full-extent proof (both present: version wins).
+    expect(resolveNtagEraseSize({ verSize: 144, provenBytes: 872 })).toEqual({
+      ok: true,
+      ndefBytes: 144,
+    });
+  });
+
+  it("accepts a FULL-EXTENT read proof on a GET_VERSION-dead reader", () => {
+    expect(resolveNtagEraseSize({ verSize: null, provenBytes: 872 })).toEqual({
+      ok: true,
+      ndefBytes: 872,
+    });
+  });
+
+  it("refuses everything else as ambiguous — the information-theoretic limit", () => {
+    // Any sub-216 conclusion requires a NAK, and a NAK is indistinguishable
+    // from a password-protected in-range page. Four heuristic tie-breakers
+    // fell in review (user pick, blanket demotion, user-extent probes, the
+    // CC cross-check in BOTH directions); only proofs remain.
+    expect(resolveNtagEraseSize({ verSize: null, provenBytes: null })).toEqual({
+      ok: false,
+      error: "size_ambiguous",
+    });
+  });
+});
+
+describe("NTAG_PHYSICAL_LAST_PAGE (GH #978 r6)", () => {
+  it("each rung's physical tail lies BEYOND the next-smaller chip's extent", () => {
+    // The whole probe discrimination: a smaller chip's readable config tail
+    // must not satisfy a larger rung's probe. Datasheet totals: 45/135/231
+    // pages (0-indexed last page 44/134/230). And the 213 tail (44) is past
+    // the NTAG212's readable extent (its config ends at page 39).
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG213).toBe(44);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG215).toBe(134);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG216).toBe(230);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG213).toBeGreaterThan(39);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG215).toBeGreaterThan(NTAG_PHYSICAL_LAST_PAGE.NTAG213);
+    expect(NTAG_PHYSICAL_LAST_PAGE.NTAG216).toBeGreaterThan(NTAG_PHYSICAL_LAST_PAGE.NTAG215);
   });
 });

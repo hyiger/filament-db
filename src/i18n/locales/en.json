@@ -1711,7 +1711,7 @@
   "settings.nfcReadOnlyBambu": "Bambu Lab tags are already read-only and can't be changed.",
   "settings.nfcReadOnlyNotFormatted": "This tag has no OpenPrintTag data to lock yet — write a filament to it first.",
   "settings.nfcReadOnlyNtagUnsupported": "Read-only isn't available for OpenTag3D/NTAG tags — their capability container is one-time-programmable, so it can't be undone. Read-only works on OpenPrintTag (SLIX2) tags.",
-  "settings.nfcNtagSizeUnknown": "Couldn't determine the NTAG's size. Try an NTAG 213, 215, or 216, or pre-format the tag.",
+  "settings.nfcNtagSizeUnknown": "Couldn't determine the NTAG's size — nothing was erased. Re-seat the tag and try again.",
   "settings.nfcLoadedTag": "Loaded tag:",
   "settings.nfcLoadedBambu": "Bambu (read-only)",
   "settings.nfcLoadedNtagOpenTag3d": "NTAG · OpenTag3D",
@@ -1833,5 +1833,8 @@
   "health.dep.ownSpools": "own spools",
   "health.dep.printHistoryJobs": "print jobs",
   "health.dep.amsSlots": "AMS slots",
-  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards."
+  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
+  "settings.nfcNtagProbeFailed": "Couldn't verify the tag's size — the reader kept failing mid-probe, so nothing was erased. Re-seat the tag and try again.",
+  "settings.nfcNtagSizeAmbiguous": "This reader can't size the tag, and reads prove it is not a full NTAG216 — it is either a smaller NTAG or password-protected (indistinguishable here). Nothing was erased. Use Write NFC, which sizes the tag explicitly, or a reader that supports GET_VERSION.",
+  "settings.nfcNtagWriteRefused": "The tag refused the write at page {page} — it may be password write-protected. The erase is INCOMPLETE: pages before {page} were cleared, data from page {page} on remains."
 }
