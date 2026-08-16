@@ -1582,8 +1582,22 @@ export class NfcService extends EventEmitter {
       for (let page = 5, n = 0; page <= lastUserPage; page++, n++) {
         try {
           await this.writeNtagPage(protocol, page, zeroes);
-        } catch {
-          break; // past writable user memory
+        } catch (err) {
+          // Round 9 (Codex P1): the size is PROVEN (GET_VERSION or the
+          // full-extent read proof), so a write failure INSIDE that extent
+          // is an error — most likely password WRITE-protection (PROT=0
+          // with AUTH0 in user memory: reads succeed, writes NAK), possibly
+          // a fault. The old `break` treated it as end-of-tag and reported
+          // a partial wipe as SUCCESS, leaving protected old data behind. A
+          // partial mutation has already happened (CC + TLV + the prefix),
+          // so the honest outcome is a loud failure that says exactly that.
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(
+            `NTAG_WRITE_REFUSED: The tag refused the write at page ${page} of its proven ` +
+              `${lastUserPage - 4} user pages — it may be password write-protected. The erase ` +
+              `is INCOMPLETE: earlier pages were cleared, data from page ${page} on remains. ` +
+              `(${msg})`,
+          );
         }
         if (page < lastUserPage) {
           await new Promise((r) => setTimeout(r, 10));

@@ -118,6 +118,7 @@ export default function DevicesSettingsPage() {
       else if (raw.includes("NTAG_SIZE_UNKNOWN")) message = t("settings.nfcNtagSizeUnknown");
       else if (raw.includes("NTAG_PROBE_FAILED")) message = t("settings.nfcNtagProbeFailed");
       else if (raw.includes("NTAG_SIZE_AMBIGUOUS")) message = t("settings.nfcNtagSizeAmbiguous");
+      else if (raw.includes("NTAG_WRITE_REFUSED")) message = t("settings.nfcNtagWriteRefused");
       setFormatResult({ ok: false, message });
     } finally {
       setFormatting(false);
