@@ -1837,5 +1837,6 @@
   "settings.nfcNtagProbeFailed": "Die Größe des Tags konnte nicht überprüft werden — der Leser schlug während der Prüfung wiederholt fehl; es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
   "settings.nfcNtagSizeAmbiguous": "Dieser Leser kann die Tag-Größe nicht ermitteln, und Lesezugriffe belegen, dass es kein vollständiger NTAG216 ist — er ist entweder ein kleinerer NTAG oder passwortgeschützt (hier nicht unterscheidbar). Es wurde nichts gelöscht. Verwenden Sie NFC schreiben (das die Größe explizit setzt) oder einen Leser mit GET_VERSION-Unterstützung.",
   "settings.nfcNtagWriteRefused": "Der Tag hat den Schreibzugriff auf Seite {page} verweigert — er ist möglicherweise passwort-schreibgeschützt. Das Löschen ist UNVOLLSTÄNDIG: Seiten vor {page} wurden geleert, Daten ab Seite {page} sind noch vorhanden.",
-  "analytics.jobsApiHint": "über die REST-API erfasst"
+  "analytics.jobsApiHint": "über die REST-API erfasst",
+  "form.maxVolumetricSpeed": "Max. volumetrische Geschwindigkeit (mm³/s)"
 }

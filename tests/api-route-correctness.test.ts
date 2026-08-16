@@ -2552,3 +2552,28 @@ describe("API route correctness", () => {
     });
   });
 });
+
+describe("the raw parent projection covers every inherited placeholder (GH #1148)", () => {
+  it("every parentPh field in FilamentForm rides the ?raw=true _parent select", async () => {
+    // The edit page renders inherited values as placeholders from
+    // `_parent`; a field missing from the projection silently shows blank
+    // (22 of 25 did, until #1148). Source-pinned because the two live in
+    // different layers and drifted apart unnoticed.
+    const { readFileSync } = await import("node:fs");
+    const form = readFileSync("src/app/filaments/FilamentForm.tsx", "utf8");
+    const route = readFileSync("src/app/api/filaments/[id]/route.ts", "utf8");
+
+    const referenced = new Set(
+      [...form.matchAll(/parentPh\("([a-zA-Z.]+)"\)/g)].map((m) => m[1].split(".")[0]),
+    );
+    expect(referenced.size).toBeGreaterThan(10); // sanity: the scan found them
+
+    // No `s` (dotAll) flag — the repo targets ES2017 and tsc rejects it
+    // (the same class as the \p{M} trap in CLAUDE.md). [\s\S] is portable.
+    const select = route.match(/\.select\([\s\S]*?\)/)?.[0] ?? "";
+    const projected = new Set(select.replace(/["+\s]+/g, " ").split(" ").filter(Boolean));
+
+    const missing = [...referenced].filter((f) => !projected.has(f));
+    expect(missing).toEqual([]);
+  });
+});

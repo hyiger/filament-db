@@ -1837,5 +1837,6 @@
   "settings.nfcNtagProbeFailed": "Couldn't verify the tag's size — the reader kept failing mid-probe, so nothing was erased. Re-seat the tag and try again.",
   "settings.nfcNtagSizeAmbiguous": "This reader can't size the tag, and reads prove it is not a full NTAG216 — it is either a smaller NTAG or password-protected (indistinguishable here). Nothing was erased. Use Write NFC, which sizes the tag explicitly, or a reader that supports GET_VERSION.",
   "settings.nfcNtagWriteRefused": "The tag refused the write at page {page} — it may be password write-protected. The erase is INCOMPLETE: pages before {page} were cleared, data from page {page} on remains.",
-  "analytics.jobsApiHint": "recorded via the REST API"
+  "analytics.jobsApiHint": "recorded via the REST API",
+  "form.maxVolumetricSpeed": "Max Volumetric Speed (mm³/s)"
 }
