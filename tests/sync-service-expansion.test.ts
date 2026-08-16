@@ -1510,6 +1510,36 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(sync.getStatus().nameConflicts).toEqual([]);
     });
 
+    it("reflects POST-COPY reality — a conflict this cycle resolved is not reported (r2)", async () => {
+      // The trim pass runs at the top of the cycle; the collection copies
+      // below it propagate a locally-resolved rename to the peer. A
+      // pre-copy snapshot reported the peer's stale pair as a live
+      // conflict until the NEXT cycle.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // The remote carries the untrimmed twin; the local side is clean and
+      // NEWER, so this cycle's copy overwrites the remote row.
+      const syncId = "post-copy-a";
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Bench", material: "PEI", syncId: "post-copy-keep", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Bench ", material: "PEI", syncId, _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() - 60_000) },
+      ]);
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bench", material: "PEI", syncId: "post-copy-keep", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Bench Two", material: "PEI", syncId, _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 60_000) },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The copy renamed the remote row, so nothing is in conflict now.
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: "Bench " }),
+      ).toBe(0);
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+
     it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
       const localDb = localClient.db("filament-db");
       const now = new Date();

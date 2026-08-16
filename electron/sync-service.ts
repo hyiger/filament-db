@@ -9,6 +9,7 @@ import {
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
 import {
+  scanTrimConflicts,
   type TrimNameConflict,
   trimEntityNames,
   describeTrimResult,
@@ -590,8 +591,6 @@ export class SyncService extends EventEmitter {
        * trimmed form, so that is what gets blocked.
        */
       const conflictedNames = new Map<string, Set<string>>();
-    // GH #1164: the cycle's ACTIVE conflicts, side-tagged, for SyncStatus.
-    const cycleNameConflicts: SyncNameConflict[] = [];
 
       // GH #1116 — normalize entity names on BOTH sides before any copy.
       //
@@ -698,11 +697,6 @@ export class SyncService extends EventEmitter {
         // logged; it just doesn't stop anything.
         for (const c of trimResult.conflicts) {
           if (!c.active) continue;
-          // GH #1164: carry the enriched conflict to the renderer, tagged
-          // with its side. Same ACTIVE-only rule as the gate below — an
-          // inactive conflict is unresolvable and invisible in the UI, so
-          // reporting it would be noise the user cannot act on.
-          cycleNameConflicts.push({ ...c, side });
           // Block the NAMES, not the collection (second adversarial audit).
           // Both spellings: the stored one and the trimmed one it would have
           // become — a pairing can be attempted under either.
@@ -716,11 +710,11 @@ export class SyncService extends EventEmitter {
         // collection-wide.
         for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
       }
-      // Publish AFTER both sides so a cycle reports one complete set, and
-      // wholesale so a resolved conflict disappears rather than lingering.
-      // Only cycles that REACH the trim phase update it — a pre-trim connect
-      // failure leaves the previous (still accurate) list alone.
-      this.updateStatus({ nameConflicts: cycleNameConflicts });
+      // (GH #1164 round 2: the conflict list is published AFTER the
+      // collection copies — see the rescan near the end of the cycle. This
+      // pre-copy point is too early: a conflict the user resolved locally
+      // is propagated to the peer by THIS cycle's copy, so publishing here
+      // reported a row that no longer exists until the next cycle.)
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
       // transit-clear queues on BOTH databases (a failed local enqueue falls
@@ -1238,11 +1232,34 @@ export class SyncService extends EventEmitter {
           .join(" | ");
       }
 
+      // GH #1164 round 2 (Codex P2): rescan AFTER the collection copies.
+      // The trim pass runs at the top of the cycle, but the copies below it
+      // propagate a locally-resolved rename to the peer — so a pre-copy
+      // snapshot reported conflicts this very cycle had just fixed. The
+      // rescan is READ-ONLY (scanTrimConflicts, #1149: no index build, no
+      // writes) and classifies identically to the migration, so the list
+      // reflects post-sync reality. Best-effort: a rescan failure leaves
+      // the previous list rather than failing an otherwise-good cycle.
+      const nameConflicts: SyncNameConflict[] = [];
+      let rescanned = false;
+      try {
+        for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+          const found = await scanTrimConflicts(dbHandle as unknown as MinimalTrimDb);
+          // ACTIVE only — same rule as the gate: an inactive conflict is
+          // permanent and invisible in the UI, nothing a user can act on.
+          for (const c of found) if (c.active) nameConflicts.push({ ...c, side });
+        }
+        rescanned = true;
+      } catch (rescanErr) {
+        console.warn("[sync] could not rescan name conflicts after the cycle.", rescanErr);
+      }
+
       this.updateStatus({
         state: erroredAll ? "error" : erroredSome ? "partial" : "idle",
         lastSyncAt: new Date().toISOString(),
         error: summary,
         progress: null,
+        ...(rescanned ? { nameConflicts } : {}),
       });
 
       if (erroredAll) this.emit("syncError", summary ?? "Sync failed");
