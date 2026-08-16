@@ -1833,5 +1833,6 @@
   "health.dep.ownSpools": "own spools",
   "health.dep.printHistoryJobs": "print jobs",
   "health.dep.amsSlots": "AMS slots",
-  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards."
+  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
+  "form.maxVolumetricSpeed": "Max Volumetric Speed (mm³/s)"
 }

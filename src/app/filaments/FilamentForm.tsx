@@ -1992,6 +1992,21 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             placeholder={t("form.placeholder.zOffset")}
           />
         </div>
+        {/* GH #1148: the base (all-nozzles) value. The whole persistence
+            pipeline already existed — importers, exporters, PUT, the detail
+            tile — but nothing rendered an editor, so a CSV-imported value
+            was uneditable in the UI. Per-nozzle calibrations override it;
+            their MVS placeholder mirrors this value live. */}
+        <div>
+          <label htmlFor="filament-max-vol-speed" className={labelClass} title={t("form.tooltip.maxVol")}>
+            {t("form.maxVolumetricSpeed")}
+          </label>
+          <input id="filament-max-vol-speed" type="number" step="0.1" min="0" className={inputClass}
+            value={form.maxVolumetricSpeed}
+            onChange={(e) => setForm({ ...form, maxVolumetricSpeed: e.target.value })}
+            placeholder={parentPh("maxVolumetricSpeed")}
+          />
+        </div>
       </div>
       </CollapsibleSection>
 
