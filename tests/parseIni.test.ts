@@ -724,6 +724,40 @@ describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () =
     expect(parsed[0].settings.compatible_printers).toBe("Bambu Lab P1S 0.4 nozzle");
   });
 
+  it("other multi-valued keys invert too — filament_soluble 1;0 becomes an array (r8)", () => {
+    const ini = [
+      "[filament:Flags]",
+      "filament_vendor = V",
+      "filament_soluble = 1;0",
+      "filament_retract_length = 0.8;1.2",
+      "filament_cost = 25.5",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.filament_soluble).toEqual(["1", "0"]);
+    expect(parsed[0].settings.filament_retract_length).toEqual(["0.8", "1.2"]);
+    // A scalar without a top-level semicolon is untouched.
+    expect(parsed[0].settings.filament_cost).toBe("25.5");
+  });
+
+  it("gcode/notes wire values are NEVER split — semicolons are content (r8)", () => {
+    const ini = [
+      "[filament:Gcode]",
+      "filament_vendor = V",
+      'start_filament_gcode = "; purge\\nM572 S0.04;comment"',
+      "filament_notes = plain;note;text",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.start_filament_gcode).toBe('"; purge\\nM572 S0.04;comment"');
+    expect(parsed[0].settings.filament_notes).toBe("plain;note;text");
+  });
+
+  it("a quoted singleton of a NON-list key stays verbatim wire text (r8)", () => {
+    const ini = ["[filament:Wire]", "filament_vendor = V", 'some_key = "nil"'].join("\n");
+    const parsed = parseIniFilaments(ini);
+    // A quoted literal "nil" must not be unquoted into the inheritance marker.
+    expect(parsed[0].settings.some_key).toBe('"nil"');
+  });
+
   it("compatible_printers_condition is NOT list-parsed — one expression", () => {
     const ini = [
       "[filament:Cond]",

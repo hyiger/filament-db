@@ -38,6 +38,22 @@ export interface FilamentData {
  * nothing. Keep this in lockstep with the `currentSettings.*` reads in
  * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
  */
+/**
+ * GH #678 round 8: keys whose INI value is ALWAYS one scalar and must never
+ * be split on `;` at import — the wire-value texts (gcode/notes, whose
+ * legacy raw wraps can hold unescaped inner quotes that defeat element
+ * parsing) and the single-expression condition (round 5). Everything else
+ * with a top-level semicolon inverts through parseIniValueList, matching
+ * what writeSection emits for array bag values.
+ */
+export const SCALAR_ONLY_INI_KEYS = new Set([
+  "compatible_printers_condition",
+  "start_filament_gcode",
+  "end_filament_gcode",
+  "filament_notes",
+  "inherits",
+]);
+
 export const INI_TOP_LEVEL_SETTING_KEYS = [
   "filament_vendor",
   "filament_type",
@@ -475,21 +491,36 @@ export function parseIniFilaments(content: string): FilamentData[] {
         // and stays verbatim like everything else.
         let value: string | null = trimmed.substring(eqIndex + 1).trim();
         if (value === "nil") value = null;
-        // GH #678 round 6: compatible_printers is a coStrings LIST — our own
-        // exporter (and PrusaSlicer itself) emits `"A";"B"`. Stored verbatim,
-        // an Orca/Bambu re-export would emit the quoted semicolon expression
-        // as ONE printer name. Reconstruct the array when the RHS holds more
-        // than one element; a single element stays a scalar (unwrapped from
-        // its quotes by the list parser), matching the Bambu ingestion
-        // convention. `compatible_printers_condition` is deliberately NOT
-        // here — it is a single expression (round 5).
-        if (key === "compatible_printers" && value != null && value !== "") {
+        // GH #678 rounds 6-8: our own exporter (writeSection) serializes
+        // EVERY array-valued bag entry as a coStrings list, so the importer
+        // must invert for every key a list can reach — gated to only
+        // compatible_printers, a Bambu → Prusa-INI → Orca round trip turned
+        // filament_soluble ["1","0"] into the scalar "1;0" (round 8).
+        //
+        // The gate is a TOP-LEVEL `;` (outside quotes): the ambiguity risk
+        // is a scalar value legitimately containing a raw semicolon, and
+        // the keys where that genuinely occurs are the wire-value texts —
+        // gcode/notes (whose legacy raw wraps can even hold unescaped inner
+        // quotes that would defeat the element parser) and the condition
+        // expression (one expression by definition, round 5). Those are
+        // SCALAR_ONLY and always verbatim. compatible_printers additionally
+        // unquotes its SINGLETON (round 7 — the quotes must not become part
+        // of the printer name on an Orca export); other keys' singletons
+        // stay verbatim, since a quoted scalar there is a wire value that
+        // must round-trip byte-identically.
+        if (
+          value != null &&
+          value !== "" &&
+          !SCALAR_ONLY_INI_KEYS.has(key)
+        ) {
           const els = parseIniValueList(value);
-          // Round 7 (Codex P1): the SINGLETON stores the PARSED element, not
-          // the quoted wire text — `"Bambu Lab P1S 0.4 nozzle"` must not
-          // export to Orca with the quotes as part of the printer name. An
-          // unquoted scalar parses to itself, so that path is byte-identical.
-          currentSettings[key] = els.length > 1 ? els : (els[0] ?? value);
+          if (els.length > 1) {
+            currentSettings[key] = els;
+          } else if (key === "compatible_printers") {
+            currentSettings[key] = els[0] ?? value;
+          } else {
+            currentSettings[key] = value;
+          }
         } else {
           currentSettings[key] = value;
         }
