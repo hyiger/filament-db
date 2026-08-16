@@ -712,6 +712,18 @@ describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () =
     expect(parsed[1].settings.compatible_printers).toBe("OnePrinter");
   });
 
+  it("a QUOTED singleton stores the parsed name, not the wire quotes (r7)", () => {
+    const ini = [
+      "[filament:QuotedOne]",
+      "filament_vendor = V",
+      'compatible_printers = "Bambu Lab P1S 0.4 nozzle"',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    // The Orca/Bambu exporter would otherwise emit the quotes as part of
+    // the printer name and the restriction would match nothing.
+    expect(parsed[0].settings.compatible_printers).toBe("Bambu Lab P1S 0.4 nozzle");
+  });
+
   it("compatible_printers_condition is NOT list-parsed — one expression", () => {
     const ini = [
       "[filament:Cond]",

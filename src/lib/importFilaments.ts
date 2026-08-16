@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { settingValuesEqual } from "./slicerSettings";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
@@ -450,15 +451,11 @@ export function splitInheritedImportSet(
         continue;
       }
       const filtered: Record<string, unknown> = {};
-      // GH #678: bag values may be ARRAYS now (multi-valued keys). Strict !==
-      // never equates two arrays, which would pin every parent-equal
-      // multi-value key as a variant override — element-wise compare instead.
-      const settingEqual = (a: unknown, b: unknown): boolean =>
-        Array.isArray(a) && Array.isArray(b)
-          ? a.length === b.length && a.every((v, i) => v === b[i])
-          : a === b;
+      // GH #678 r7: array-aware equality via the shared settingValuesEqual
+      // — three sites made the identity-compare mistake independently; one
+      // helper now owns the rule.
       for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
-        if (!settingEqual(parentSettings[sk], sv)) filtered[sk] = sv;
+        if (!settingValuesEqual(parentSettings[sk], sv)) filtered[sk] = sv;
       }
       set[key] = filtered;
       continue;

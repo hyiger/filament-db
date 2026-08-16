@@ -67,6 +67,21 @@ export interface SettingsMergeResult {
  * detail page, the OpenPrintTag tag writers — must go through this, or a
  * "1;1" array reads as off in one place and on in another.
  */
+/**
+ * GH #678 round 7 — value equality for settings-bag entries, in ONE place.
+ * Bag values may be ARRAYS now, and `!==` never equates two arrays, so an
+ * identity compare silently classifies a parent-equal multi-value key as
+ * divergent — pinning it as a variant override and severing GH #106 live
+ * inheritance. Three sites made this exact mistake independently
+ * (splitInheritedImportSet, prepareBambuUpdate's inheritance filter,
+ * iniImportApply's unset scan); they all call this now.
+ */
+export function settingValuesEqual(a: unknown, b: unknown): boolean {
+  return Array.isArray(a) && Array.isArray(b)
+    ? a.length === b.length && a.every((v, i) => v === b[i])
+    : a === b;
+}
+
 export function settingFlagIsOn(value: unknown): boolean {
   const scalar = Array.isArray(value) ? value[0] : value;
   return scalar === "1";

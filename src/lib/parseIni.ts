@@ -485,7 +485,11 @@ export function parseIniFilaments(content: string): FilamentData[] {
         // here — it is a single expression (round 5).
         if (key === "compatible_printers" && value != null && value !== "") {
           const els = parseIniValueList(value);
-          currentSettings[key] = els.length > 1 ? els : value;
+          // Round 7 (Codex P1): the SINGLETON stores the PARSED element, not
+          // the quoted wire text — `"Bambu Lab P1S 0.4 nozzle"` must not
+          // export to Orca with the quotes as part of the printer name. An
+          // unquoted scalar parses to itself, so that path is byte-identical.
+          currentSettings[key] = els.length > 1 ? els : (els[0] ?? value);
         } else {
           currentSettings[key] = value;
         }

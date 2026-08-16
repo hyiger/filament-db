@@ -8,6 +8,7 @@ import {
   MAX_SETTINGS_KEYS,
   MAX_SETTING_VALUE_LENGTH,
   settingFlagIsOn,
+  settingValuesEqual,
 } from "@/lib/slicerSettings";
 
 /**
@@ -408,5 +409,15 @@ describe("settingFlagIsOn (GH #678 r4)", () => {
     expect(settingFlagIsOn(["1", "0"])).toBe(true);
     expect(settingFlagIsOn(["0", "1"])).toBe(false);
     expect(settingFlagIsOn([])).toBe(false);
+  });
+});
+
+describe("settingValuesEqual (GH #678 r7)", () => {
+  it("equates arrays element-wise and scalars by identity", () => {
+    expect(settingValuesEqual(["A", "B"], ["A", "B"])).toBe(true);
+    expect(settingValuesEqual(["A", "B"], ["A", "C"])).toBe(false);
+    expect(settingValuesEqual(["A"], "A")).toBe(false);
+    expect(settingValuesEqual("x", "x")).toBe(true);
+    expect(settingValuesEqual(null, null)).toBe(true);
   });
 });
