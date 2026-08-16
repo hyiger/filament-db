@@ -179,10 +179,15 @@ export async function GET(
     // printer/data mismatch never turns a working lookup into a 404.
     if (printerParam) {
       const wanted = printerParam.trim().toLowerCase();
+      // Both sides normalized through `wanted` (Codex P2): a populated
+      // ObjectId renders canonical lowercase, so an id typed/stored with
+      // uppercase hex — or with surrounding whitespace — missed the compare
+      // and silently fell through to the printer-less default, which looks
+      // like "no calibration for my machine" with no error to explain it.
       const printerMatches = scopedMatches.filter(
         (cal) =>
           (cal.printer?.name ?? "").trim().toLowerCase() === wanted ||
-          String(cal.printer?._id ?? "") === printerParam,
+          String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
       );
       if (printerMatches.length > 0) {
         scopedMatches = printerMatches;

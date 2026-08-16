@@ -96,6 +96,19 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.05);
     });
 
+    it("matches an ObjectId case-insensitively and ignores stray whitespace", async () => {
+      const { f, xl } = await seedTwoPrinters();
+      const upper = String(xl._id).toUpperCase();
+      const res = await getCalibration(
+        getReq(
+          `http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${encodeURIComponent(` ${upper} `)}`,
+        ),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // Pre-fix this silently returned the printer-less default (0.02).
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.05);
+    });
+
     it("falls back to the shareable default for an UNKNOWN printer — never a 404", async () => {
       const { f } = await seedTwoPrinters();
       const res = await getCalibration(
