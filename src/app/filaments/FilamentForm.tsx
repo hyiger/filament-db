@@ -34,6 +34,7 @@ import {
 } from "@/lib/calibrationScope";
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
+import { settingFlagIsOn } from "@/lib/slicerSettings";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -334,8 +335,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
     glassTempTransition: initialData?.glassTempTransition?.toString() || "",
     heatDeflectionTemp: initialData?.heatDeflectionTemp?.toString() || "",
-    abrasive: getSettingVal(initialData, "filament_abrasive") === "1",
-    soluble: getSettingVal(initialData, "filament_soluble") === "1",
+    abrasive: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_abrasive"]),
+    soluble: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_soluble"]),
     optTags: initialData?.optTags || [],
     fanMinSpeed: getSettingVal(initialData, "min_fan_speed"),
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
@@ -345,7 +346,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     auxFanSpeed: getSettingVal(initialData, "additional_cooling_fan_speed"),
     fanBelowLayerTime: getSettingVal(initialData, "fan_below_layer_time"),
     slowDownMinSpeed: getSettingVal(initialData, "slow_down_min_speed"),
-    activateAirFiltration: getSettingVal(initialData, "activate_air_filtration") === "1",
+    activateAirFiltration: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["activate_air_filtration"]),
     retractLength: getSettingVal(initialData, "filament_retract_length"),
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
@@ -357,7 +358,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     filamentLoadTime: getSettingVal(initialData, "filament_load_time"),
     filamentUnloadTime: getSettingVal(initialData, "filament_unload_time"),
     rammingParameters: getSettingVal(initialData, "filament_ramming_parameters"),
-    wipe: getSettingVal(initialData, "filament_wipe") === "1",
+    wipe: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_wipe"]),
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
@@ -959,11 +960,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     {
       const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
       // Round 3 (Codex P1): checkbox-backed keys don't seed via the join —
-      // they seed `getSettingVal(...) === "1"` and write back "1"/"0", so
+      // they seed settingFlagIsOn(...) and write back "1"/"0", so
       // join-identity can never detect their unedited case. Their unedited
-      // test mirrors that exact derivation instead: the outgoing scalar
-      // equals what the seed computed FROM the stored array. Keep this set
-      // in lockstep with the `=== "1"` seeds above.
+      // test mirrors the seed via the SAME helper. Keep this set in
+      // lockstep with the settingFlagIsOn seeds above.
       const CHECKBOX_SETTING_KEYS = new Set([
         "filament_abrasive",
         "filament_soluble",
@@ -973,10 +973,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
         if (!Array.isArray(sv) || typeof v !== "string") continue;
-        const joined = sv.join(";");
+        // Checkbox keys mirror the seed derivation via the SAME helper
+        // (settingFlagIsOn), so seed and restore stay lockstep by
+        // construction; text keys mirror the join seed.
         const unedited = CHECKBOX_SETTING_KEYS.has(k)
-          ? v === (joined === "1" ? "1" : "0")
-          : v === joined;
+          ? v === (settingFlagIsOn(sv) ? "1" : "0")
+          : v === sv.join(";");
         if (unedited) (settings as Record<string, unknown>)[k] = sv;
       }
     }

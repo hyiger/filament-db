@@ -56,6 +56,22 @@ export interface SettingsMergeResult {
  * structured keys either have a top-level field that overrides any stale bag
  * shadow on export (harmless) or are legit shared defaults (must survive).
  */
+/**
+ * GH #678 round 4 — the ONE array-aware boolean derivation for "1"/"0"
+ * flag settings (filament_abrasive / filament_soluble / filament_wipe /
+ * activate_air_filtration). A multi-element value is an Orca per-extruder
+ * array; deriving from the FIRST element reproduces the pre-#678 read
+ * behaviour byte-for-byte (the old unwrap() collapse read element 0), so
+ * preserving the array cannot flip any flag that used to read as on.
+ * Every reader — form seeds, the form's unedited-restore mirror, the
+ * detail page, the OpenPrintTag tag writers — must go through this, or a
+ * "1;1" array reads as off in one place and on in another.
+ */
+export function settingFlagIsOn(value: unknown): boolean {
+  const scalar = Array.isArray(value) ? value[0] : value;
+  return scalar === "1";
+}
+
 export const NEVER_BAGGED_KEYS = new Set([
   "filament_settings_id",
   "filamentdb_id",

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { settingFlagIsOn } from "@/lib/slicerSettings";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useNfcContext } from "@/components/NfcProvider";
@@ -790,8 +791,8 @@ function FilamentDetail() {
         dryingTemperature: filament.dryingTemperature,
         dryingTime: filament.dryingTime,
         transmissionDistance: filament.transmissionDistance,
-        abrasive: filament.settings?.filament_abrasive === "1",
-        soluble: filament.settings?.filament_soluble === "1",
+        abrasive: settingFlagIsOn(filament.settings?.filament_abrasive),
+        soluble: settingFlagIsOn(filament.settings?.filament_soluble),
         shoreHardnessA: filament.shoreHardnessA,
         shoreHardnessD: filament.shoreHardnessD,
         optTags: filament.optTags,
