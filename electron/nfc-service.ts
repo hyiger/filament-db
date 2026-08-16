@@ -929,18 +929,27 @@ export class NfcService extends EventEmitter {
    */
   /**
    * GH #978: derive an NTAG's NDEF capacity by PROBING, for GET_VERSION-dead
-   * readers (ACR1552U). Non-mutating FF B0 page reads at each larger size's
-   * top page, descending 216 → 215; a chip NAKs reads past its physical end
-   * (the same behaviour the write path's brick guard is built on, proven on
-   * the ACR1552U), so the first size whose top page reads is the chip's
-   * size. Falls through to the NTAG213 floor — the caller has already read
-   * the head, so 144 bytes is always physically present. Only a DEFINITIVE
-   * chip NAK (an SW error — the chip answered) demotes a rung; transport
-   * failures retry and, when persistent, FAIL CLOSED with nothing written
-   * (round 4, Codex P1 — a reader blip must never shrink the wipe extent).
+   * readers (ACR1552U). Non-mutating FF B0 page reads at each size's top
+   * page, descending 216 → 215 → 213; a chip NAKs reads past its physical
+   * end (the same behaviour the write path's brick guard is built on, proven
+   * on the ACR1552U), so the first size whose top page reads is the chip's
+   * size. The 213 rung is PROBED TOO, not assumed (round 5, Codex P1): an
+   * NTAG210/212 passes the NXP head guard while GET_VERSION's parser
+   * deliberately returns null for it, and an assumed 144-byte floor would
+   * write past its user extent — a definitive NAK at the 213 rung refuses
+   * the erase instead (NTAG_UNSUPPORTED, nothing written). Only a
+   * DEFINITIVE chip NAK (an SW error — the chip answered) demotes or
+   * refuses; transport failures retry ×3 then FAIL CLOSED
+   * (NTAG_PROBE_FAILED, nothing written). The residual mis-size therefore
+   * requires a chip that returns a definitive NAK for a genuinely IN-RANGE
+   * page — not a reader blip.
    */
   private async probeNtagCapacity(protocol: number): Promise<number> {
-    for (const bytes of [NTAG_NAME_TO_NDEF_BYTES.NTAG216, NTAG_NAME_TO_NDEF_BYTES.NTAG215]) {
+    for (const bytes of [
+      NTAG_NAME_TO_NDEF_BYTES.NTAG216,
+      NTAG_NAME_TO_NDEF_BYTES.NTAG215,
+      NTAG_NAME_TO_NDEF_BYTES.NTAG213,
+    ]) {
       const topPage = 4 + Math.ceil(bytes / 4) - 1;
       const probeStart = Math.max(4, topPage - 3);
       // Round 4 (Codex P1): only a DEFINITIVE chip answer may demote a rung.
@@ -960,7 +969,17 @@ export class NfcService extends EventEmitter {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
-          if (definitiveNak) break; // the chip answered: smaller than this rung
+          if (definitiveNak) {
+            if (bytes === NTAG_NAME_TO_NDEF_BYTES.NTAG213) {
+              // Below the smallest supported chip (an NTAG210/212 passes the
+              // NXP head guard but NAKs page 39): refuse, nothing written.
+              throw new Error(
+                "NTAG_UNSUPPORTED: This tag is smaller than an NTAG213 (NTAG210/212 are not " +
+                  "supported) — nothing was erased.",
+              );
+            }
+            break; // the chip answered: smaller than this rung
+          }
           if (attempt >= 3) {
             throw new Error(
               "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept failing " +
@@ -970,6 +989,8 @@ export class NfcService extends EventEmitter {
         }
       }
     }
+    // Unreachable: the 213 rung either returned or threw above. Kept for
+    // the type system and as a fail-safe floor.
     return NTAG_NAME_TO_NDEF_BYTES.NTAG213;
   }
 
