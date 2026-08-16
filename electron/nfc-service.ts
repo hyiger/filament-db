@@ -945,12 +945,21 @@ export class NfcService extends EventEmitter {
       try {
         const data = await this.readNtagBurst(protocol, probeStart);
         // A COMPLETE 16-byte burst is the proof (round 11, Codex P1): some
-        // readers return SW=9000 with a short payload, which the head/image
-        // paths already treat as possible — a short answer here proves
-        // nothing about pages 227-230 and refuses as ambiguous rather than
-        // stamping an 872-byte CC on an anomalously-responding tag.
+        // readers return SW=9000 with a short payload — that proves nothing
+        // about pages 227-230, but it is also NOT a negative proof (round
+        // 12, Codex P2): the cause may be a transient/anomalous reader
+        // response. Short answers therefore join the TRANSPORT class —
+        // retried, and after three attempts the erase fails closed as
+        // INCONCLUSIVE (NTAG_PROBE_FAILED: re-seat and retry), never as
+        // the "reads prove it is not a full NTAG216" refusal.
         if (data.length >= 16) return NTAG_NAME_TO_NDEF_BYTES.NTAG216;
-        return null;
+        if (attempt >= 3) {
+          throw new Error(
+            "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept returning " +
+              "incomplete responses, so nothing was erased. Re-seat the tag and try again.",
+          );
+        }
+        continue;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
