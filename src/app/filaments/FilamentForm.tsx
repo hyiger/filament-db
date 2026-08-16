@@ -227,6 +227,16 @@ const DEFAULT_FILAMENT_TYPES = [
   "POM", "PP", "HIPS", "PVA", "PET-GF", "PPA", "IGLIDUR",
 ];
 
+/** GH #678 r17: the ONE derivation of what a scalar control shows for an
+ *  array-valued setting — first element, String-coerced (the Mixed bag can
+ *  hold numbers), null/absent as "". `getSettingVal` seeds through it and
+ *  the unedited-restore pass mirrors through it, so the seed and its mirror
+ *  cannot drift apart — they did twice (r9's join mirror, r15's uncoerced
+ *  comparison), each time flattening a stored array on an unrelated save. */
+function displayFirstElement(arr: readonly unknown[]): string {
+  return arr[0] == null ? "" : String(arr[0]);
+}
+
 function getSettingVal(data: Record<string, unknown> | undefined, key: string): string {
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
@@ -240,7 +250,7 @@ function getSettingVal(data: Record<string, unknown> | undefined, key: string): 
   // multi-value field maps back to its stored array on save.
   // Round 15: String-coerce — the Mixed bag can hold non-strings, and the
   // declared string type would otherwise be a lie feeding form state.
-  if (Array.isArray(val)) return val[0] == null ? "" : String(val[0]);
+  if (Array.isArray(val)) return displayFirstElement(val);
   if (!val || val === "nil") return "";
   return String(val);
 }
@@ -1017,7 +1027,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         // edited-only, guarded on the join comparison above).
         const unedited = CHECKBOX_SETTING_KEYS.has(k)
           ? outgoing === (settingFlagIsOn(sv) ? "1" : "0")
-          : outgoing === (sv[0] ?? "");
+          : outgoing === displayFirstElement(sv);
         if (unedited) (settings as Record<string, unknown>)[k] = sv;
       }
     }
