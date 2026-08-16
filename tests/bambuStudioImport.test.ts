@@ -117,18 +117,50 @@ describe("parseBambuStudioProfile", () => {
     expect(parseBambuStudioProfile({ name: ["X"] }).filament.settings.filament_soluble).toBeUndefined();
   });
 
-  it("collapses a multi-element compatible_printers to its first element (#678 deferred)", () => {
-    // A faithful multi-printer round-trip can't store an array in the shared
-    // settings bag: the PrusaSlicer exporter would comma-join it into one
-    // invalid INI line, and the edit form String-casts + .replace()s several
-    // settings keys. So passthrough values stay scalar (unwrap → first element)
-    // and the multi-value round-trip is tracked on #678 as a larger,
-    // cross-exporter change.
+  it("preserves a multi-element compatible_printers as an array (#678)", () => {
+    // Every consumer is array-aware now: the PrusaSlicer exporter emits the
+    // coStrings form, Orca/Bambu exports pass arrays natively, the form
+    // displays a `;`-join, and inheritance compares element-wise. Single- and
+    // zero-element arrays keep the scalar collapse byte-identical (next test).
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
       compatible_printers: ["Bambu X1 0.4 nozzle", "Prusa MK4 0.4 nozzle"],
     });
+    expect(filament.settings.compatible_printers).toEqual([
+      "Bambu X1 0.4 nozzle",
+      "Prusa MK4 0.4 nozzle",
+    ]);
+  });
+
+  it("compatible_printers_condition stays SCALAR even when multi-element (#678 r5)", () => {
+    // It is one expression, not a list — and the #1021 legacy-condition
+    // ingestion strip is string-only by design. An array here would bypass
+    // that guard and re-persist a machine-derived restriction.
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers_condition: ["nozzle_diameter[0]==0.4", "nozzle_diameter[0]==0.4"],
+    });
+    expect(filament.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
+  it("keeps the single-element scalar collapse byte-identical (#678)", () => {
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers: ["Bambu X1 0.4 nozzle"],
+    });
     expect(filament.settings.compatible_printers).toBe("Bambu X1 0.4 nozzle");
+  });
+
+  it("stores multi-value ELEMENTS raw — the list serializer owns escaping (#678 r2)", () => {
+    // Arrays never ride the scalar `key = value` INI path: the PrusaSlicer
+    // emitter escapes each element via serializeIniValueList, and Orca
+    // passes raw arrays natively. Wrapping at ingestion double-encoded on
+    // the Prusa side and exported escape text as CONTENT on the Orca side.
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers: ["Line1\nLine2", "Plain"],
+    });
+    expect(filament.settings.compatible_printers).toEqual(["Line1\nLine2", "Plain"]);
   });
 
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {

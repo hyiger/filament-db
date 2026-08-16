@@ -56,6 +56,41 @@ export interface SettingsMergeResult {
  * structured keys either have a top-level field that overrides any stale bag
  * shadow on export (harmless) or are legit shared defaults (must survive).
  */
+/**
+ * GH #678 round 4 — the ONE array-aware boolean derivation for "1"/"0"
+ * flag settings (filament_abrasive / filament_soluble / filament_wipe /
+ * activate_air_filtration). A multi-element value is an Orca per-extruder
+ * array; deriving from the FIRST element reproduces the pre-#678 read
+ * behaviour byte-for-byte (the old unwrap() collapse read element 0), so
+ * preserving the array cannot flip any flag that used to read as on.
+ * Every reader — form seeds, the form's unedited-restore mirror, the
+ * detail page, the OpenPrintTag tag writers — must go through this, or a
+ * "1;1" array reads as off in one place and on in another.
+ */
+/**
+ * GH #678 round 7 — value equality for settings-bag entries, in ONE place.
+ * Bag values may be ARRAYS now, and `!==` never equates two arrays, so an
+ * identity compare silently classifies a parent-equal multi-value key as
+ * divergent — pinning it as a variant override and severing GH #106 live
+ * inheritance. Three sites made this exact mistake independently
+ * (splitInheritedImportSet, prepareBambuUpdate's inheritance filter,
+ * iniImportApply's unset scan); they all call this now.
+ */
+export function settingValuesEqual(a: unknown, b: unknown): boolean {
+  return Array.isArray(a) && Array.isArray(b)
+    ? a.length === b.length && a.every((v, i) => v === b[i])
+    : a === b;
+}
+
+export function settingFlagIsOn(value: unknown): boolean {
+  const scalar = Array.isArray(value) ? value[0] : value;
+  // Round 15: String-coerce for parity with pre-#678's unwrap(), which did
+  // String(value[0]) — the Mixed bag can hold a numeric 1 from the generic
+  // API, and a bare === "1" would read it as OFF where the old collapse
+  // read it as ON.
+  return scalar == null ? false : String(scalar) === "1";
+}
+
 export const NEVER_BAGGED_KEYS = new Set([
   "filament_settings_id",
   "filamentdb_id",
@@ -111,6 +146,10 @@ export function mergeSlicerSettings(
     // parent's stored wire value, so an unchanged Orca sync of an inherited
     // multi-line setting keeps inheriting instead of pinning a variant
     // override that severs GH #106 live inheritance.
+    // GH #678 round 2: ARRAYS pass through untouched — elements stay RAW.
+    // They never ride the scalar INI path (serializeIniValueList escapes at
+    // the PrusaSlicer emit; Orca emits arrays natively), and wrapping
+    // elements here double-encoded them. Scalar rule below unchanged.
     const wireValue =
       typeof value === "string" && /[\r\n]/.test(value) ? wrapIniString(value) : value;
     const serialized = JSON.stringify(wireValue ?? null);

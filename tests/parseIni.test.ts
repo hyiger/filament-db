@@ -6,6 +6,8 @@ import {
   decodeMultilineWireValue,
   wrapIniString,
   unwrapIniString,
+  serializeIniValueList,
+  parseIniValueList,
 } from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
@@ -647,5 +649,171 @@ describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () =>
 
   it("serializes a bare newline (shorter than a quoted wrapper) via the unquoted path", () => {
     expect(serializeIniValue("\n")).toBe('"\\n"');
+  });
+});
+
+describe("serializeIniValueList (GH #678)", () => {
+  it("quotes EVERY element — lists are self-describing (r12)", () => {
+    // Conditional quoting emitted `1;0`, indistinguishable from a scalar
+    // that legitimately contains a semicolon (ACME;Labs) — corrupting it
+    // on re-import. All-quoted is the unambiguous grammar.
+    expect(serializeIniValueList(["A", "B"])).toBe('"A";"B"');
+    expect(serializeIniValueList(["1", "0"])).toBe('"1";"0"');
+  });
+
+  it("quotes elements containing whitespace — the real compatible_printers shape", () => {
+    expect(
+      serializeIniValueList(["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"]),
+    ).toBe('"Bambu Lab P1S 0.4 nozzle";"Bambu Lab X1C 0.4 nozzle"');
+  });
+
+  it("quotes and escapes semicolons, quotes, backslashes and empties", () => {
+    expect(serializeIniValueList(['a;b'])).toBe('"a;b"');
+    expect(serializeIniValueList(['say "hi"'])).toBe('"say \\"hi\\""');
+    expect(serializeIniValueList(["back\\slash"])).toBe('"back\\\\slash"');
+    expect(serializeIniValueList([""])).toBe('""');
+  });
+
+  it("String-coerces non-string elements — the Mixed bag can hold numbers (r15)", () => {
+    // The generic create/PUT API and slicer syncs can store [1, 2]; passing
+    // a number to the string-only escaper threw and 500ed both PrusaSlicer
+    // export routes.
+    expect(serializeIniValueList([1, 2] as unknown as string[])).toBe('"1";"2"');
+    expect(serializeIniValueList([true, null] as unknown as string[])).toBe('"true";"null"');
+  });
+
+  it("escapes newlines inside an element so the line cannot split", () => {
+    expect(serializeIniValueList(["a\nb"])).toBe('"a\\nb"');
+  });
+});
+
+describe("parseIniValueList — the coStrings inverse (GH #678 r6)", () => {
+  it("round-trips serializeIniValueList exactly", () => {
+    const cases = [
+      ["A", "B"],
+      ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+      ["a;b", 'say "hi"', ""],
+      ["Line1\nLine2", "Plain"],
+    ];
+    for (const els of cases) {
+      expect(parseIniValueList(serializeIniValueList(els))).toEqual(els);
+    }
+  });
+
+  it("tolerates whitespace around separators — hand-formatted INI (r18)", () => {
+    expect(parseIniValueList('"A" ; "B"')).toEqual(["A", "B"]);
+    expect(parseIniValueList('"A"\t;\t"B"')).toEqual(["A", "B"]);
+    expect(parseIniValueList('"A" ')).toEqual(["A"]);
+  });
+
+  it("falls back to the WHOLE value when the shape is not a list (r18)", () => {
+    // Never invent element names from malformed text: pre-fix, '"A" ; "B"'
+    // yielded ["A", " ", " \"B\""] — two of which match no printer.
+    expect(parseIniValueList('"A" "B"')).toEqual(['"A" "B"']);
+    expect(parseIniValueList('"A"x;"B"')).toEqual(['"A"x;"B"']);
+    expect(parseIniValueList('"unterminated')).toEqual(['"unterminated']);
+  });
+
+  it("splits an unquoted scalar into one element", () => {
+    expect(parseIniValueList("Just One")).toEqual(["Just One"]);
+  });
+});
+
+describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () => {
+  it("a coStrings RHS becomes an array; a single value stays scalar", () => {
+    const ini = [
+      "[filament:Multi]",
+      "filament_vendor = V",
+      'compatible_printers = "Bambu Lab P1S 0.4 nozzle";"Bambu Lab X1C 0.4 nozzle"',
+      "",
+      "[filament:Single]",
+      "filament_vendor = V",
+      "compatible_printers = OnePrinter",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.compatible_printers).toEqual([
+      "Bambu Lab P1S 0.4 nozzle",
+      "Bambu Lab X1C 0.4 nozzle",
+    ]);
+    expect(parsed[1].settings.compatible_printers).toBe("OnePrinter");
+  });
+
+  it("a QUOTED singleton stores the parsed name, not the wire quotes (r7)", () => {
+    const ini = [
+      "[filament:QuotedOne]",
+      "filament_vendor = V",
+      'compatible_printers = "Bambu Lab P1S 0.4 nozzle"',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    // The Orca/Bambu exporter would otherwise emit the quotes as part of
+    // the printer name and the restriction would match nothing.
+    expect(parsed[0].settings.compatible_printers).toBe("Bambu Lab P1S 0.4 nozzle");
+  });
+
+  it("other multi-valued keys invert on the STRICT quoted grammar (r8+r12)", () => {
+    const ini = [
+      "[filament:Flags]",
+      "filament_vendor = V",
+      'filament_soluble = "1";"0"',
+      'filament_retract_length = "0.8";"1.2"',
+      "filament_cost = 25.5",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.filament_soluble).toEqual(["1", "0"]);
+    expect(parsed[0].settings.filament_retract_length).toEqual(["0.8", "1.2"]);
+    expect(parsed[0].settings.filament_cost).toBe("25.5");
+  });
+
+  it("a bare semicolon in scalar content is NOT a list — the r12 corruption guard", () => {
+    // The exporter emits scalar values verbatim, so a vendor named
+    // ACME;Labs rides as `filament_vendor = ACME;Labs`. r8's bare-semicolon
+    // inversion split it and the structured extraction kept only "ACME".
+    const ini = [
+      "[filament:SemiVendor]",
+      "filament_vendor = ACME;Labs",
+      "some_note_like = plain;scalar;content",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].vendor).toBe("ACME;Labs");
+    expect(parsed[0].settings.some_note_like).toBe("plain;scalar;content");
+  });
+
+  it("our own exported multi-element gcode round-trips through INI (r13)", () => {
+    const ini = [
+      "[filament:MultiGcode]",
+      "filament_vendor = V",
+      'start_filament_gcode = "; setup A";"; setup B"',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.start_filament_gcode).toEqual(["; setup A", "; setup B"]);
+  });
+
+  it("gcode/notes wire values are NEVER split — semicolons are content (r8)", () => {
+    const ini = [
+      "[filament:Gcode]",
+      "filament_vendor = V",
+      'start_filament_gcode = "; purge\\nM572 S0.04;comment"',
+      "filament_notes = plain;note;text",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.start_filament_gcode).toBe('"; purge\\nM572 S0.04;comment"');
+    expect(parsed[0].settings.filament_notes).toBe("plain;note;text");
+  });
+
+  it("a quoted singleton of a NON-list key stays verbatim wire text (r8)", () => {
+    const ini = ["[filament:Wire]", "filament_vendor = V", 'some_key = "nil"'].join("\n");
+    const parsed = parseIniFilaments(ini);
+    // A quoted literal "nil" must not be unquoted into the inheritance marker.
+    expect(parsed[0].settings.some_key).toBe('"nil"');
+  });
+
+  it("compatible_printers_condition is NOT list-parsed — one expression", () => {
+    const ini = [
+      "[filament:Cond]",
+      "filament_vendor = V",
+      'compatible_printers_condition = printer_model=~/(A;B)/',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.compatible_printers_condition).toBe("printer_model=~/(A;B)/");
   });
 });

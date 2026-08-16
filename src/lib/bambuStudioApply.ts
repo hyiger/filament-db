@@ -19,6 +19,7 @@
  */
 
 import Printer from "@/models/Printer";
+import { settingValuesEqual } from "./slicerSettings";
 import Nozzle from "@/models/Nozzle";
 import {
   mergeSlicerSettings,
@@ -271,7 +272,9 @@ export async function prepareBambuUpdate(
     const parentBag = parentSettings as Record<string, unknown>;
     const filtered: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(bag)) {
-      if (parentBag[key] !== value) filtered[key] = value;
+      // GH #678 r7: element-wise, or a parent-equal ARRAY value pins as a
+      // variant override and parent edits stop propagating.
+      if (!settingValuesEqual(parentBag[key], value)) filtered[key] = value;
     }
     update.settings = filtered;
   }

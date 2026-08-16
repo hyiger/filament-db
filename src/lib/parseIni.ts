@@ -24,7 +24,7 @@ export interface FilamentData {
   spoolWeight?: number | null;
   shrinkageXY?: number | null;
   shrinkageZ?: number | null;
-  settings: Record<string, string | null>;
+  settings: Record<string, string | string[] | null>;
 }
 
 /**
@@ -38,6 +38,22 @@ export interface FilamentData {
  * nothing. Keep this in lockstep with the `currentSettings.*` reads in
  * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
  */
+/**
+ * GH #678 rounds 8+13: keys whose INI value is ALWAYS one scalar and must
+ * never list-parse — the single-expression condition (round 5) and
+ * `inherits`. The gcode/notes wire texts left this set in round 13: under
+ * the strict all-quoted grammar a bare semicolon in their content can no
+ * longer be mistaken for a separator, so our own exported multi-element
+ * gcode/notes arrays round-trip again. The accepted residual, stated: a
+ * LEGACY raw-wrapped note whose content happens to contain a
+ * quote-aligned `";"` sequence could false-match the grammar — a shape no
+ * canonical writer produces and no real note has been observed to hold.
+ */
+export const SCALAR_ONLY_INI_KEYS = new Set([
+  "compatible_printers_condition",
+  "inherits",
+]);
+
 export const INI_TOP_LEVEL_SETTING_KEYS = [
   "filament_vendor",
   "filament_type",
@@ -138,6 +154,115 @@ function unescapeIniValueContent(content: string): string {
  */
 export function wrapIniString(content: string): string {
   return `"${escapeIniValueContent(content)}"`;
+}
+
+/**
+ * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
+ * matching escape_strings_cstyle's coStrings convention: elements joined
+ * with `;`, an element quoted-escaped when it contains whitespace, `;`,
+ * a quote, a backslash, or is empty — a bare simple token rides unquoted.
+ * A comma-join (what String(array) would do) is NOT a list to PrusaSlicer;
+ * it reads back as one value with commas in it.
+ */
+/**
+ * Inverse of {@link serializeIniValueList} (GH #678 round 6): split a
+ * coStrings RHS into its elements — `;` separates, a quoted element is
+ * unescaped C-style. A scalar with no top-level `;` returns a single
+ * element. Used by the INI importer to reconstruct list-typed settings
+ * (compatible_printers) that our own exporter — or PrusaSlicer itself —
+ * emitted as a list, so a Prusa-INI round-trip through an Orca/Bambu
+ * export keeps list semantics instead of exporting the raw quoted
+ * semicolon expression as ONE printer name.
+ */
+export function parseIniValueList(value: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  // Not a well-formed list → the whole value is ONE element. Round 18: a
+  // hand-formatted `"A" ; "B"` used to yield ["A", " ", " \"B\""] — three
+  // bogus printer names, two matching nothing. (The reported infinite loop
+  // does not occur: every branch either advances or breaks, verified
+  // empirically over the malformed shapes; the progress assertion below
+  // makes that structural rather than incidental.)
+  const whole = (): string[] => [value];
+  while (i <= value.length) {
+    const before = i;
+    if (value[i] === '"') {
+      let el = "";
+      i += 1;
+      let closed = false;
+      while (i < value.length) {
+        const ch = value[i];
+        if (ch === "\\" && i + 1 < value.length) {
+          const next = value[i + 1];
+          el += next === "n" ? "\n" : next === "r" ? "\r" : next;
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          closed = true;
+          break;
+        }
+        el += ch;
+        i += 1;
+      }
+      if (!closed) return whole(); // unterminated quote: not a list
+      i += 1; // past the closing quote
+      out.push(el);
+      while (value[i] === " " || value[i] === "\t") i += 1; // tolerate `"A" ; "B"`
+      if (i >= value.length) break;
+      if (value[i] !== ";") return whole(); // stray text between elements
+      i += 1;
+      while (value[i] === " " || value[i] === "\t") i += 1;
+    } else {
+      const sep = value.indexOf(";", i);
+      if (sep === -1) {
+        out.push(value.slice(i));
+        break;
+      }
+      out.push(value.slice(i, sep));
+      i = sep + 1;
+    }
+    // Structural progress guarantee: every iteration consumes at least one
+    // character, so no future edit can turn this into a spin.
+    if (i <= before) return whole();
+  }
+  return out;
+}
+
+/**
+ * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
+ * matching escape_strings_cstyle's coStrings convention. Elements are
+ * joined with `;`; EVERY element is quoted (round 12) so an emitted list
+ * is self-describing and cannot be confused with scalar content that
+ * merely contains a semicolon.
+ */
+export function serializeIniValueList(values: readonly unknown[]): string {
+  // Round 12 (Codex P2): EVERY element is quoted, unconditionally — this
+  // makes an emitted list SELF-DESCRIBING. A scalar's canonical wire form
+  // escapes interior quotes (\"), so an unescaped `";"` separator between
+  // quoted elements cannot occur inside one, and the strict all-quoted
+  // grammar below is unambiguous. Conditional quoting emitted `1;0`, which
+  // is indistinguishable from a scalar that legitimately CONTAINS a
+  // semicolon (filament_vendor = ACME;Labs) — re-importing that mangled
+  // the vendor to its first "element".
+  // Round 15 (Codex P2): elements are String-coerced HERE, at the single
+  // enforcement point. The bag is a Mixed field — the generic create/PUT
+  // API and slicer syncs can legitimately store [1, 2] — and passing a
+  // number to the string-only escapeIniValueContent threw
+  // "el.replace is not a function", 500ing both PrusaSlicer export routes.
+  // The singleton and Orca paths already coerce; this makes it universal
+  // so no caller can reintroduce the crash.
+  return values.map((el) => `"${escapeIniValueContent(String(el))}"`).join(";");
+}
+
+/**
+ * Does a value match the strict SELF-DESCRIBING list grammar our exporter
+ * emits — two or more fully-quoted elements joined by `;`? Only such values
+ * are list-parsed on generic keys; everything else is scalar content.
+ */
+const QUOTED_LIST_RE = /^"(?:[^"\\]|\\.)*"(?:;"(?:[^"\\]|\\.)*")+$/;
+export function isQuotedIniList(value: string): boolean {
+  return QUOTED_LIST_RE.test(value);
 }
 
 /**
@@ -315,7 +440,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
   const lines = content.split("\n");
 
   let currentName: string | null = null;
-  let currentSettings: Record<string, string | null> = {};
+  let currentSettings: Record<string, string | string[] | null> = {};
 
   function flushFilament() {
     if (currentName && Object.keys(currentSettings).length > 0) {
@@ -330,23 +455,31 @@ export function parseIniFilaments(content: string): FilamentData[] {
         if (!val || val === "nil") return null;
         return val;
       };
+      // GH #678 round 6: the bag can hold arrays now (compatible_printers),
+      // but every TOP-LEVEL field below is scalar-typed and its key is never
+      // stored as an array — this narrows for the type system (first element
+      // defensively, matching the read convention everywhere else).
+      const scalar = (v: string | string[] | null | undefined): string | undefined => {
+        const s0 = Array.isArray(v) ? v[0] : v;
+        return s0 ?? undefined;
+      };
 
       const fd: FilamentData = {
         name: currentName!,
-        vendor: currentSettings.filament_vendor || "Unknown",
-        type: currentSettings.filament_type || "Unknown",
-        color: currentSettings.filament_colour || "#808080",
-        cost: parseNum(currentSettings.filament_cost),
-        density: parseNum(currentSettings.filament_density),
-        diameter: parseNum(currentSettings.filament_diameter) ?? 1.75,
+        vendor: scalar(currentSettings.filament_vendor) || "Unknown",
+        type: scalar(currentSettings.filament_type) || "Unknown",
+        color: scalar(currentSettings.filament_colour) || "#808080",
+        cost: parseNum(scalar(currentSettings.filament_cost)),
+        density: parseNum(scalar(currentSettings.filament_density)),
+        diameter: parseNum(scalar(currentSettings.filament_diameter)) ?? 1.75,
         temperatures: {
-          nozzle: parseNum(currentSettings.temperature),
-          nozzleFirstLayer: parseNum(currentSettings.first_layer_temperature),
-          bed: parseNum(currentSettings.bed_temperature),
-          bedFirstLayer: parseNum(currentSettings.first_layer_bed_temperature),
+          nozzle: parseNum(scalar(currentSettings.temperature)),
+          nozzleFirstLayer: parseNum(scalar(currentSettings.first_layer_temperature)),
+          bed: parseNum(scalar(currentSettings.bed_temperature)),
+          bedFirstLayer: parseNum(scalar(currentSettings.first_layer_bed_temperature)),
         },
-        maxVolumetricSpeed: parseNum(currentSettings.filament_max_volumetric_speed),
-        inherits: nilOrVal(currentSettings.inherits),
+        maxVolumetricSpeed: parseNum(scalar(currentSettings.filament_max_volumetric_speed)),
+        inherits: nilOrVal(scalar(currentSettings.inherits)),
         settings: { ...currentSettings },
       };
       // GH #951 (Codex): lift spool weight + shrinkage to top-level ONLY when the
@@ -354,13 +487,13 @@ export function parseIniFilaments(content: string): FilamentData[] {
       // `undefined` (→ omitted from the importer's `$set`) rather than nulling a
       // value already on the row. See the FilamentData comment above.
       if ("filament_spool_weight" in currentSettings) {
-        fd.spoolWeight = parseNum(currentSettings.filament_spool_weight);
+        fd.spoolWeight = parseNum(scalar(currentSettings.filament_spool_weight));
       }
       if ("filament_shrinkage_compensation_xy" in currentSettings) {
-        fd.shrinkageXY = parseNum(currentSettings.filament_shrinkage_compensation_xy);
+        fd.shrinkageXY = parseNum(scalar(currentSettings.filament_shrinkage_compensation_xy));
       }
       if ("filament_shrinkage_compensation_z" in currentSettings) {
-        fd.shrinkageZ = parseNum(currentSettings.filament_shrinkage_compensation_z);
+        fd.shrinkageZ = parseNum(scalar(currentSettings.filament_shrinkage_compensation_z));
       }
       filaments.push(fd);
     }
@@ -405,7 +538,46 @@ export function parseIniFilaments(content: string): FilamentData[] {
         // and stays verbatim like everything else.
         let value: string | null = trimmed.substring(eqIndex + 1).trim();
         if (value === "nil") value = null;
-        currentSettings[key] = value;
+        // GH #678 rounds 6-8: our own exporter (writeSection) serializes
+        // EVERY array-valued bag entry as a coStrings list, so the importer
+        // must invert for every key a list can reach — gated to only
+        // compatible_printers, a Bambu → Prusa-INI → Orca round trip turned
+        // filament_soluble ["1","0"] into the scalar "1;0" (round 8).
+        //
+        // The gate is a TOP-LEVEL `;` (outside quotes): the ambiguity risk
+        // is a scalar value legitimately containing a raw semicolon, and
+        // the keys where that genuinely occurs are the wire-value texts —
+        // gcode/notes (whose legacy raw wraps can even hold unescaped inner
+        // quotes that would defeat the element parser) and the condition
+        // expression (one expression by definition, round 5). Those are
+        // SCALAR_ONLY and always verbatim. compatible_printers additionally
+        // unquotes its SINGLETON (round 7 — the quotes must not become part
+        // of the printer name on an Orca export); other keys' singletons
+        // stay verbatim, since a quoted scalar there is a wire value that
+        // must round-trip byte-identically.
+        if (
+          value != null &&
+          value !== "" &&
+          !SCALAR_ONLY_INI_KEYS.has(key)
+        ) {
+          // Round 12 (Codex P2): a GENERIC key list-parses ONLY when the
+          // value matches the strict all-quoted grammar our exporter emits
+          // — a bare `ACME;Labs` is scalar content (a vendor with a
+          // semicolon), not a list, and splitting it corrupted the field.
+          // compatible_printers stays allowlisted for the looser top-level
+          // `;` form because PrusaSlicer itself may emit simple unquoted
+          // tokens there, and its values are names, never free text.
+          if (key === "compatible_printers") {
+            const els = parseIniValueList(value);
+            currentSettings[key] = els.length > 1 ? els : (els[0] ?? value);
+          } else if (isQuotedIniList(value)) {
+            currentSettings[key] = parseIniValueList(value);
+          } else {
+            currentSettings[key] = value;
+          }
+        } else {
+          currentSettings[key] = value;
+        }
       }
     }
   }

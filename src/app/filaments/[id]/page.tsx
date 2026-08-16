@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { settingFlagIsOn } from "@/lib/slicerSettings";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useNfcContext } from "@/components/NfcProvider";
@@ -790,8 +791,8 @@ function FilamentDetail() {
         dryingTemperature: filament.dryingTemperature,
         dryingTime: filament.dryingTime,
         transmissionDistance: filament.transmissionDistance,
-        abrasive: filament.settings?.filament_abrasive === "1",
-        soluble: filament.settings?.filament_soluble === "1",
+        abrasive: settingFlagIsOn(filament.settings?.filament_abrasive),
+        soluble: settingFlagIsOn(filament.settings?.filament_soluble),
         shoreHardnessA: filament.shoreHardnessA,
         shoreHardnessD: filament.shoreHardnessD,
         optTags: filament.optTags,
@@ -1552,9 +1553,14 @@ function FilamentDetail() {
                   PrusaSlicer" has a visible cause; it's editable on the
                   form's Slicer tab. */}
               {(() => {
-                const restriction =
+                const rawRestriction =
                   filament.settings?.compatible_printers_condition ||
                   filament.settings?.compatible_printers;
+                // GH #678: compatible_printers may be a multi-valued ARRAY
+                // now — render it joined the way PrusaSlicer lists read.
+                const restriction = Array.isArray(rawRestriction)
+                  ? rawRestriction.join("; ")
+                  : rawRestriction;
                 // On a VARIANT the detail doc's settings are parent-resolved,
                 // so the restriction may live in the PARENT's bag — the raw
                 // edit form then can't see or clear it. Point at the parent
