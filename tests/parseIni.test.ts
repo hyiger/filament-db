@@ -756,6 +756,16 @@ describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () =
     expect(parsed[0].settings.some_note_like).toBe("plain;scalar;content");
   });
 
+  it("our own exported multi-element gcode round-trips through INI (r13)", () => {
+    const ini = [
+      "[filament:MultiGcode]",
+      "filament_vendor = V",
+      'start_filament_gcode = "; setup A";"; setup B"',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.start_filament_gcode).toEqual(["; setup A", "; setup B"]);
+  });
+
   it("gcode/notes wire values are NEVER split — semicolons are content (r8)", () => {
     const ini = [
       "[filament:Gcode]",

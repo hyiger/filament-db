@@ -39,18 +39,18 @@ export interface FilamentData {
  * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
  */
 /**
- * GH #678 round 8: keys whose INI value is ALWAYS one scalar and must never
- * be split on `;` at import — the wire-value texts (gcode/notes, whose
- * legacy raw wraps can hold unescaped inner quotes that defeat element
- * parsing) and the single-expression condition (round 5). Everything else
- * with a top-level semicolon inverts through parseIniValueList, matching
- * what writeSection emits for array bag values.
+ * GH #678 rounds 8+13: keys whose INI value is ALWAYS one scalar and must
+ * never list-parse — the single-expression condition (round 5) and
+ * `inherits`. The gcode/notes wire texts left this set in round 13: under
+ * the strict all-quoted grammar a bare semicolon in their content can no
+ * longer be mistaken for a separator, so our own exported multi-element
+ * gcode/notes arrays round-trip again. The accepted residual, stated: a
+ * LEGACY raw-wrapped note whose content happens to contain a
+ * quote-aligned `";"` sequence could false-match the grammar — a shape no
+ * canonical writer produces and no real note has been observed to hold.
  */
 export const SCALAR_ONLY_INI_KEYS = new Set([
   "compatible_printers_condition",
-  "start_filament_gcode",
-  "end_filament_gcode",
-  "filament_notes",
   "inherits",
 ]);
 
