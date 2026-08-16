@@ -177,11 +177,19 @@ export function wrapIniString(content: string): string {
 export function parseIniValueList(value: string): string[] {
   const out: string[] = [];
   let i = 0;
+  // Not a well-formed list → the whole value is ONE element. Round 18: a
+  // hand-formatted `"A" ; "B"` used to yield ["A", " ", " \"B\""] — three
+  // bogus printer names, two matching nothing. (The reported infinite loop
+  // does not occur: every branch either advances or breaks, verified
+  // empirically over the malformed shapes; the progress assertion below
+  // makes that structural rather than incidental.)
+  const whole = (): string[] => [value];
   while (i <= value.length) {
+    const before = i;
     if (value[i] === '"') {
-      // Quoted element: consume to the closing unescaped quote, unescaping.
       let el = "";
       i += 1;
+      let closed = false;
       while (i < value.length) {
         const ch = value[i];
         if (ch === "\\" && i + 1 < value.length) {
@@ -190,15 +198,21 @@ export function parseIniValueList(value: string): string[] {
           i += 2;
           continue;
         }
-        if (ch === '"') break;
+        if (ch === '"') {
+          closed = true;
+          break;
+        }
         el += ch;
         i += 1;
       }
+      if (!closed) return whole(); // unterminated quote: not a list
       i += 1; // past the closing quote
       out.push(el);
-      // skip the separator (or end)
-      if (value[i] === ";") i += 1;
-      else if (i >= value.length) break;
+      while (value[i] === " " || value[i] === "\t") i += 1; // tolerate `"A" ; "B"`
+      if (i >= value.length) break;
+      if (value[i] !== ";") return whole(); // stray text between elements
+      i += 1;
+      while (value[i] === " " || value[i] === "\t") i += 1;
     } else {
       const sep = value.indexOf(";", i);
       if (sep === -1) {
@@ -208,10 +222,20 @@ export function parseIniValueList(value: string): string[] {
       out.push(value.slice(i, sep));
       i = sep + 1;
     }
+    // Structural progress guarantee: every iteration consumes at least one
+    // character, so no future edit can turn this into a spin.
+    if (i <= before) return whole();
   }
   return out;
 }
 
+/**
+ * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
+ * matching escape_strings_cstyle's coStrings convention. Elements are
+ * joined with `;`; EVERY element is quoted (round 12) so an emitted list
+ * is self-describing and cannot be confused with scalar content that
+ * merely contains a semicolon.
+ */
 export function serializeIniValueList(values: readonly unknown[]): string {
   // Round 12 (Codex P2): EVERY element is quoted, unconditionally — this
   // makes an emitted list SELF-DESCRIBING. A scalar's canonical wire form

@@ -700,6 +700,20 @@ describe("parseIniValueList — the coStrings inverse (GH #678 r6)", () => {
     }
   });
 
+  it("tolerates whitespace around separators — hand-formatted INI (r18)", () => {
+    expect(parseIniValueList('"A" ; "B"')).toEqual(["A", "B"]);
+    expect(parseIniValueList('"A"\t;\t"B"')).toEqual(["A", "B"]);
+    expect(parseIniValueList('"A" ')).toEqual(["A"]);
+  });
+
+  it("falls back to the WHOLE value when the shape is not a list (r18)", () => {
+    // Never invent element names from malformed text: pre-fix, '"A" ; "B"'
+    // yielded ["A", " ", " \"B\""] — two of which match no printer.
+    expect(parseIniValueList('"A" "B"')).toEqual(['"A" "B"']);
+    expect(parseIniValueList('"A"x;"B"')).toEqual(['"A"x;"B"']);
+    expect(parseIniValueList('"unterminated')).toEqual(['"unterminated']);
+  });
+
   it("splits an unquoted scalar into one element", () => {
     expect(parseIniValueList("Just One")).toEqual(["Just One"]);
   });
