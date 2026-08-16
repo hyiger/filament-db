@@ -612,7 +612,18 @@ function writeSection(
       // GH #678: a multi-valued bag entry (compatible_printers et al.) emits
       // PrusaSlicer's coStrings form. String(value) would comma-join —
       // which the slicer reads back as ONE value with commas in it.
-      lines.push(`${key} = ${serializeIniValueList(value)}`);
+      // Round 14 (Codex P2): a SINGLETON array collapses to the scalar
+      // convention — the strict list grammar needs two elements, so an
+      // emitted one-element list would re-import as a quoted wire scalar
+      // and garble the next Orca export. Single-element array ≡ scalar is
+      // the parser convention everywhere else.
+      if (value.length === 0) {
+        lines.push(`${key} = `);
+      } else if (value.length === 1) {
+        lines.push(`${key} = ${serializeIniValue(String(value[0]), key)}`);
+      } else {
+        lines.push(`${key} = ${serializeIniValueList(value)}`);
+      }
     } else if (value !== undefined) {
       // GH #1070: a raw \r/\n inside a bag value would split the emitted
       // `key = value` line — PrusaSlicer rejects the whole bundle over one

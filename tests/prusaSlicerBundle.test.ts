@@ -1135,6 +1135,21 @@ describe("generatePrusaSlicerBundle", () => {
       expect(bundle).toContain('compatible_printers = "Line1\\nLine2";"Plain"');
     });
 
+    it("a SINGLETON array collapses to the scalar convention (r14)", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Singleton",
+          settings: { filament_soluble: ["1"] },
+        },
+      ]);
+      // Not '"1"' — the strict list grammar needs two elements, so a quoted
+      // singleton would re-import as a wire scalar and garble the next
+      // Orca export.
+      expect(bundle).toContain("filament_soluble = 1");
+      expect(bundle).not.toContain('filament_soluble = "1"');
+    });
+
     it("leaves scalar bag values untouched next to an array one", () => {
       const bundle = generatePrusaSlicerBundle([
         {
