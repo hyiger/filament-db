@@ -208,7 +208,9 @@ export function collapsePerNozzleImportSections(
   const out: CollapsedFilamentData[] = [];
   const seenGroups = new Set<string>();
   for (const f of filaments) {
-    const hint = (f.settings.filamentdb_nozzle ?? "").trim();
+    // Routing hints are always scalars; a (nonsensical) array here reads as absent.
+    const rawHint = f.settings.filamentdb_nozzle;
+    const hint = typeof rawHint === "string" ? rawHint.trim() : "";
     if (!hint) {
       // Pass through, but never persist routing hints / re-derived keys.
       const settings = { ...f.settings };
@@ -251,7 +253,8 @@ export function collapsePerNozzleImportSections(
       if (!("first_layer_bed_temperature" in f.settings)) delete temps.bedFirstLayer;
       if (Object.keys(temps).length === 0) delete collapsed.temperatures;
       if (!("inherits" in f.settings)) delete collapsed.inherits;
-      const fid = (f.settings.filamentdb_id ?? "").trim();
+      const rawFid = f.settings.filamentdb_id;
+      const fid = typeof rawFid === "string" ? rawFid.trim() : "";
       if (fid) collapsed.filamentdbId = fid; // GH #950: id-first resolution hint
       out.push(collapsed);
       continue;
@@ -260,7 +263,8 @@ export function collapsePerNozzleImportSections(
     const baseName = f.name.endsWith(` ${hint}`)
       ? f.name.slice(0, f.name.length - hint.length - 1).trim()
       : f.name;
-    const id = (f.settings.filamentdb_id ?? "").trim();
+    const rawId = f.settings.filamentdb_id;
+    const id = typeof rawId === "string" ? rawId.trim() : "";
     const groupKey = id ? `id:${id}` : `name:${baseName.toLowerCase()}`;
     if (seenGroups.has(groupKey)) continue; // a sibling already represents the base
     seenGroups.add(groupKey);

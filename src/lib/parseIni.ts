@@ -24,7 +24,7 @@ export interface FilamentData {
   spoolWeight?: number | null;
   shrinkageXY?: number | null;
   shrinkageZ?: number | null;
-  settings: Record<string, string | null>;
+  settings: Record<string, string | string[] | null>;
 }
 
 /**
@@ -148,6 +148,54 @@ export function wrapIniString(content: string): string {
  * A comma-join (what String(array) would do) is NOT a list to PrusaSlicer;
  * it reads back as one value with commas in it.
  */
+/**
+ * Inverse of {@link serializeIniValueList} (GH #678 round 6): split a
+ * coStrings RHS into its elements — `;` separates, a quoted element is
+ * unescaped C-style. A scalar with no top-level `;` returns a single
+ * element. Used by the INI importer to reconstruct list-typed settings
+ * (compatible_printers) that our own exporter — or PrusaSlicer itself —
+ * emitted as a list, so a Prusa-INI round-trip through an Orca/Bambu
+ * export keeps list semantics instead of exporting the raw quoted
+ * semicolon expression as ONE printer name.
+ */
+export function parseIniValueList(value: string): string[] {
+  const out: string[] = [];
+  let i = 0;
+  while (i <= value.length) {
+    if (value[i] === '"') {
+      // Quoted element: consume to the closing unescaped quote, unescaping.
+      let el = "";
+      i += 1;
+      while (i < value.length) {
+        const ch = value[i];
+        if (ch === "\\" && i + 1 < value.length) {
+          const next = value[i + 1];
+          el += next === "n" ? "\n" : next === "r" ? "\r" : next;
+          i += 2;
+          continue;
+        }
+        if (ch === '"') break;
+        el += ch;
+        i += 1;
+      }
+      i += 1; // past the closing quote
+      out.push(el);
+      // skip the separator (or end)
+      if (value[i] === ";") i += 1;
+      else if (i >= value.length) break;
+    } else {
+      const sep = value.indexOf(";", i);
+      if (sep === -1) {
+        out.push(value.slice(i));
+        break;
+      }
+      out.push(value.slice(i, sep));
+      i = sep + 1;
+    }
+  }
+  return out;
+}
+
 export function serializeIniValueList(values: readonly string[]): string {
   return values
     .map((el) => (el === "" || /[\s;"\\]/.test(el) ? `"${escapeIniValueContent(el)}"` : el))
@@ -329,7 +377,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
   const lines = content.split("\n");
 
   let currentName: string | null = null;
-  let currentSettings: Record<string, string | null> = {};
+  let currentSettings: Record<string, string | string[] | null> = {};
 
   function flushFilament() {
     if (currentName && Object.keys(currentSettings).length > 0) {
@@ -344,23 +392,31 @@ export function parseIniFilaments(content: string): FilamentData[] {
         if (!val || val === "nil") return null;
         return val;
       };
+      // GH #678 round 6: the bag can hold arrays now (compatible_printers),
+      // but every TOP-LEVEL field below is scalar-typed and its key is never
+      // stored as an array — this narrows for the type system (first element
+      // defensively, matching the read convention everywhere else).
+      const scalar = (v: string | string[] | null | undefined): string | undefined => {
+        const s0 = Array.isArray(v) ? v[0] : v;
+        return s0 ?? undefined;
+      };
 
       const fd: FilamentData = {
         name: currentName!,
-        vendor: currentSettings.filament_vendor || "Unknown",
-        type: currentSettings.filament_type || "Unknown",
-        color: currentSettings.filament_colour || "#808080",
-        cost: parseNum(currentSettings.filament_cost),
-        density: parseNum(currentSettings.filament_density),
-        diameter: parseNum(currentSettings.filament_diameter) ?? 1.75,
+        vendor: scalar(currentSettings.filament_vendor) || "Unknown",
+        type: scalar(currentSettings.filament_type) || "Unknown",
+        color: scalar(currentSettings.filament_colour) || "#808080",
+        cost: parseNum(scalar(currentSettings.filament_cost)),
+        density: parseNum(scalar(currentSettings.filament_density)),
+        diameter: parseNum(scalar(currentSettings.filament_diameter)) ?? 1.75,
         temperatures: {
-          nozzle: parseNum(currentSettings.temperature),
-          nozzleFirstLayer: parseNum(currentSettings.first_layer_temperature),
-          bed: parseNum(currentSettings.bed_temperature),
-          bedFirstLayer: parseNum(currentSettings.first_layer_bed_temperature),
+          nozzle: parseNum(scalar(currentSettings.temperature)),
+          nozzleFirstLayer: parseNum(scalar(currentSettings.first_layer_temperature)),
+          bed: parseNum(scalar(currentSettings.bed_temperature)),
+          bedFirstLayer: parseNum(scalar(currentSettings.first_layer_bed_temperature)),
         },
-        maxVolumetricSpeed: parseNum(currentSettings.filament_max_volumetric_speed),
-        inherits: nilOrVal(currentSettings.inherits),
+        maxVolumetricSpeed: parseNum(scalar(currentSettings.filament_max_volumetric_speed)),
+        inherits: nilOrVal(scalar(currentSettings.inherits)),
         settings: { ...currentSettings },
       };
       // GH #951 (Codex): lift spool weight + shrinkage to top-level ONLY when the
@@ -368,13 +424,13 @@ export function parseIniFilaments(content: string): FilamentData[] {
       // `undefined` (→ omitted from the importer's `$set`) rather than nulling a
       // value already on the row. See the FilamentData comment above.
       if ("filament_spool_weight" in currentSettings) {
-        fd.spoolWeight = parseNum(currentSettings.filament_spool_weight);
+        fd.spoolWeight = parseNum(scalar(currentSettings.filament_spool_weight));
       }
       if ("filament_shrinkage_compensation_xy" in currentSettings) {
-        fd.shrinkageXY = parseNum(currentSettings.filament_shrinkage_compensation_xy);
+        fd.shrinkageXY = parseNum(scalar(currentSettings.filament_shrinkage_compensation_xy));
       }
       if ("filament_shrinkage_compensation_z" in currentSettings) {
-        fd.shrinkageZ = parseNum(currentSettings.filament_shrinkage_compensation_z);
+        fd.shrinkageZ = parseNum(scalar(currentSettings.filament_shrinkage_compensation_z));
       }
       filaments.push(fd);
     }
@@ -419,7 +475,20 @@ export function parseIniFilaments(content: string): FilamentData[] {
         // and stays verbatim like everything else.
         let value: string | null = trimmed.substring(eqIndex + 1).trim();
         if (value === "nil") value = null;
-        currentSettings[key] = value;
+        // GH #678 round 6: compatible_printers is a coStrings LIST — our own
+        // exporter (and PrusaSlicer itself) emits `"A";"B"`. Stored verbatim,
+        // an Orca/Bambu re-export would emit the quoted semicolon expression
+        // as ONE printer name. Reconstruct the array when the RHS holds more
+        // than one element; a single element stays a scalar (unwrapped from
+        // its quotes by the list parser), matching the Bambu ingestion
+        // convention. `compatible_printers_condition` is deliberately NOT
+        // here — it is a single expression (round 5).
+        if (key === "compatible_printers" && value != null && value !== "") {
+          const els = parseIniValueList(value);
+          currentSettings[key] = els.length > 1 ? els : value;
+        } else {
+          currentSettings[key] = value;
+        }
       }
     }
   }

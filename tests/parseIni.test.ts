@@ -7,6 +7,7 @@ import {
   wrapIniString,
   unwrapIniString,
   serializeIniValueList,
+  parseIniValueList,
 } from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
@@ -671,5 +672,53 @@ describe("serializeIniValueList (GH #678)", () => {
 
   it("escapes newlines inside an element so the line cannot split", () => {
     expect(serializeIniValueList(["a\nb"])).toBe('"a\\nb"');
+  });
+});
+
+describe("parseIniValueList — the coStrings inverse (GH #678 r6)", () => {
+  it("round-trips serializeIniValueList exactly", () => {
+    const cases = [
+      ["A", "B"],
+      ["Bambu Lab P1S 0.4 nozzle", "Bambu Lab X1C 0.4 nozzle"],
+      ["a;b", 'say "hi"', ""],
+      ["Line1\nLine2", "Plain"],
+    ];
+    for (const els of cases) {
+      expect(parseIniValueList(serializeIniValueList(els))).toEqual(els);
+    }
+  });
+
+  it("splits an unquoted scalar into one element", () => {
+    expect(parseIniValueList("Just One")).toEqual(["Just One"]);
+  });
+});
+
+describe("INI import reconstructs a compatible_printers list (GH #678 r6)", () => {
+  it("a coStrings RHS becomes an array; a single value stays scalar", () => {
+    const ini = [
+      "[filament:Multi]",
+      "filament_vendor = V",
+      'compatible_printers = "Bambu Lab P1S 0.4 nozzle";"Bambu Lab X1C 0.4 nozzle"',
+      "",
+      "[filament:Single]",
+      "filament_vendor = V",
+      "compatible_printers = OnePrinter",
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.compatible_printers).toEqual([
+      "Bambu Lab P1S 0.4 nozzle",
+      "Bambu Lab X1C 0.4 nozzle",
+    ]);
+    expect(parsed[1].settings.compatible_printers).toBe("OnePrinter");
+  });
+
+  it("compatible_printers_condition is NOT list-parsed — one expression", () => {
+    const ini = [
+      "[filament:Cond]",
+      "filament_vendor = V",
+      'compatible_printers_condition = printer_model=~/(A;B)/',
+    ].join("\n");
+    const parsed = parseIniFilaments(ini);
+    expect(parsed[0].settings.compatible_printers_condition).toBe("printer_model=~/(A;B)/");
   });
 });
