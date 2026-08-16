@@ -259,10 +259,14 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
   const raw = settings.start_filament_gcode;
-  // GH #678 round 2 (Codex P1): a multi-element gcode is an array now —
-  // .match on it threw during form initialization. Join for the scan; the
-  // stored array itself is preserved by the unedited-restore pass on save.
-  const gcode = Array.isArray(raw) ? raw.join("\n") : raw;
+  // GH #678 rounds 2+11: an array scans its FIRST element only — the same
+  // convention every reader follows (and pre-#678's collapse semantics).
+  // Scanning ALL elements (the round-2 join) derived a PA the textarea
+  // doesn't display: ["", "M572 S0.04"] seeded a blank textarea plus a
+  // populated PA field, and the submit then synthesized a scalar M572 line
+  // that no longer matched the blank first-element seed — the restore pass
+  // read it as edited and the per-extruder array was lost on any save.
+  const gcode = Array.isArray(raw) ? raw[0] : raw;
   if (!gcode) return "";
   // Match M572 S<value> — take the first occurrence
   const match = gcode.match(/M572\s+S([\d.]+)/);
