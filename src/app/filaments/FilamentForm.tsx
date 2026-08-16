@@ -987,7 +987,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       ]);
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
-        if (!Array.isArray(sv) || typeof v !== "string") continue;
+        if (!Array.isArray(sv)) continue;
+        // A blank first element seeds "", and the `|| undefined` submit
+        // writes turn an untouched "" into undefined — which JSON-omits the
+        // key and would silently DELETE the stored array (round 10, Codex
+        // P2). Outgoing undefined therefore normalizes to the "" it came
+        // from before the unedited comparison. Anything non-string/non-
+        // undefined is not a form-written scalar; leave it alone.
+        const outgoing = typeof v === "string" ? v : v === undefined ? "" : null;
+        if (outgoing === null) continue;
         // Every unedited test mirrors its field's SEED derivation exactly:
         // checkboxes via settingFlagIsOn, everything else via the
         // first-element display getSettingVal produces (round 9 — the
@@ -995,8 +1003,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         // compatible_printers never reaches this loop (its write is
         // edited-only, guarded on the join comparison above).
         const unedited = CHECKBOX_SETTING_KEYS.has(k)
-          ? v === (settingFlagIsOn(sv) ? "1" : "0")
-          : v === (sv[0] ?? "");
+          ? outgoing === (settingFlagIsOn(sv) ? "1" : "0")
+          : outgoing === (sv[0] ?? "");
         if (unedited) (settings as Record<string, unknown>)[k] = sv;
       }
     }
