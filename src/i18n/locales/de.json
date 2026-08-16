@@ -222,7 +222,7 @@
   "dashboard.dryDue.never": "nie getrocknet",
   "dashboard.dryDue.more": "…und {count} weitere, nicht angezeigt.",
   "dashboard.recentPrints": "Letzte Drucke",
-  "dashboard.recentPrints.empty": "Noch keine Druckaufträge erfasst. Manueller Spulenverbrauch wird separat pro Filament und in der Analyse erfasst.",
+  "dashboard.recentPrints.empty": "Noch keine Druckaufträge erfasst. Aufträge werden über die REST-API (POST /api/print-history) von Slicer- oder Drucker-Integrationen aufgezeichnet — bisher ist keine integriert. Manuelle Spulennutzung wird separat je Filament und in der Analyse erfasst.",
   "common.clear": "Leeren",
   "common.cancel": "Abbrechen",
   "common.copy": "{value} kopieren",
@@ -1836,5 +1836,6 @@
   "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu.",
   "settings.nfcNtagProbeFailed": "Die Größe des Tags konnte nicht überprüft werden — der Leser schlug während der Prüfung wiederholt fehl; es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
   "settings.nfcNtagSizeAmbiguous": "Dieser Leser kann die Tag-Größe nicht ermitteln, und Lesezugriffe belegen, dass es kein vollständiger NTAG216 ist — er ist entweder ein kleinerer NTAG oder passwortgeschützt (hier nicht unterscheidbar). Es wurde nichts gelöscht. Verwenden Sie NFC schreiben (das die Größe explizit setzt) oder einen Leser mit GET_VERSION-Unterstützung.",
-  "settings.nfcNtagWriteRefused": "Der Tag hat den Schreibzugriff auf Seite {page} verweigert — er ist möglicherweise passwort-schreibgeschützt. Das Löschen ist UNVOLLSTÄNDIG: Seiten vor {page} wurden geleert, Daten ab Seite {page} sind noch vorhanden."
+  "settings.nfcNtagWriteRefused": "Der Tag hat den Schreibzugriff auf Seite {page} verweigert — er ist möglicherweise passwort-schreibgeschützt. Das Löschen ist UNVOLLSTÄNDIG: Seiten vor {page} wurden geleert, Daten ab Seite {page} sind noch vorhanden.",
+  "analytics.jobsApiHint": "über die REST-API erfasst"
 }
