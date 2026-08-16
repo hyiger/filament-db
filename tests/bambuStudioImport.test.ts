@@ -132,6 +132,17 @@ describe("parseBambuStudioProfile", () => {
     ]);
   });
 
+  it("compatible_printers_condition stays SCALAR even when multi-element (#678 r5)", () => {
+    // It is one expression, not a list — and the #1021 legacy-condition
+    // ingestion strip is string-only by design. An array here would bypass
+    // that guard and re-persist a machine-derived restriction.
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      compatible_printers_condition: ["nozzle_diameter[0]==0.4", "nozzle_diameter[0]==0.4"],
+    });
+    expect(filament.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
   it("keeps the single-element scalar collapse byte-identical (#678)", () => {
     const { filament } = parseBambuStudioProfile({
       name: ["X"],

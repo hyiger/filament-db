@@ -422,7 +422,16 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     // scalar collapse below BYTE-IDENTICAL — the Orca/Bambu one-element
     // convention is the overwhelmingly common case and every existing
     // round-trip and string-equality path depends on it.
-    if (Array.isArray(value) && value.length > 1) {
+    // GH #678 round 5 (Codex P1): `compatible_printers_condition` is a
+    // single EXPRESSION, not a list — the multi-value preservation exists
+    // for genuine lists like compatible_printers. Preserving an array here
+    // would bypass the #1021 legacy-condition ingestion strip entirely
+    // (stripLegacyMachineCondition's grammar is string-only, by design), so
+    // a pre-upgrade multi-extruder profile could re-persist the
+    // machine-derived restriction and hide the preset again. First-element
+    // collapse keeps the pre-#678 semantics and keeps the guard sound.
+    const isScalarOnlyKey = key === "compatible_printers_condition";
+    if (Array.isArray(value) && value.length > 1 && !isScalarOnlyKey) {
       // Elements are stored RAW (round 2, Codex P2): arrays never ride the
       // scalar `key = value` INI path — the PrusaSlicer emitter runs them
       // through serializeIniValueList, which quotes/escapes newlines itself,
