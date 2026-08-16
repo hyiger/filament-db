@@ -172,39 +172,50 @@ export async function GET(
       if (typeMatches.length > 0) scopedMatches = typeMatches;
     }
 
-    // GH #1047 Phase 0: narrow by PRINTER before the bed-type step, using the
-    // same name-or-ObjectId convention bed_type already uses. SOFT, matching
-    // the nozzle_type posture directly above — a printer match wins; else the
-    // shareable printer-null defaults; else the unscoped list, so a
+    // GH #1047 Phase 0: PRIORITIZE by printer — deliberately reordering
+    // rather than filtering (Codex P2). Dropping the non-matching entries
+    // discarded the printer-less BEDLESS default that the bed_type step
+    // below falls back to, so `printer=P&bed_type=Smooth` with (P,Textured)
+    // + (null,null) returned the Textured entry, breaking the documented
+    // "a bed-type miss falls back to a calibration without a bed type".
+    // Ordering keeps that promise while `scopedMatches[0]` still prefers
+    // the printer match. Soft throughout, like nozzle_type beside it: a
     // printer/data mismatch never turns a working lookup into a 404.
+    const genericEntries = scopedMatches.filter((cal) => !cal.printer);
     if (printerParam) {
-      const wanted = printerParam.trim().toLowerCase();
-      // Both sides normalized through `wanted` (Codex P2): a populated
-      // ObjectId renders canonical lowercase, so an id typed/stored with
-      // uppercase hex — or with surrounding whitespace — missed the compare
-      // and silently fell through to the printer-less default, which looks
-      // like "no calibration for my machine" with no error to explain it.
-      const printerMatches = scopedMatches.filter(
+      const raw = printerParam.trim();
+      const wanted = raw.toLowerCase();
+      // EXACT trimmed name first (Codex P2): the Printer name index is
+      // case-SENSITIVE, so "XL" and "xl" can both exist. When the caller
+      // supplies the stored spelling, array order must not decide which
+      // machine's values come back.
+      const exactName = scopedMatches.filter(
+        (cal) => (cal.printer?.name ?? "").trim() === raw,
+      );
+      // Else fold case, and accept the ObjectId form (bed_type's
+      // convention). Both sides normalized — a populated id renders
+      // canonical lowercase, so an uppercase-hex id silently missed.
+      const loose = scopedMatches.filter(
         (cal) =>
           (cal.printer?.name ?? "").trim().toLowerCase() === wanted ||
           String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
       );
+      const printerMatches = exactName.length > 0 ? exactName : loose;
       if (printerMatches.length > 0) {
-        scopedMatches = printerMatches;
-      } else {
-        // The shareable defaults (printer = null) are the right fallback for
-        // an unknown printer — they are what `prusaSlicerBundle` already
-        // prefers when baking a preset.
-        const defaults = scopedMatches.filter((cal) => !cal.printer);
-        if (defaults.length > 0) scopedMatches = defaults;
+        // Printer-scoped first, the shareable defaults retained behind them
+        // (disjoint sets: a generic entry has no printer to match).
+        scopedMatches = [...printerMatches, ...genericEntries];
+      } else if (genericEntries.length > 0) {
+        // Unknown printer → the shareable defaults, which is what
+        // prusaSlicerBundle already prefers when baking a preset.
+        scopedMatches = genericEntries;
       }
-    } else {
-      // No printer asked for: prefer the shareable defaults over a
-      // machine-specific entry. Deterministic where the old code took
-      // whatever sorted first — see the PR note; this is a small behavior
-      // change and the reason the param exists.
-      const defaults = scopedMatches.filter((cal) => !cal.printer);
-      if (defaults.length > 0) scopedMatches = defaults;
+    } else if (genericEntries.length > 0) {
+      // No printer asked for: prefer the shareable defaults, keeping the
+      // machine-specific entries behind them so a filament with ONLY
+      // printer-scoped rows still answers. Deterministic where the old code
+      // took whatever sorted first — the small behavior change this adds.
+      scopedMatches = [...genericEntries, ...scopedMatches.filter((cal) => cal.printer)];
     }
 
     let match = scopedMatches[0];

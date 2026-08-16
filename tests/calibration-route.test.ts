@@ -132,6 +132,50 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.02);
     });
 
+    it("keeps the bedless default reachable after printer narrowing (Codex P2)", async () => {
+      // (P, Textured) + (null, null): asking for P with bed_type=Smooth must
+      // fall back to the BEDLESS generic, per the documented bed-type rule —
+      // a filter-based narrowing hid it and returned the Textured entry.
+      const Printer = mongoose.models.Printer;
+      const BedType = mongoose.models.BedType;
+      const noz = await Nozzle.create({ name: "0.4 B", diameter: 0.4, type: "Brass" });
+      const p1 = await Printer.create({ name: "P1", manufacturer: "M", printerModel: "X" });
+      const textured = await BedType.create({ name: "Textured", material: "PEI" });
+      const f = await Filament.create({
+        name: "PC", vendor: "X", type: "PC",
+        calibrations: [
+          { nozzle: noz._id, printer: p1._id, bedType: textured._id, pressureAdvance: 0.11 },
+          { nozzle: noz._id, pressureAdvance: 0.01 }, // generic + bedless
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=P1&bed_type=Smooth`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.01);
+    });
+
+    it("prefers the EXACT printer name over a case-folded twin (Codex P2)", async () => {
+      // The Printer name index is case-sensitive, so XL and xl can coexist.
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 C", diameter: 0.4, type: "Brass" });
+      const lower = await Printer.create({ name: "xl", manufacturer: "M", printerModel: "X" });
+      const upper = await Printer.create({ name: "XL", manufacturer: "M", printerModel: "X" });
+      const f = await Filament.create({
+        name: "TPU", vendor: "X", type: "TPU",
+        calibrations: [
+          { nozzle: noz._id, printer: lower._id, pressureAdvance: 0.21 }, // sorts first
+          { nozzle: noz._id, printer: upper._id, pressureAdvance: 0.22 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=XL`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // Array order would have handed back the lowercase machine's 0.21.
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.22);
+    });
+
     it("still answers when only printer-scoped entries exist", async () => {
       const Printer = mongoose.models.Printer;
       const noz = await Nozzle.create({ name: "0.6 Brass", diameter: 0.6, type: "Brass" });
