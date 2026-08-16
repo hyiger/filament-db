@@ -943,8 +943,14 @@ export class NfcService extends EventEmitter {
     const probeStart = Math.max(4, NTAG_PHYSICAL_LAST_PAGE.NTAG216 - 3);
     for (let attempt = 1; ; attempt++) {
       try {
-        await this.readNtagBurst(protocol, probeStart);
-        return NTAG_NAME_TO_NDEF_BYTES.NTAG216;
+        const data = await this.readNtagBurst(protocol, probeStart);
+        // A COMPLETE 16-byte burst is the proof (round 11, Codex P1): some
+        // readers return SW=9000 with a short payload, which the head/image
+        // paths already treat as possible — a short answer here proves
+        // nothing about pages 227-230 and refuses as ambiguous rather than
+        // stamping an 872-byte CC on an anomalously-responding tag.
+        if (data.length >= 16) return NTAG_NAME_TO_NDEF_BYTES.NTAG216;
+        return null;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
