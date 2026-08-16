@@ -265,7 +265,11 @@ export default function AnalyticsPage() {
               hint={
                 data.totals.manualEntries > 0
                   ? t("analytics.manualEntriesHint", { count: data.totals.manualEntries })
-                  : undefined
+                  : data.totals.jobs === 0
+                    ? // GH #1069: with neither jobs nor manual entries the
+                      // zero read as "broken". Say where jobs come from.
+                      t("analytics.jobsApiHint")
+                    : undefined
               }
             />
           </div>
