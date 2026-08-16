@@ -1711,7 +1711,7 @@
   "settings.nfcReadOnlyBambu": "Bambu-Lab-Tags sind bereits schreibgeschützt und können nicht geändert werden.",
   "settings.nfcReadOnlyNotFormatted": "Dieser Tag enthält noch keine OpenPrintTag-Daten zum Sperren — schreiben Sie zuerst ein Filament darauf.",
   "settings.nfcReadOnlyNtagUnsupported": "Schreibschutz ist für OpenTag3D/NTAG-Tags nicht verfügbar — ihr Capability Container ist einmalig programmierbar und lässt sich nicht zurücksetzen. Schreibschutz funktioniert bei OpenPrintTag (SLIX2)-Tags.",
-  "settings.nfcNtagSizeUnknown": "Die Größe des NTAG konnte nicht ermittelt werden. Verwenden Sie einen NTAG 213, 215 oder 216 oder formatieren Sie den Tag vorab.",
+  "settings.nfcNtagSizeUnknown": "Die Größe des NTAG konnte nicht ermittelt werden — es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
   "settings.nfcLoadedTag": "Aufgelegter Tag:",
   "settings.nfcLoadedBambu": "Bambu (schreibgeschützt)",
   "settings.nfcLoadedNtagOpenTag3d": "NTAG · OpenTag3D",
@@ -1834,5 +1834,8 @@
   "health.dep.printHistoryJobs": "Druckaufträge",
   "health.dep.amsSlots": "AMS-Slots",
   "health.bedTempsRenameNote": "Hinweis: {count} Filament(e) verweisen in den Temperaturen je Druckbett-Typ auf genau diesen Namen. Umbenennen aktualisiert diese Einträge nicht — wählen Sie die Druckoberfläche bei diesen Filamenten danach neu.",
+  "settings.nfcNtagProbeFailed": "Die Größe des Tags konnte nicht überprüft werden — der Leser schlug während der Prüfung wiederholt fehl; es wurde nichts gelöscht. Legen Sie den Tag neu auf und versuchen Sie es erneut.",
+  "settings.nfcNtagSizeAmbiguous": "Dieser Leser kann die Tag-Größe nicht ermitteln, und Lesezugriffe belegen, dass es kein vollständiger NTAG216 ist — er ist entweder ein kleinerer NTAG oder passwortgeschützt (hier nicht unterscheidbar). Es wurde nichts gelöscht. Verwenden Sie NFC schreiben (das die Größe explizit setzt) oder einen Leser mit GET_VERSION-Unterstützung.",
+  "settings.nfcNtagWriteRefused": "Der Tag hat den Schreibzugriff auf Seite {page} verweigert — er ist möglicherweise passwort-schreibgeschützt. Das Löschen ist UNVOLLSTÄNDIG: Seiten vor {page} wurden geleert, Daten ab Seite {page} sind noch vorhanden.",
   "form.maxVolumetricSpeed": "Max. volumetrische Geschwindigkeit (mm³/s)"
 }
