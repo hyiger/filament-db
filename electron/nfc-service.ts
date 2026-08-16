@@ -934,10 +934,10 @@ export class NfcService extends EventEmitter {
    * (the same behaviour the write path's brick guard is built on, proven on
    * the ACR1552U), so the first size whose top page reads is the chip's
    * size. Falls through to the NTAG213 floor — the caller has already read
-   * the head, so 144 bytes is always physically present. A transport blip
-   * mid-probe can only UNDER-size (both probes fail → 213): the erase then
-   * cleans a smaller extent and stamps a smaller CC — recoverable by
-   * re-erasing — and never writes past the chip's end.
+   * the head, so 144 bytes is always physically present. Only a DEFINITIVE
+   * chip NAK (an SW error — the chip answered) demotes a rung; transport
+   * failures retry and, when persistent, FAIL CLOSED with nothing written
+   * (round 4, Codex P1 — a reader blip must never shrink the wipe extent).
    */
   private async probeNtagCapacity(protocol: number): Promise<number> {
     for (const bytes of [NTAG_NAME_TO_NDEF_BYTES.NTAG216, NTAG_NAME_TO_NDEF_BYTES.NTAG215]) {
