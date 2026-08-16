@@ -939,7 +939,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         .split(";")
         .map((p) => p.trim())
         .filter((p) => p !== "");
-      settings.compatible_printers = parts.length > 1 ? parts : form.compatPrinters || "";
+      // Round 16 (Codex P2): store the NORMALIZED value in every arm. The
+      // raw field could keep a stray separator ("A;" after deleting the
+      // second entry) or surrounding whitespace, which the exporters then
+      // emit as the printer NAME — matching nothing and hiding the preset.
+      // parts is already trimmed and empty-filtered: >1 is the list, 1 is
+      // the scalar, 0 clears the restriction.
+      settings.compatible_printers =
+        parts.length > 1 ? parts : parts.length === 1 ? parts[0] : "";
     }
     if (
       form.compatPrintersCondition !==
