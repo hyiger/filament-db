@@ -9,6 +9,7 @@ import {
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
 import {
+  type TrimNameConflict,
   trimEntityNames,
   describeTrimResult,
   type MinimalTrimDb,
@@ -262,6 +263,15 @@ export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
   return full.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
 }
 
+/**
+ * GH #1164: a trim-collision conflict the SYNC pass found, tagged with the
+ * side it lives on. The enriched shape (#1149's id/trimsTo/collidesWith)
+ * already exists at the trim call below and was discarded there — the Data
+ * health page can only scan the database the SERVER talks to, so a
+ * remote-only conflict was previously invisible to every surface.
+ */
+export type SyncNameConflict = TrimNameConflict & { side: "local" | "remote" };
+
 export interface SyncStatus {
   /**
    * "partial" (GH #369) means some collections succeeded and at least one
@@ -275,6 +285,14 @@ export interface SyncStatus {
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
+  /**
+   * GH #1164: ACTIVE trim-collision conflicts seen in the last cycle that
+   * reached the trim phase, tagged local/remote. Refreshed wholesale each
+   * such cycle (so a resolved conflict disappears) and naturally empty on a
+   * clean database. Additive: it never gates anything — the collection
+   * gating still runs off `conflictedNames`, untouched.
+   */
+  nameConflicts: SyncNameConflict[];
 }
 
 interface SyncResult {
@@ -339,6 +357,7 @@ export class SyncService extends EventEmitter {
     lastSyncAt: null,
     error: null,
     progress: null,
+    nameConflicts: [],
   };
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
@@ -571,6 +590,8 @@ export class SyncService extends EventEmitter {
        * trimmed form, so that is what gets blocked.
        */
       const conflictedNames = new Map<string, Set<string>>();
+    // GH #1164: the cycle's ACTIVE conflicts, side-tagged, for SyncStatus.
+    const cycleNameConflicts: SyncNameConflict[] = [];
 
       // GH #1116 — normalize entity names on BOTH sides before any copy.
       //
@@ -677,6 +698,11 @@ export class SyncService extends EventEmitter {
         // logged; it just doesn't stop anything.
         for (const c of trimResult.conflicts) {
           if (!c.active) continue;
+          // GH #1164: carry the enriched conflict to the renderer, tagged
+          // with its side. Same ACTIVE-only rule as the gate below — an
+          // inactive conflict is unresolvable and invisible in the UI, so
+          // reporting it would be noise the user cannot act on.
+          cycleNameConflicts.push({ ...c, side });
           // Block the NAMES, not the collection (second adversarial audit).
           // Both spellings: the stored one and the trimmed one it would have
           // become — a pairing can be attempted under either.
@@ -690,6 +716,11 @@ export class SyncService extends EventEmitter {
         // collection-wide.
         for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
       }
+      // Publish AFTER both sides so a cycle reports one complete set, and
+      // wholesale so a resolved conflict disappears rather than lingering.
+      // Only cycles that REACH the trim phase update it — a pre-trim connect
+      // failure leaves the previous (still accurate) list alone.
+      this.updateStatus({ nameConflicts: cycleNameConflicts });
 
       // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
       // transit-clear queues on BOTH databases (a failed local enqueue falls

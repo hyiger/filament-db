@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
 
@@ -10,6 +11,15 @@ interface SyncStatus {
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
+  /** GH #1164: trim-collision conflicts the sync pass saw, side-tagged.
+   *  Optional — an older main process simply omits it. */
+  nameConflicts?: Array<{
+    collection: string;
+    name: string;
+    trimsTo: string | null;
+    collidesWith: { id: string; name: string } | null;
+    side: "local" | "remote";
+  }>;
 }
 
 function formatRelativeTime(iso: string, t: (key: string, params?: Record<string, string | number>) => string): string {
@@ -303,6 +313,32 @@ export default function SyncStatusIndicator() {
           {status.error && (
             <div className="text-red-600 dark:text-red-400 mb-2 break-words">
               <strong>{t("sync.tooltip.error")}:</strong> {status.error}
+            </div>
+          )}
+          {/* GH #1164: name conflicts the sync pass found — the ONLY surface
+              for one that exists solely on the remote database (the Data
+              health page scans the local side). Deliberately NOT wired into
+              the pill's state machine: "partial" means a collection failed
+              to sync, which these are not. */}
+          {(status.nameConflicts?.length ?? 0) > 0 && (
+            <div className="text-amber-600 dark:text-amber-400 mb-2 break-words">
+              <strong>{t("sync.tooltip.nameConflicts")}:</strong>{" "}
+              {t("sync.tooltip.nameConflicts.count", {
+                count: status.nameConflicts!.length,
+              })}
+              <ul className="mt-1 space-y-0.5">
+                {status.nameConflicts!.slice(0, 3).map((c) => (
+                  <li key={`${c.side}-${c.collection}-${c.name}`} className="font-mono text-[11px]">
+                    {c.side} · {c.collection} · {JSON.stringify(c.name)}
+                  </li>
+                ))}
+              </ul>
+              <Link
+                href="/settings/health"
+                className="underline hover:no-underline mt-1 inline-block"
+              >
+                {t("sync.tooltip.nameConflicts.link")}
+              </Link>
             </div>
           )}
           <button

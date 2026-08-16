@@ -1456,6 +1456,74 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("sync reports trim-collision conflicts on SyncStatus (GH #1164)", () => {
+    /**
+     * The remote-only case is the whole point: the Data health page scans
+     * the database the SERVER talks to, so a conflict living only on the
+     * peer had no surface anywhere. The sync pass already computes the
+     * enriched conflict; it just discarded it.
+     */
+    it("carries a REMOTE-only conflict, side-tagged, with the enriched fields", async () => {
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // Raw driver: Mongoose's trim setter would normalize on insert.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Shelf R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Shelf R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      const found = sync.getStatus().nameConflicts;
+      const remote = found.filter((c) => c.side === "remote");
+      expect(remote.length).toBe(1);
+      expect(remote[0].collection).toBe("bedtypes");
+      expect(remote[0].name).toBe("Shelf R ");
+      expect(remote[0].trimsTo).toBe("Shelf R");
+      expect(remote[0].reason).toBe("collision");
+      expect(remote[0].active).toBe(true);
+      expect(remote[0].collidesWith?.name).toBe("Shelf R");
+    });
+
+    it("is empty on a clean database and refreshes wholesale", async () => {
+      const localDb = localClient.db("filament-db");
+      const now = new Date();
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Shelf L", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Shelf L ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts.some((c) => c.side === "local")).toBe(true);
+
+      // Resolve it by hand on BOTH sides — the first cycle propagated the
+      // pair to the peer, so a local-only delete leaves a real remote
+      // conflict (which the next cycle would rightly still report).
+      const remoteDb = remoteClient.db("filament-db");
+      await localDb.collection("bedtypes").deleteOne({ name: "Shelf L " });
+      await remoteDb.collection("bedtypes").deleteOne({ name: "Shelf L " });
+      sync.destroy();
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+
+    it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
+      const localDb = localClient.db("filament-db");
+      const now = new Date();
+      // A tombstoned row with a whitespace-only name: permanent, invisible.
+      await localDb.collection("bedtypes").insertOne({
+        name: "   ", material: "PEI", _deletedAt: now, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+  });
+
   describe("unreadable tombstones are healed and never spread (GH #1152)", () => {
     /**
      * The raw-driver `_deletedAt: ""` shape sits between the engine's two

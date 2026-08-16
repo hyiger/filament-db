@@ -12,6 +12,20 @@ interface ElectronAPI {
     lastSyncAt: string | null;
     error: string | null;
     progress: string | null;
+    /** GH #1164: ACTIVE trim-collision conflicts from the last sync cycle,
+     *  tagged with the database side they live on. Optional so an older
+     *  main process (no field) still typechecks against a newer renderer.
+     *  Keep in lockstep with SyncStatus in electron/sync-service.ts. */
+    nameConflicts?: Array<{
+      collection: string;
+      name: string;
+      id: string;
+      trimsTo: string | null;
+      reason: "collision" | "empty-name";
+      collidesWith: { id: string; name: string } | null;
+      active: boolean;
+      side: "local" | "remote";
+    }>;
   }>;
   triggerSync: () => Promise<{ results?: unknown[]; error?: string }>;
   checkAtlasConnectivity: () => Promise<{ connected: boolean }>;
@@ -23,6 +37,20 @@ interface ElectronAPI {
     lastSyncAt: string | null;
     error: string | null;
     progress: string | null;
+    /** GH #1164: ACTIVE trim-collision conflicts from the last sync cycle,
+     *  tagged with the database side they live on. Optional so an older
+     *  main process (no field) still typechecks against a newer renderer.
+     *  Keep in lockstep with SyncStatus in electron/sync-service.ts. */
+    nameConflicts?: Array<{
+      collection: string;
+      name: string;
+      id: string;
+      trimsTo: string | null;
+      reason: "collision" | "empty-name";
+      collidesWith: { id: string; name: string } | null;
+      active: boolean;
+      side: "local" | "remote";
+    }>;
   }) => void) => () => void;
   onConnectionModeFallback: (cb: (info: { intended: string; actual: string }) => void) => () => void;
   /** Fires after a hybrid-mode sync cycle completes (success or no-op).

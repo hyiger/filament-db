@@ -1838,5 +1838,11 @@
   "settings.nfcNtagSizeAmbiguous": "Dieser Leser kann die Tag-Größe nicht ermitteln, und Lesezugriffe belegen, dass es kein vollständiger NTAG216 ist — er ist entweder ein kleinerer NTAG oder passwortgeschützt (hier nicht unterscheidbar). Es wurde nichts gelöscht. Verwenden Sie NFC schreiben (das die Größe explizit setzt) oder einen Leser mit GET_VERSION-Unterstützung.",
   "settings.nfcNtagWriteRefused": "Der Tag hat den Schreibzugriff auf Seite {page} verweigert — er ist möglicherweise passwort-schreibgeschützt. Das Löschen ist UNVOLLSTÄNDIG: Seiten vor {page} wurden geleert, Daten ab Seite {page} sind noch vorhanden.",
   "analytics.jobsApiHint": "über die REST-API erfasst",
-  "form.maxVolumetricSpeed": "Max. volumetrische Geschwindigkeit (mm³/s)"
+  "form.maxVolumetricSpeed": "Max. volumetrische Geschwindigkeit (mm³/s)",
+  "sync.tooltip.nameConflicts": "Namenskonflikte",
+  "sync.tooltip.nameConflicts.count": "{count} Zeile(n), deren Name sich von einer anderen nur durch Leerzeichen unterscheidet",
+  "sync.tooltip.nameConflicts.link": "Datenzustand öffnen",
+  "health.remote.title": "Auf der anderen Datenbank",
+  "health.remote.subtitle": "Konflikte, die der Sync-Dienst auf der Datenbank gefunden hat, mit der diese App synchronisiert. Sie werden nur zur Information angezeigt — die Aktionen oben gelten für die Datenbank, mit der diese App verbunden ist.",
+  "health.remote.hint": "Erscheint dasselbe Paar auch oben, lösen Sie es dort — die Korrektur wird synchronisiert. Andernfalls lösen Sie es auf dem Rechner, dem jene Datenbank gehört."
 }

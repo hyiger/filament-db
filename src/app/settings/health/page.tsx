@@ -58,6 +58,18 @@ export default function DataHealthPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  // GH #1164: conflicts the desktop sync service saw, side-tagged. The scan
+  // above only covers the database THIS server talks to (the local one in
+  // hybrid mode), so a remote-only conflict has no other surface anywhere.
+  const [syncConflicts, setSyncConflicts] = useState<
+    Array<{
+      collection: string;
+      name: string;
+      trimsTo: string | null;
+      collidesWith: { id: string; name: string } | null;
+      side: "local" | "remote";
+    }>
+  >([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
@@ -100,6 +112,29 @@ export default function DataHealthPage() {
     })();
     return () => {
       cancelled = true;
+    };
+  }, []);
+
+  // GH #1164, desktop only: the sync service's view of BOTH databases.
+  // Same IIFE shape as above for the set-state-in-effect rule.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getSyncStatus) return;
+    let cancelled = false;
+    const apply = (st: { nameConflicts?: typeof syncConflicts }) => {
+      if (!cancelled) setSyncConflicts(st.nameConflicts ?? []);
+    };
+    (async () => {
+      try {
+        apply(await api.getSyncStatus());
+      } catch {
+        /* status unavailable — the local scan above still stands */
+      }
+    })();
+    const unsub = api.onSyncStatusChange?.(apply);
+    return () => {
+      cancelled = true;
+      unsub?.();
     };
   }, []);
 
@@ -300,6 +335,44 @@ export default function DataHealthPage() {
           );
         })}
       </div>
+
+      {/* GH #1164: REMOTE-side conflicts, read-only. Local ones already
+          appear above with dependent counts and actions; listing them twice
+          would read as two different problems. Resolution differs by shape:
+          a pair that also exists locally is fixed above and propagates on
+          the next sync; a remote-ONLY row has no local twin to act on. */}
+      {syncConflicts.some((c) => c.side === "remote") && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold mb-1">{t("health.remote.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.remote.subtitle")}</p>
+          <div className="space-y-2">
+            {syncConflicts
+              .filter((c) => c.side === "remote")
+              .map((c) => (
+                <div
+                  key={`${c.collection}-${c.name}`}
+                  className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                      {t(`health.col.${c.collection}`)}
+                    </span>
+                    <code className="text-sm font-mono">{JSON.stringify(c.name)}</code>
+                  </div>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    {c.collidesWith
+                      ? t("health.conflict.takenBy", {
+                          trimsTo: JSON.stringify(c.trimsTo ?? ""),
+                          twin: JSON.stringify(c.collidesWith.name),
+                        })
+                      : t("health.conflict.emptyName")}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{t("health.remote.hint")}</p>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

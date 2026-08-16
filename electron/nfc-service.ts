@@ -31,7 +31,6 @@ import {
   resolveNtagEraseSize,
   NTAG_NAME_TO_NDEF_BYTES,
   NTAG_PHYSICAL_LAST_PAGE,
-  NTAG216_MAX_NDEF_BYTES,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
 import {
