@@ -943,11 +943,31 @@ export class NfcService extends EventEmitter {
     for (const bytes of [NTAG_NAME_TO_NDEF_BYTES.NTAG216, NTAG_NAME_TO_NDEF_BYTES.NTAG215]) {
       const topPage = 4 + Math.ceil(bytes / 4) - 1;
       const probeStart = Math.max(4, topPage - 3);
-      try {
-        await this.readNtagBurst(protocol, probeStart);
-        return bytes;
-      } catch {
-        // Smaller than this rung — try the next one down.
+      // Round 4 (Codex P1): only a DEFINITIVE chip answer may demote a rung.
+      // readNtagBurst has two failure shapes — an SW error ("NTAG read page
+      // N failed: SW=…"), which means the chip ANSWERED and NAK'd the
+      // out-of-range read, and a transport throw from transmit(), which
+      // proves nothing about the chip. Treating every exception as
+      // "smaller" let a transient transmit blip classify a real 216 as a
+      // 215: the erase then stamped the smaller CC, wiped the shortened
+      // extent, and reported success with old data left beyond it. A
+      // transport failure is retried; if it persists the erase FAILS CLOSED
+      // with nothing written.
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await this.readNtagBurst(protocol, probeStart);
+          return bytes;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          const definitiveNak = /^NTAG read page \d+ failed: SW=/.test(msg);
+          if (definitiveNak) break; // the chip answered: smaller than this rung
+          if (attempt >= 3) {
+            throw new Error(
+              "NTAG_PROBE_FAILED: Couldn't verify the tag's size — the reader kept failing " +
+                "mid-probe, so nothing was erased. Re-seat the tag and try again.",
+            );
+          }
+        }
       }
     }
     return NTAG_NAME_TO_NDEF_BYTES.NTAG213;

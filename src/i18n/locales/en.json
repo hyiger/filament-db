@@ -1833,5 +1833,6 @@
   "health.dep.ownSpools": "own spools",
   "health.dep.printHistoryJobs": "print jobs",
   "health.dep.amsSlots": "AMS slots",
-  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards."
+  "health.bedTempsRenameNote": "Note: {count} filament(s) reference this exact name in per-bed-type temperatures. Renaming does not update those entries — re-pick the bed surface on those filaments afterwards.",
+  "settings.nfcNtagProbeFailed": "Couldn't verify the tag's size — the reader kept failing mid-probe, so nothing was erased. Re-seat the tag and try again."
 }
