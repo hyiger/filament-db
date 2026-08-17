@@ -139,10 +139,15 @@ export default function DataHealthPage() {
       lastSyncAt?: string | null;
       state?: string;
     };
+    // The rendered list needs the same yield-to-live rule as the watcher's
+    // baseline (Codex P2): a live event can beat this promise, and installing
+    // the older snapshot's conflicts afterwards would drop a remote-only
+    // conflict from the page until some later status arrived.
+    let sawLiveStatus = false;
     (async () => {
       try {
         const st = await api.getSyncStatus();
-        if (cancelled) return;
+        if (cancelled || sawLiveStatus) return;
         setSyncConflicts((st as StatusSample).nameConflicts ?? []);
         watcher.seed(st);
       } catch {
@@ -151,6 +156,7 @@ export default function DataHealthPage() {
     })();
     const unsub = api.onSyncStatusChange?.((st) => {
       if (cancelled) return;
+      sawLiveStatus = true;
       setSyncConflicts((st as StatusSample).nameConflicts ?? []);
       if (watcher.observe(st)) void load();
     });

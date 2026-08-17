@@ -101,11 +101,20 @@ export default function SyncStatusIndicator() {
       }
     });
 
+    // A live event can beat this promise (Codex P2, GH #1164). Adopting the
+    // older snapshot then rolls the indicator back to a pre-completion state
+    // — and with it the conflict count and its Data health link, which may be
+    // the only notice a remote-only conflict ever gets — until some later
+    // status arrives. So the mount snapshot yields to anything already seen.
+    let sawLiveStatus = false;
     api.getSyncStatus().then((s) => {
-      if (active) setStatus(s);
+      if (active && !sawLiveStatus) setStatus(s);
     });
 
-    const unsub1 = api.onSyncStatusChange(setStatus);
+    const unsub1 = api.onSyncStatusChange((s) => {
+      sawLiveStatus = true;
+      setStatus(s);
+    });
     const unsub2 = api.onConnectionModeFallback(() => {
       setIsFallback(true);
     });
