@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1149 — Data health: the trim-collision resolution surface.
@@ -58,23 +59,45 @@ export default function DataHealthPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [conflicts, setConflicts] = useState<Conflict[]>([]);
+  // GH #1164: conflicts the desktop sync service saw, side-tagged. The scan
+  // above only covers the database THIS server talks to (the local one in
+  // hybrid mode), so a remote-only conflict has no other surface anywhere.
+  const [syncConflicts, setSyncConflicts] = useState<
+    Array<{
+      collection: string;
+      name: string;
+      trimsTo: string | null;
+      collidesWith: { id: string; name: string } | null;
+      side: "local" | "remote";
+    }>
+  >([]);
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Every scan of /api/name-conflicts takes a ticket, and only the newest
+  // ticket may write (Codex P2). The mount scan and a completion-triggered
+  // refetch are independent requests with no ordering: mounting while a sync
+  // finishes, the mount request can capture the PRE-copy database and resolve
+  // LAST, overwriting the post-copy list — the newly copied conflict then
+  // stays missing until another sync or a reload.
+  const scanSeq = useRef(0);
+
   // Refetch helper for the ACTION handlers (event handlers, not effects —
   // the react-hooks/set-state-in-effect rule does not apply there).
   const load = useCallback(async () => {
+    const seq = ++scanSeq.current;
     try {
       const res = await fetch("/api/name-conflicts");
       if (!res.ok) throw new Error();
       const body = (await res.json()) as { conflicts: Conflict[] };
+      if (seq !== scanSeq.current) return;
       setConflicts(body.conflicts);
       setError(false);
     } catch {
-      setError(true);
+      if (seq === scanSeq.current) setError(true);
     } finally {
-      setLoading(false);
+      if (seq === scanSeq.current) setLoading(false);
     }
   }, []);
 
@@ -84,24 +107,76 @@ export default function DataHealthPage() {
   // pattern OptResyncDialog established; the CI lint proved the difference).
   useEffect(() => {
     let cancelled = false;
+    const seq = ++scanSeq.current;
+    const current = () => !cancelled && seq === scanSeq.current;
     (async () => {
       try {
         const res = await fetch("/api/name-conflicts");
         if (!res.ok) throw new Error();
         const body = (await res.json()) as { conflicts: Conflict[] };
-        if (cancelled) return;
+        if (!current()) return;
         setConflicts(body.conflicts);
         setError(false);
       } catch {
-        if (!cancelled) setError(true);
+        if (current()) setError(true);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  // GH #1164, desktop only: the sync service's view of BOTH databases.
+  // Same IIFE shape as above for the set-state-in-effect rule.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getSyncStatus) return;
+    let cancelled = false;
+    // A COMPLETED cycle can copy a remote-only conflict INTO the local
+    // database (Codex P2) — after which the pair belongs in the actionable
+    // list above, not the read-only remote section whose copy says "resolve
+    // it above". The local scan is a mount-time snapshot, so refetch it
+    // whenever a cycle finishes. `lastSyncAt` changing is exactly that
+    // signal; progress ticks during a cycle carry the same value and are
+    // ignored, so this cannot loop.
+    // The "did a cycle end?" rule lives in a pure, unit-tested module
+    // (Codex P2): this page has no test harness, and that rule has been
+    // wrong three separate ways, each time leaving the actionable list
+    // silently stale.
+    const watcher = createSyncCycleWatcher();
+    type StatusSample = {
+      nameConflicts?: typeof syncConflicts;
+      lastSyncAt?: string | null;
+      state?: string;
+    };
+    // The rendered list needs the same yield-to-live rule as the watcher's
+    // baseline (Codex P2): a live event can beat this promise, and installing
+    // the older snapshot's conflicts afterwards would drop a remote-only
+    // conflict from the page until some later status arrived.
+    let sawLiveStatus = false;
+    (async () => {
+      try {
+        const st = await api.getSyncStatus();
+        if (cancelled || sawLiveStatus) return;
+        setSyncConflicts((st as StatusSample).nameConflicts ?? []);
+        watcher.seed(st);
+      } catch {
+        /* status unavailable — the local scan above still stands */
+      }
+    })();
+    const unsub = api.onSyncStatusChange?.((st) => {
+      if (cancelled) return;
+      sawLiveStatus = true;
+      setSyncConflicts((st as StatusSample).nameConflicts ?? []);
+      if (watcher.observe(st)) void load();
+    });
+    return () => {
+      cancelled = true;
+      unsub?.();
+    };
+  }, [load]);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
@@ -166,6 +241,10 @@ export default function DataHealthPage() {
     [renameValue, t, toast, load],
   );
 
+  // GH #1164: derived ONCE — the all-clear banner and the remote section
+  // must agree about what "remote conflicts exist" means.
+  const remoteConflicts = syncConflicts.filter((c) => c.side === "remote");
+
   return (
     <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
       <Link href="/settings" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
@@ -181,7 +260,11 @@ export default function DataHealthPage() {
       {!loading && error && (
         <p className="text-sm text-red-500">{t("health.error")}</p>
       )}
-      {!loading && !error && conflicts.length === 0 && (
+      {/* GH #1164 (Codex P2): the all-clear must account for BOTH databases.
+          With a clean local scan and a remote-only conflict — the primary
+          case this PR adds — the page otherwise rendered "your data is
+          healthy" directly above an amber conflict list. */}
+      {!loading && !error && conflicts.length === 0 && remoteConflicts.length === 0 && (
         <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
           <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>
         </div>
@@ -300,6 +383,42 @@ export default function DataHealthPage() {
           );
         })}
       </div>
+
+      {/* GH #1164: REMOTE-side conflicts, read-only. Local ones already
+          appear above with dependent counts and actions; listing them twice
+          would read as two different problems. Resolution differs by shape:
+          a pair that also exists locally is fixed above and propagates on
+          the next sync; a remote-ONLY row has no local twin to act on. */}
+      {remoteConflicts.length > 0 && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold mb-1">{t("health.remote.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.remote.subtitle")}</p>
+          <div className="space-y-2">
+            {remoteConflicts.map((c) => (
+                <div
+                  key={`${c.collection}-${c.name}`}
+                  className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                      {t(`health.col.${c.collection}`)}
+                    </span>
+                    <code className="text-sm font-mono">{JSON.stringify(c.name)}</code>
+                  </div>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mt-1">
+                    {c.collidesWith
+                      ? t("health.conflict.takenBy", {
+                          trimsTo: JSON.stringify(c.trimsTo ?? ""),
+                          twin: JSON.stringify(c.collidesWith.name),
+                        })
+                      : t("health.conflict.emptyName")}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">{t("health.remote.hint")}</p>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
     </main>
   );
 }

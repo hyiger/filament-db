@@ -1456,6 +1456,196 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  describe("sync reports trim-collision conflicts on SyncStatus (GH #1164)", () => {
+    /**
+     * The remote-only case is the whole point: the Data health page scans
+     * the database the SERVER talks to, so a conflict living only on the
+     * peer had no surface anywhere. The sync pass already computes the
+     * enriched conflict; it just discarded it.
+     */
+    it("carries a REMOTE-only conflict, side-tagged, with the enriched fields", async () => {
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // Raw driver: Mongoose's trim setter would normalize on insert.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Shelf R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Shelf R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      const found = sync.getStatus().nameConflicts;
+      const remote = found.filter((c) => c.side === "remote");
+      expect(remote.length).toBe(1);
+      expect(remote[0].collection).toBe("bedtypes");
+      expect(remote[0].name).toBe("Shelf R ");
+      expect(remote[0].trimsTo).toBe("Shelf R");
+      expect(remote[0].reason).toBe("collision");
+      expect(remote[0].active).toBe(true);
+      expect(remote[0].collidesWith?.name).toBe("Shelf R");
+    });
+
+    it("is empty on a clean database and refreshes wholesale", async () => {
+      const localDb = localClient.db("filament-db");
+      const now = new Date();
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Shelf L", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Shelf L ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts.some((c) => c.side === "local")).toBe(true);
+
+      // Resolve it by hand on BOTH sides — the first cycle propagated the
+      // pair to the peer, so a local-only delete leaves a real remote
+      // conflict (which the next cycle would rightly still report).
+      const remoteDb = remoteClient.db("filament-db");
+      await localDb.collection("bedtypes").deleteOne({ name: "Shelf L " });
+      await remoteDb.collection("bedtypes").deleteOne({ name: "Shelf L " });
+      sync.destroy();
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+
+    it("reflects POST-COPY reality — a conflict this cycle resolved is not reported (r2)", async () => {
+      // The trim pass runs at the top of the cycle; the collection copies
+      // below it propagate a locally-resolved rename to the peer. A
+      // pre-copy snapshot reported the peer's stale pair as a live
+      // conflict until the NEXT cycle.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // The remote carries the untrimmed twin; the local side is clean and
+      // NEWER, so this cycle's copy overwrites the remote row.
+      const syncId = "post-copy-a";
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Bench", material: "PEI", syncId: "post-copy-keep", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Bench ", material: "PEI", syncId, _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() - 60_000) },
+      ]);
+      await localDb.collection("bedtypes").insertMany([
+        { name: "Bench", material: "PEI", syncId: "post-copy-keep", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Bench Two", material: "PEI", syncId, _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 60_000) },
+      ]);
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The copy renamed the remote row, so nothing is in conflict now.
+      expect(
+        await remoteDb.collection("bedtypes").countDocuments({ name: "Bench " }),
+      ).toBe(0);
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+
+    it("publishes the trim-phase conflicts when the cycle DIES before the rescan (r3)", async () => {
+      // A cycle that throws after the trim passes never reaches the
+      // end-of-cycle rescan, and the outer catch used to leave the previous
+      // list standing. For a REMOTE-only conflict that is total invisibility:
+      // the health page scans the local database, which has no copy of it.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Dead R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Dead R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      // Fail the first uncaught step after the trim passes — the same shape
+      // as the remote nozzle-map read failing mid-cycle.
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      const remote = sync.getStatus().nameConflicts.filter((c) => c.side === "remote");
+      expect(remote.length).toBe(1);
+      expect(remote[0].name).toBe("Dead R ");
+      expect(remote[0].collection).toBe("bedtypes");
+    });
+
+    it("does not erase a conflict in a collection the trim SKIPPED (r4)", async () => {
+      // A skipped collection was never scanned, so the snapshot is SILENT
+      // about it — publishing that silence on the error path would delete a
+      // still-live conflict rather than refresh it.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Skip R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Skip R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      // Same instance across both cycles — the point is what SURVIVES.
+      sync = makeSync();
+      await sync.sync();
+      expect(
+        sync.getStatus().nameConflicts.some((c) => c.side === "remote" && c.name === "Skip R "),
+      ).toBe(true);
+
+      // Make the next trim SKIP remote bedtypes: drop the protective index and
+      // leave a duplicate ACTIVE name behind, so the rebuild is refused and the
+      // pass gives up before reading any candidate row.
+      await remoteDb.collection("bedtypes").dropIndex("name_1").catch(() => {});
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Twin", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Twin", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      expect(
+        sync.getStatus().nameConflicts.some((c) => c.side === "remote" && c.name === "Skip R "),
+      ).toBe(true);
+    });
+
+    it("still publishes a SCANNED collection's fresh conflict when another was skipped (r6)", async () => {
+      // Publishability is per collection, not global. A skip elsewhere used to
+      // suppress the whole snapshot, hiding a conflict that was actually
+      // found — indefinitely, whenever the skip and the failure both repeat.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // bedtypes: duplicate ACTIVE names, so its index build is refused and
+      // the collection is skipped before any row is read.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Dup", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Dup", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      // locations: a genuine trim conflict, in a collection that IS scanned.
+      await remoteDb.collection("locations").insertMany([
+        { name: "Loc X", kind: "shelf", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Loc X ", kind: "shelf", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      const found = sync.getStatus().nameConflicts;
+      expect(
+        found.some((c) => c.side === "remote" && c.collection === "locations" && c.name === "Loc X "),
+      ).toBe(true);
+    });
+
+    it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
+      const localDb = localClient.db("filament-db");
+      const now = new Date();
+      // A tombstoned row with a whitespace-only name: permanent, invisible.
+      await localDb.collection("bedtypes").insertOne({
+        name: "   ", material: "PEI", _deletedAt: now, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+      expect(sync.getStatus().nameConflicts).toEqual([]);
+    });
+  });
+
   describe("unreadable tombstones are healed and never spread (GH #1152)", () => {
     /**
      * The raw-driver `_deletedAt: ""` shape sits between the engine's two

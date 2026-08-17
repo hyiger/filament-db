@@ -1189,6 +1189,9 @@ ipcMain.handle("get-sync-status", (event) => {
     lastSyncAt: null,
     error: null,
     progress: null,
+      // GH #1164: mode switches destroy the service, so the field resets
+      // with it — an absent list must not read as a stale one.
+      nameConflicts: [],
   };
 });
 
