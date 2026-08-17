@@ -512,6 +512,14 @@ export class SyncService extends EventEmitter {
       }
     };
 
+    // Declared outside the try so the catch below can publish them: a cycle
+    // that dies after the trim passes still knows what those passes saw.
+    const trimConflicts: SyncNameConflict[] = [];
+    // Only a scan that covered BOTH peers is publishable. A partial one
+    // (thrown or aborted mid-loop) would drop the unscanned side's rows,
+    // which is worse than the stale list it would replace.
+    let trimScanCompleted = false;
+
     try {
       await local.connect();
       await remote.connect();
@@ -697,6 +705,14 @@ export class SyncService extends EventEmitter {
         // logged; it just doesn't stop anything.
         for (const c of trimResult.conflicts) {
           if (!c.active) continue;
+          // Keep a copy for the ERROR path (Codex P2 round 3). The published
+          // list normally comes from the post-copy rescan at the end of the
+          // cycle, but a cycle that throws between here and there never
+          // reaches it — and the outer catch would then leave the PREVIOUS
+          // list standing. That silently loses every remote-only conflict:
+          // the health page's own scan reads the local database, which by
+          // definition has no copy of one.
+          trimConflicts.push({ ...c, side });
           // Block the NAMES, not the collection (second adversarial audit).
           // Both spellings: the stored one and the trimmed one it would have
           // become — a pairing can be attempted under either.
@@ -710,6 +726,7 @@ export class SyncService extends EventEmitter {
         // collection-wide.
         for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
       }
+      trimScanCompleted = !this.aborted;
       // (GH #1164 round 2: the conflict list is published AFTER the
       // collection copies — see the rescan near the end of the cycle. This
       // pre-copy point is too early: a conflict the user resolved locally
@@ -1259,7 +1276,16 @@ export class SyncService extends EventEmitter {
         lastSyncAt: new Date().toISOString(),
         error: summary,
         progress: null,
-        ...(rescanned ? { nameConflicts } : {}),
+        // Rescan first; the trim snapshot only as a fallback when it failed.
+        // That snapshot is PRE-copy, so it can name a conflict this cycle's
+        // copies just resolved on the peer — over-reporting for one cycle,
+        // which self-corrects. Leaving a stale list under-reports instead,
+        // and that never self-corrects.
+        ...(rescanned
+          ? { nameConflicts }
+          : trimScanCompleted
+            ? { nameConflicts: trimConflicts }
+            : {}),
       });
 
       if (erroredAll) this.emit("syncError", summary ?? "Sync failed");
@@ -1267,7 +1293,16 @@ export class SyncService extends EventEmitter {
       return results;
     } catch (err) {
       const safe = wrapSyncErrorMessage(err, getDbNameFromUri(this.atlasUri));
-      this.updateStatus({ state: "error", error: safe, progress: null });
+      this.updateStatus({
+        state: "error",
+        error: safe,
+        progress: null,
+        // A cycle can die anywhere after the trim passes — the remote nozzle
+        // read, any collection copy — and the end-of-cycle rescan never runs.
+        // Publish what the trim saw rather than leaving the previous list,
+        // which the health page cannot correct on its own for the remote side.
+        ...(trimScanCompleted ? { nameConflicts: trimConflicts } : {}),
+      });
       this.emit("syncError", safe);
       return [];
     } finally {

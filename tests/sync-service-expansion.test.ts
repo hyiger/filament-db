@@ -1540,6 +1540,32 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(sync.getStatus().nameConflicts).toEqual([]);
     });
 
+    it("publishes the trim-phase conflicts when the cycle DIES before the rescan (r3)", async () => {
+      // A cycle that throws after the trim passes never reaches the
+      // end-of-cycle rescan, and the outer catch used to leave the previous
+      // list standing. For a REMOTE-only conflict that is total invisibility:
+      // the health page scans the local database, which has no copy of it.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Dead R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Dead R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      // Fail the first uncaught step after the trim passes — the same shape
+      // as the remote nozzle-map read failing mid-cycle.
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      const remote = sync.getStatus().nameConflicts.filter((c) => c.side === "remote");
+      expect(remote.length).toBe(1);
+      expect(remote[0].name).toBe("Dead R ");
+      expect(remote[0].collection).toBe("bedtypes");
+    });
+
     it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
       const localDb = localClient.db("filament-db");
       const now = new Date();
