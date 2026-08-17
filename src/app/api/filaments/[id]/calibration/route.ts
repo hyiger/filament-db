@@ -235,37 +235,37 @@ export async function GET(
       const loose = addressable.filter(
         (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
-      // The exact name gets the same existence question as the id, for the
-      // same reason (Codex P2 round 3): with "XL" and "xl" both active, a
-      // request for "XL" whose machine has no row here would fold case and
-      // return "xl"'s calibration. An exact identity that exists suppresses
-      // the case-folded fallback. Asked only when folding would actually
-      // change the answer, so the ordinary lookup adds no query.
+      // Every rung gets the same existence question as the id, and for the
+      // same reason (Codex P2 rounds 3–5): an identity that EXISTS and simply
+      // has no calibration here must not be answered by a weaker match. That
+      // has to be asked PER RUNG — a live "X " with no row here was still
+      // answered by "X"'s row, because the trimmed rung had matches and the
+      // single combined check never fired.
       //
       // Asked through the RAW driver, not the model: the schema's `trim`
       // setter applies to query VALUES too, so `Printer.exists({name: "X "})`
       // casts to `"X"` and answers about the wrong row — the same trap GH
       // #1116 documents. The native query compares the spelling as given, and
       // `_deletedAt: null` there also matches rows predating the field.
-      const exactNameExists =
-        !idIsRealPrinter &&
-        verbatimName.length === 0 &&
-        exactName.length === 0 &&
-        loose.length > 0 &&
+      const liveNamed = async (name: string) =>
         (await Printer.collection.countDocuments(
-          { name: { $in: [printerParam, raw] }, _deletedAt: null },
+          { name, _deletedAt: null },
           { limit: 1 },
         )) > 0;
 
+      // Strongest rung first; each `liveNamed` is reached — and therefore
+      // asked — only when the rung above found nothing and a weaker one would
+      // otherwise answer. The ordinary lookup (stored spelling, rows present)
+      // stops at `verbatimName` and issues no query at all.
       let printerMatches: typeof scopedMatches = [];
       if (idMatches.length > 0) printerMatches = idMatches;
-      // The caller addressed an identity that EXISTS and simply has no
-      // calibration here. A weaker match is not a second chance at the same
-      // question — it answers a different one, so it stays off and the
-      // shareable default below takes over.
-      else if (idIsRealPrinter || exactNameExists) printerMatches = [];
+      else if (idIsRealPrinter) printerMatches = [];
       else if (verbatimName.length > 0) printerMatches = verbatimName;
+      else if ((exactName.length > 0 || loose.length > 0) && (await liveNamed(printerParam)))
+        printerMatches = [];
       else if (exactName.length > 0) printerMatches = exactName;
+      else if (loose.length > 0 && raw !== printerParam && (await liveNamed(raw)))
+        printerMatches = [];
       else printerMatches = loose;
       if (printerMatches.length > 0) {
         // Printer-scoped first, the shareable defaults retained behind them

@@ -304,6 +304,37 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.82);
     });
 
+    it("an existing VERBATIM name with no row here does not fall to its trimmed twin (r5)", async () => {
+      // One rung below the r4 case: "VT " exists and is what the caller asked
+      // for, but has no row for this nozzle. The trimmed rung had matches, so
+      // a single combined existence check never fired and "VT"'s row answered.
+      const noz = await Nozzle.create({ name: "0.4 W", diameter: 0.4, type: "Brass" });
+      const other = await Nozzle.create({ name: "0.6 W", diameter: 0.6, type: "Brass" });
+      const rawPrinters = mongoose.connection.collection("printers");
+      const now = new Date();
+      const tidy = new mongoose.Types.ObjectId();
+      const untidy = new mongoose.Types.ObjectId();
+      await rawPrinters.insertMany([
+        { _id: tidy, name: "VT", manufacturer: "M", printerModel: "X", _deletedAt: null, createdAt: now, updatedAt: now },
+        { _id: untidy, name: "VT ", manufacturer: "M", printerModel: "X", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      const f = await Filament.create({
+        name: "PVA-H", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: tidy, pressureAdvance: 0.11 },
+          { nozzle: noz._id, pressureAdvance: 0.12 }, // the shareable default
+          { nozzle: other._id, printer: untidy, pressureAdvance: 0.13 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(
+          `http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${encodeURIComponent("VT ")}`,
+        ),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.12);
+    });
+
     it("a soft-deleted printer's own row does not outrank an active namesake (r4)", async () => {
       // populate() doesn't filter tombstones, so a calibration still pointing
       // at a deleted printer used to satisfy the id match — the impostor
