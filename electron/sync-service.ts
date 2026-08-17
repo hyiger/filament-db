@@ -515,10 +515,12 @@ export class SyncService extends EventEmitter {
     // Declared outside the try so the catch below can publish them: a cycle
     // that dies after the trim passes still knows what those passes saw.
     const trimConflicts: SyncNameConflict[] = [];
-    // Only a scan that covered BOTH peers is publishable. A partial one
-    // (thrown or aborted mid-loop) would drop the unscanned side's rows,
+    // Only a scan that covered BOTH peers AND every collection is
+    // publishable. A partial one — thrown, aborted mid-loop, or silent about
+    // a collection the trim skipped — would drop rows it never looked at,
     // which is worse than the stale list it would replace.
     let trimScanCompleted = false;
+    let trimSkipped = false;
 
     try {
       await local.connect();
@@ -725,8 +727,14 @@ export class SyncService extends EventEmitter {
         // definition, and it doesn't know WHICH — so that one really is
         // collection-wide.
         for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
+        // A skip means the pass never looked at that collection's rows at all
+        // — it gave up before querying any candidate (Codex P2 round 4). The
+        // snapshot is therefore silent about it, and publishing that silence
+        // would erase a previously-reported conflict there rather than
+        // refresh it. Same rule as the abort below, for the same reason.
+        if (trimResult.skipped.length > 0) trimSkipped = true;
       }
-      trimScanCompleted = !this.aborted;
+      trimScanCompleted = !this.aborted && !trimSkipped;
       // (GH #1164 round 2: the conflict list is published AFTER the
       // collection copies — see the rescan near the end of the cycle. This
       // pre-copy point is too early: a conflict the user resolved locally

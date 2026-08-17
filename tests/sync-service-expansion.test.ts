@@ -1566,6 +1566,42 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(remote[0].collection).toBe("bedtypes");
     });
 
+    it("does not erase a conflict in a collection the trim SKIPPED (r4)", async () => {
+      // A skipped collection was never scanned, so the snapshot is SILENT
+      // about it — publishing that silence on the error path would delete a
+      // still-live conflict rather than refresh it.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Skip R", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Skip R ", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      // Same instance across both cycles — the point is what SURVIVES.
+      sync = makeSync();
+      await sync.sync();
+      expect(
+        sync.getStatus().nameConflicts.some((c) => c.side === "remote" && c.name === "Skip R "),
+      ).toBe(true);
+
+      // Make the next trim SKIP remote bedtypes: drop the protective index and
+      // leave a duplicate ACTIVE name behind, so the rebuild is refused and the
+      // pass gives up before reading any candidate row.
+      await remoteDb.collection("bedtypes").dropIndex("name_1").catch(() => {});
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Twin", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Twin", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      expect(
+        sync.getStatus().nameConflicts.some((c) => c.side === "remote" && c.name === "Skip R "),
+      ).toBe(true);
+    });
+
     it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
       const localDb = localClient.db("filament-db");
       const now = new Date();
