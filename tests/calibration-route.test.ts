@@ -275,6 +275,61 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.72);
     });
 
+    it("the caller's VERBATIM spelling wins over a whitespace twin (r4)", async () => {
+      // Hybrid sync writes through the raw driver, which bypasses the schema's
+      // trim setter — so "VB" and "VB " can both be active. Trimming both
+      // sides of the exact compare let array order pick between them.
+      const noz = await Nozzle.create({ name: "0.4 V", diameter: 0.4, type: "Brass" });
+      const rawPrinters = mongoose.connection.collection("printers");
+      const now = new Date();
+      const tidy = new mongoose.Types.ObjectId();
+      const untidy = new mongoose.Types.ObjectId();
+      await rawPrinters.insertMany([
+        { _id: tidy, name: "VB", manufacturer: "M", printerModel: "X", _deletedAt: null, createdAt: now, updatedAt: now },
+        { _id: untidy, name: "VB ", manufacturer: "M", printerModel: "X", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      const f = await Filament.create({
+        name: "PVA-F", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: tidy, pressureAdvance: 0.81 }, // sorts first
+          { nozzle: noz._id, printer: untidy, pressureAdvance: 0.82 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(
+          `http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${encodeURIComponent("VB ")}`,
+        ),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.82);
+    });
+
+    it("a soft-deleted printer's own row does not outrank an active namesake (r4)", async () => {
+      // populate() doesn't filter tombstones, so a calibration still pointing
+      // at a deleted printer used to satisfy the id match — the impostor
+      // problem inverted, a dead identity beating a live one.
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 Z", diameter: 0.4, type: "Brass" });
+      const gone = await Printer.create({
+        name: "Gone2", manufacturer: "M", printerModel: "X", _deletedAt: new Date(),
+      });
+      const alive = await Printer.create({
+        name: String(gone._id), manufacturer: "M", printerModel: "X",
+      });
+      const f = await Filament.create({
+        name: "PVA-G", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: gone._id, pressureAdvance: 0.91 }, // sorts first
+          { nozzle: noz._id, printer: alive._id, pressureAdvance: 0.92 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${gone._id}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.92);
+    });
+
     it("a 24-hex string owned by NO printer is still matched as a name", async () => {
       // The other side of the same test: existence is what gates the name
       // path, so a hex-shaped name nobody owns as an id must still resolve.

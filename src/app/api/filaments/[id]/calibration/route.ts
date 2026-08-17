@@ -113,7 +113,7 @@ export async function GET(
       nozzle?: { diameter?: number; name?: string; type?: string; highFlow?: boolean };
       // `_id` is an ObjectId at runtime (populated doc); typed loosely like
       // the bedType entry below so the lean() cast still overlaps.
-      printer?: { _id?: unknown; name?: string };
+      printer?: { _id?: unknown; name?: string; _deletedAt?: unknown };
       bedType?: { _id?: string; name?: string; material?: string } | null;
       extrusionMultiplier?: number;
       maxVolumetricSpeed?: number;
@@ -192,8 +192,15 @@ export async function GET(
       // above. Ids are compared case-folded because a populated `_id`
       // renders canonical lowercase.
       const looksLikeId = /^[0-9a-fA-F]{24}$/.test(raw);
+      // Only a LIVE printer is addressable (Codex P2 round 4). `populate()`
+      // does not filter tombstones, so a calibration still pointing at a
+      // soft-deleted printer would satisfy an id match and outrank an ACTIVE
+      // printer named with that id — the impostor problem inverted. Applied to
+      // every rung below, so "exists" means the same thing here as it does in
+      // the existence queries and in the rest of the printer API.
+      const addressable = scopedMatches.filter((cal) => cal.printer && !cal.printer._deletedAt);
       const idMatches = looksLikeId
-        ? scopedMatches.filter(
+        ? addressable.filter(
             (cal) => String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
           )
         : [];
@@ -211,15 +218,21 @@ export async function GET(
       const idIsRealPrinter =
         idMatches.length > 0 ||
         (looksLikeId && (await Printer.exists({ _id: raw, _deletedAt: null })) !== null);
-      // Then the EXACT trimmed name (Codex P2): the Printer name index is
-      // case-SENSITIVE, so "XL" and "xl" can both exist. When the caller
-      // supplies the stored spelling, array order must not decide which
-      // machine's values come back.
-      const exactName = scopedMatches.filter(
-        (cal) => (cal.printer?.name ?? "").trim() === raw,
-      );
-      // Finally fold case on the name.
-      const loose = scopedMatches.filter(
+      // Then the name, in three rungs from strictest to loosest. The Printer
+      // name index is case-SENSITIVE, so "XL" and "xl" can both exist; and
+      // hybrid sync writes through the raw driver, which bypasses the schema's
+      // trim setter, so "X" and "X " can both exist too. Array order must not
+      // decide between them when the caller spelled one of them exactly.
+      //
+      // 1. VERBATIM — the caller's spelling against the stored spelling, no
+      //    normalization on either side (Codex P2 round 4). This is the only
+      //    rung that can tell "X" from "X ".
+      const verbatimName = addressable.filter((cal) => (cal.printer?.name ?? "") === printerParam);
+      // 2. Trimmed exact — tolerates stray whitespace around the caller's
+      //    input, which is the ordinary case since stored names are trimmed.
+      const exactName = addressable.filter((cal) => (cal.printer?.name ?? "").trim() === raw);
+      // 3. Case-folded.
+      const loose = addressable.filter(
         (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
       // The exact name gets the same existence question as the id, for the
@@ -228,11 +241,21 @@ export async function GET(
       // return "xl"'s calibration. An exact identity that exists suppresses
       // the case-folded fallback. Asked only when folding would actually
       // change the answer, so the ordinary lookup adds no query.
+      //
+      // Asked through the RAW driver, not the model: the schema's `trim`
+      // setter applies to query VALUES too, so `Printer.exists({name: "X "})`
+      // casts to `"X"` and answers about the wrong row — the same trap GH
+      // #1116 documents. The native query compares the spelling as given, and
+      // `_deletedAt: null` there also matches rows predating the field.
       const exactNameExists =
         !idIsRealPrinter &&
+        verbatimName.length === 0 &&
         exactName.length === 0 &&
         loose.length > 0 &&
-        (await Printer.exists({ name: raw, _deletedAt: null })) !== null;
+        (await Printer.collection.countDocuments(
+          { name: { $in: [printerParam, raw] }, _deletedAt: null },
+          { limit: 1 },
+        )) > 0;
 
       let printerMatches: typeof scopedMatches = [];
       if (idMatches.length > 0) printerMatches = idMatches;
@@ -241,6 +264,7 @@ export async function GET(
       // question — it answers a different one, so it stays off and the
       // shareable default below takes over.
       else if (idIsRealPrinter || exactNameExists) printerMatches = [];
+      else if (verbatimName.length > 0) printerMatches = verbatimName;
       else if (exactName.length > 0) printerMatches = exactName;
       else printerMatches = loose;
       if (printerMatches.length > 0) {
