@@ -199,6 +199,56 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.32);
     });
 
+    it("an EXISTING printer id with no row here falls to the default, not a name twin", async () => {
+      // The impostor case one level deeper: the addressed printer is real but
+      // has no calibration for THIS nozzle, so the id can't be matched among
+      // the rows. Inferring "unknown id" from that and re-trying as a name
+      // handed the request to the twin (Codex P2 round 2).
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 R", diameter: 0.4, type: "Brass" });
+      const other = await Nozzle.create({ name: "0.6 R", diameter: 0.6, type: "Brass" });
+      const real = await Printer.create({ name: "RealB", manufacturer: "M", printerModel: "X" });
+      const impostor = await Printer.create({
+        name: String(real._id), manufacturer: "M", printerModel: "X",
+      });
+      const f = await Filament.create({
+        name: "PVA-B", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: impostor._id, pressureAdvance: 0.41 },
+          { nozzle: noz._id, pressureAdvance: 0.42 }, // the shareable default
+          { nozzle: other._id, printer: real._id, pressureAdvance: 0.43 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${real._id}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.42);
+    });
+
+    it("a 24-hex string owned by NO printer is still matched as a name", async () => {
+      // The other side of the same test: existence is what gates the name
+      // path, so a hex-shaped name nobody owns as an id must still resolve.
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 H", diameter: 0.4, type: "Brass" });
+      const orphanId = new mongoose.Types.ObjectId();
+      const named = await Printer.create({
+        name: String(orphanId), manufacturer: "M", printerModel: "X",
+      });
+      const f = await Filament.create({
+        name: "PVA-C", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, pressureAdvance: 0.51 },
+          { nozzle: noz._id, printer: named._id, pressureAdvance: 0.52 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${orphanId}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.52);
+    });
+
     it("still answers when only printer-scoped entries exist", async () => {
       const Printer = mongoose.models.Printer;
       const noz = await Nozzle.create({ name: "0.6 Brass", diameter: 0.6, type: "Brass" });

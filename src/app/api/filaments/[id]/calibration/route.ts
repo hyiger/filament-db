@@ -6,7 +6,7 @@ import {
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
-import "@/models/Printer";
+import Printer from "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { calibrationToOrcaSlicerKeys } from "@/lib/orcaSlicerBundle";
@@ -197,6 +197,16 @@ export async function GET(
             (cal) => String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
           )
         : [];
+      // Whether that id names a REAL printer is a question about the Printer
+      // COLLECTION, not about the rows we happen to have filtered (Codex P2
+      // round 2). Inferring existence from `idMatches` conflates "no such
+      // printer" with "that printer has no row for this nozzle" — and only the
+      // first may fall back to name matching. Get the second wrong and the
+      // impostor wins again by the back door. Queried only when the populated
+      // rows didn't already prove existence, so the hit path adds nothing.
+      const idIsRealPrinter =
+        idMatches.length > 0 ||
+        (looksLikeId && (await Printer.exists({ _id: raw })) !== null);
       // Then the EXACT trimmed name (Codex P2): the Printer name index is
       // case-SENSITIVE, so "XL" and "xl" can both exist. When the caller
       // supplies the stored spelling, array order must not decide which
@@ -209,7 +219,16 @@ export async function GET(
         (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
       const printerMatches =
-        idMatches.length > 0 ? idMatches : exactName.length > 0 ? exactName : loose;
+        idMatches.length > 0
+          ? idMatches
+          : idIsRealPrinter
+            ? // The caller addressed a printer that EXISTS and simply has no
+              // calibration here. Name matching is not a second chance at the
+              // same question — it answers a different one, so it stays off.
+              []
+            : exactName.length > 0
+              ? exactName
+              : loose;
       if (printerMatches.length > 0) {
         // Printer-scoped first, the shareable defaults retained behind them
         // (disjoint sets: a generic entry has no printer to match).
