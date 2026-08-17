@@ -135,20 +135,33 @@ export default function DataHealthPage() {
     // like the mount snapshot, so its refetch was skipped.
     let seenInitial = false;
     let lastSeenSync: string | null = null;
-    const apply = (st: { nameConflicts?: typeof syncConflicts; lastSyncAt?: string | null }) => {
+    let wasSyncing = false;
+    const apply = (st: {
+      nameConflicts?: typeof syncConflicts;
+      lastSyncAt?: string | null;
+      state?: string;
+    }) => {
       if (cancelled) return;
       setSyncConflicts(st.nameConflicts ?? []);
       const stamp = st.lastSyncAt ?? null;
+      const syncing = st.state === "syncing";
       if (!seenInitial) {
         // The mount snapshot itself — record it, refetch nothing.
         seenInitial = true;
         lastSeenSync = stamp;
+        wasSyncing = syncing;
         return;
       }
-      if (stamp !== lastSeenSync) {
-        lastSeenSync = stamp;
-        void load();
-      }
+      // A cycle ENDED if the stamp advanced OR we left the syncing state.
+      // The second clause matters for a FAILED cycle (Codex P2): the
+      // terminal error status keeps the previous lastSyncAt, yet earlier
+      // collections in that cycle may already have copied a remote
+      // conflict into the local database — so a stamp-only rule left the
+      // actionable list stale until some later success.
+      const ended = stamp !== lastSeenSync || (wasSyncing && !syncing);
+      lastSeenSync = stamp;
+      wasSyncing = syncing;
+      if (ended) void load();
     };
     (async () => {
       try {
