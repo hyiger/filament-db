@@ -185,22 +185,31 @@ export async function GET(
     if (printerParam) {
       const raw = printerParam.trim();
       const wanted = raw.toLowerCase();
-      // EXACT trimmed name first (Codex P2): the Printer name index is
+      // A 24-hex input is an OBJECTID and wins outright (Codex P2), before
+      // any name matching: printer names are unrestricted, so one printer
+      // could be NAMED as another's id — and this endpoint documents
+      // ObjectId support, matching how the filament itself is resolved
+      // above. Ids are compared case-folded because a populated `_id`
+      // renders canonical lowercase.
+      const looksLikeId = /^[0-9a-fA-F]{24}$/.test(raw);
+      const idMatches = looksLikeId
+        ? scopedMatches.filter(
+            (cal) => String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
+          )
+        : [];
+      // Then the EXACT trimmed name (Codex P2): the Printer name index is
       // case-SENSITIVE, so "XL" and "xl" can both exist. When the caller
       // supplies the stored spelling, array order must not decide which
       // machine's values come back.
       const exactName = scopedMatches.filter(
         (cal) => (cal.printer?.name ?? "").trim() === raw,
       );
-      // Else fold case, and accept the ObjectId form (bed_type's
-      // convention). Both sides normalized — a populated id renders
-      // canonical lowercase, so an uppercase-hex id silently missed.
+      // Finally fold case on the name.
       const loose = scopedMatches.filter(
-        (cal) =>
-          (cal.printer?.name ?? "").trim().toLowerCase() === wanted ||
-          String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
+        (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
-      const printerMatches = exactName.length > 0 ? exactName : loose;
+      const printerMatches =
+        idMatches.length > 0 ? idMatches : exactName.length > 0 ? exactName : loose;
       if (printerMatches.length > 0) {
         // Printer-scoped first, the shareable defaults retained behind them
         // (disjoint sets: a generic entry has no printer to match).

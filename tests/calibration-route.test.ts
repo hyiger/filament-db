@@ -176,6 +176,29 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.22);
     });
 
+    it("treats a 24-hex input as an ObjectId even if another printer is NAMED that (Codex P2)", async () => {
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 D", diameter: 0.4, type: "Brass" });
+      const real = await Printer.create({ name: "Real", manufacturer: "M", printerModel: "X" });
+      // A second printer literally NAMED as the first one's id.
+      const impostor = await Printer.create({
+        name: String(real._id), manufacturer: "M", printerModel: "X",
+      });
+      const f = await Filament.create({
+        name: "PVA", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: impostor._id, pressureAdvance: 0.31 }, // sorts first
+          { nozzle: noz._id, printer: real._id, pressureAdvance: 0.32 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${real._id}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // The id must win over the name-collision impostor.
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.32);
+    });
+
     it("still answers when only printer-scoped entries exist", async () => {
       const Printer = mongoose.models.Printer;
       const noz = await Nozzle.create({ name: "0.6 Brass", diameter: 0.6, type: "Brass" });
