@@ -226,6 +226,55 @@ describe("GET /api/filaments/[id]/calibration", () => {
       expect((await res.json()).calibration.pressureAdvance).toBe(0.42);
     });
 
+    it("an EXISTING exact name with no row here does not fold case to its twin", async () => {
+      // Same shape one rung down the ladder: "XL" and "xl" can both exist
+      // (the name index is case-sensitive). A request for "XL" whose machine
+      // has no row for this nozzle must not be answered by "xl" (Codex P2 r3).
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 T", diameter: 0.4, type: "Brass" });
+      const other = await Nozzle.create({ name: "0.6 T", diameter: 0.6, type: "Brass" });
+      const upper = await Printer.create({ name: "TW", manufacturer: "M", printerModel: "X" });
+      const lower = await Printer.create({ name: "tw", manufacturer: "M", printerModel: "X" });
+      const f = await Filament.create({
+        name: "PVA-D", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, printer: lower._id, pressureAdvance: 0.61 },
+          { nozzle: noz._id, pressureAdvance: 0.62 }, // the shareable default
+          { nozzle: other._id, printer: upper._id, pressureAdvance: 0.63 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=TW`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.62);
+    });
+
+    it("a SOFT-DELETED printer's id does not suppress an active printer named that", async () => {
+      // "Exists" means active everywhere else in the printer API, so a
+      // tombstoned row must not stand in the way of a live identity.
+      const Printer = mongoose.models.Printer;
+      const noz = await Nozzle.create({ name: "0.4 S", diameter: 0.4, type: "Brass" });
+      const gone = await Printer.create({
+        name: "Gone", manufacturer: "M", printerModel: "X", _deletedAt: new Date(),
+      });
+      const alive = await Printer.create({
+        name: String(gone._id), manufacturer: "M", printerModel: "X",
+      });
+      const f = await Filament.create({
+        name: "PVA-E", vendor: "X", type: "PVA",
+        calibrations: [
+          { nozzle: noz._id, pressureAdvance: 0.71 },
+          { nozzle: noz._id, printer: alive._id, pressureAdvance: 0.72 },
+        ],
+      });
+      const res = await getCalibration(
+        getReq(`http://localhost/api/filaments/${f._id}/calibration?nozzle_diameter=0.4&printer=${gone._id}`),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect((await res.json()).calibration.pressureAdvance).toBe(0.72);
+    });
+
     it("a 24-hex string owned by NO printer is still matched as a name", async () => {
       // The other side of the same test: existence is what gates the name
       // path, so a hex-shaped name nobody owns as an id must still resolve.

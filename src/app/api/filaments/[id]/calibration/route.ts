@@ -204,9 +204,13 @@ export async function GET(
       // first may fall back to name matching. Get the second wrong and the
       // impostor wins again by the back door. Queried only when the populated
       // rows didn't already prove existence, so the hit path adds nothing.
+      // `_deletedAt: null` because that is what the rest of the printer API
+      // means by "exists" (Codex P2 round 3). A soft-deleted row is not an
+      // identity a caller can address, so letting one suppress the name path
+      // would hide an ACTIVE printer that happens to be named with its id.
       const idIsRealPrinter =
         idMatches.length > 0 ||
-        (looksLikeId && (await Printer.exists({ _id: raw })) !== null);
+        (looksLikeId && (await Printer.exists({ _id: raw, _deletedAt: null })) !== null);
       // Then the EXACT trimmed name (Codex P2): the Printer name index is
       // case-SENSITIVE, so "XL" and "xl" can both exist. When the caller
       // supplies the stored spelling, array order must not decide which
@@ -218,17 +222,27 @@ export async function GET(
       const loose = scopedMatches.filter(
         (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
-      const printerMatches =
-        idMatches.length > 0
-          ? idMatches
-          : idIsRealPrinter
-            ? // The caller addressed a printer that EXISTS and simply has no
-              // calibration here. Name matching is not a second chance at the
-              // same question — it answers a different one, so it stays off.
-              []
-            : exactName.length > 0
-              ? exactName
-              : loose;
+      // The exact name gets the same existence question as the id, for the
+      // same reason (Codex P2 round 3): with "XL" and "xl" both active, a
+      // request for "XL" whose machine has no row here would fold case and
+      // return "xl"'s calibration. An exact identity that exists suppresses
+      // the case-folded fallback. Asked only when folding would actually
+      // change the answer, so the ordinary lookup adds no query.
+      const exactNameExists =
+        !idIsRealPrinter &&
+        exactName.length === 0 &&
+        loose.length > 0 &&
+        (await Printer.exists({ name: raw, _deletedAt: null })) !== null;
+
+      let printerMatches: typeof scopedMatches = [];
+      if (idMatches.length > 0) printerMatches = idMatches;
+      // The caller addressed an identity that EXISTS and simply has no
+      // calibration here. A weaker match is not a second chance at the same
+      // question — it answers a different one, so it stays off and the
+      // shareable default below takes over.
+      else if (idIsRealPrinter || exactNameExists) printerMatches = [];
+      else if (exactName.length > 0) printerMatches = exactName;
+      else printerMatches = loose;
       if (printerMatches.length > 0) {
         // Printer-scoped first, the shareable defaults retained behind them
         // (disjoint sets: a generic entry has no printer to match).
