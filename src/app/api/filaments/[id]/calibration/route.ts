@@ -6,7 +6,7 @@ import {
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
-import "@/models/Printer";
+import Printer from "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { calibrationToOrcaSlicerKeys } from "@/lib/orcaSlicerBundle";
@@ -111,7 +111,9 @@ export async function GET(
     // Find calibration matching the nozzle diameter
     const calibrations = ((filament as NonNullable<typeof filament>).calibrations || []) as Array<{
       nozzle?: { diameter?: number; name?: string; type?: string; highFlow?: boolean };
-      printer?: { name?: string };
+      // `_id` is an ObjectId at runtime (populated doc); typed loosely like
+      // the bedType entry below so the lean() cast still overlaps.
+      printer?: { _id?: unknown; name?: string; _deletedAt?: unknown };
       bedType?: { _id?: string; name?: string; material?: string } | null;
       extrusionMultiplier?: number;
       maxVolumetricSpeed?: number;
@@ -134,6 +136,12 @@ export async function GET(
     const highFlowParam = searchParams.get("high_flow");
     const nozzleTypeParam = searchParams.get("nozzle_type");
     const bedTypeParam = searchParams.get("bed_type");
+    // GH #1047 Phase 0: the printer scope. `calibrations[].printer` has been
+    // populated since #107 but nothing could ASK for it, so a slicer on the
+    // XL got whichever same-nozzle entry happened to sort first — including
+    // one tuned for a different machine. Zero schema change; the full
+    // printer-scoped nozzle identity remains #1047's later phases.
+    const printerParam = searchParams.get("printer");
 
     const diameterMatches = calibrations.filter((cal) => {
       if (!cal.nozzle || Math.abs((cal.nozzle.diameter || 0) - nozzleDiameter) >= 0.01)
@@ -162,6 +170,118 @@ export async function GET(
         (cal) => (cal.nozzle?.type ?? "").trim().toLowerCase() === wanted,
       );
       if (typeMatches.length > 0) scopedMatches = typeMatches;
+    }
+
+    // GH #1047 Phase 0: PRIORITIZE by printer — deliberately reordering
+    // rather than filtering (Codex P2). Dropping the non-matching entries
+    // discarded the printer-less BEDLESS default that the bed_type step
+    // below falls back to, so `printer=P&bed_type=Smooth` with (P,Textured)
+    // + (null,null) returned the Textured entry, breaking the documented
+    // "a bed-type miss falls back to a calibration without a bed type".
+    // Ordering keeps that promise while `scopedMatches[0]` still prefers
+    // the printer match. Soft throughout, like nozzle_type beside it: a
+    // printer/data mismatch never turns a working lookup into a 404.
+    const genericEntries = scopedMatches.filter((cal) => !cal.printer);
+    if (printerParam) {
+      const raw = printerParam.trim();
+      const wanted = raw.toLowerCase();
+      // A 24-hex input is an OBJECTID and wins outright (Codex P2), before
+      // any name matching: printer names are unrestricted, so one printer
+      // could be NAMED as another's id — and this endpoint documents
+      // ObjectId support, matching how the filament itself is resolved
+      // above. Ids are compared case-folded because a populated `_id`
+      // renders canonical lowercase.
+      const looksLikeId = /^[0-9a-fA-F]{24}$/.test(raw);
+      // Only a LIVE printer is addressable (Codex P2 round 4). `populate()`
+      // does not filter tombstones, so a calibration still pointing at a
+      // soft-deleted printer would satisfy an id match and outrank an ACTIVE
+      // printer named with that id — the impostor problem inverted. Applied to
+      // every rung below, so "exists" means the same thing here as it does in
+      // the existence queries and in the rest of the printer API.
+      const addressable = scopedMatches.filter((cal) => cal.printer && !cal.printer._deletedAt);
+      const idMatches = looksLikeId
+        ? addressable.filter(
+            (cal) => String(cal.printer?._id ?? "").trim().toLowerCase() === wanted,
+          )
+        : [];
+      // Whether that id names a REAL printer is a question about the Printer
+      // COLLECTION, not about the rows we happen to have filtered (Codex P2
+      // round 2). Inferring existence from `idMatches` conflates "no such
+      // printer" with "that printer has no row for this nozzle" — and only the
+      // first may fall back to name matching. Get the second wrong and the
+      // impostor wins again by the back door. Queried only when the populated
+      // rows didn't already prove existence, so the hit path adds nothing.
+      // `_deletedAt: null` because that is what the rest of the printer API
+      // means by "exists" (Codex P2 round 3). A soft-deleted row is not an
+      // identity a caller can address, so letting one suppress the name path
+      // would hide an ACTIVE printer that happens to be named with its id.
+      const idIsRealPrinter =
+        idMatches.length > 0 ||
+        (looksLikeId && (await Printer.exists({ _id: raw, _deletedAt: null })) !== null);
+      // Then the name, in three rungs from strictest to loosest. The Printer
+      // name index is case-SENSITIVE, so "XL" and "xl" can both exist; and
+      // hybrid sync writes through the raw driver, which bypasses the schema's
+      // trim setter, so "X" and "X " can both exist too. Array order must not
+      // decide between them when the caller spelled one of them exactly.
+      //
+      // 1. VERBATIM — the caller's spelling against the stored spelling, no
+      //    normalization on either side (Codex P2 round 4). This is the only
+      //    rung that can tell "X" from "X ".
+      const verbatimName = addressable.filter((cal) => (cal.printer?.name ?? "") === printerParam);
+      // 2. Trimmed exact — tolerates stray whitespace around the caller's
+      //    input, which is the ordinary case since stored names are trimmed.
+      const exactName = addressable.filter((cal) => (cal.printer?.name ?? "").trim() === raw);
+      // 3. Case-folded.
+      const loose = addressable.filter(
+        (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
+      );
+      // Every rung gets the same existence question as the id, and for the
+      // same reason (Codex P2 rounds 3–5): an identity that EXISTS and simply
+      // has no calibration here must not be answered by a weaker match. That
+      // has to be asked PER RUNG — a live "X " with no row here was still
+      // answered by "X"'s row, because the trimmed rung had matches and the
+      // single combined check never fired.
+      //
+      // Asked through the RAW driver, not the model: the schema's `trim`
+      // setter applies to query VALUES too, so `Printer.exists({name: "X "})`
+      // casts to `"X"` and answers about the wrong row — the same trap GH
+      // #1116 documents. The native query compares the spelling as given, and
+      // `_deletedAt: null` there also matches rows predating the field.
+      const liveNamed = async (name: string) =>
+        (await Printer.collection.countDocuments(
+          { name, _deletedAt: null },
+          { limit: 1 },
+        )) > 0;
+
+      // Strongest rung first; each `liveNamed` is reached — and therefore
+      // asked — only when the rung above found nothing and a weaker one would
+      // otherwise answer. The ordinary lookup (stored spelling, rows present)
+      // stops at `verbatimName` and issues no query at all.
+      let printerMatches: typeof scopedMatches = [];
+      if (idMatches.length > 0) printerMatches = idMatches;
+      else if (idIsRealPrinter) printerMatches = [];
+      else if (verbatimName.length > 0) printerMatches = verbatimName;
+      else if ((exactName.length > 0 || loose.length > 0) && (await liveNamed(printerParam)))
+        printerMatches = [];
+      else if (exactName.length > 0) printerMatches = exactName;
+      else if (loose.length > 0 && raw !== printerParam && (await liveNamed(raw)))
+        printerMatches = [];
+      else printerMatches = loose;
+      if (printerMatches.length > 0) {
+        // Printer-scoped first, the shareable defaults retained behind them
+        // (disjoint sets: a generic entry has no printer to match).
+        scopedMatches = [...printerMatches, ...genericEntries];
+      } else if (genericEntries.length > 0) {
+        // Unknown printer → the shareable defaults, which is what
+        // prusaSlicerBundle already prefers when baking a preset.
+        scopedMatches = genericEntries;
+      }
+    } else if (genericEntries.length > 0) {
+      // No printer asked for: prefer the shareable defaults, keeping the
+      // machine-specific entries behind them so a filament with ONLY
+      // printer-scoped rows still answers. Deterministic where the old code
+      // took whatever sorted first — the small behavior change this adds.
+      scopedMatches = [...genericEntries, ...scopedMatches.filter((cal) => cal.printer)];
     }
 
     let match = scopedMatches[0];
