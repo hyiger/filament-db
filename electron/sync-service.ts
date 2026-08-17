@@ -13,6 +13,7 @@ import {
   type TrimNameConflict,
   trimEntityNames,
   describeTrimResult,
+  TRIMMABLE_COLLECTIONS,
   type MinimalTrimDb,
 } from "../src/lib/trimEntityNames";
 import {
@@ -515,12 +516,22 @@ export class SyncService extends EventEmitter {
     // Declared outside the try so the catch below can publish them: a cycle
     // that dies after the trim passes still knows what those passes saw.
     const trimConflicts: SyncNameConflict[] = [];
-    // Only a scan that covered BOTH peers AND every collection is
-    // publishable. A partial one — thrown, aborted mid-loop, or silent about
-    // a collection the trim skipped — would drop rows it never looked at,
-    // which is worse than the stale list it would replace.
-    let trimScanCompleted = false;
-    let trimSkipped = false;
+    // Which `side:collection` pairs the trim actually LOOKED at (Codex P2
+    // round 6). Publishability is per pair, not global: the snapshot is
+    // authoritative about what it scanned and silent about the rest, so a
+    // single skip must not suppress a fresh conflict another collection just
+    // found — that hid it indefinitely whenever the skip and the failure both
+    // repeated. A pair the pass skipped, or a side it threw on, keeps
+    // whatever the previous status said.
+    const scannedPairs = new Set<string>();
+    const pairKey = (side: string, collection: string) => `${side}:${collection}`;
+    /** Fresh rows for scanned pairs; the previous status for everything else. */
+    const mergeWithPrevious = (fresh: SyncNameConflict[]): SyncNameConflict[] => [
+      ...fresh,
+      ...(this.status.nameConflicts ?? []).filter(
+        (c) => !scannedPairs.has(pairKey(c.side, c.collection)),
+      ),
+    ];
 
     try {
       await local.connect();
@@ -726,15 +737,18 @@ export class SyncService extends EventEmitter {
         // A collection the pass SKIPPED has un-normalized names by
         // definition, and it doesn't know WHICH — so that one really is
         // collection-wide.
-        for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
         // A skip means the pass never looked at that collection's rows at all
         // — it gave up before querying any candidate (Codex P2 round 4). The
-        // snapshot is therefore silent about it, and publishing that silence
-        // would erase a previously-reported conflict there rather than
-        // refresh it. Same rule as the abort below, for the same reason.
-        if (trimResult.skipped.length > 0) trimSkipped = true;
+        // snapshot is therefore silent about it rather than clean, so record
+        // only what was really scanned; everything else keeps the previous
+        // status's rows. A side this loop THROWS on records nothing, since
+        // the throw discards whatever it had found so far.
+        const skippedHere = new Set(trimResult.skipped.map((sk) => sk.collection));
+        for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
+        for (const collection of TRIMMABLE_COLLECTIONS) {
+          if (!skippedHere.has(collection)) scannedPairs.add(pairKey(side, collection));
+        }
       }
-      trimScanCompleted = !this.aborted && !trimSkipped;
       // (GH #1164 round 2: the conflict list is published AFTER the
       // collection copies — see the rescan near the end of the cycle. This
       // pre-copy point is too early: a conflict the user resolved locally
@@ -1291,9 +1305,7 @@ export class SyncService extends EventEmitter {
         // and that never self-corrects.
         ...(rescanned
           ? { nameConflicts }
-          : trimScanCompleted
-            ? { nameConflicts: trimConflicts }
-            : {}),
+          : { nameConflicts: mergeWithPrevious(trimConflicts) }),
       });
 
       if (erroredAll) this.emit("syncError", summary ?? "Sync failed");
@@ -1309,7 +1321,9 @@ export class SyncService extends EventEmitter {
         // read, any collection copy — and the end-of-cycle rescan never runs.
         // Publish what the trim saw rather than leaving the previous list,
         // which the health page cannot correct on its own for the remote side.
-        ...(trimScanCompleted ? { nameConflicts: trimConflicts } : {}),
+        // A cycle that died BEFORE the trim scanned anything merges to exactly
+        // the previous list, which is the old behaviour.
+        nameConflicts: mergeWithPrevious(trimConflicts),
       });
       this.emit("syncError", safe);
       return [];

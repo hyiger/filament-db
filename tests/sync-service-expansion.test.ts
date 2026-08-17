@@ -1602,6 +1602,36 @@ describe("SyncService — v1.12 sync expansion", () => {
       ).toBe(true);
     });
 
+    it("still publishes a SCANNED collection's fresh conflict when another was skipped (r6)", async () => {
+      // Publishability is per collection, not global. A skip elsewhere used to
+      // suppress the whole snapshot, hiding a conflict that was actually
+      // found — indefinitely, whenever the skip and the failure both repeat.
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // bedtypes: duplicate ACTIVE names, so its index build is refused and
+      // the collection is skipped before any row is read.
+      await remoteDb.collection("bedtypes").insertMany([
+        { name: "Dup", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Dup", material: "PEI", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+      // locations: a genuine trim conflict, in a collection that IS scanned.
+      await remoteDb.collection("locations").insertMany([
+        { name: "Loc X", kind: "shelf", _deletedAt: null, createdAt: now, updatedAt: now },
+        { name: "Loc X ", kind: "shelf", _deletedAt: null, createdAt: now, updatedAt: now },
+      ]);
+
+      sync = makeSync();
+      (sync as unknown as { reconcileNozzlesByName: () => Promise<void> })
+        .reconcileNozzlesByName = () => Promise.reject(new Error("boom"));
+      await sync.sync();
+
+      expect(sync.getStatus().state).toBe("error");
+      const found = sync.getStatus().nameConflicts;
+      expect(
+        found.some((c) => c.side === "remote" && c.collection === "locations" && c.name === "Loc X "),
+      ).toBe(true);
+    });
+
     it("does not report an INACTIVE conflict — nothing a user could act on", async () => {
       const localDb = localClient.db("filament-db");
       const now = new Date();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
@@ -75,19 +75,29 @@ export default function DataHealthPage() {
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Every scan of /api/name-conflicts takes a ticket, and only the newest
+  // ticket may write (Codex P2). The mount scan and a completion-triggered
+  // refetch are independent requests with no ordering: mounting while a sync
+  // finishes, the mount request can capture the PRE-copy database and resolve
+  // LAST, overwriting the post-copy list — the newly copied conflict then
+  // stays missing until another sync or a reload.
+  const scanSeq = useRef(0);
+
   // Refetch helper for the ACTION handlers (event handlers, not effects —
   // the react-hooks/set-state-in-effect rule does not apply there).
   const load = useCallback(async () => {
+    const seq = ++scanSeq.current;
     try {
       const res = await fetch("/api/name-conflicts");
       if (!res.ok) throw new Error();
       const body = (await res.json()) as { conflicts: Conflict[] };
+      if (seq !== scanSeq.current) return;
       setConflicts(body.conflicts);
       setError(false);
     } catch {
-      setError(true);
+      if (seq === scanSeq.current) setError(true);
     } finally {
-      setLoading(false);
+      if (seq === scanSeq.current) setLoading(false);
     }
   }, []);
 
@@ -97,18 +107,20 @@ export default function DataHealthPage() {
   // pattern OptResyncDialog established; the CI lint proved the difference).
   useEffect(() => {
     let cancelled = false;
+    const seq = ++scanSeq.current;
+    const current = () => !cancelled && seq === scanSeq.current;
     (async () => {
       try {
         const res = await fetch("/api/name-conflicts");
         if (!res.ok) throw new Error();
         const body = (await res.json()) as { conflicts: Conflict[] };
-        if (cancelled) return;
+        if (!current()) return;
         setConflicts(body.conflicts);
         setError(false);
       } catch {
-        if (!cancelled) setError(true);
+        if (current()) setError(true);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (current()) setLoading(false);
       }
     })();
     return () => {
