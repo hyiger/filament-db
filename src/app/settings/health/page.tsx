@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1149 — Data health: the trim-collision resolution surface.
@@ -128,49 +129,31 @@ export default function DataHealthPage() {
     // whenever a cycle finishes. `lastSyncAt` changing is exactly that
     // signal; progress ticks during a cycle carry the same value and are
     // ignored, so this cannot loop.
-    // `seenInitial` is a SEPARATE flag, not `lastSeenSync === null`
-    // (Codex P2): null is a legitimate stamp — the app mounts mid-initial-
-    // sync, or after connection failures, with lastSyncAt still null — and
-    // conflating "unset" with "null" made the first REAL completion look
-    // like the mount snapshot, so its refetch was skipped.
-    let seenInitial = false;
-    let lastSeenSync: string | null = null;
-    let wasSyncing = false;
-    const apply = (st: {
+    // The "did a cycle end?" rule lives in a pure, unit-tested module
+    // (Codex P2): this page has no test harness, and that rule has been
+    // wrong three separate ways, each time leaving the actionable list
+    // silently stale.
+    const watcher = createSyncCycleWatcher();
+    type StatusSample = {
       nameConflicts?: typeof syncConflicts;
       lastSyncAt?: string | null;
       state?: string;
-    }) => {
-      if (cancelled) return;
-      setSyncConflicts(st.nameConflicts ?? []);
-      const stamp = st.lastSyncAt ?? null;
-      const syncing = st.state === "syncing";
-      if (!seenInitial) {
-        // The mount snapshot itself — record it, refetch nothing.
-        seenInitial = true;
-        lastSeenSync = stamp;
-        wasSyncing = syncing;
-        return;
-      }
-      // A cycle ENDED if the stamp advanced OR we left the syncing state.
-      // The second clause matters for a FAILED cycle (Codex P2): the
-      // terminal error status keeps the previous lastSyncAt, yet earlier
-      // collections in that cycle may already have copied a remote
-      // conflict into the local database — so a stamp-only rule left the
-      // actionable list stale until some later success.
-      const ended = stamp !== lastSeenSync || (wasSyncing && !syncing);
-      lastSeenSync = stamp;
-      wasSyncing = syncing;
-      if (ended) void load();
     };
     (async () => {
       try {
-        apply(await api.getSyncStatus());
+        const st = await api.getSyncStatus();
+        if (cancelled) return;
+        setSyncConflicts((st as StatusSample).nameConflicts ?? []);
+        watcher.seed(st);
       } catch {
         /* status unavailable — the local scan above still stands */
       }
     })();
-    const unsub = api.onSyncStatusChange?.(apply);
+    const unsub = api.onSyncStatusChange?.((st) => {
+      if (cancelled) return;
+      setSyncConflicts((st as StatusSample).nameConflicts ?? []);
+      if (watcher.observe(st)) void load();
+    });
     return () => {
       cancelled = true;
       unsub?.();
