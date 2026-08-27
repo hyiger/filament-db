@@ -89,8 +89,12 @@ export default function AppHeader() {
           <SyncStatusIndicator />
           <NfcStatus />
         </div>
-        {/* Primary nav — desktop-only; mobile uses the drawer below. */}
-        <div className="hidden md:flex items-center gap-3">
+        {/* Primary nav — desktop-only; mobile uses the drawer below.
+            lg (not md) since the 8th link (#1168): at 768-1024px the full
+            set alongside the brand/version + status pills wraps or clips,
+            especially with the longer German labels — the drawer stays
+            active through tablet widths instead (Codex P2 #1184). */}
+        <div className="hidden lg:flex items-center gap-3">
           <nav className="flex items-center gap-1" aria-label={t("nav.aria.primary")}>
             {LINKS.map((link) => (
               <Link
@@ -104,10 +108,10 @@ export default function AppHeader() {
             ))}
           </nav>
         </div>
-        {/* Mobile hamburger — hidden on ≥md */}
+        {/* Mobile hamburger — hidden on ≥lg (see the nav comment above) */}
         <button
           type="button"
-          className="md:hidden p-1.5 -mr-1.5 rounded-md text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+          className="lg:hidden p-1.5 -mr-1.5 rounded-md text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           onClick={() => setMobileOpen((v) => !v)}
           aria-label={mobileOpen ? t("nav.closeMenu") : t("nav.openMenu")}
           aria-expanded={mobileOpen}
@@ -133,7 +137,7 @@ export default function AppHeader() {
       {mobileOpen && (
         <nav
           id="mobile-nav"
-          className="md:hidden border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950"
+          className="lg:hidden border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950"
           aria-label={t("nav.aria.primaryMobile")}
         >
           <div className="w-full px-4 py-2 flex flex-col gap-1">
