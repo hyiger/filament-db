@@ -118,11 +118,11 @@ describe("pruneParentEqualPrefill", () => {
     expect(
       pruneParentEqualPrefill({ settings: { chamber_temperature: "45" } }, {}),
     ).toEqual({ settings: { chamber_temperature: "45" } });
-    // Non-string parent value (array/nil) never matches.
+    // A nil / non-string, non-array parent value never matches.
     expect(
       pruneParentEqualPrefill(
         { settings: { chamber_temperature: "45" } },
-        { settings: { chamber_temperature: ["45"] } },
+        { settings: { chamber_temperature: null } },
       ),
     ).toEqual({ settings: { chamber_temperature: "45" } });
   });
@@ -133,6 +133,48 @@ describe("pruneParentEqualPrefill", () => {
       { optTags: [27], secondaryColors: ["#112233"] },
     );
     expect(out).toEqual({ optTags: [], secondaryColors: [] });
+  });
+
+  it("compares density/diameter on the snapToStep grid — half-float dust equals the parent (Codex P2 #1183 r3)", () => {
+    // A tag-programmed 1.24 decodes from CBOR half-float as 1.2392578125;
+    // the form snaps it to 1.24 at seed, so keeping it would persist a
+    // parent-equal override. 2.85 decodes as 2.849609375 likewise.
+    expect(
+      pruneParentEqualPrefill(
+        { density: 1.2392578125, diameter: 2.849609375 },
+        { density: 1.24, diameter: 2.85 },
+      ),
+    ).toEqual({});
+    // A genuinely different value on the same grid still survives.
+    expect(
+      pruneParentEqualPrefill({ density: 1.27 }, { density: 1.24 }),
+    ).toEqual({ density: 1.27 });
+    // Non-snap fields keep exact comparison (no grid to hide behind).
+    expect(
+      pruneParentEqualPrefill({ maxVolumetricSpeed: 12.3392578125 }, { maxVolumetricSpeed: 12.34 }),
+    ).toEqual({ maxVolumetricSpeed: 12.3392578125 });
+  });
+
+  it("prunes against the FIRST element of an array-valued parent setting (#678 form semantics)", () => {
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "45" } },
+        { settings: { chamber_temperature: ["45", "50"] } },
+      ),
+    ).toEqual({ settings: {} });
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "50" } },
+        { settings: { chamber_temperature: ["45", "50"] } },
+      ),
+    ).toEqual({ settings: { chamber_temperature: "50" } });
+    // Non-string first element never matches.
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "45" } },
+        { settings: { chamber_temperature: [45] } },
+      ),
+    ).toEqual({ settings: { chamber_temperature: "45" } });
   });
 
   it("does not mutate its input", () => {

@@ -21,6 +21,8 @@
  * in which case inheritance yields the identical number anyway.
  */
 
+import { snapToStep } from "@/lib/snapToStep";
+
 /** The raw parent doc fields the prune compares against (from ?raw=true). */
 export interface VariantPrefillParent {
   density?: number | null;
@@ -45,6 +47,14 @@ const PRUNE_EQUAL_SCALARS = [
   "netFilamentWeight",
   "spoolWeight",
 ] as const;
+
+/** density + diameter are seeded through the form's GH #570 snapToStep
+ *  (CBOR half-floats: a tag's 1.24 decodes as 1.2392578125), so equality
+ *  must be judged on the SNAPPED values — the form submits the snapped
+ *  number, and an exact-compare "difference" of half-float dust would
+ *  persist a parent-equal override (Codex P2 #1183 round 3). */
+const SNAP_BEFORE_COMPARE: ReadonlySet<string> = new Set(["density", "diameter"]);
+const SNAP_STEP = 0.01;
 
 function sameNumericSet(a: readonly number[], b: readonly number[]): boolean {
   if (a.length !== b.length) return false;
@@ -81,7 +91,11 @@ export function pruneParentEqualPrefill(
   for (const field of PRUNE_EQUAL_SCALARS) {
     const own = out[field];
     const inherited = parent[field];
-    if (typeof own === "number" && typeof inherited === "number" && own === inherited) {
+    if (typeof own !== "number" || typeof inherited !== "number") continue;
+    const snap = SNAP_BEFORE_COMPARE.has(field);
+    const ownCmp = snap ? snapToStep(own, SNAP_STEP) : own;
+    const inheritedCmp = snap ? snapToStep(inherited, SNAP_STEP) : inherited;
+    if (ownCmp === inheritedCmp) {
       delete out[field];
     }
   }
@@ -120,7 +134,16 @@ export function pruneParentEqualPrefill(
     const pruned: Record<string, unknown> = { ...(ownSettings as Record<string, unknown>) };
     for (const [key, value] of Object.entries(pruned)) {
       const inherited = (parentSettings as Record<string, unknown>)[key];
-      if (typeof value === "string" && typeof inherited === "string" && value === inherited) {
+      // A parent bag value may be a multi-element ARRAY (#678); the form
+      // displays and edits its FIRST element, so that's the value a
+      // parent-equal child copy would shadow (Codex P2 #1183 round 3).
+      const inheritedStr =
+        typeof inherited === "string"
+          ? inherited
+          : Array.isArray(inherited) && typeof inherited[0] === "string"
+            ? inherited[0]
+            : null;
+      if (typeof value === "string" && inheritedStr !== null && value === inheritedStr) {
         delete pruned[key];
       }
     }
