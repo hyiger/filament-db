@@ -28,7 +28,6 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
   const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
   const nozzleMin = searchParams.get("nozzleMin") ? Number(searchParams.get("nozzleMin")) : null;
   const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
-  const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
   const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
   // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
   const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
@@ -55,11 +54,19 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
       : {}),
     density: searchParams.get("density") ? Number(searchParams.get("density")) : null,
     diameter: searchParams.get("diameter") ? Number(searchParams.get("diameter")) : 1.75,
+    // Align with decodedTagToFilamentPayload (Codex P2 #1183 r8): the tag's
+    // min/max are the print RANGE, not first-layer temps — a 225-245 °C tag
+    // used to persist a spurious 225 °C first-layer override and lose the
+    // range. First-layer stays null; the range lands on its own fields
+    // (bed has no range fields in the schema, so its min is dropped like
+    // the canonical mapper does).
     temperatures: {
       nozzle: nozzleMax,
-      nozzleFirstLayer: nozzleMin ?? nozzleMax,
+      nozzleFirstLayer: null,
+      nozzleRangeMin: nozzleMin,
+      nozzleRangeMax: nozzleMax,
       bed: bedMax,
-      bedFirstLayer: bedMin ?? bedMax,
+      bedFirstLayer: null,
     },
     ...(weight != null ? { netFilamentWeight: weight } : {}),
     // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
