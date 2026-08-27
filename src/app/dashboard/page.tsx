@@ -7,6 +7,7 @@ import { useDateFormat } from "@/hooks/useDateFormat";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
+import LogPrintJobDialog from "@/components/LogPrintJobDialog";
 
 interface DashboardData {
   counts: {
@@ -59,6 +60,9 @@ export default function DashboardPage() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // GH #1167: in-app "Log print job" dialog — the first first-party writer of
+  // POST /api/print-history. onLogged bumps reloadKey so the card refetches.
+  const [showLogJob, setShowLogJob] = useState(false);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -85,6 +89,22 @@ export default function DashboardPage() {
   const retry = () => {
     setError(null);
     setReloadKey((k) => k + 1);
+  };
+
+  /** True when the stored value is exactly UTC midnight — the shape a
+   *  date-only entry takes (the Log-print-job picker sends a bare
+   *  `YYYY-MM-DD` for past days, stored as `00:00:00.000Z`). Same
+   *  detection as the filament detail page's usage disclosure (#941):
+   *  real "now" timestamps are effectively never exactly UTC midnight. */
+  const isUtcMidnight = (value: string): boolean => {
+    const d = new Date(value);
+    return (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCHours() === 0 &&
+      d.getUTCMinutes() === 0 &&
+      d.getUTCSeconds() === 0 &&
+      d.getUTCMilliseconds() === 0
+    );
   };
 
   /** Spool labels imported from Prusament come through as
@@ -285,7 +305,22 @@ export default function DashboardPage() {
 
       {/* Recent print history */}
       <section>
-        <h2 className="text-lg font-semibold mb-2">{t("dashboard.recentPrints")}</h2>
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="text-lg font-semibold">{t("dashboard.recentPrints")}</h2>
+          <button
+            type="button"
+            onClick={() => setShowLogJob(true)}
+            className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+          >
+            {t("printJob.open")}
+          </button>
+        </div>
+        {showLogJob && (
+          <LogPrintJobDialog
+            onLogged={() => setReloadKey((k) => k + 1)}
+            onClose={() => setShowLogJob(false)}
+          />
+        )}
         {data.recentPrintHistory.length === 0 ? (
           <p className="text-sm text-gray-500">{t("dashboard.recentPrints.empty")}</p>
         ) : (
@@ -296,7 +331,13 @@ export default function DashboardPage() {
                   <p className="font-medium truncate">{p.jobLabel}</p>
                   <p className="text-xs text-gray-500">
                     {p.printerName ? `${p.printerName} · ` : ""}
-                    {formatDateTime(p.startedAt)}
+                    {/* Codex P2 (PR #1182): a date-only backfill is stored as
+                        UTC midnight — formatted as a LOCAL datetime it reads
+                        as the previous evening west of UTC. Render it as a
+                        UTC calendar day instead (the #941 convention). */}
+                    {isUtcMidnight(p.startedAt)
+                      ? formatDate(p.startedAt, { timeZone: "UTC" })
+                      : formatDateTime(p.startedAt)}
                     {p.source !== "manual" && ` · ${p.source}`}
                   </p>
                 </div>
