@@ -25,7 +25,16 @@ import { useConfirm } from "@/components/ConfirmDialog";
  */
 
 interface JobUsageRow {
-  filamentId: { _id: string; name: string; vendor?: string; type?: string; color?: string | null } | null;
+  filamentId: {
+    _id: string;
+    name: string;
+    vendor?: string;
+    type?: string;
+    color?: string | null;
+    /** Populated refs resolve even for trashed filaments — the GET selects
+     *  _deletedAt so the UI can render a non-link (Codex P2 #1184). */
+    _deletedAt?: string | null;
+  } | null;
   spoolId: string | null;
   grams: number;
 }
@@ -264,7 +273,18 @@ export default function HistoryPage() {
           ) : jobs === null ? (
             <p className="text-sm text-gray-500">{t("common.loading")}</p>
           ) : visibleJobs.length === 0 ? (
-            <p className="text-sm text-gray-500">{t("history.jobs.empty")}</p>
+            <>
+              <p className="text-sm text-gray-500">{t("history.jobs.empty")}</p>
+              {/* Codex P2 (#1184): the label search runs over the fetched
+                  window, so an empty result may just mean the match is
+                  OLDER than the newest {limit} jobs — the disclosure must
+                  not vanish exactly when it matters most. */}
+              {jobs.length >= JOBS_LIMIT && (
+                <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+                  {t("history.jobs.limitNote", { limit: JOBS_LIMIT })}
+                </p>
+              )}
+            </>
           ) : (
             <>
               <ul className="text-sm divide-y divide-gray-200 dark:divide-gray-700 border border-gray-200 dark:border-gray-700 rounded">
@@ -305,7 +325,7 @@ export default function HistoryPage() {
                       <div className="mt-2 ml-5 space-y-1">
                         {job.usage.map((u, i) => (
                           <p key={i} className="text-xs text-gray-600 dark:text-gray-300">
-                            {u.filamentId ? (
+                            {u.filamentId && u.filamentId._deletedAt == null ? (
                               <Link
                                 href={`/filaments/${u.filamentId._id}${u.spoolId ? `?spool=${u.spoolId}` : ""}`}
                                 className="text-blue-600 dark:text-blue-400 hover:underline"
@@ -313,6 +333,15 @@ export default function HistoryPage() {
                                 {u.filamentId.name}
                                 {u.filamentId.vendor ? ` — ${u.filamentId.vendor}` : ""}
                               </Link>
+                            ) : u.filamentId ? (
+                              // Trashed: populate still resolves the ref, but the
+                              // active-only detail API would 404 — name, no link
+                              // (Codex P2 #1184).
+                              <span>
+                                {u.filamentId.name}
+                                {u.filamentId.vendor ? ` — ${u.filamentId.vendor}` : ""}
+                                {` (${t("history.filamentTrashed")})`}
+                              </span>
                             ) : (
                               <span className="italic">{t("history.filamentGone")}</span>
                             )}

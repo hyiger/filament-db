@@ -1857,16 +1857,17 @@
   "history.jobs.empty": "No print jobs match. Jobs appear here once logged — use “Log print job” on the Dashboard or POST /api/print-history.",
   "history.jobs.limitNote": "Showing the most recent {limit} jobs.",
   "history.delete.title": "Undo print job?",
-  "history.delete.message": "Delete “{label}” and refund {grams} g to its spools? This restores the debited weight.",
+  "history.delete.message": "Delete “{label}” and refund {grams} g to its spools? The debited weight is restored on every spool that still exists — grams debited from a since-deleted filament or spool stay deducted.",
   "history.delete.confirm": "Delete and refund",
   "history.delete.button": "Delete",
-  "history.delete.done": "Print job deleted — spool weight refunded",
+  "history.delete.done": "Print job deleted — debited weight refunded to its remaining spools",
   "history.delete.failed": "Failed to delete print job",
-  "history.delete.refundNote": "Deleting a job refunds its grams to the spools it debited.",
+  "history.delete.refundNote": "Deleting a job refunds its grams to the spools it debited, where those spools still exist.",
   "history.filamentGone": "filament removed",
   "history.searchLedger": "Search usage labels…",
   "history.filterSource": "Filter by source",
   "history.allSources": "All sources",
   "history.ledger.empty": "No usage entries match.",
-  "history.ledger.capNote": "Each spool keeps at most 1,000 usage entries (oldest manual entries are dropped first), so very old entries may be absent. Job and slicer entries are also counted on the Print jobs tab."
+  "history.ledger.capNote": "Each spool keeps at most 1,000 usage entries (oldest manual entries are dropped first), so very old entries may be absent. Job and slicer entries are also counted on the Print jobs tab.",
+  "history.filamentTrashed": "in trash"
 }
