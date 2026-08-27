@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
@@ -107,6 +107,9 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
   const [formError, setFormError] = useState<PrintJobFormError | null>(null);
   const [serverError, setServerError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Mirrors `submitting` for the document-level Escape handler, which is
+  // registered once and must read the LIVE value, not a stale closure.
+  const submittingRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -138,12 +141,20 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
     };
   }, []);
 
+  // Codex P2 (PR #1182 round 2): dismissing while the POST is in flight does
+  // NOT abort it — a user who closes on a slow request, reopens, and submits
+  // again ends up with TWO jobs debiting inventory. Every dismissal gesture
+  // (Escape, backdrop, X, Cancel) funnels through this guard.
+  const safeClose = useCallback(() => {
+    if (!submittingRef.current) onClose();
+  }, [onClose]);
+
   // Escape to close + Tab focus trap (mirrors OptLinkDialog's mechanics).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        onClose();
+        safeClose();
         return;
       }
       if (e.key !== "Tab" || !dialogRef.current) return;
@@ -162,7 +173,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [safeClose]);
 
   const sortedFilaments = useMemo(
     () => [...filaments].sort((a, b) => a.name.localeCompare(b.name)),
@@ -212,6 +223,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
     }
     setFormError(null);
     setSubmitting(true);
+    submittingRef.current = true;
     try {
       const res = await fetch("/api/print-history", {
         method: "POST",
@@ -235,6 +247,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
       setServerError(t("printJob.failed"));
     } finally {
       setSubmitting(false);
+      submittingRef.current = false;
     }
   };
 
@@ -248,7 +261,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
       role="dialog"
       aria-modal="true"
       aria-label={t("printJob.title")}
-      onClick={onClose}
+      onClick={safeClose}
     >
       <div
         ref={dialogRef}
@@ -259,8 +272,9 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
           <h2 className="text-lg font-semibold">{t("printJob.title")}</h2>
           <button
             type="button"
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            onClick={safeClose}
+            disabled={submitting}
+            className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 disabled:opacity-50"
             aria-label={t("common.close")}
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -449,8 +463,9 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
         <div className="flex justify-end gap-2 px-5 py-3 border-t border-gray-200 dark:border-gray-700">
           <button
             type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-gray-400"
+            onClick={safeClose}
+            disabled={submitting}
+            className="px-3 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:border-gray-400 disabled:opacity-50"
           >
             {t("common.cancel")}
           </button>
