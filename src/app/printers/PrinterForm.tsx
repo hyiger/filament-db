@@ -636,7 +636,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
               id="printer-build-x"
               type="number"
               min="0"
-              step="1"
+              step="any"
               className={inputClass}
               value={form.buildVolume.x}
               onChange={(e) =>
@@ -650,7 +650,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
               id="printer-build-y"
               type="number"
               min="0"
-              step="1"
+              step="any"
               className={inputClass}
               value={form.buildVolume.y}
               onChange={(e) =>
@@ -664,7 +664,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
               id="printer-build-z"
               type="number"
               min="0"
-              step="1"
+              step="any"
               className={inputClass}
               value={form.buildVolume.z}
               onChange={(e) =>
@@ -680,7 +680,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
               id="printer-max-flow"
               type="number"
               min="0"
-              step="0.1"
+              step="any"
               className={inputClass}
               value={form.maxFlow}
               onChange={(e) => updateForm({ maxFlow: e.target.value })}
@@ -693,7 +693,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
               id="printer-max-speed"
               type="number"
               min="0"
-              step="1"
+              step="any"
               className={inputClass}
               value={form.maxSpeed}
               onChange={(e) => updateForm({ maxSpeed: e.target.value })}
