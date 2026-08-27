@@ -145,6 +145,20 @@ export default function HistoryPage() {
     return () => ac.abort();
   }, [printerFilter]);
 
+  // /api/printers filters trashed printers out, but their history rows
+  // remain (and GET /api/print-history?printerId= still resolves them) —
+  // union in any printer referenced by the fetched jobs so those rows stay
+  // filterable (Codex P2 #1184 r8).
+  const printerOptions = useMemo(() => {
+    const byId = new Map(printers.map((p) => [p._id, { ...p, trashed: false }]));
+    for (const job of jobs ?? []) {
+      if (job.printerId && !byId.has(job.printerId._id)) {
+        byId.set(job.printerId._id, { ...job.printerId, trashed: true });
+      }
+    }
+    return [...byId.values()];
+  }, [printers, jobs]);
+
   const visibleJobs = useMemo(() => {
     if (!jobs) return [];
     const q = jobSearch.trim().toLowerCase();
@@ -285,9 +299,9 @@ export default function HistoryPage() {
               className={inputClass}
             >
               <option value="">{t("history.allPrinters")}</option>
-              {printers.map((p) => (
+              {printerOptions.map((p) => (
                 <option key={p._id} value={p._id}>
-                  {p.name}
+                  {p.trashed ? `${p.name} (${t("history.printerTrashed")})` : p.name}
                 </option>
               ))}
             </select>

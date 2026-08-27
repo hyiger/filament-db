@@ -1903,5 +1903,6 @@
   "printJob.error.rowGramsTooLarge": "Row {row}: grams amount is too large",
   "printJob.error.dateInFuture": "The date can't be in the future — future-dated jobs would be hidden from Analytics",
   "history.ledger.limitNote": "Results are limited to the newest {limit} matching entries.",
-  "history.viewAll": "View all →"
+  "history.viewAll": "View all →",
+  "history.printerTrashed": "in trash"
 }
