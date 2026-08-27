@@ -364,7 +364,7 @@ export default function HistoryPage() {
                               <span className="italic">{t("history.filamentGone")}</span>
                             )}
                             {" · "}
-                            {formatGrams(u.grams)} g
+                            {formatGrams(safeGrams(u.grams))} g
                           </p>
                         ))}
                         {job.notes && (
