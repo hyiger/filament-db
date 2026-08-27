@@ -9,7 +9,11 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { formatMinutesAsHm } from "@/lib/formatDuration";
-import { matchesTokenizedQuery } from "@/lib/materialSearch";
+import {
+  matchesSearchTokens,
+  normalizeSearchFields,
+  tokenizeSearchQuery,
+} from "@/lib/materialSearch";
 
 // Row layout constants — the virtualized List needs known heights so it
 // can compute the absolute scroll position of every row without mounting
@@ -554,6 +558,19 @@ export default function OpenPrintTagBrowser() {
     return db.brands.filter((b) => b.name.toLowerCase().includes(q));
   }, [db, brandSearch]);
 
+  // Normalized once per loaded DB, not once per keystroke per row (Codex P2
+  // on PR #1181 — the search filter below runs over ~11.7k materials). Keyed
+  // by object identity: db.materials is stable for the life of the loaded db.
+  const searchFieldsByMaterial = useMemo(() => {
+    const map = new Map<OPTMaterial, string[]>();
+    if (db) {
+      for (const m of db.materials) {
+        map.set(m, normalizeSearchFields([m.name, m.brandName, m.type]));
+      }
+    }
+    return map;
+  }, [db]);
+
   const filteredMaterials = useMemo(() => {
     if (!db) return [];
     let materials = db.materials;
@@ -569,9 +586,12 @@ export default function OpenPrintTagBrowser() {
     }
     if (searchQuery) {
       // GH #1173: tokenized — same semantics as the OPT link dialog.
-      materials = materials.filter((m) =>
-        matchesTokenizedQuery([m.name, m.brandName, m.type], searchQuery),
-      );
+      const tokens = tokenizeSearchQuery(searchQuery);
+      if (tokens.length > 0) {
+        materials = materials.filter((m) =>
+          matchesSearchTokens(searchFieldsByMaterial.get(m) ?? [], tokens),
+        );
+      }
     }
 
     // Sort
@@ -592,7 +612,7 @@ export default function OpenPrintTagBrowser() {
     }
 
     return materials;
-  }, [db, brandFilter, typeFilter, tierFilter, searchQuery, sortKey]);
+  }, [db, brandFilter, typeFilter, tierFilter, searchQuery, sortKey, searchFieldsByMaterial]);
 
   // ── Handlers ───────────────────────────────────────────────────────
 

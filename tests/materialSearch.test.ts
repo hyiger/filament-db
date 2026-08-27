@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { matchesTokenizedQuery, normalizeSearchText } from "@/lib/materialSearch";
+import {
+  matchesSearchTokens,
+  matchesTokenizedQuery,
+  normalizeSearchFields,
+  normalizeSearchText,
+  tokenizeSearchQuery,
+} from "@/lib/materialSearch";
 
 // GH #1173 — the reporter's exact rows: brand in one field, color-bearing
 // name in another, type in a third. The old single-substring filter could
@@ -18,6 +24,30 @@ describe("normalizeSearchText", () => {
 
   it("leaves plain ASCII untouched", () => {
     expect(normalizeSearchText("pla blanc 1.75")).toBe("pla blanc 1.75");
+  });
+});
+
+describe("the compile-once split form (Codex P2 on PR #1181)", () => {
+  it("tokenizeSearchQuery normalizes, splits on whitespace runs, and drops empties", () => {
+    expect(tokenizeSearchQuery("  Arianeplast   PLá ")).toEqual(["arianeplast", "pla"]);
+    expect(tokenizeSearchQuery("")).toEqual([]);
+    expect(tokenizeSearchQuery("   ")).toEqual([]);
+  });
+
+  it("normalizeSearchFields normalizes and drops null/undefined/empty entries", () => {
+    expect(normalizeSearchFields(["PLA Blanc", null, undefined, "", "Améthyste"])).toEqual([
+      "pla blanc",
+      "amethyste",
+    ]);
+  });
+
+  it("matchesSearchTokens is the equivalence-preserving core of matchesTokenizedQuery", () => {
+    const fields = normalizeSearchFields(ARIANEPLAST_PLA_BLANC);
+    for (const q of ["arianeplast b", "arianeplast petg", "", "pla blanc"]) {
+      expect(matchesSearchTokens(fields, tokenizeSearchQuery(q))).toBe(
+        matchesTokenizedQuery(ARIANEPLAST_PLA_BLANC, q),
+      );
+    }
   });
 });
 

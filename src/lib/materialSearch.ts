@@ -26,21 +26,47 @@ export function normalizeSearchText(value: string): string {
   return value.normalize("NFD").replace(COMBINING_MARKS_RE, "").toLowerCase();
 }
 
+/** Normalized whitespace-separated query tokens. Empty for a blank query. */
+export function tokenizeSearchQuery(query: string): string[] {
+  return normalizeSearchText(query).split(/\s+/).filter(Boolean);
+}
+
+/** Pre-normalize a row's searchable fields (drops null/undefined/empty). */
+export function normalizeSearchFields(
+  fields: ReadonlyArray<string | null | undefined>,
+): string[] {
+  return fields
+    .filter((f): f is string => typeof f === "string" && f !== "")
+    .map(normalizeSearchText);
+}
+
 /**
- * True when EVERY whitespace-separated token of `query` is a substring of AT
- * LEAST ONE of `fields` (AND across tokens, OR across fields), compared
- * accent- and case-insensitively. An empty / whitespace-only query matches
- * everything — callers that want "no query → no results" gate that case
- * themselves (the link dialog does).
+ * AND across tokens, OR across fields, over PRE-normalized inputs. Zero
+ * tokens match everything — callers that want "no query → no results" gate
+ * that case themselves (the link dialog does).
+ *
+ * Split from matchesTokenizedQuery so hot callers pay normalization once per
+ * SEARCH, not once per ROW: both UI callers filter the ~11.7k-material OPT
+ * list per keystroke inside useMemo, where re-tokenizing the query (and
+ * re-normalizing every row's fields) 11.7k times per keystroke measurably
+ * blocks input (Codex P2 on PR #1181). Tokenize the query once per search
+ * and cache normalizeSearchFields per row keyed on the loaded list.
+ */
+export function matchesSearchTokens(
+  normalizedFields: ReadonlyArray<string>,
+  tokens: ReadonlyArray<string>,
+): boolean {
+  return tokens.every((token) => normalizedFields.some((h) => h.includes(token)));
+}
+
+/**
+ * Convenience one-shot: true when EVERY whitespace-separated token of `query`
+ * is a substring of AT LEAST ONE of `fields` (accent- and case-insensitive).
+ * For per-keystroke filtering of large lists use the split form above.
  */
 export function matchesTokenizedQuery(
   fields: ReadonlyArray<string | null | undefined>,
   query: string,
 ): boolean {
-  const tokens = normalizeSearchText(query).split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return true;
-  const haystacks = fields
-    .filter((f): f is string => typeof f === "string" && f !== "")
-    .map(normalizeSearchText);
-  return tokens.every((token) => haystacks.some((h) => h.includes(token)));
+  return matchesSearchTokens(normalizeSearchFields(fields), tokenizeSearchQuery(query));
 }
