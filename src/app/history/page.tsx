@@ -158,9 +158,16 @@ export default function HistoryPage() {
   const jobGrams = (job: PrintJob): number => sumUsageGrams(job.usage);
 
   /** What a DELETE would actually restore — debitedGrams where recorded
-   *  (a 100 g job against a 50 g spool debited, and refunds, only 50 g). */
+   *  (a 100 g job against a 50 g spool debited, and refunds, only 50 g).
+   *  A row with NO spool deliberately debited nothing (GH #305: all spools
+   *  retired → spoolId null, no debitedGrams) and refunds nothing; the
+   *  grams fallback applies only to legacy pre-#1074 rows that DID debit
+   *  a spool (Codex P2 #1184 r7). */
   const jobRefundableGrams = (job: PrintJob): number =>
-    job.usage.reduce((sum, u) => sum + safeGrams(u.debitedGrams ?? u.grams), 0);
+    job.usage.reduce(
+      (sum, u) => sum + safeGrams(u.debitedGrams ?? (u.spoolId ? u.grams : 0)),
+      0,
+    );
 
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
