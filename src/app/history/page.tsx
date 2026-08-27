@@ -62,6 +62,23 @@ interface PickerPrinter {
 const JOBS_LIMIT = 200;
 const LEDGER_LIMIT = 200;
 
+/** True when the stored value is exactly UTC midnight — the shape a
+ *  date-only entry takes (date pickers submit a bare `YYYY-MM-DD`, stored
+ *  as `00:00:00.000Z`). Same detection as the filament detail page's usage
+ *  disclosure (#941): real "now" timestamps are effectively never exactly
+ *  UTC midnight. Rendered as a UTC calendar day, a date-only entry can't
+ *  drift to the previous evening west of UTC. */
+function isUtcMidnight(value: string): boolean {
+  const d = new Date(value);
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  );
+}
+
 export default function HistoryPage() {
   const { t } = useTranslation();
   const { formatDate, formatDateTime } = useDateFormat();
@@ -266,7 +283,9 @@ export default function HistoryPage() {
                         </p>
                         <p className="text-xs text-gray-500">
                           {job.printerId?.name ? `${job.printerId.name} · ` : ""}
-                          {formatDateTime(job.startedAt)}
+                          {isUtcMidnight(job.startedAt)
+                            ? formatDate(job.startedAt, { timeZone: "UTC" })
+                            : formatDateTime(job.startedAt)}
                           {job.source !== "manual" && ` · ${job.source}`}
                         </p>
                       </button>
@@ -368,7 +387,7 @@ export default function HistoryPage() {
                       </Link>
                       {entry.spoolLabel ? ` · ${entry.spoolLabel}` : ""}
                       {" · "}
-                      {formatDate(entry.date)}
+                      {formatDate(entry.date, isUtcMidnight(entry.date) ? { timeZone: "UTC" } : undefined)}
                       {" · "}
                       {sourceLabel(entry.source)}
                     </p>
