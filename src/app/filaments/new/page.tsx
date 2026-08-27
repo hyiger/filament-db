@@ -352,7 +352,18 @@ function NewFilamentContent() {
               // gray / "PLA" (a 2.85 mm family would otherwise get a wrong
               // explicit override on every tag that omits diameter).
               if (!searchParams.get("diameter")) delete nfc.diameter;
-              if (!searchParams.get("color")) delete nfc.color;
+              // No color param: a tag WITH secondary colors deliberately has
+              // a null primary (the coextruded spec shape) — deleting would
+              // make seedFormColorHex(undefined) stamp a phantom gray
+              // primary onto the color sequence (Codex P2 #1183 r7). A tag
+              // with no colors at all keeps the fresh-form default instead.
+              if (!searchParams.get("color")) {
+                if (Array.isArray(nfc.secondaryColors) && nfc.secondaryColors.length > 0) {
+                  nfc.color = null;
+                } else {
+                  delete nfc.color;
+                }
+              }
               if (!searchParams.get("type")) delete nfc.type;
               // Codex P1 (#1183): a tag carrying a NET actualWeight but no
               // tare gets the standalone 0-tare pin (net = gross). With a
