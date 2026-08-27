@@ -49,10 +49,11 @@ const PRUNE_EQUAL_SCALARS = [
 ] as const;
 
 /** density + diameter are seeded through the form's GH #570 snapToStep
- *  (CBOR half-floats: a tag's 1.24 decodes as 1.2392578125), so equality
- *  must be judged on the SNAPPED values — the form submits the snapped
- *  number, and an exact-compare "difference" of half-float dust would
- *  persist a parent-equal override (Codex P2 #1183 round 3). */
+ *  (CBOR half-floats: a tag's 1.24 decodes as 1.2392578125), so the OWN
+ *  side is judged on the snapped value the form would actually submit.
+ *  The PARENT side stays EXACT: the form never snaps an inherited value,
+ *  so an off-grid parent (an imported 1.244) really does differ from a
+ *  tag's snapped 1.24 and the override must survive (Codex #1183 r3/r5). */
 const SNAP_BEFORE_COMPARE: ReadonlySet<string> = new Set(["density", "diameter"]);
 const SNAP_STEP = 0.01;
 
@@ -92,10 +93,8 @@ export function pruneParentEqualPrefill(
     const own = out[field];
     const inherited = parent[field];
     if (typeof own !== "number" || typeof inherited !== "number") continue;
-    const snap = SNAP_BEFORE_COMPARE.has(field);
-    const ownCmp = snap ? snapToStep(own, SNAP_STEP) : own;
-    const inheritedCmp = snap ? snapToStep(inherited, SNAP_STEP) : inherited;
-    if (ownCmp === inheritedCmp) {
+    const ownCmp = SNAP_BEFORE_COMPARE.has(field) ? snapToStep(own, SNAP_STEP) : own;
+    if (ownCmp === inherited) {
       delete out[field];
     }
   }

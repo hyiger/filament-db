@@ -149,6 +149,13 @@ describe("pruneParentEqualPrefill", () => {
     expect(
       pruneParentEqualPrefill({ density: 1.27 }, { density: 1.24 }),
     ).toEqual({ density: 1.27 });
+    // The PARENT side stays exact (Codex r5): an off-grid imported parent
+    // 1.244 differs from the tag's snapped 1.24 — the override survives,
+    // because the form never snaps an inherited value and the variant
+    // would otherwise resolve to 1.244 while the user saw 1.24.
+    expect(
+      pruneParentEqualPrefill({ density: 1.2392578125 }, { density: 1.244 }),
+    ).toEqual({ density: 1.2392578125 });
     // Non-snap fields keep exact comparison (no grid to hide behind).
     expect(
       pruneParentEqualPrefill({ maxVolumetricSpeed: 12.3392578125 }, { maxVolumetricSpeed: 12.34 }),
