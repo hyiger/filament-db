@@ -143,7 +143,7 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
           type="number"
           min="0"
           max="100"
-          step="1"
+          step="any"
           className={inputClass}
           value={form.humidity}
           onChange={(e) => updateForm({ humidity: e.target.value })}
