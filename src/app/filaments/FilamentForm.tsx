@@ -1898,7 +1898,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <input
             id="filament-cost"
             type="number"
-            step="0.01"
+            step="any"
             min="0"
             className={inputClass}
             value={form.cost}
@@ -1946,7 +1946,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-net-filament"
               type="number"
-              step="1"
+              step="any"
               min="0"
               className={inputClass}
               value={form.netFilamentWeight}
@@ -1960,7 +1960,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-spool-weight"
               type="number"
-              step="1"
+              step="any"
               min="0"
               className={inputClass}
               value={form.spoolWeight}
@@ -1983,7 +1983,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-initial-weight"
               type="number"
-              step="1"
+              step="any"
               min="0"
               className={inputClass}
               value={form.totalWeight}
@@ -2001,7 +2001,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-low-stock-threshold"
               type="number"
-              step="1"
+              step="any"
               min="0"
               className={inputClass}
               value={form.lowStockThreshold}
@@ -2072,7 +2072,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label htmlFor="filament-min-print-speed" className={labelClass}>{t("form.minPrintSpeed")}</label>
-          <input id="filament-min-print-speed" type="number" step="1" min="0" className={inputClass}
+          <input id="filament-min-print-speed" type="number" step="any" min="0" className={inputClass}
             value={form.minPrintSpeed}
             onChange={(e) => setForm({ ...form, minPrintSpeed: e.target.value })}
             placeholder={parentPh("minPrintSpeed")}
@@ -2080,7 +2080,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
         <div>
           <label htmlFor="filament-max-print-speed" className={labelClass}>{t("form.maxPrintSpeed")}</label>
-          <input id="filament-max-print-speed" type="number" step="1" min="0" className={inputClass}
+          <input id="filament-max-print-speed" type="number" step="any" min="0" className={inputClass}
             value={form.maxPrintSpeed}
             onChange={(e) => setForm({ ...form, maxPrintSpeed: e.target.value })}
             placeholder={parentPh("maxPrintSpeed")}
@@ -2088,7 +2088,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
         <div>
           <label htmlFor="filament-z-offset" className={labelClass}>{t("form.zOffset")}</label>
-          <input id="filament-z-offset" type="number" step="0.001" className={inputClass}
+          <input id="filament-z-offset" type="number" step="any" className={inputClass}
             value={form.zOffset}
             onChange={(e) => setForm({ ...form, zOffset: e.target.value })}
             placeholder={t("form.placeholder.zOffset")}
@@ -2123,6 +2123,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-nozzle"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.nozzle}
@@ -2140,6 +2141,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-nozzle-first-layer"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.nozzleFirstLayer}
@@ -2157,6 +2159,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-bed"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.bed}
@@ -2174,6 +2177,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-bed-first-layer"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.bedFirstLayer}
@@ -2191,6 +2195,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-chamber"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.chamber}
@@ -2207,6 +2212,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-standby"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.standby}
@@ -2224,6 +2230,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               id="filament-temp-nozzle-range-min"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.nozzleRangeMin}
@@ -2242,6 +2249,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
               ref={nozzleRangeMaxRef}
               id="filament-temp-nozzle-range-max"
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.temperatures.nozzleRangeMax}
@@ -2270,14 +2278,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                   }} placeholder={t("form.placeholder.bedType")} />
                 </div>
                 <div>
-                  <input type="number" min="0" className={inputClass} value={bt.temperature} onChange={(e) => {
+                  <input type="number" step="any" min="0" className={inputClass} value={bt.temperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, temperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
                   }} placeholder={t("form.placeholder.temp")} />
                 </div>
                 <div>
-                  <input type="number" min="0" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
+                  <input type="number" step="any" min="0" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, firstLayerTemperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
@@ -2336,6 +2344,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <label className={labelClass}>{t("form.fanMinSpeed")}</label>
             <input
               type="number"
+              step="any"
               min="0"
               max="100"
               className={inputClass}
@@ -2347,6 +2356,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <label className={labelClass}>{t("form.fanMaxSpeed")}</label>
             <input
               type="number"
+              step="any"
               min="0"
               max="100"
               className={inputClass}
@@ -2358,6 +2368,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <label className={labelClass}>{t("form.fanBridgeSpeed")}</label>
             <input
               type="number"
+              step="any"
               min="0"
               max="100"
               className={inputClass}
@@ -2369,6 +2380,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <label className={labelClass}>{t("form.fanDisableFirstLayers")}</label>
             <input
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.fanDisableFirstLayers}
@@ -2377,21 +2389,21 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           </div>
           <div>
             <label className={labelClass}>{t("form.overhangFanSpeed")}</label>
-            <input type="number" min="0" max="100" className={inputClass}
+            <input type="number" step="any" min="0" max="100" className={inputClass}
               value={form.overhangFanSpeed}
               onChange={(e) => setForm({ ...form, overhangFanSpeed: e.target.value })}
             />
           </div>
           <div>
             <label className={labelClass}>{t("form.auxFanSpeed")}</label>
-            <input type="number" min="0" max="100" className={inputClass}
+            <input type="number" step="any" min="0" max="100" className={inputClass}
               value={form.auxFanSpeed}
               onChange={(e) => setForm({ ...form, auxFanSpeed: e.target.value })}
             />
           </div>
           <div>
             <label className={labelClass}>{t("form.fanBelowLayerTime")}</label>
-            <input type="number" min="0" className={inputClass}
+            <input type="number" step="any" min="0" className={inputClass}
               value={form.fanBelowLayerTime}
               onChange={(e) => setForm({ ...form, fanBelowLayerTime: e.target.value })}
               placeholder={t("form.placeholder.fanBelowLayerTime")}
@@ -2399,7 +2411,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           </div>
           <div>
             <label className={labelClass}>{t("form.slowDownMinSpeed")}</label>
-            <input type="number" min="0" className={inputClass}
+            <input type="number" step="any" min="0" className={inputClass}
               value={form.slowDownMinSpeed}
               onChange={(e) => setForm({ ...form, slowDownMinSpeed: e.target.value })}
               placeholder={t("form.placeholder.slowDownMinSpeed")}
@@ -2420,7 +2432,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               type="number"
               min="0"
-              step="0.1"
+              step="any"
               className={inputClass}
               value={form.retractLength}
               onChange={(e) => setForm({ ...form, retractLength: e.target.value })}
@@ -2430,6 +2442,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <label className={labelClass}>{t("form.retractSpeed")}</label>
             <input
               type="number"
+              step="any"
               min="0"
               className={inputClass}
               value={form.retractSpeed}
@@ -2441,7 +2454,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             <input
               type="number"
               min="0"
-              step="0.01"
+              step="any"
               className={inputClass}
               value={form.retractLift}
               onChange={(e) => setForm({ ...form, retractLift: e.target.value })}
@@ -2449,7 +2462,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           </div>
           <div>
             <label className={labelClass}>{t("form.retractMinTravel")}</label>
-            <input type="number" min="0" step="0.1" className={inputClass}
+            <input type="number" min="0" step="any" className={inputClass}
               value={form.retractMinTravel}
               onChange={(e) => setForm({ ...form, retractMinTravel: e.target.value })}
               placeholder={t("form.placeholder.retractMinTravel")}
@@ -2467,28 +2480,28 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div>
             <label className={labelClass}>{t("form.loadingSpeed")}</label>
-            <input type="number" min="0" step="0.1" className={inputClass}
+            <input type="number" min="0" step="any" className={inputClass}
               value={form.filamentLoadingSpeed}
               onChange={(e) => setForm({ ...form, filamentLoadingSpeed: e.target.value })}
             />
           </div>
           <div>
             <label className={labelClass}>{t("form.unloadingSpeed")}</label>
-            <input type="number" min="0" step="0.1" className={inputClass}
+            <input type="number" min="0" step="any" className={inputClass}
               value={form.filamentUnloadingSpeed}
               onChange={(e) => setForm({ ...form, filamentUnloadingSpeed: e.target.value })}
             />
           </div>
           <div>
             <label className={labelClass}>{t("form.loadTime")}</label>
-            <input type="number" min="0" step="0.1" className={inputClass}
+            <input type="number" min="0" step="any" className={inputClass}
               value={form.filamentLoadTime}
               onChange={(e) => setForm({ ...form, filamentLoadTime: e.target.value })}
             />
           </div>
           <div>
             <label className={labelClass}>{t("form.unloadTime")}</label>
-            <input type="number" min="0" step="0.1" className={inputClass}
+            <input type="number" min="0" step="any" className={inputClass}
               value={form.filamentUnloadTime}
               onChange={(e) => setForm({ ...form, filamentUnloadTime: e.target.value })}
             />
@@ -2511,7 +2524,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>{t("form.glassTempTransition")}</label>
-          <input type="number" step="1" min="0" className={inputClass}
+          <input type="number" step="any" min="0" className={inputClass}
             value={form.glassTempTransition}
             onChange={(e) => setForm({ ...form, glassTempTransition: e.target.value })}
             placeholder={parentPh("glassTempTransition") ?? t("form.placeholder.glassTempTransition")}
@@ -2519,7 +2532,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
         <div>
           <label className={labelClass}>{t("form.heatDeflectionTemp")}</label>
-          <input type="number" step="1" min="0" className={inputClass}
+          <input type="number" step="any" min="0" className={inputClass}
             value={form.heatDeflectionTemp}
             onChange={(e) => setForm({ ...form, heatDeflectionTemp: e.target.value })}
             placeholder={parentPh("heatDeflectionTemp") ?? t("form.placeholder.heatDeflectionTemp")}
@@ -2542,7 +2555,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <input
             className={inputClass}
             type="number"
-            step="1"
+            step="any"
             min="0"
             value={form.dryingTemperature}
             onChange={(e) => setForm({ ...form, dryingTemperature: e.target.value })}
@@ -2554,7 +2567,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <input
             className={inputClass}
             type="number"
-            step="1"
+            step="any"
             min="0"
             value={form.dryingTime}
             onChange={(e) => setForm({ ...form, dryingTime: e.target.value })}
@@ -2580,7 +2593,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <input
             className={inputClass}
             type="number"
-            step="1"
+            step="any"
             min="0"
             max="100"
             value={form.shoreHardnessA}
@@ -2593,7 +2606,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <input
             className={inputClass}
             type="number"
-            step="1"
+            step="any"
             min="0"
             max="100"
             value={form.shoreHardnessD}
@@ -2887,7 +2900,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        step="any"
                         className={inputClass}
                         value={cal.extrusionMultiplier}
                         onChange={(e) =>
@@ -2901,7 +2914,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <input
                         type="number"
                         min="0"
-                        step="0.1"
+                        step="any"
                         className={inputClass}
                         value={cal.maxVolumetricSpeed}
                         onChange={(e) =>
@@ -2915,7 +2928,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <input
                         type="number"
                         min="0"
-                        step="0.001"
+                        step="any"
                         className={inputClass}
                         value={cal.pressureAdvance}
                         onChange={(e) =>
@@ -2929,7 +2942,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <input
                         type="number"
                         min="0"
-                        step="0.1"
+                        step="any"
                         className={inputClass}
                         value={cal.retractLength}
                         onChange={(e) =>
@@ -2942,6 +2955,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.retractSpeed")}>{t("form.cal.retractSpeed")}</label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
                         className={inputClass}
                         value={cal.retractSpeed}
@@ -2956,7 +2970,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <input
                         type="number"
                         min="0"
-                        step="0.01"
+                        step="any"
                         className={inputClass}
                         value={cal.retractLift}
                         onChange={(e) =>
@@ -2974,6 +2988,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.nozzleTemp")}</label>
                       <input
                         type="number"
+                        step="any"
                         className={inputClass}
                         value={cal.nozzleTemp}
                         onChange={(e) => updateCalibration(key, "nozzleTemp", e.target.value)}
@@ -2984,6 +2999,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.nozzleTempFirstLayer")}</label>
                       <input
                         type="number"
+                        step="any"
                         className={inputClass}
                         value={cal.nozzleTempFirstLayer}
                         onChange={(e) => updateCalibration(key, "nozzleTempFirstLayer", e.target.value)}
@@ -2994,6 +3010,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.bedTemp")}</label>
                       <input
                         type="number"
+                        step="any"
                         className={inputClass}
                         value={cal.bedTemp}
                         onChange={(e) => updateCalibration(key, "bedTemp", e.target.value)}
@@ -3004,6 +3021,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.bedTempFirstLayer")}</label>
                       <input
                         type="number"
+                        step="any"
                         className={inputClass}
                         value={cal.bedTempFirstLayer}
                         onChange={(e) => updateCalibration(key, "bedTempFirstLayer", e.target.value)}
@@ -3014,6 +3032,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.chamberTemp")}</label>
                       <input
                         type="number"
+                        step="any"
                         className={inputClass}
                         value={cal.chamberTemp}
                         onChange={(e) => updateCalibration(key, "chamberTemp", e.target.value)}
@@ -3029,6 +3048,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanMin")}</label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
                         max="100"
                         className={inputClass}
@@ -3041,6 +3061,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanMax")}</label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
                         max="100"
                         className={inputClass}
@@ -3053,6 +3074,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanBridge")}</label>
                       <input
                         type="number"
+                        step="any"
                         min="0"
                         max="100"
                         className={inputClass}
@@ -3169,7 +3191,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                     <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.em")}>{t("form.cal.em")}</label>
                     <input
                       type="number"
-                      step="0.01"
+                      step="any"
                       className={inputClass}
                       value={preset.extrusionMultiplier}
                       onChange={(e) => updatePreset(idx, "extrusionMultiplier", e.target.value)}
@@ -3180,6 +3202,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                     <label className="block text-xs text-gray-500 mb-1">{t("form.preset.nozzle")}</label>
                     <input
                       type="number"
+                      step="any"
                       className={inputClass}
                       value={preset.nozzle}
                       onChange={(e) => updatePreset(idx, "nozzle", e.target.value)}
@@ -3190,6 +3213,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                     <label className="block text-xs text-gray-500 mb-1">{t("form.preset.nozzleFirst")}</label>
                     <input
                       type="number"
+                      step="any"
                       className={inputClass}
                       value={preset.nozzleFirstLayer}
                       onChange={(e) => updatePreset(idx, "nozzleFirstLayer", e.target.value)}
@@ -3200,6 +3224,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                     <label className="block text-xs text-gray-500 mb-1">{t("form.preset.bed")}</label>
                     <input
                       type="number"
+                      step="any"
                       className={inputClass}
                       value={preset.bed}
                       onChange={(e) => updatePreset(idx, "bed", e.target.value)}
@@ -3210,6 +3235,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                     <label className="block text-xs text-gray-500 mb-1">{t("form.preset.bedFirst")}</label>
                     <input
                       type="number"
+                      step="any"
                       className={inputClass}
                       value={preset.bedFirstLayer}
                       onChange={(e) => updatePreset(idx, "bedFirstLayer", e.target.value)}
