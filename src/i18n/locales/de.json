@@ -1902,6 +1902,6 @@
   "printJob.error.rowGrams": "Zeile {row}: Grammwert größer als 0 eingeben",
   "printJob.error.rowGramsTooLarge": "Zeile {row}: Grammwert ist zu groß",
   "printJob.error.dateInFuture": "Das Datum darf nicht in der Zukunft liegen — zukünftig datierte Aufträge wären in der Analyse nicht sichtbar",
-  "history.ledger.limitNote": "Es werden die neuesten {limit} passenden Einträge angezeigt — ältere Treffer liegen außerhalb dieses Fensters.",
+  "history.ledger.limitNote": "Die Ergebnisse sind auf die neuesten {limit} passenden Einträge begrenzt.",
   "history.viewAll": "Alle anzeigen →"
 }
