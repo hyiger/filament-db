@@ -7,6 +7,7 @@ import { useDateFormat } from "@/hooks/useDateFormat";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
+import { safeGrams, sumUsageGrams } from "@/lib/capUsageHistory";
 
 /**
  * GH #1168 — print-history / usage browser.
@@ -151,16 +152,15 @@ export default function HistoryPage() {
     return jobs.filter((j) => j.jobLabel.toLowerCase().includes(q));
   }, [jobs, jobSearch]);
 
-  const jobGrams = (job: PrintJob): number =>
-    job.usage.reduce((sum, u) => sum + (Number.isFinite(u.grams) ? u.grams : 0), 0);
+  // sumUsageGrams/safeGrams clamp each entry (GH #1030/#1078) — a legacy /
+  // snapshot-restored / hybrid-synced row can hold pathological finite values
+  // whose raw sum overflows, and formatGrams(Infinity) renders empty.
+  const jobGrams = (job: PrintJob): number => sumUsageGrams(job.usage);
 
   /** What a DELETE would actually restore — debitedGrams where recorded
    *  (a 100 g job against a 50 g spool debited, and refunds, only 50 g). */
   const jobRefundableGrams = (job: PrintJob): number =>
-    job.usage.reduce((sum, u) => {
-      const g = Number.isFinite(u.debitedGrams) ? (u.debitedGrams as number) : u.grams;
-      return sum + (Number.isFinite(g) ? g : 0);
-    }, 0);
+    job.usage.reduce((sum, u) => sum + safeGrams(u.debitedGrams ?? u.grams), 0);
 
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
@@ -439,7 +439,7 @@ export default function HistoryPage() {
                       {sourceLabel(entry.source)}
                     </p>
                   </div>
-                  <span className="text-xs text-gray-500 flex-shrink-0">{formatGrams(entry.grams)} g</span>
+                  <span className="text-xs text-gray-500 flex-shrink-0">{formatGrams(safeGrams(entry.grams))} g</span>
                 </li>
               ))}
             </ul>
