@@ -6745,6 +6745,125 @@
         }
       }
     },
+    "/api/spools/usage-search": {
+      "get": {
+        "tags": [
+          "Spools"
+        ],
+        "summary": "Cross-spool usage-ledger search",
+        "description": "Unwinds every active filament's spools[].usageHistory into flat rows for the /history page's Spool usage ledger tab (GH #1168). Manual usage entries (source 'manual', jobId null) exist ONLY inside spool subdocuments, so this is the one surface where a manual entry's jobLabel can be searched across spools. Filters: label (case-insensitive substring, regex metacharacters literal, max 128 chars), source (manual | slicer | job | nfc — the UI defaults to 'manual' because job/slicer entries are projections of PrintHistory rows and would double-show next to the Print jobs tab), limit (1..1000, default 100). Rows sort date-descending. Soft-deleted filaments are excluded. The projection never carries photoDataUrl or dryCycles. Completeness caveat: each spool's ledger is capped at 1,000 entries with manual/nfc entries evicted first, so very old entries may be absent.",
+        "parameters": [
+          {
+            "name": "label",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 128
+            },
+            "description": "Case-insensitive jobLabel substring; regex metacharacters are treated literally."
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "manual",
+                "slicer",
+                "job",
+                "nfc"
+              ]
+            },
+            "description": "Restrict to one entry source."
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            },
+            "description": "Maximum rows returned (after date-desc ordering)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Matching ledger rows, newest first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "filamentId": {
+                            "type": "string"
+                          },
+                          "filamentName": {
+                            "type": "string"
+                          },
+                          "vendor": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "color": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "spoolId": {
+                            "type": "string"
+                          },
+                          "spoolLabel": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "date": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "grams": {
+                            "type": "number"
+                          },
+                          "jobLabel": {
+                            "type": "string"
+                          },
+                          "source": {
+                            "type": "string",
+                            "enum": [
+                              "manual",
+                              "slicer",
+                              "job",
+                              "nfc"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "limit": {
+                      "type": "integer",
+                      "description": "The applied limit."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid label length, source, or limit."
+          }
+        }
+      }
+    },
     "/api/name-conflicts": {
       "get": {
         "summary": "Scan for name conflicts the trim migration could not repair",

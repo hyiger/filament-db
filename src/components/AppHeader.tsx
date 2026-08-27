@@ -13,6 +13,7 @@ const LINKS: { href: string; labelKey: string; exact?: boolean }[] = [
   { href: "/inventory", labelKey: "common.inventory" },
   { href: "/compare", labelKey: "common.compare" },
   { href: "/analytics", labelKey: "common.analytics" },
+  { href: "/history", labelKey: "common.history" },
   { href: "/share", labelKey: "common.share" },
   { href: "/settings", labelKey: "common.settings" },
 ];
