@@ -3,6 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
+import {
+  matchesSearchTokens,
+  normalizeSearchFields,
+  tokenizeSearchQuery,
+} from "@/lib/materialSearch";
 
 /**
  * Issue #753 (approach C) — "Link to OpenPrintTag" dialog.
@@ -99,18 +104,29 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose, mode = "l
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Normalized once per loaded list, not once per keystroke per row
+  // (Codex P2 on PR #1181 — this filter runs over ~11.7k materials).
+  const searchable = useMemo(
+    () =>
+      materials.map((m) => ({
+        material: m,
+        fields: normalizeSearchFields([m.name, m.brandName, m.type]),
+      })),
+    [materials],
+  );
+
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === "") return [];
-    return materials
-      .filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.brandName.toLowerCase().includes(q) ||
-          m.type.toLowerCase().includes(q),
-      )
-      .slice(0, MAX_RESULTS);
-  }, [materials, query]);
+    if (query.trim() === "") return [];
+    // GH #1173: tokenized — "arianeplast pl" hits brand + type across fields.
+    const tokens = tokenizeSearchQuery(query);
+    const out: OptMaterial[] = [];
+    for (const { material, fields } of searchable) {
+      if (!matchesSearchTokens(fields, tokens)) continue;
+      out.push(material);
+      if (out.length === MAX_RESULTS) break;
+    }
+    return out;
+  }, [searchable, query]);
 
   const handleLink = async () => {
     if (!selectedSlug) return;
