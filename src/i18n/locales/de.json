@@ -1875,5 +1875,6 @@
   "printJob.error.tooManyRows": "Höchstens 100 Filamentzeilen pro Auftrag",
   "printJob.error.rowFilament": "Zeile {row}: Filament auswählen",
   "printJob.error.rowGrams": "Zeile {row}: Grammwert größer als 0 eingeben",
-  "printJob.error.rowGramsTooLarge": "Zeile {row}: Grammwert ist zu groß"
+  "printJob.error.rowGramsTooLarge": "Zeile {row}: Grammwert ist zu groß",
+  "printJob.error.dateInFuture": "Das Datum darf nicht in der Zukunft liegen — zukünftig datierte Aufträge wären in der Analyse nicht sichtbar"
 }

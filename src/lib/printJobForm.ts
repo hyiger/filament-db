@@ -47,6 +47,7 @@ export type PrintJobFormError =
   | { code: "label_required" }
   | { code: "label_too_long" }
   | { code: "notes_too_long" }
+  | { code: "date_in_future" }
   | { code: "no_rows" }
   | { code: "too_many_rows" }
   | { code: "row_filament_required"; rowIndex: number }
@@ -66,10 +67,17 @@ export function parseGrams(raw: string): number | null {
   return Number.isFinite(value) ? value : null;
 }
 
-export function validatePrintJobForm(form: PrintJobFormState): PrintJobFormValidation {
+export function validatePrintJobForm(
+  form: PrintJobFormState,
+  todayLocal: string,
+): PrintJobFormValidation {
   if (form.jobLabel.trim() === "") return { ok: false, code: "label_required" };
   if (form.jobLabel.length > MAX_JOB_LABEL_LENGTH) return { ok: false, code: "label_too_long" };
   if (form.notes.length > MAX_NOTES_LENGTH) return { ok: false, code: "notes_too_long" };
+  // Codex P1 (PR #1182): analytics excludes `startedAt > now`, so a
+  // future-dated job would debit inventory NOW while staying invisible in
+  // every aggregate until its date arrives. YYYY-MM-DD compares lexically.
+  if (form.date !== "" && form.date > todayLocal) return { ok: false, code: "date_in_future" };
   if (form.usage.length === 0) return { ok: false, code: "no_rows" };
   if (form.usage.length > MAX_USAGE_ROWS) return { ok: false, code: "too_many_rows" };
   for (let i = 0; i < form.usage.length; i++) {
@@ -94,8 +102,18 @@ export interface PrintJobBody {
   usage: { filamentId: string; spoolId?: string; grams: number }[];
 }
 
-/** Build the POST body. Call only after validatePrintJobForm returns ok. */
-export function buildPrintJobBody(form: PrintJobFormState): PrintJobBody {
+/**
+ * Build the POST body. Call only after validatePrintJobForm returns ok.
+ *
+ * Codex P1 (PR #1182): when the picked date IS today (local), startedAt is
+ * OMITTED so the server stamps the current instant. A bare YYYY-MM-DD parses
+ * as UTC midnight, which for a user east of UTC is still in the FUTURE
+ * before UTC reaches midnight — and analytics excludes `startedAt > now`,
+ * so the just-logged job would vanish from every aggregate for up to the
+ * UTC offset. The bare date stays reserved for PAST-day backfills (the
+ * v1.63 convention), where a past local day's UTC midnight is always <= now.
+ */
+export function buildPrintJobBody(form: PrintJobFormState, todayLocal: string): PrintJobBody {
   const body: PrintJobBody = {
     jobLabel: form.jobLabel.trim(),
     usage: form.usage.map((row) => {
@@ -108,7 +126,7 @@ export function buildPrintJobBody(form: PrintJobFormState): PrintJobBody {
     }),
   };
   if (form.printerId !== "") body.printerId = form.printerId;
-  if (form.date !== "") body.startedAt = form.date;
+  if (form.date !== "" && form.date !== todayLocal) body.startedAt = form.date;
   const notes = form.notes.trim();
   if (notes !== "") body.notes = notes;
   return body;

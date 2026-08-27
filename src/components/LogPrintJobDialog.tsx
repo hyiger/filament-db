@@ -74,6 +74,8 @@ function errorMessageKey(error: PrintJobFormError): string {
       return "printJob.error.labelTooLong";
     case "notes_too_long":
       return "printJob.error.notesTooLong";
+    case "date_in_future":
+      return "printJob.error.dateInFuture";
     case "no_rows":
       return "printJob.error.noRows";
     case "too_many_rows":
@@ -199,7 +201,11 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
 
   const handleSubmit = async () => {
     setServerError(null);
-    const result = validatePrintJobForm(form);
+    // Resolved at SUBMIT time, not mount time — a dialog left open across
+    // local midnight must judge "today" (and the today-omission in
+    // buildPrintJobBody) against the current day.
+    const today = localTodayInput();
+    const result = validatePrintJobForm(form, today);
     if (!result.ok) {
       setFormError(result);
       return;
@@ -210,7 +216,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
       const res = await fetch("/api/print-history", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(buildPrintJobBody(form)),
+        body: JSON.stringify(buildPrintJobBody(form, today)),
       });
       if (!res.ok) {
         // Server messages are English prose (incl. the 409 "please retry"
@@ -312,6 +318,7 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
                   <input
                     id="print-job-date"
                     type="date"
+                    max={localTodayInput()}
                     className={inputClass}
                     value={form.date}
                     onChange={(e) => setForm({ ...form, date: e.target.value })}

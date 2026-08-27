@@ -91,6 +91,22 @@ export default function DashboardPage() {
     setReloadKey((k) => k + 1);
   };
 
+  /** True when the stored value is exactly UTC midnight — the shape a
+   *  date-only entry takes (the Log-print-job picker sends a bare
+   *  `YYYY-MM-DD` for past days, stored as `00:00:00.000Z`). Same
+   *  detection as the filament detail page's usage disclosure (#941):
+   *  real "now" timestamps are effectively never exactly UTC midnight. */
+  const isUtcMidnight = (value: string): boolean => {
+    const d = new Date(value);
+    return (
+      !Number.isNaN(d.getTime()) &&
+      d.getUTCHours() === 0 &&
+      d.getUTCMinutes() === 0 &&
+      d.getUTCSeconds() === 0 &&
+      d.getUTCMilliseconds() === 0
+    );
+  };
+
   /** Spool labels imported from Prusament come through as
    * `<instanceId> (<ISO timestamp>)`. The ISO chunk reads as raw
    * machine output in a dashboard list — convert it to the user's
@@ -315,7 +331,13 @@ export default function DashboardPage() {
                   <p className="font-medium truncate">{p.jobLabel}</p>
                   <p className="text-xs text-gray-500">
                     {p.printerName ? `${p.printerName} · ` : ""}
-                    {formatDateTime(p.startedAt)}
+                    {/* Codex P2 (PR #1182): a date-only backfill is stored as
+                        UTC midnight — formatted as a LOCAL datetime it reads
+                        as the previous evening west of UTC. Render it as a
+                        UTC calendar day instead (the #941 convention). */}
+                    {isUtcMidnight(p.startedAt)
+                      ? formatDate(p.startedAt, { timeZone: "UTC" })
+                      : formatDateTime(p.startedAt)}
                     {p.source !== "manual" && ` · ${p.source}`}
                   </p>
                 </div>
