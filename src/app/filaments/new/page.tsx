@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { pruneParentEqualPrefill } from "@/lib/nfcVariantPrefill";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
@@ -17,6 +18,75 @@ interface FilamentOption {
   vendor: string;
   type: string;
   color: string;
+}
+
+/** GH #1177: the from_nfc query-param → form-initialData mapping, extracted
+ *  so BOTH the standalone create effect and the ?parentId= parent-loader can
+ *  build it — the loader used to replace initialData wholesale and every tag
+ *  field was discarded on the create-variant path. */
+function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unknown> {
+  const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
+  const nozzleMin = searchParams.get("nozzleMin") ? Number(searchParams.get("nozzleMin")) : null;
+  const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
+  const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
+  const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
+  // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
+  const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
+  const emptySpool = searchParams.get("emptySpool") ? Number(searchParams.get("emptySpool")) : null;
+
+  return {
+    name: searchParams.get("name") || "",
+    vendor: searchParams.get("vendor") || "",
+    type: searchParams.get("type") || "PLA",
+    color: searchParams.get("color") || "#808080",
+    // GH #477: NFC tag's secondary slots arrive comma-separated;
+    // FilamentForm reads `initialData.secondaryColors` and surfaces
+    // them in the multi-color editor. Empty/blank entries filtered
+    // out so a tag with sparse slots doesn't produce empty strings
+    // that fail the hex validator at save time.
+    ...(searchParams.get("secondaryColors")
+      ? {
+          secondaryColors: searchParams
+            .get("secondaryColors")!
+            .split(",")
+            .map((c) => c.trim())
+            .filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c)),
+        }
+      : {}),
+    density: searchParams.get("density") ? Number(searchParams.get("density")) : null,
+    diameter: searchParams.get("diameter") ? Number(searchParams.get("diameter")) : 1.75,
+    temperatures: {
+      nozzle: nozzleMax,
+      nozzleFirstLayer: nozzleMin ?? nozzleMax,
+      bed: bedMax,
+      bedFirstLayer: bedMin ?? bedMax,
+    },
+    ...(weight != null ? { netFilamentWeight: weight } : {}),
+    // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
+    // carries no emptySpool — else the derived spool reads as untracked
+    // (null spoolWeight) and hides the entered remaining (Codex P2 r7/r8).
+    ...(emptySpool != null
+      ? { spoolWeight: emptySpool }
+      : actualWeight != null
+        ? { spoolWeight: 0 }
+        : {}),
+    ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
+    ...(searchParams.get("colorName") ? { colorName: searchParams.get("colorName") } : {}),
+    ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
+    ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
+    ...(searchParams.get("maxVolumetricSpeed")
+      ? { maxVolumetricSpeed: Number(searchParams.get("maxVolumetricSpeed")) }
+      : {}),
+    ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
+    settings: {
+      ...(searchParams.get("chamber")
+        ? { chamber_temperature: searchParams.get("chamber") }
+        : {}),
+      ...(searchParams.get("country")
+        ? { filament_notes: `"Origin: ${searchParams.get("country")}"` }
+        : {}),
+    },
+  };
 }
 
 function NewFilamentContent() {
@@ -236,76 +306,18 @@ function NewFilamentContent() {
 
   // Initialize from NFC query params
   useEffect(() => {
-    if (searchParams.get("from_nfc")) {
-      const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
-      const nozzleMin = searchParams.get("nozzleMin") ? Number(searchParams.get("nozzleMin")) : null;
-      const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
-      const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
-      const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
-      // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
-      const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
-      const emptySpool = searchParams.get("emptySpool") ? Number(searchParams.get("emptySpool")) : null;
-
+    // GH #1177: when ?parentId= rides along, the parent-loader effect below
+    // owns the (merged) initialData — writing it here too would just be
+    // overwritten by that effect's async wholesale replace.
+    if (searchParams.get("from_nfc") && !parentId) {
       // Syncing external URL state into form initial data. Can't be derived
       // because the form is controlled elsewhere via formKey remounts.
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setInitialData({
-        name: searchParams.get("name") || "",
-        vendor: searchParams.get("vendor") || "",
-        type: searchParams.get("type") || "PLA",
-        color: searchParams.get("color") || "#808080",
-        // GH #477: NFC tag's secondary slots arrive comma-separated;
-        // FilamentForm reads `initialData.secondaryColors` and surfaces
-        // them in the multi-color editor. Empty/blank entries filtered
-        // out so a tag with sparse slots doesn't produce empty strings
-        // that fail the hex validator at save time.
-        ...(searchParams.get("secondaryColors")
-          ? {
-              secondaryColors: searchParams
-                .get("secondaryColors")!
-                .split(",")
-                .map((c) => c.trim())
-                .filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c)),
-            }
-          : {}),
-        density: searchParams.get("density") ? Number(searchParams.get("density")) : null,
-        diameter: searchParams.get("diameter") ? Number(searchParams.get("diameter")) : 1.75,
-        temperatures: {
-          nozzle: nozzleMax,
-          nozzleFirstLayer: nozzleMin ?? nozzleMax,
-          bed: bedMax,
-          bedFirstLayer: bedMin ?? bedMax,
-        },
-        ...(weight != null ? { netFilamentWeight: weight } : {}),
-        // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
-        // carries no emptySpool — else the derived spool reads as untracked
-        // (null spoolWeight) and hides the entered remaining (Codex P2 r7/r8).
-        ...(emptySpool != null
-          ? { spoolWeight: emptySpool }
-          : actualWeight != null
-            ? { spoolWeight: 0 }
-            : {}),
-        ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
-        ...(searchParams.get("colorName") ? { colorName: searchParams.get("colorName") } : {}),
-        ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
-        ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
-        ...(searchParams.get("maxVolumetricSpeed")
-          ? { maxVolumetricSpeed: Number(searchParams.get("maxVolumetricSpeed")) }
-          : {}),
-        ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
-        settings: {
-          ...(searchParams.get("chamber")
-            ? { chamber_temperature: searchParams.get("chamber") }
-            : {}),
-          ...(searchParams.get("country")
-            ? { filament_notes: `"Origin: ${searchParams.get("country")}"` }
-            : {}),
-        },
-      });
+      setInitialData(nfcPrefillFromParams(searchParams));
       setTitleKey("new.fromNfc");
       setFormKey((k) => k + 1);
     }
-  }, [searchParams]);
+  }, [searchParams, parentId]);
 
   // Initialize from ?parentId= query param
   //
@@ -329,12 +341,41 @@ function NewFilamentContent() {
         .then((r) => (r.ok ? r.json() : null))
         .then((parent) => {
           if (parent) {
-            setInitialData({
-              parentId,
-              vendor: parent.vendor || "",
-              type: parent.type || "",
-              _parent: parent,
-            });
+            // GH #1177: a variant-from-tag rides ?from_nfc=1 alongside
+            // ?parentId=. This effect's setInitialData replaces state
+            // wholesale, so it must COMPOSE the tag prefill itself — the
+            // from_nfc effect above deliberately skips when parentId is set.
+            if (searchParams.get("from_nfc")) {
+              const nfc = nfcPrefillFromParams(searchParams);
+              // Defaults that only make sense standalone: an absent tag
+              // param must fall through to the PARENT, not to 1.75 mm /
+              // gray / "PLA" (a 2.85 mm family would otherwise get a wrong
+              // explicit override on every tag that omits diameter).
+              if (!searchParams.get("diameter")) delete nfc.diameter;
+              if (!searchParams.get("color")) delete nfc.color;
+              if (!searchParams.get("type")) delete nfc.type;
+              // GH #106: a tag value EQUAL to the parent's stays blank so
+              // the variant keeps inheriting it dynamically (the v1.52
+              // pruneOptPayloadAgainstParent rule, applied client-side).
+              const pruned = pruneParentEqualPrefill(nfc, parent);
+              setInitialData({
+                ...pruned,
+                parentId,
+                // Family identity comes from the chosen parent — the tag's
+                // brand string ("Prusament") routinely differs from the
+                // stored vendor ("Prusa Research").
+                vendor: parent.vendor || (pruned.vendor as string) || "",
+                type: parent.type || (pruned.type as string) || "",
+                _parent: parent,
+              });
+            } else {
+              setInitialData({
+                parentId,
+                vendor: parent.vendor || "",
+                type: parent.type || "",
+                _parent: parent,
+              });
+            }
             setTitleKey("new.addColorVariant");
             setFormKey((k) => k + 1);
           }
@@ -345,7 +386,7 @@ function NewFilamentContent() {
         .finally(() => setParentLoading(false));
       return () => ac.abort();
     }
-  }, [parentId]);
+  }, [parentId, searchParams]);
 
   // Initialize from ?cloneId= query param (full clone from detail page).
   // Only copy identification fields (name, color, vendor, type) so the new

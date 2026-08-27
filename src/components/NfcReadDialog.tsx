@@ -97,10 +97,17 @@ export default function NfcReadDialog() {
     router.push(`/filaments/${id}`);
   };
 
-  const handleCreateNew = () => {
-    if (!data) return;
+  /** GH #1177: ONE param builder for both create paths — Create New and
+   *  Create-as-variant forward the SAME full tag field set. The variant
+   *  path used to send only name/color/secondaryColors because the
+   *  /filaments/new parent-loader replaced initialData wholesale and
+   *  discarded everything anyway (Codex #706 r9); that loader now composes
+   *  the tag prefill with the parent (and prunes parent-equal values so
+   *  GH #106 inheritance survives), so the full set is worth carrying. */
+  const buildTagParams = () => {
     const params = new URLSearchParams();
     params.set("from_nfc", "1");
+    if (!data) return params;
     if (data.materialName) params.set("name", data.materialName);
     if (data.brandName) params.set("vendor", data.brandName);
     if (data.materialType) params.set("type", data.materialType);
@@ -133,31 +140,20 @@ export default function NfcReadDialog() {
     if (data.shoreHardnessA != null) params.set("shoreA", String(data.shoreHardnessA));
     if (data.shoreHardnessD != null) params.set("shoreD", String(data.shoreHardnessD));
     if (data.tags && data.tags.length > 0) params.set("optTags", data.tags.join(","));
+    return params;
+  };
+
+  const handleCreateNew = () => {
+    if (!data) return;
+    const params = buildTagParams();
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };
 
   const handleCreateAsVariant = (parentId: string) => {
     if (!data) return;
-    const params = new URLSearchParams();
-    params.set("from_nfc", "1");
+    const params = buildTagParams();
     params.set("parentId", parentId);
-    if (data.materialName) params.set("name", data.materialName);
-    if (data.color) params.set("color", data.color);
-    // GH #477: multi-color tags carry up to 5 additional colors in spec
-    // keys 20–24. Join them comma-separated; FilamentForm parses the
-    // param on mount and pre-populates the secondary-color slots.
-    if (data.secondaryColors && data.secondaryColors.length > 0) {
-      params.set("secondaryColors", data.secondaryColors.join(","));
-    }
-    // NOTE: the tag's actual remaining weight + tare are deliberately NOT
-    // carried here. A variant-from-tag goes through both the from_nfc effect
-    // AND the ?parentId= parent-loader on /filaments/new, and the latter
-    // currently replaces initialData wholesale — so any weights set here are
-    // discarded before the form renders (the same pre-existing race already
-    // drops the name/color above). Wiring spool weights through that path
-    // correctly is tracked as a separate follow-up; until then we don't pass
-    // values that would be silently lost (Codex #706 r9).
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };
