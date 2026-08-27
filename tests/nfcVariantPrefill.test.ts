@@ -189,6 +189,21 @@ describe("pruneParentEqualPrefill", () => {
         { settings: { chamber_temperature: 45 } },
       ),
     ).toEqual({ settings: {} });
+    // filament_notes compares through unwrapIniString on both sides: the NFC
+    // prefill writes the quoted wire form while an imported parent may hold
+    // the bare string — the form displays both identically (Codex r6).
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { filament_notes: '"Origin: CZ"' } },
+        { settings: { filament_notes: "Origin: CZ" } },
+      ),
+    ).toEqual({ settings: {} });
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { filament_notes: '"Origin: CZ"' } },
+        { settings: { filament_notes: '"Origin: DE"' } },
+      ),
+    ).toEqual({ settings: { filament_notes: '"Origin: CZ"' } });
     // An object-shaped value never matches (nothing displayable to shadow).
     expect(
       pruneParentEqualPrefill(

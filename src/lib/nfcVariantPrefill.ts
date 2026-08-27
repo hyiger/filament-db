@@ -22,6 +22,7 @@
  */
 
 import { snapToStep } from "@/lib/snapToStep";
+import { unwrapIniString } from "@/lib/parseIni";
 
 /** The raw parent doc fields the prune compares against (from ?raw=true). */
 export interface VariantPrefillParent {
@@ -56,6 +57,16 @@ const PRUNE_EQUAL_SCALARS = [
  *  tag's snapped 1.24 and the override must survive (Codex #1183 r3/r5). */
 const SNAP_BEFORE_COMPARE: ReadonlySet<string> = new Set(["density", "diameter"]);
 const SNAP_STEP = 0.01;
+
+/** The bag keys FilamentForm seeds through unwrapIniString (gcode/notes
+ *  textareas): the wire holds `"Origin: CZ"` while an imported parent may
+ *  hold the unquoted form — both DISPLAY identically, so equality must be
+ *  judged on the unwrapped values (Codex P2 #1183 round 6). */
+const INI_UNWRAPPED_SETTINGS: ReadonlySet<string> = new Set([
+  "filament_notes",
+  "start_filament_gcode",
+  "end_filament_gcode",
+]);
 
 function sameNumericSet(a: readonly number[], b: readonly number[]): boolean {
   if (a.length !== b.length) return false;
@@ -141,8 +152,13 @@ export function pruneParentEqualPrefill(
       const first = Array.isArray(inherited) ? inherited[0] : inherited;
       const inheritedStr =
         first == null || typeof first === "object" ? null : String(first);
-      if (typeof value === "string" && inheritedStr !== null && value === inheritedStr) {
-        delete pruned[key];
+      if (typeof value === "string" && inheritedStr !== null) {
+        const unwrap = INI_UNWRAPPED_SETTINGS.has(key);
+        const ownCmp = unwrap ? unwrapIniString(value) : value;
+        const inheritedCmp = unwrap ? unwrapIniString(inheritedStr) : inheritedStr;
+        if (ownCmp === inheritedCmp) {
+          delete pruned[key];
+        }
       }
     }
     out.settings = pruned;
