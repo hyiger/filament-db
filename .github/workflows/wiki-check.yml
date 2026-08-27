@@ -1,0 +1,40 @@
+# Post-publication validation of the wiki (M-25, wiki review 2026-08-20).
+#
+# The wiki repository cannot run Actions of its own, but wiki edits fire the
+# `gollum` event on this repository. This is detection after publication, not
+# a gate: a web edit is already live when this runs. The pre-publication gate
+# remains the wiki repo's pre-push hook (`make install-hooks` there).
+name: wiki-check
+
+on:
+  gollum:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the wiki
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository }}.wiki
+          ref: master        # wiki repos have no API-served default branch
+          fetch-depth: 3     # enough history for the failure report below
+          # The default GITHUB_TOKEN's repo access extends to this repo's own wiki.
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Validate the wiki
+        run: make check
+
+      - name: Report the failing revision
+        if: failure()
+        run: |
+          echo "::error::wiki validation failed at wiki revision $(git rev-parse HEAD) — a web edit likely bypassed the pre-push hook"
+          git log -3 --oneline
