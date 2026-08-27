@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
+import { matchesTokenizedQuery } from "@/lib/materialSearch";
 
 /**
  * Issue #753 (approach C) — "Link to OpenPrintTag" dialog.
@@ -100,15 +101,10 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose, mode = "l
   }, [onClose]);
 
   const results = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (q === "") return [];
+    if (query.trim() === "") return [];
+    // GH #1173: tokenized — "arianeplast pl" hits brand + type across fields.
     return materials
-      .filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.brandName.toLowerCase().includes(q) ||
-          m.type.toLowerCase().includes(q),
-      )
+      .filter((m) => matchesTokenizedQuery([m.name, m.brandName, m.type], query))
       .slice(0, MAX_RESULTS);
   }, [materials, query]);
 

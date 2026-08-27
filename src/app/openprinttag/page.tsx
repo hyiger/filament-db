@@ -9,6 +9,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { formatMinutesAsHm } from "@/lib/formatDuration";
+import { matchesTokenizedQuery } from "@/lib/materialSearch";
 
 // Row layout constants — the virtualized List needs known heights so it
 // can compute the absolute scroll position of every row without mounting
@@ -567,12 +568,9 @@ export default function OpenPrintTagBrowser() {
       materials = materials.filter((m) => m.completenessTier === tierFilter);
     }
     if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      materials = materials.filter(
-        (m) =>
-          m.name.toLowerCase().includes(q) ||
-          m.brandName.toLowerCase().includes(q) ||
-          m.type.toLowerCase().includes(q),
+      // GH #1173: tokenized — same semantics as the OPT link dialog.
+      materials = materials.filter((m) =>
+        matchesTokenizedQuery([m.name, m.brandName, m.type], searchQuery),
       );
     }
 
