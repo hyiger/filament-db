@@ -25,6 +25,11 @@ import { useConfirm } from "@/components/ConfirmDialog";
  */
 
 interface JobUsageRow {
+  /** GH #1074: grams ACTUALLY debited when the job was recorded —
+   *  min(spool remaining, grams). The DELETE refund restores THIS, not the
+   *  requested grams, so the confirm dialog must sum it (Codex P2 #1184).
+   *  Absent on legacy rows predating #1074 (fall back to grams). */
+  debitedGrams?: number;
   filamentId: {
     _id: string;
     name: string;
@@ -100,6 +105,10 @@ export default function HistoryPage() {
   // ── Jobs tab state ──────────────────────────────────────────────────
   const [jobs, setJobs] = useState<PrintJob[] | null>(null);
   const [jobsError, setJobsError] = useState(false);
+  // Whether the FETCH filled the window — deleting a row locally must not
+  // hide the truncation disclosure (Codex P2 #1184): older jobs may exist
+  // even though the mutable array now holds fewer than the limit.
+  const [jobsTruncated, setJobsTruncated] = useState(false);
   const [printers, setPrinters] = useState<PickerPrinter[]>([]);
   const [printerFilter, setPrinterFilter] = useState("");
   const [jobSearch, setJobSearch] = useState("");
@@ -125,6 +134,7 @@ export default function HistoryPage() {
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((body) => {
         setJobs(body);
+        setJobsTruncated(Array.isArray(body) && body.length >= JOBS_LIMIT);
         setJobsError(false);
       })
       .catch((err) => {
@@ -144,6 +154,14 @@ export default function HistoryPage() {
   const jobGrams = (job: PrintJob): number =>
     job.usage.reduce((sum, u) => sum + (Number.isFinite(u.grams) ? u.grams : 0), 0);
 
+  /** What a DELETE would actually restore — debitedGrams where recorded
+   *  (a 100 g job against a 50 g spool debited, and refunds, only 50 g). */
+  const jobRefundableGrams = (job: PrintJob): number =>
+    job.usage.reduce((sum, u) => {
+      const g = Number.isFinite(u.debitedGrams) ? (u.debitedGrams as number) : u.grams;
+      return sum + (Number.isFinite(g) ? g : 0);
+    }, 0);
+
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -158,7 +176,7 @@ export default function HistoryPage() {
       title: t("history.delete.title"),
       message: t("history.delete.message", {
         label: job.jobLabel,
-        grams: formatGrams(jobGrams(job)),
+        grams: formatGrams(jobRefundableGrams(job)),
       }),
       confirmLabel: t("history.delete.confirm"),
     });
@@ -279,7 +297,7 @@ export default function HistoryPage() {
                   window, so an empty result may just mean the match is
                   OLDER than the newest {limit} jobs — the disclosure must
                   not vanish exactly when it matters most. */}
-              {jobs.length >= JOBS_LIMIT && (
+              {jobsTruncated && (
                 <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
                   {t("history.jobs.limitNote", { limit: JOBS_LIMIT })}
                 </p>
@@ -359,7 +377,7 @@ export default function HistoryPage() {
               </ul>
               <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
                 {t("history.delete.refundNote")}
-                {jobs.length >= JOBS_LIMIT && ` ${t("history.jobs.limitNote", { limit: JOBS_LIMIT })}`}
+                {jobsTruncated && ` ${t("history.jobs.limitNote", { limit: JOBS_LIMIT })}`}
               </p>
             </>
           )}
@@ -425,6 +443,11 @@ export default function HistoryPage() {
                 </li>
               ))}
             </ul>
+          )}
+          {ledger !== null && ledger.length >= LEDGER_LIMIT && (
+            <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
+              {t("history.ledger.limitNote", { limit: LEDGER_LIMIT })}
+            </p>
           )}
           <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">{t("history.ledger.capNote")}</p>
         </section>

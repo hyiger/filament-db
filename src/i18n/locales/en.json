@@ -1901,5 +1901,7 @@
   "printJob.error.rowFilament": "Row {row}: select a filament",
   "printJob.error.rowGrams": "Row {row}: enter a grams amount greater than 0",
   "printJob.error.rowGramsTooLarge": "Row {row}: grams amount is too large",
-  "printJob.error.dateInFuture": "The date can't be in the future — future-dated jobs would be hidden from Analytics"
+  "printJob.error.dateInFuture": "The date can't be in the future — future-dated jobs would be hidden from Analytics",
+  "history.ledger.limitNote": "Showing the newest {limit} matching entries — older matches exist beyond this window.",
+  "history.viewAll": "View all →"
 }
