@@ -134,15 +134,14 @@ export function pruneParentEqualPrefill(
     const pruned: Record<string, unknown> = { ...(ownSettings as Record<string, unknown>) };
     for (const [key, value] of Object.entries(pruned)) {
       const inherited = (parentSettings as Record<string, unknown>)[key];
-      // A parent bag value may be a multi-element ARRAY (#678); the form
-      // displays and edits its FIRST element, so that's the value a
-      // parent-equal child copy would shadow (Codex P2 #1183 round 3).
+      // Mirror FilamentForm's getSettingVal exactly: a Mixed-bag parent
+      // value may be a multi-element ARRAY (#678, first element displayed)
+      // and may be a NUMBER (round-15 String-coercion) — the comparison
+      // must judge what the form would SHOW, or a "45" prefill under a
+      // parent [45] persists a parent-equal override (Codex #1183 r3/r4).
+      const first = Array.isArray(inherited) ? inherited[0] : inherited;
       const inheritedStr =
-        typeof inherited === "string"
-          ? inherited
-          : Array.isArray(inherited) && typeof inherited[0] === "string"
-            ? inherited[0]
-            : null;
+        first == null || typeof first === "object" ? null : String(first);
       if (typeof value === "string" && inheritedStr !== null && value === inheritedStr) {
         delete pruned[key];
       }

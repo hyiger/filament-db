@@ -168,11 +168,25 @@ describe("pruneParentEqualPrefill", () => {
         { settings: { chamber_temperature: ["45", "50"] } },
       ),
     ).toEqual({ settings: { chamber_temperature: "50" } });
-    // Non-string first element never matches.
+    // Numeric parent values are String-coerced like getSettingVal (round 15):
+    // a Mixed bag can hold 45 or [45], both of which the form shows as "45".
     expect(
       pruneParentEqualPrefill(
         { settings: { chamber_temperature: "45" } },
         { settings: { chamber_temperature: [45] } },
+      ),
+    ).toEqual({ settings: {} });
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "45" } },
+        { settings: { chamber_temperature: 45 } },
+      ),
+    ).toEqual({ settings: {} });
+    // An object-shaped value never matches (nothing displayable to shadow).
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "45" } },
+        { settings: { chamber_temperature: { nested: 45 } } },
       ),
     ).toEqual({ settings: { chamber_temperature: "45" } });
   });
