@@ -354,6 +354,20 @@ function NewFilamentContent() {
               if (!searchParams.get("diameter")) delete nfc.diameter;
               if (!searchParams.get("color")) delete nfc.color;
               if (!searchParams.get("type")) delete nfc.type;
+              // Codex P1 (#1183): a tag carrying a NET actualWeight but no
+              // tare gets the standalone 0-tare pin (net = gross). With a
+              // parent whose tare IS known, that pin is a false 0 override
+              // AND the derived spool's gross understates by the tare —
+              // drop the pin (the tare inherits) and gross up the total.
+              const actualWeightParam = searchParams.get("actualWeight");
+              if (
+                actualWeightParam &&
+                !searchParams.get("emptySpool") &&
+                typeof parent.spoolWeight === "number"
+              ) {
+                delete nfc.spoolWeight;
+                nfc.totalWeight = Number(actualWeightParam) + parent.spoolWeight;
+              }
               // GH #106: a tag value EQUAL to the parent's stays blank so
               // the variant keeps inheriting it dynamically (the v1.52
               // pruneOptPayloadAgainstParent rule, applied client-side).

@@ -79,13 +79,21 @@ describe("pruneParentEqualPrefill", () => {
     ).toEqual({ optTags: [28, 3] });
   });
 
-  it("prunes secondaryColors case-insensitively on set-equality", () => {
+  it("prunes secondaryColors POSITIONALLY, case-folded — slots are ordered (Codex P2 #1183)", () => {
+    expect(
+      pruneParentEqualPrefill(
+        { secondaryColors: ["#AABBCC", "#112233"] },
+        { secondaryColors: ["#aabbcc", "#112233"] },
+      ),
+    ).toEqual({});
+    // Same colors, different order: gradients render in slot order and slot 0
+    // is the representative export color — the tag's ordering is real data.
     expect(
       pruneParentEqualPrefill(
         { secondaryColors: ["#AABBCC", "#112233"] },
         { secondaryColors: ["#112233", "#aabbcc"] },
       ),
-    ).toEqual({});
+    ).toEqual({ secondaryColors: ["#AABBCC", "#112233"] });
     expect(
       pruneParentEqualPrefill(
         { secondaryColors: ["#AABBCC"] },
@@ -98,6 +106,25 @@ describe("pruneParentEqualPrefill", () => {
         { secondaryColors: ["#112233", "#aabbcc"] },
       ),
     ).toEqual({ secondaryColors: ["#AABBCC"] });
+  });
+
+  it("prunes parent-equal settings-bag strings, keeps differing/missing ones (Codex P2 #1183)", () => {
+    const out = pruneParentEqualPrefill(
+      { settings: { chamber_temperature: "45", filament_notes: '"Origin: CZ"' } },
+      { settings: { chamber_temperature: "45", filament_notes: '"Origin: DE"' } },
+    );
+    expect(out.settings).toEqual({ filament_notes: '"Origin: CZ"' });
+    // No parent bag at all → untouched.
+    expect(
+      pruneParentEqualPrefill({ settings: { chamber_temperature: "45" } }, {}),
+    ).toEqual({ settings: { chamber_temperature: "45" } });
+    // Non-string parent value (array/nil) never matches.
+    expect(
+      pruneParentEqualPrefill(
+        { settings: { chamber_temperature: "45" } },
+        { settings: { chamber_temperature: ["45"] } },
+      ),
+    ).toEqual({ settings: { chamber_temperature: "45" } });
   });
 
   it("never prunes an empty prefill array — empty already means inherit (GH #477)", () => {

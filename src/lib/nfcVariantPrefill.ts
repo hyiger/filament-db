@@ -24,6 +24,7 @@
 /** The raw parent doc fields the prune compares against (from ?raw=true). */
 export interface VariantPrefillParent {
   density?: number | null;
+  settings?: Record<string, unknown> | null;
   diameter?: number | null;
   maxVolumetricSpeed?: number | null;
   shoreHardnessA?: number | null;
@@ -52,12 +53,13 @@ function sameNumericSet(a: readonly number[], b: readonly number[]): boolean {
   return sa.every((v, i) => v === sb[i]);
 }
 
-function sameColorSet(a: readonly string[], b: readonly string[]): boolean {
+/** POSITIONAL comparison, case-folded — secondary colors are ordered SLOTS
+ *  (spec keys 20-24): gradients render in slot order and slot 0 is the
+ *  representative slicer-export color, so the same colors in a different
+ *  order are DIFFERENT data and must not be pruned (Codex P2 #1183). */
+function sameColorSlots(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
-  const norm = (list: readonly string[]) => [...list].map((c) => c.toLowerCase()).sort();
-  const sa = norm(a);
-  const sb = norm(b);
-  return sa.every((v, i) => v === sb[i]);
+  return a.every((v, i) => v.toLowerCase() === b[i].toLowerCase());
 }
 
 /**
@@ -102,6 +104,29 @@ export function pruneParentEqualPrefill(
     out.temperatures = pruned;
   }
 
+  // Settings-bag entries the NFC prefill seeds (chamber_temperature, the
+  // origin filament_notes) are inherited through the bag like any other
+  // value — a parent-equal copy would sever propagation exactly like a
+  // top-level scalar (Codex P2 #1183). String-compare per key; only prune
+  // when the parent carries the identical string.
+  const ownSettings = out.settings;
+  const parentSettings = parent.settings;
+  if (
+    ownSettings &&
+    typeof ownSettings === "object" &&
+    parentSettings &&
+    typeof parentSettings === "object"
+  ) {
+    const pruned: Record<string, unknown> = { ...(ownSettings as Record<string, unknown>) };
+    for (const [key, value] of Object.entries(pruned)) {
+      const inherited = (parentSettings as Record<string, unknown>)[key];
+      if (typeof value === "string" && typeof inherited === "string" && value === inherited) {
+        delete pruned[key];
+      }
+    }
+    out.settings = pruned;
+  }
+
   const ownTags = out.optTags;
   if (
     Array.isArray(ownTags) &&
@@ -119,7 +144,7 @@ export function pruneParentEqualPrefill(
     ownSecondaries.length > 0 &&
     Array.isArray(parent.secondaryColors) &&
     parent.secondaryColors.length > 0 &&
-    sameColorSet(ownSecondaries as string[], parent.secondaryColors)
+    sameColorSlots(ownSecondaries as string[], parent.secondaryColors)
   ) {
     delete out.secondaryColors;
   }
