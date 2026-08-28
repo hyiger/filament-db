@@ -16,7 +16,6 @@ export default function NfcReadDialog() {
 
   const visible = dialogOpen && tagReadResult != null;
 
-  // Escape key handler
   useEffect(() => {
     if (!visible) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -38,11 +37,10 @@ export default function NfcReadDialog() {
     const dialog = dialogRef.current;
     const handleTab = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      // GH #418: re-query focusables on every Tab — the dialog has
-      // multiple sub-templates (error / empty / match / unknown-data)
-      // that mount different button sets, and the candidate-list view
-      // also gains/loses rows as data resolves. A snapshot taken on
-      // open would let Tab escape once the layout changes.
+      // Re-query focusables on every Tab — the dialog's sub-templates
+      // mount different button sets and the candidate list gains/loses
+      // rows as data resolves; a snapshot taken on open would let Tab
+      // escape once the layout changes.
       const focusable = Array.from(
         dialog.querySelectorAll<HTMLElement>(
           'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
@@ -52,10 +50,10 @@ export default function NfcReadDialog() {
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       const active = document.activeElement as HTMLElement | null;
-      // GH #418 (mirrors ConfirmDialog #351 round 2): if focus has
-      // escaped the dialog entirely (parent re-render, focusing a
-      // background list link via assistive tech, etc.) yank it back
-      // rather than letting the user wander outside the modal.
+      // Mirrors ConfirmDialog: if focus has escaped the dialog entirely
+      // (parent re-render, assistive tech focusing a background link),
+      // yank it back rather than letting the user wander outside the
+      // modal.
       if (!active || (active !== dialog && !dialog.contains(active))) {
         e.preventDefault();
         first.focus();
@@ -76,12 +74,11 @@ export default function NfcReadDialog() {
     document.addEventListener("keydown", handleTab);
     return () => {
       document.removeEventListener("keydown", handleTab);
-      // GH #451: the element that had focus when the dialog opened may
-      // have been unmounted while the dialog was up (a parent route
-      // navigated away, or a list re-rendered). Calling `.focus()` on a
-      // detached node either no-ops silently or — in some browsers —
-      // scrolls the viewport to where the node used to be. Verify the
-      // node is still in the document before restoring.
+      // The element that had focus when the dialog opened may have been
+      // unmounted while it was up. Calling `.focus()` on a detached node
+      // either no-ops silently or — in some browsers — scrolls the
+      // viewport to where the node used to be, so verify it's still in
+      // the document before restoring.
       if (prevFocus && document.contains(prevFocus)) {
         prevFocus.focus?.();
       }
@@ -97,13 +94,11 @@ export default function NfcReadDialog() {
     router.push(`/filaments/${id}`);
   };
 
-  /** GH #1177: ONE param builder for both create paths — Create New and
-   *  Create-as-variant forward the SAME full tag field set. The variant
-   *  path used to send only name/color/secondaryColors because the
-   *  /filaments/new parent-loader replaced initialData wholesale and
-   *  discarded everything anyway (Codex #706 r9); that loader now composes
-   *  the tag prefill with the parent (and prunes parent-equal values so
-   *  GH #106 inheritance survives), so the full set is worth carrying. */
+  /** ONE param builder for both create paths — Create New and
+   *  Create-as-variant forward the SAME full tag field set. The
+   *  /filaments/new parent-loader composes the tag prefill with the
+   *  parent (pruning parent-equal values so GH #106 inheritance
+   *  survives), so the full set is worth carrying. */
   const buildTagParams = () => {
     const params = new URLSearchParams();
     params.set("from_nfc", "1");
@@ -112,17 +107,16 @@ export default function NfcReadDialog() {
     if (data.brandName) params.set("vendor", data.brandName);
     if (data.materialType) params.set("type", data.materialType);
     if (data.color) params.set("color", data.color);
-    // #864: OpenTag3D carries a plain-text color name; keep it on Create New.
+    // OpenTag3D carries a plain-text color name; keep it on Create New.
     if (data.colorName) params.set("colorName", data.colorName);
-    // GH #477: multi-color tags carry up to 5 additional colors in spec
-    // keys 20–24. Join them comma-separated; FilamentForm parses the
-    // param on mount and pre-populates the secondary-color slots.
+    // Multi-color tags carry up to 5 additional colors, comma-joined;
+    // FilamentForm parses the param on mount.
     if (data.secondaryColors && data.secondaryColors.length > 0) {
       params.set("secondaryColors", data.secondaryColors.join(","));
     }
     if (data.density != null) params.set("density", String(data.density));
     if (data.diameter != null) params.set("diameter", String(data.diameter));
-    // #864: OpenTag3D Extended map carries target/max volumetric speed.
+    // OpenTag3D Extended map carries target/max volumetric speed.
     if (data.maxVolumetricSpeed != null) {
       params.set("maxVolumetricSpeed", String(data.maxVolumetricSpeed));
     }
@@ -133,7 +127,7 @@ export default function NfcReadDialog() {
     // OpenTag3D keeps the RECOMMENDED temps in aux while nozzleTemp/bedTemp
     // carry the range maxima — the canonical decodedTagToFilamentPayload
     // prefers the recommended values for the everyday temps, so the URL
-    // flow must carry them too (Codex P2 #1183 r9).
+    // flow must carry them too.
     const auxRec = (key: string): number | null => {
       const v = Number(data.aux?.[key]);
       return Number.isFinite(v) ? v : null;
@@ -142,8 +136,8 @@ export default function NfcReadDialog() {
     const bedRec = auxRec("opentag3d_recommended_bed_temp_c");
     if (nozzleRec != null) params.set("nozzleRec", String(nozzleRec));
     if (bedRec != null) params.set("bedRec", String(bedRec));
-    // Codex P2 #1183 r10: the canonical decodedTagToFilamentPayload also
-    // preserves preheat (temperatures.standby), drying, and HueForge TD.
+    // decodedTagToFilamentPayload also preserves preheat
+    // (temperatures.standby), drying, and HueForge TD.
     if (data.preheatTemp != null) params.set("preheat", String(data.preheatTemp));
     if (data.dryingTemperature != null) params.set("dryingTemp", String(data.dryingTemperature));
     if (data.dryingTime != null) params.set("dryingTime", String(data.dryingTime));
@@ -151,7 +145,7 @@ export default function NfcReadDialog() {
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
     // Actual remaining net + tare so the new-filament form can seed a spool
-    // that reflects a partially used roll, not a full one (Codex P2 r7 #706).
+    // that reflects a partially used roll, not a full one.
     if (data.actualWeightGrams != null) params.set("actualWeight", String(data.actualWeightGrams));
     if (data.emptySpoolWeight != null) params.set("emptySpool", String(data.emptySpoolWeight));
     if (data.countryOfOrigin) params.set("country", data.countryOfOrigin);

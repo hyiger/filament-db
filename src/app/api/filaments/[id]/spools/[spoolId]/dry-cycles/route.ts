@@ -45,29 +45,22 @@ export async function POST(
   if (body !== null && typeof body !== "object") {
     return errorResponse("body must be an object", 400);
   }
-  // Cap notes length so a malicious or accidental multi-MB POST can't
-  // bloat a spool subdocument. 1000 chars is generous for a freeform
-  // dry-cycle note; matches the spirit of the print-history `notes`
-  // bound (2000) without giving as much rope, since this entry sits
-  // inside an embedded subdocument array that's loaded on every spool
-  // fetch.
+  // Cap notes length so a multi-MB POST can't bloat a spool subdocument
+  // (this entry sits inside an embedded array loaded on every spool fetch).
   if (typeof body?.notes === "string" && body.notes.length > 1000) {
     return errorResponse("notes must be 1000 characters or fewer", 400);
   }
 
-  // GH #502.1: mirror the print-history POST guard (#306) so an Invalid
-  // Date can't reach the doc. Without this, /api/dashboard later 500s
-  // when `new Date(invalidDate).toISOString()` throws RangeError.
+  // GH #502.1: an Invalid Date reaching the doc later 500s /api/dashboard
+  // (`.toISOString()` throws) — mirror the print-history POST guard.
   const cycleDate = body?.date ? new Date(body.date) : new Date();
   if (Number.isNaN(cycleDate.getTime())) {
     return errorResponse("date is not a valid date", 400);
   }
 
-  // GH #502.2: the schema declares `tempC { min: 0, max: 300 }` and
-  // `durationMin { min: 0 }`, but `findOneAndUpdate(..., { $push })`
-  // below intentionally omits `runValidators: true` to keep the
-  // atomic $slice cap (#304). Enforce the same bounds explicitly here
-  // so negatives / out-of-range values can't corrupt the row.
+  // GH #502.2: the $push below intentionally omits `runValidators: true`
+  // to keep the atomic $slice cap (#304) — enforce the schema's bounds
+  // (tempC 0-300, durationMin >= 0) explicitly here.
   if (body?.tempC != null) {
     if (typeof body.tempC !== "number" || !Number.isFinite(body.tempC)) {
       return errorResponse("tempC must be a finite number", 400);
@@ -99,16 +92,11 @@ export async function POST(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
-    // GH #605 round 11 (F1): the positional $push mutates an existing spool
-    // subdocument, so it serializes on the same per-filament mutex the
-    // promotion paths hold. Unserialized it could land between a promotion's
-    // snapshot and its clearing write — the 201-acknowledged dry cycle would
-    // be minted onto neither document (the copy predates it, the parent is
-    // cleared right after). In-lock, either this POST runs first (the fresh
-    // snapshot moves the cycle with the spool) or the promotion runs first
-    // and the filter no longer matches — post-promotion staleness already
-    // 404s (round 4); the lock adds mid-promotion atomicity. Single key, no
-    // nested lock inside.
+    // GH #605: the positional $push mutates a spool subdocument, so it
+    // serializes on the same per-filament mutex the promotion paths hold —
+    // unserialized it could land between a promotion's snapshot and its
+    // clearing write, minting the 201-acknowledged dry cycle onto neither
+    // document. Single key, no nested lock inside.
     return await runExclusive(filamentLockKey(id), async () => {
       const filament = await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null, "spools._id": spoolId },
@@ -121,9 +109,8 @@ export async function POST(
       if (!filament) {
         return errorResponse("Filament or spool not found", 404);
       }
-      // GH #1027: the $push filter matched `spools._id`, so the spool is
-      // guaranteed present in the post-write doc; the null guard is
-      // unreachable-in-practice defensiveness.
+      // GH #1027: the $push filter matched `spools._id`, so the null guard
+      // is unreachable-in-practice defensiveness.
       if (shape === "spool") {
         const spool = findSpoolById(filament.spools, spoolId);
         if (!spool) {

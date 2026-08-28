@@ -6,17 +6,14 @@ import { resolveFilament } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
- * GET /api/spools/{spoolId}
+ * GET /api/spools/{spoolId} — resolve a spool by its subdocument id to the
+ * filament that owns it plus the spool itself. Powers the spool-level deep
+ * links (the label QR's `?spool=<spoolId>`, GH #595) without the caller
+ * knowing the parent filament id up front.
  *
- * Resolve a single spool by its subdocument id to the filament that owns it
- * plus the spool itself. Powers the mobile scanner's spool-level deep links
- * (the label QR's `?spool=<spoolId>` link, GH #595): the phone scans the QR,
- * resolves the spool here, and opens the filament detail with that spool
- * highlighted — without having to know the parent filament id up front.
- *
- * The filament is inheritance-resolved (variants get their parent's values)
- * so the response is a complete view, mirroring `GET /api/filaments/{id}`.
- * Read-only, so no trusted-origin guard (matches the other GET routes).
+ * The filament is inheritance-resolved so the response is a complete view,
+ * mirroring `GET /api/filaments/{id}`. Read-only, so no trusted-origin
+ * guard.
  */
 export async function GET(
   _request: NextRequest,

@@ -35,18 +35,15 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
  * cached OpenPrintTag database, mapped to the Filament schema, and created or
  * updated (upsert by name + vendor).
  *
- * Variant mode (`parentId` set — Issue #753, approach A): imports exactly ONE
- * slug AS A VARIANT of `parentId`, pulling only the fields DISTINCT from the
- * parent onto the variant (everything identical to the parent is left to
- * inherit dynamically). The variant is linked to the OPT material so it can use
- * the "Check for updates" re-sync loop afterwards.
+ * Variant mode (`parentId` set — Issue #753): imports exactly ONE slug AS A
+ * VARIANT of `parentId`, pulling only the fields DISTINCT from the parent
+ * (everything identical is left to inherit dynamically), linked to the OPT
+ * material for the re-sync loop.
  *
- * GH #605 (codex round 3, Finding A): variant mode runs through the SAME
- * promotion gate as POST /api/filaments (createVariantGated) — importing the
- * FIRST variant of a parent that still carries its own color/spools 409s
- * with the structured `parent_promotion_required` payload until the caller
- * confirms with `promoteParent: true` in the body. Promotion is never
- * silent, on any entry point.
+ * GH #605: variant mode runs through the SAME promotion gate as
+ * POST /api/filaments (createVariantGated) — the FIRST variant of a carrying
+ * parent 409s `parent_promotion_required` until the caller confirms with
+ * `promoteParent: true`. Promotion is never silent, on any entry point.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -69,12 +66,9 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    // GH #427: cap the per-request slug count. The loop below does a
-    // per-slug findOneAndUpdate followed by a findById on match, so a
-    // 50k-slug payload performed 50k+ sequential round-trips. Sibling
-    // import routes already enforce caps (share/POST: 500,
-    // print-history/POST: 100, filaments/import: 10k). 500 is plenty
-    // for any realistic bulk import from the OpenPrintTag browse page.
+    // GH #427: cap the per-request slug count — the loop does per-slug
+    // sequential round-trips, so an unbounded payload is a DoS. Sibling
+    // import routes enforce similar caps.
     const MAX_SLUGS = 500;
     if (slugs.length > MAX_SLUGS) {
       return NextResponse.json(
@@ -85,16 +79,13 @@ export async function POST(request: NextRequest) {
 
     await dbConnect();
 
-    // Issue #753 (approach A): variant mode — import a single material as a
-    // variant of an existing parent, pulling only its distinct fields.
-    // `promoteParent` is the GH #605 confirmation flag, mirroring
-    // POST /api/filaments — a control flag, never a schema field.
+    // Variant mode. `promoteParent` is the GH #605 confirmation flag — a
+    // control flag, never a schema field.
     const parentId = body.parentId;
     if (parentId != null && parentId !== "") {
       return importAsVariant(slugs, parentId, body.promoteParent === true);
     }
 
-    // Get the cached database (should already be cached from the browse page)
     const db = await fetchOpenPrintTagDatabase();
     const slugSet = new Set(slugs);
     const selected = db.materials.filter((m) => slugSet.has(m.slug));
@@ -117,40 +108,30 @@ export async function POST(request: NextRequest) {
         const vendor = payload.vendor as string;
 
         // GH #607: capture the OPT-offered value for every managed field at
-        // import time. This provenance snapshot lets a later "check for
-        // updates" (the re-sync feature) tell "OPT changed it upstream" from
-        // "the user edited it locally" without a manual sync-first dance.
+        // import time, so a later re-sync check can tell "OPT changed it
+        // upstream" from "the user edited it locally". Top-level field, NOT
+        // inside `settings` — settings entries render directly in the
+        // detail-page table and ride into slicer exports, neither of which
+        // tolerates an object value.
         const optSnapshot = buildOptSnapshot(payload);
-        // Seed it on the create path too (the update path uses
-        // optUpdateFields below). Top-level field, NOT inside `settings` —
-        // settings entries render directly in the detail-page table and ride
-        // into slicer exports, neither of which tolerates an object value
-        // (Codex P2 on PR #612).
         payload.openprinttagSnapshot = optSnapshot;
 
-        // The unique index is on { name } where _deletedAt is null, so we
-        // must query by name alone to avoid a duplicate-key error when the
-        // same name exists under a different vendor.
-        //
-        // Use findOneAndUpdate to atomically find-and-update, avoiding a
-        // race where two concurrent imports could both see "no existing"
-        // and both try to create, causing a duplicate-key error.
+        // The unique index is on { name } where _deletedAt is null, so query
+        // by name alone; findOneAndUpdate is atomic so two concurrent
+        // imports can't both create.
 
-        // Always include the OpenPrintTag reference in settings + refresh the
-        // GH #607 provenance snapshot on every (re-)import so an existing row's
-        // snapshot stays current with the upstream offer. Shared with the
-        // variant-import + link routes via buildOptLinkUpdate.
+        // Always refresh the linkage + provenance snapshot on re-import —
+        // shared with the variant-import + link routes via buildOptLinkUpdate.
         const optUpdateFields: Record<string, unknown> = buildOptLinkUpdate(payload);
 
-        // Build conditional updates: only set fields that are currently null.
+        // Conditional updates: only set fields that are currently null.
         const conditionalDefaults: Record<string, unknown> = {};
         if (payload.density != null)
           conditionalDefaults.density = payload.density;
         if (payload.color && payload.color !== "#808080")
           conditionalDefaults.color = payload.color;
-        // GH #477: OpenPrintTag spec keys 20–24. Apply only when the
-        // existing row has none — mirrors the "only set if currently
-        // null/sentinel" rule the other conditional defaults use.
+        // GH #477: spec keys 20–24 — applied only when the existing row has
+        // none, like the other conditional defaults.
         if (
           Array.isArray(payload.secondaryColors) &&
           payload.secondaryColors.length > 0
@@ -167,13 +148,9 @@ export async function POST(request: NextRequest) {
           conditionalDefaults.shoreHardnessD = payload.shoreHardnessD;
 
         /** Apply conditional defaults (only set if currently null) to a
-         *  row — used by both the normal existing-row path AND the
-         *  duplicate-key race-recovery path (Codex P2 round 1 on
-         *  PR #531). Without this shared helper, a doc that's created
-         *  by a concurrent caller between the existing-lookup and the
-         *  create below would land with ONLY the optUpdateFields set —
-         *  density/color/drying/etc. would never get backfilled from
-         *  the OPT material the user explicitly chose to import. */
+         *  row — shared by the normal existing-row path AND the
+         *  duplicate-key race-recovery path, so a doc created by a
+         *  concurrent caller still gets density/color/drying backfilled. */
         const applyConditionalDefaults = async (
           row: { _id: unknown; density?: number | null; color?: string | null; secondaryColors?: string[] | null; transmissionDistance?: number | null; dryingTemperature?: number | null; dryingTime?: number | null; shoreHardnessD?: number | null },
         ): Promise<void> => {
@@ -183,23 +160,17 @@ export async function POST(request: NextRequest) {
           if (conditionalDefaults.color && row.color === "#808080")
             conditionalSet.color = conditionalDefaults.color;
           // GH #477: only adopt the OPT db's secondaryColors when the
-          // existing row has none. Don't overwrite user-set arrays.
+          // existing row has none — don't overwrite user-set arrays.
           if (
             conditionalDefaults.secondaryColors &&
             (!row.secondaryColors || row.secondaryColors.length === 0)
           ) {
             conditionalSet.secondaryColors = conditionalDefaults.secondaryColors;
-            // GH #477 (Codex P2 on PR #484 r3): when the OPT material
-            // is coextruded (payload.color === null, secondaryColors
-            // populated) AND the row still has the gray sentinel
-            // "#808080", clear it to null so we don't end up with the
-            // gray+secondaries state the spec doesn't permit for
-            // coextruded materials. mapToFilamentPayload already emits
-            // null for this case so payload.color is null here, but the
-            // conditionalDefaults.color branch above only fires when
-            // payload.color is truthy — leaving the sentinel in place.
-            // This explicit clear closes the gap. Matches the create
-            // branch which gets null directly via mapToFilamentPayload.
+            // When the OPT material is coextruded (null primary) AND the row
+            // still has the gray sentinel, clear it to null — the
+            // conditionalDefaults.color branch only fires on a truthy
+            // payload.color, so the sentinel would otherwise persist beside
+            // the adopted secondaries (a state the spec doesn't permit).
             if (payload.color === null && row.color === "#808080") {
               conditionalSet.color = null;
             }
@@ -214,20 +185,14 @@ export async function POST(request: NextRequest) {
             conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
 
           if (Object.keys(conditionalSet).length > 0) {
-            // GH #605 (codex P2, importer sweep): the existing row may be a
-            // TEMPLATE (≥1 live variant). Its color was moved onto the
-            // variants at promotion, but a LEGACY template can still carry
-            // the '#808080' sentinel — the `row.color === "#808080"` branch
-            // above would then backfill the OPT color straight onto it,
-            // re-materializing per-variant state the re-sync flow already
-            // refuses (diffOptFields' excludeColor). Strip the shared
-            // TEMPLATE_STRIP_FIELDS (of which only `color` can appear in
-            // `conditionalSet`) with the PUT's semantics: non-null only, so
-            // the coextruded explicit `color: null` clear still passes.
-            // Decision + write share the per-filament mutex the promotion
-            // paths lock (this route's bulk mode holds no other lock).
-            // The strip never fails the row (atlas posture) — it's reported
-            // as a per-row note on the errors channel.
+            // GH #605: the existing row may be a TEMPLATE — a LEGACY
+            // template can still carry the '#808080' sentinel, and the
+            // sentinel branch above would backfill the OPT color straight
+            // onto it. Strip the shared TEMPLATE_STRIP_FIELDS with the PUT's
+            // semantics (non-null only, so the coextruded explicit
+            // `color: null` clear still passes). Decision + write share the
+            // per-filament mutex the promotion paths lock. The strip never
+            // fails the row — reported as a per-row note on errors.
             await runExclusive(filamentLockKey(row._id), async () => {
               const stripped = await stripTemplateFieldsForWrite(
                 Filament,
@@ -240,11 +205,9 @@ export async function POST(request: NextRequest) {
                 );
               }
               if (Object.keys(conditionalSet).length === 0) return;
-              // GH #632: runValidators so the GH #503 hex validators on
-              // color/secondaryColors (and the numeric range validators)
-              // fire on this update path too — bare findByIdAndUpdate
-              // skips schema validators, which let a malformed color_rgba
-              // from a community YAML persist an invalid hex on re-import.
+              // GH #632: runValidators — bare findByIdAndUpdate skips schema
+              // validators, letting a malformed color_rgba from a community
+              // YAML persist an invalid hex on re-import.
               await Filament.findByIdAndUpdate(
                 row._id,
                 { $set: conditionalSet },
@@ -254,20 +217,14 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        // CANONICAL FIRST, survivor only on a miss (Codex P2).
-        //
-        // A row the migration could not trim is invisible to a name-filtered
-        // query (the setter casts it), so on its own this atomic upsert would
-        // miss it and the create below would mint a second active row.
-        //
-        // But the scan must not run FIRST. Its `$expr` matches the canonical
-        // and the untrimmed row alike and imposes no ordering, so in exactly
-        // the collision state that produces a survivor — same-vendor `"PLA"`
-        // AND `"PLA "` — a survivor-first lookup would pick either one, and
-        // the import could start updating the legacy row where the indexed
-        // query had deterministically chosen the canonical one. Trying the
-        // cast query first keeps that determinism and reaches the scan only
-        // when there is genuinely nothing canonical to hit.
+        // CANONICAL FIRST, survivor only on a miss. A row the migration
+        // could not trim is invisible to a name-filtered query (the setter
+        // casts it), so on its own this upsert would miss it and the create
+        // below would mint a second active row. But the survivor scan must
+        // not run FIRST: its `$expr` matches the canonical and the untrimmed
+        // row alike, so in exactly the collision state that produces a
+        // survivor a scan-first lookup could pick the legacy row where the
+        // indexed query deterministically chooses the canonical one.
         let existing = await Filament.findOneAndUpdate(
           { name, _deletedAt: null, vendor },
           { $set: optUpdateFields },
@@ -292,11 +249,11 @@ export async function POST(request: NextRequest) {
           await applyConditionalDefaults(existing);
           updated++;
         } else {
-          // Check if a filament exists with a different vendor (name collision)
+          // Different-vendor name collision check.
           let nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
           if (!nameCollision) {
-            // Same blind spot, and it matters in the opposite direction: a
-            // MISSED collision lets the create proceed into a duplicate.
+            // Same survivor blind spot, opposite direction: a MISSED
+            // collision lets the create proceed into a duplicate.
             const otherVendorId = await findSurvivorId(
               Filament.collection as unknown as MinimalNameCollection,
               name,
@@ -313,13 +270,11 @@ export async function POST(request: NextRequest) {
             );
             continue;
           }
-          // GH #524.1: between the nameCollision check above and the
-          // create below, a concurrent POST can win the race and the
-          // loser's create throws E11000 with the raw MongoServerError
-          // text that used to leak into errors[]. Mirror the three-phase
-          // recovery the bambustudio / filament-import / prusament
-          // importers all use: on a duplicate-key error, re-fetch the
-          // winner and treat it as an update.
+          // GH #524.1: a concurrent POST can win the unique-name race and
+          // the loser's create throws E11000. Mirror the three-phase
+          // recovery the bambustudio / filament-import / prusament importers
+          // use: re-fetch the winner and treat it as an update (never leak
+          // the raw MongoServerError text).
           try {
             await Filament.create(payload);
             created++;
@@ -332,11 +287,10 @@ export async function POST(request: NextRequest) {
               { returnDocument: "after" },
             );
             if (winner) {
-              // Codex P2 round 1: same conditional-default backfill the
-              // normal existing-row path applies — without this the
-              // duplicate-recovery branch would report "updated" while
-              // leaving the OPT material's density/color/drying-temp
-              // unset on the raced-in row.
+              // Same conditional-default backfill as the normal
+              // existing-row path — otherwise this branch reports "updated"
+              // while leaving density/color/drying unset on the raced-in
+              // row.
               await applyConditionalDefaults(winner);
               updated++;
             } else {
@@ -383,12 +337,11 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Issue #753 (approach A): import ONE OpenPrintTag material as a VARIANT of an
- * existing parent. Only fields distinct from the parent land on the variant —
- * everything identical is pruned so it inherits dynamically (resolveFilament).
- * The variant is created linked (settings.openprinttag_* + snapshot) so it can
- * use the re-sync loop. Create-only: a name collision is refused, never
- * silently updating / re-parenting another row.
+ * Issue #753: import ONE OpenPrintTag material as a VARIANT of an existing
+ * parent. Only fields distinct from the parent land on the variant
+ * (identical values are pruned so they inherit dynamically); created linked
+ * so it can use the re-sync loop. Create-only: a name collision is refused,
+ * never silently updating / re-parenting another row.
  */
 async function importAsVariant(slugs: string[], parentId: string, promoteParent: boolean) {
   if (typeof parentId !== "string" || !mongoose.isValidObjectId(parentId)) {
@@ -401,8 +354,8 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
     );
   }
 
-  // Parent must exist, be active, and not itself be a variant (no nested
-  // inheritance) — mirrors the create route's parent validation.
+  // Parent must exist, be active, and not itself be a variant — mirrors the
+  // create route's parent validation.
   const parent = await Filament.findOne({ _id: parentId, _deletedAt: null }).lean();
   if (!parent) {
     return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
@@ -424,21 +377,20 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
   }
 
   const payload = mapToFilamentPayload(material);
-  // Snapshot the FULL OPT offer BEFORE pruning: a field we prune (the variant
-  // inherits it) must still carry provenance, so if the user later overrides it
-  // a re-check classifies it correctly instead of as a no-provenance conflict.
+  // Snapshot the FULL OPT offer BEFORE pruning: a pruned (inherited) field
+  // must still carry provenance so a later user override classifies
+  // correctly instead of as a no-provenance conflict.
   const snapshot = buildOptSnapshot(payload);
   const name = payload.name as string;
 
-  // Refuse a name collision rather than updating / re-parenting an existing
-  // row — a "create variant" action must never mutate another filament.
+  // Refuse a name collision — a "create variant" action must never mutate
+  // another filament.
   let collision = await Filament.findOne({ name, _deletedAt: null }).lean();
   if (!collision) {
-    // GH #1116 (Codex P1): a MISSED collision fails in the dangerous
-    // direction. A row the migration could not trim is invisible to this cast
-    // query, so the refusal below is skipped and the variant is created —
-    // producing exactly the pair of identically-rendering active rows this
-    // guard exists to prevent, with the new one additionally parented.
+    // GH #1116: a MISSED collision fails in the dangerous direction — an
+    // untrimmed survivor is invisible to this cast query, so the refusal
+    // would be skipped and the variant created as an identically-rendering
+    // duplicate.
     const survivorId = await findSurvivorId(
       Filament.collection as unknown as MinimalNameCollection,
       name,
@@ -454,17 +406,13 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
     );
   }
 
-  // Prune against the parent's effective values (the parent is a root, so its
-  // stored values ARE its effective values). Strict equality only — a value
-  // that merely resembles the parent's is kept as the variant's distinct data.
-  //
-  // Pruning against THIS pre-lock snapshot is equivalent to pruning against
-  // the post-promotion parent the gate below may produce: a promotion moves
-  // only color/colorName/spools/totalWeight/lowStockThreshold, and NONE of
-  // those participate in the prune (color/colorName are never pruned by
-  // design, and the inventory trio is neither inheritable nor present in an
-  // OPT payload). So the payload the gate dry-run validates is exactly the
-  // payload the create persists.
+  // Prune against the parent's effective values (a root's stored values ARE
+  // its effective values). Strict equality only. Pruning against THIS
+  // pre-lock snapshot is equivalent to pruning against the post-promotion
+  // parent the gate below may produce: a promotion moves only
+  // color/colorName/spools/totalWeight/lowStockThreshold, and NONE of those
+  // participate in the prune — so the payload the gate dry-run validates is
+  // exactly the payload the create persists.
   const variantPayload = pruneOptPayloadAgainstParent(
     payload,
     parent as unknown as Record<string, unknown>,
@@ -472,25 +420,21 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
   variantPayload.parentId = parentId;
   variantPayload.openprinttagSnapshot = snapshot;
   // diameter is hardcoded 1.75 by mapToFilamentPayload (not real OPT data) —
-  // null it so the variant inherits the parent's diameter (GH #106), exactly
-  // as the create route does for variants.
+  // null it so the variant inherits the parent's diameter (GH #106).
   variantPayload.diameter = null;
 
   try {
-    // GH #605 (codex round 3, Finding A): the same in-lock gate sequence as
-    // POST /api/filaments — per-parent mutex, in-lock parent re-fetch,
-    // structured 409 until `promoteParent: true`, dry-run validate, then
-    // promote copy-first/clear-last and create. See createVariantGated.
+    // GH #605: the same in-lock gate sequence as POST /api/filaments — see
+    // createVariantGated.
     const result = await createVariantGated(Filament, parentId, variantPayload, promoteParent);
     switch (result.outcome) {
       case "parent_not_found":
-        // Vanished (soft-deleted) between the pre-lock validation above and
-        // the lock — same 400 the pre-lock check would have given.
+        // Vanished (soft-deleted) between the pre-lock validation and the
+        // lock — same 400 the pre-lock check would have given.
         return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
       case "parent_is_variant":
-        // Validated above as a root, but a concurrent PUT re-parented it
-        // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
-        // 400 the pre-lock check produces.
+        // A concurrent PUT re-parented it before the gate's in-lock re-fetch
+        // — same no-nesting 400.
         return NextResponse.json(
           { error: "Cannot set a variant as parent (no nested inheritance)" },
           { status: 400 },
@@ -498,8 +442,8 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
       case "promotion_required":
         return NextResponse.json(promotionRequired409Body(result), { status: 409 });
       case "name_taken":
-        // Same copy as the pre-lock collision check — this is the raced
-        // variant of it, caught by the gate's pre-promotion re-check.
+        // The raced variant of the pre-lock collision check, caught by the
+        // gate's pre-promotion re-check.
         return NextResponse.json(
           { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
           { status: 409 },

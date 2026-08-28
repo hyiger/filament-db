@@ -18,11 +18,9 @@ import { formatWithSeparators } from "@/lib/numberFormatPref";
 import { getNumberFormat } from "@/lib/intlCache";
 
 /**
- * Built-in currencies. v1.12 expanded the list from 4 to 13 to cover the
- * countries Filament DB users tend to live in (the previous USD/EUR/GBP/JPY
- * was missing the Nordic markets and Switzerland in particular — GH #140).
- * Anything not in this list can be added via the Settings UI's
- * "Add custom currency" form, which writes through `useCurrency.addCustom`.
+ * Built-in currencies. Anything not in this list can be added via the
+ * Settings UI's "Add custom currency" form, which writes through
+ * `useCurrency.addCustom`.
  */
 export const CURRENCIES = [
   { code: "USD", symbol: "$", name: "US Dollar" },
@@ -41,10 +39,9 @@ export const CURRENCIES = [
 ] as const;
 
 /**
- * Pre-v1.12.9 this was a const-narrowed union of the four built-in codes.
- * With custom currencies (GH #140) the runtime accepts any string code,
- * so the type is widened to `string` — validators inside the hook keep
- * the value tied to a known list (built-in or custom).
+ * Widened to `string` because custom currencies accept any code —
+ * validators inside the hook keep the value tied to a known list
+ * (built-in or custom).
  */
 export type CurrencyCode = string;
 
@@ -54,7 +51,6 @@ const DEFAULT_CURRENCY = "USD";
 
 const BUILTIN_CODES: string[] = CURRENCIES.map((c) => c.code);
 
-/** Build a {code → symbol} lookup over both built-ins and the custom list. */
 function buildSymbolMap(custom: CustomCurrency[]): Map<string, string> {
   const m = new Map<string, string>();
   for (const c of CURRENCIES) m.set(c.code, c.symbol);
@@ -104,9 +100,9 @@ function readStoredCurrency(custom: CustomCurrency[]): string {
  * values seed web-mode users via the post-mount sync effect below.
  */
 export function useCurrency() {
-  // GH #821: default the Intl locale to the app's chosen language so currency
-  // grouping/decimals follow it (the GH #447 intent), matching the locale-aware
-  // dateFormat. Callers can still pass an explicit override to format().
+  // GH #821: default the Intl locale to the app's chosen language so
+  // currency grouping/decimals follow it. Callers can still pass an
+  // explicit override to format().
   const { locale } = useTranslation();
   // The number-format preference also governs currency grouping/decimals.
   // `separators` is null in system mode (and pre-hydration), where currency
@@ -118,10 +114,9 @@ export function useCurrency() {
   const [currency, setCurrencyState] = useState<string>(DEFAULT_CURRENCY);
 
   // GH #639: seed from localStorage on mount instead of in the useState
-  // initializers. Those run during hydration, so a stored non-default
-  // currency made the client's first render disagree with the SSR HTML
-  // (USD) — a React 19 hydration mismatch + full client re-render on
-  // every page load for a non-default web user. Same pattern as
+  // initializers — those run during hydration, so a stored non-default
+  // currency would make the client's first render disagree with the SSR
+  // HTML (a React 19 hydration mismatch). Same pattern as
   // CollapsibleSection / TranslationProvider: default during SSR, one
   // post-hydration sync render. The electron-store hydration effect below
   // resolves asynchronously after this, so on desktop it still wins.
@@ -145,10 +140,9 @@ export function useCurrency() {
 
         // Resolve the authoritative custom list for this hydration:
         //   - Electron-store has the key (typeof === "string"): apply it
-        //     verbatim, INCLUDING the empty array. Otherwise a desktop
+        //     verbatim, INCLUDING the empty array — otherwise a desktop
         //     user who cleared their list could see localStorage-cached
-        //     entries resurrect on next launch (Codex P2 follow-up to
-        //     PR #142).
+        //     entries resurrect on next launch.
         //   - Key absent (undefined): leave the localStorage-initialised
         //     state alone — first run on desktop after web use survives.
         let resolvedList: CustomCurrency[] | null = null;
@@ -160,12 +154,11 @@ export function useCurrency() {
         const saved = typeof c.currency === "string" ? c.currency : "";
         if (saved) {
           // Validate against the just-resolved list so an electron-side
-          // entry that still exists in `c.customCurrencies` is accepted
-          // even on the first render after mount. When electron didn't
-          // override (resolvedList === null), fall back to a fresh
-          // localStorage read — NOT the closure's `customCurrencies`,
-          // which is always the first-render `[]` since GH #639 moved
-          // the localStorage seed out of the useState initializer.
+          // entry is accepted even on the first render after mount. When
+          // electron didn't override (resolvedList === null), fall back to
+          // a fresh localStorage read — NOT the closure's
+          // `customCurrencies`, which is always the first-render `[]`
+          // because the localStorage seed runs post-mount (GH #639).
           const validateAgainst = resolvedList ?? readStoredCustom();
           if (isKnownCode(saved, validateAgainst)) {
             setCurrencyState(saved);
@@ -225,13 +218,10 @@ export function useCurrency() {
       const next = addCC(customCurrencies, entry);
       setCustomCurrenciesState(next);
       persistCustom(next);
-      // Auto-select the just-added code. Doing it here closes the
-      // closure-stale-state hole: a separate setCurrency() call from the
-      // caller would validate against the pre-add `customCurrencies`
-      // captured in setCurrency's useCallback memo, and reject the new
-      // code (Codex P2 follow-up to PR #142). Since the ergonomic flow
-      // is "user adds a currency to use", autoselect is also the right
-      // default behaviour.
+      // Auto-select the just-added code HERE: a separate setCurrency()
+      // call from the caller would validate against the pre-add
+      // `customCurrencies` captured in setCurrency's useCallback memo and
+      // reject the new code.
       setCurrencyState(entry.code);
       persistCurrency(entry.code);
       return null;
@@ -258,20 +248,15 @@ export function useCurrency() {
   const symbol = getCurrencySymbol(currency, customCurrencies);
 
   /**
-   * GH #447 — format a numeric value as currency using Intl.NumberFormat
-   * where the code is an ISO 4217 built-in (USD, EUR, GBP, etc.) so
-   * screen-readers hear "12 US dollars" rather than "dollar 12" and
-   * thousands grouping respects the locale. Custom user-added currency
-   * codes fall back to the legacy `${symbol}${value}` shape because
-   * Intl.NumberFormat rejects unknown codes.
-   *
-   * Defensive try/catch: a future Node/Chromium that drops support for
-   * a code, or a malformed numeric input, just falls back to the raw
-   * shape rather than throwing into the render.
+   * GH #447 — format as currency via Intl.NumberFormat for ISO 4217
+   * built-ins (screen-readers hear "12 US dollars", grouping respects the
+   * locale). Custom user-added codes fall back to `${symbol}${value}`
+   * because Intl.NumberFormat rejects unknown codes. Defensive try/catch
+   * falls back to the raw shape rather than throwing into the render.
    */
   const format = useCallback(
     (value: number, localeOverride?: string): string => {
-      // Number-format modes (Codex P2 ×3):
+      // Number-format modes:
       //  - preset/custom pair active  → keep the APP locale for currency symbol
       //    placement (#821) and swap ONLY the group/decimal separators.
       //  - System mode (post-hydration) → use the DEVICE locale so currency
@@ -307,8 +292,8 @@ export function useCurrency() {
         }
       }
       // Custom (non-ISO) currency code — Intl.NumberFormat rejects it, so
-      // compose `${symbol}${number}`. Match the legacy 2-decimal shape so a
-      // custom code never renders raw decimals (Codex on PR #470).
+      // compose `${symbol}${number}` with the 2-decimal shape so a custom
+      // code never renders raw decimals.
       if (hasPreset) {
         return `${symbol}${formatWithSeparators(
           value,

@@ -5,8 +5,8 @@ import { shouldApplyAppCsp } from "../electron/csp-scope";
  * Pin the Electron CSP scope: the app-CSP rewrite MUST NOT touch
  * responses from external origins (the most important being a vendor
  * TDS document loaded inside the renderer's `<iframe>` — GH #250's
- * `frame-src https:` flow). Codex flagged this as a P1 on PR #462
- * twice; this test exists so any future tweak to the scope helper
+ * `frame-src https:` flow). This test exists so any future tweak
+ * to the scope helper
  * fails CI before it can regress the TDS preview again.
  */
 const APP_ORIGIN = "http://localhost:3456";
@@ -26,7 +26,7 @@ describe("shouldApplyAppCsp", () => {
   });
 
   it("does NOT apply the app CSP to vendor TDS documents (the critical case)", () => {
-    // The exact failure mode Codex P1'd: a vendor TDS fetched into an
+    // The exact failure mode: a vendor TDS fetched into an
     // iframe must keep its OWN CSP — applying our `frame-ancestors
     // 'none'` would make Chromium refuse to embed it.
     expect(

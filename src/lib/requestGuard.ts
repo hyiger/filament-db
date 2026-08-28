@@ -79,7 +79,7 @@ export function assertSameOriginRequest(request: NextRequest): NextResponse | nu
     // check is too lenient: when `Sec-Fetch-Site` is absent (older
     // browsers, embedded webviews, intermediaries that strip Fetch
     // Metadata) a cross-origin request from the SAME host but a
-    // different port would otherwise slip through (Codex review).
+    // different port would otherwise slip through.
     // Ports are normalised against the Origin's scheme default, so an
     // explicit `:443`/`:80` on one side and an omitted default on the
     // other still compare equal — no false-reject on the PORT behind a
@@ -175,7 +175,7 @@ const UNSAFE_UPDATE_PATH_RE = /(^|\.)(__proto__|constructor|prototype)(\.|$)/;
  *   - `openprinttagSnapshot` — OPT provenance (GH #619): a forged snapshot
  *     flips a user-edited field from `conflict` to auto-`adopt` on re-sync.
  *   - `promotionInFlight` / `promotedByToken` — the durable promotion-marker
- *     pair (GH #605 round 10): a forged pair could make a later gate pass
+ *     pair (GH #605): a forged pair could make a later gate pass
  *     "resume" a promotion that never ran and clear a parent's inventory.
  */
 export const SERVER_OWNED_FILAMENT_FIELDS = [

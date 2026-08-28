@@ -109,7 +109,7 @@ describe("SyncService — per-collection error isolation (GH #369)", () => {
     expect(sync.getStatus().error).toMatch(/printers/);
   });
 
-  // GH #369 (Codex follow-up): when a syncCollection fails, every
+  // GH #369: when a syncCollection fails, every
   // downstream collection that consumes its syncId map must be SKIPPED
   // rather than run against a stale map. The remap transforms drop
   // unresolved refs to null — so a transient nozzle failure used to
@@ -182,7 +182,7 @@ describe("SyncService — per-collection error isolation (GH #369)", () => {
     expect(sync.getStatus().error).toBeNull();
   });
 
-  // GH #369 (Codex follow-up): the status.error summary must carry the
+  // GH #369: the status.error summary must carry the
   // ACTUAL failure message, not just the collection-name list. The
   // canonical case: Atlas auth error — every collection fails with the
   // same wrapped, actionable text ("Update the user's role to one that
@@ -238,7 +238,7 @@ describe("SyncService — per-collection error isolation (GH #369)", () => {
     expect(err).toMatch(/skipped.*prerequisite.*nozzles/);
   });
 
-  // GH #369 (Codex P1 follow-up): the post-sync repair passes
+  // GH #369: the post-sync repair passes
   // (repairDanglingSpoolLocations, repairFilamentParentIds,
   // repairPrinterAmsSlots) ran unconditionally and outside any
   // try/catch. If their prerequisite sync failed, they'd touch stale

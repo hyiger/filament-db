@@ -34,6 +34,8 @@
 | `GET` | `/api/filaments/:id/openprinttag` | Lädt das OpenPrintTag-Binary für ein Filament herunter |
 | `GET` | `/api/filaments/:id/openprinttag/check` | Vergleicht ein verknüpftes Filament mit dem aktuellen OpenPrintTag-Material |
 | `POST` | `/api/filaments/:id/openprinttag/sync` | Wendet ausgewählte OpenPrintTag-Aktualisierungen auf ein verknüpftes Filament an |
+| `POST` | `/api/filaments/:id/openprinttag/link` | Verknüpft ein bestehendes Filament mit einem OpenPrintTag-Material |
+| `DELETE` | `/api/filaments/:id/openprinttag/link` | Entfernt die OpenPrintTag-Verknüpfung eines Filaments (Werte bleiben unberührt) |
 | `GET` | `/api/filaments/:id/calibration` | Liefert Kalibrierungsdaten für ein Filament und einen Düsendurchmesser |
 | `GET` | `/api/filaments/:id/spool-check` | Prüft, ob eine Spule genug Filament für einen Druckauftrag hat |
 | `POST` | `/api/filaments/:id` | Synchronisiert ein Filament-Preset zurück aus PrusaSlicer |
@@ -47,7 +49,9 @@
 | `POST` | `/api/filaments/:id/spools` | Fügt einem Filament eine Spule hinzu |
 | `PUT` | `/api/filaments/:id/spools/:spoolId` | Aktualisiert Gewicht oder Bezeichnung einer Spule |
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Entfernt eine Spule aus einem Filament |
+| `GET` | `/api/spools/:spoolId` | Löst eine Spulen-Subdokument-ID zu ihrem (vererbungsaufgelösten) Eigentümer-Filament plus der Spule auf — versorgt die `?spool=<id>`-Deep-Links des Mobile-Scanners (v1.43) |
 | `GET` | `/api/spools/next-label` | Schlägt die nächste numerische Rollennummer für ein Spulen-Label vor (`{ next, max }`) |
+| `GET` | `/api/spools/usage-search` | Durchsucht das Nutzungs-Journal aller Spulen nach Eintrags-Bezeichnung / Quelle — versorgt den Journal-Tab der `/history`-Seite (#1168) |
 
 `POST /api/filaments/:id/spools`, `PUT /api/filaments/:id/spools/:spoolId` und `DELETE /api/filaments/:id/spools/:spoolId` — plus `POST /api/filaments/:id/spools/:spoolId/usage` und `POST .../dry-cycles` — akzeptieren einen optionalen Query-Parameter `?shape=spool`, der die Antwort auf die betroffene Spule eindampft. Siehe Abschnitt **Antwortform bei Spulen-Mutationen** weiter unten.
 
@@ -136,6 +140,7 @@ Liefert ein Array projizierter Filament-Zusammenfassungen (nicht die vollständi
 - `search` -- Filter nach Name (case-insensitive Regex)
 - `type` -- exakte Übereinstimmung beim Filamenttyp (z. B. `PLA`, `PETG`)
 - `vendor` -- exakte Übereinstimmung beim Herstellernamen
+- `family` -- auf `1` setzen, um einen `type`-/`vendor`-Filter auf die ganze Familie auszuweiten: Trifft der Filter eine VORLAGE, kommen ihre Varianten mit zurück, selbst wenn deren eigener gespeicherter `vendor`/`type` abweicht (eine Familie darf legitim uneins sein — beide Felder sind `required` und werden pro Zeile gestempelt, sie erben also nie wirklich). **Standardmäßig aus**, weil `type` und `vendor` exakte Zeilenfilter sind und andere Aufrufer sich wörtlich darauf verlassen (`FilamentForm` leitet vendor-gestützte TDS-Vorschläge aus `?vendor=` ab; `PrusamentImportDialog` behandelt `?type=`-Ergebnisse als Material-Treffer). Die gruppierende Filamentliste aktiviert ihn, damit eine getroffene Vorlage nicht als Gruppenkopf ohne Mitglieder gerendert wird (GH #1108). Ein vorhandenes `search`-Prädikat gilt weiterhin auch für die hinzugenommenen Zeilen.
 
 **Antwortformat pro Zeile** (entspricht `FilamentSummary` in `src/types/filament.ts` plus einigen Extras, die Liste / Formular / Picker benötigen):
 
@@ -177,6 +182,24 @@ Legt ein neues Filament an. Sende einen JSON-Body mit mindestens `name`, `vendor
 Wenn `totalWeight` angegeben wird, aber kein `spools`-Array, wird automatisch ein initialer Spuleneintrag aus dem Gewichtswert erstellt.
 
 Ist `parentId` gesetzt und wäre dies die **erste** lebende Variante dieses Elternfilaments, während das Elternfilament noch eine eigene Farbe oder eigene Spulen trägt, wird die Anfrage mit `409 parent_promotion_required` abgelehnt und nichts geschrieben; wiederhole sie mit `"promoteParent": true`, um zu bestätigen. Body-Form und Umfang der Verschiebung stehen im Abschnitt **Filament-Vorlagen** weiter oben.
+
+#### Anlegen aus einem dekodierten Tag
+
+Die Route akzeptiert auch die Create-from-Tag-Body-Form des Mobile-Scanners:
+
+```json
+{
+  "tagData": { "…der dekodierte Tag…": "…" },
+  "overrides": { "name": "…", "vendor": "…", "type": "…" },
+  "spoolRemainingGrams": 750
+}
+```
+
+- `tagData` — ein dekodierter Tag, exakt wie ihn `POST /api/nfc/decode` in `decoded` zurückgegeben hat. Der Server bildet ihn auf ein Filament-Payload ab (`decodedTagToFilamentPayload`) — das Telefon reproduziert das Mapping nie. Temperaturen verwenden die **empfohlenen** Werte des Tags, nicht das Bereichsmaximum (v1.67.0, #1008).
+- `overrides` — Filamentfelder, die die tag-abgeleiteten Werte **überstimmen**. Der Scanner sendet hier die vom Nutzer bestätigten Werte für `name` / `vendor` / `type` (Pflichtfelder).
+- `spoolRemainingGrams` — eine Zahl ≥ 0. Der Server addiert das Leergewicht des Tags, um das Bruttogewicht der Spule abzuleiten, und legt daraus GENAU EINE initiale Spule an. **Weglassen (oder `null` senden), um ein reines Katalog-Filament ohne Spule anzulegen.**
+
+Der zusammengeführte Body durchläuft anschließend den normalen Create-Pfad (dasselbe Feld-Stripping, dieselbe Referenz-Validierung und dieselbe Eindeutiger-Name-Behandlung wie ein gewöhnliches Anlegen). `instanceId` wird nie vom Tag übernommen — sie bleibt systemvergeben.
 
 ### GET /api/filaments/:id
 
@@ -371,7 +394,10 @@ Liefert Kalibrierungsdaten für ein bestimmtes Filament und einen Düsendurchmes
 Query-Parameter:
 - `nozzle_diameter` (erforderlich) -- Düsendurchmesser in mm (z. B. `0.4`)
 - `high_flow` (optional) -- `0` oder `1`. Wenn angegeben, werden nur Düsen mit dem entsprechenden `highFlow`-Flag gematcht. Disambiguiert Standard- vs. High-Flow-Düsen mit gleichem Durchmesser.
+- `nozzle_type` (optional) -- Name des Düsentyps (z. B. `Diamondback`). Disambiguiert zusätzlich Düsen gleichen Durchmessers, aber unterschiedlichen Typs — symmetrisch zum `filamentdb_nozzle`-Hinweis der Rücksync-Route, sodass das suffigierte Pro-Düse-Preset eines Mehrdüsen-Filaments die Kalibrierung **seiner** Düse zurückliest (#872).
+- `printer` (optional) -- Druckername oder ObjectId (v1.78, #1047). Beschränkt die Suche auf die Kalibrierungszeilen dieses Druckers: Ein 24-Hex-Wert wird als ID behandelt und gewinnt sofort; sonst wird der Name wortwörtlich → getrimmt → case-insensitiv abgeglichen, jeweils nur gegen **aktive** Drucker. Passende Zeilen werden **priorisiert, nicht gefiltert** — drucker-bezogene Einträge stehen vor den generischen druckerlosen Einträgen (die als Fallback dahinter bleiben), sodass ein Slicer nicht mehr den zufällig zuerst sortierten Eintrag derselben Düse bekommt, womöglich einen für eine andere Maschine getunten. Durchweg weich: Ein nicht passender Drucker (oder einer, der keinen aktiven Drucker benennt) fällt auf die generischen Einträge zurück, statt eine funktionierende Abfrage in ein 404 zu verwandeln. Ohne den Parameter werden generische (druckerlose) Einträge bevorzugt.
 - `bed_type` (optional) -- Name oder ID des Druckbett-Typs. Wenn angegeben, werden Kalibrierungswerte speziell für diese Druckbettoberfläche zurückgegeben. Fallback-Reihenfolge: bed-type-spezifischer Match → Match ohne bed-type → erster Durchmesser-Match.
+- `format` (optional) -- `orcaslicer` liefert die Kalibrierung mit OrcaSlicer-Schlüsselnamen und array-verpackten Werten (OrcaSlicers Multi-Extruder-Konvention).
 
 Liefert bei Erfolg:
 ```json
@@ -501,6 +527,15 @@ Antworten:
 - `404` mit `{ "linked": false, "found": false, "slug": "…" }` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank.
 - `400` — fehlender oder ungültiger `slug`.
 
+### DELETE /api/filaments/:id/openprinttag/link
+
+Entfernt die OpenPrintTag-Verknüpfung eines Filaments (v1.77, #1150) — genau die drei Pfade, die das POST schreibt (`settings.openprinttag_slug` / `_uuid` und den Provenance-Snapshot `openprinttagSnapshot`), und sonst nichts: Feldwerte, die das Material einmal geliefert hat, bleiben unberührt. Same-Origin-geschützt; kein Request-Body. Es findet kein Upstream-Abruf statt, die Verknüpfung ist also auch dann entfernbar, wenn das Material aus der OpenPrintTag-Datenbank verschwunden ist (die Sackgasse, die dieser Endpunkt auflöst).
+
+Antworten:
+- `{ "unlinked": true, "filament": { … } }` — Verknüpfung entfernt + das frische Dokument. Idempotent: Das Entverknüpfen eines nicht verknüpften Filaments ist trotzdem ein `200` (`$unset` auf fehlende Pfade ist ein No-op), ein Doppelklick oder Retry also harmlos.
+- `400` — die `{id}` ist keine gültige ObjectId.
+- `404` — kein aktives Filament mit dieser ID.
+
 ### Antwortform bei Spulen-Mutationen
 
 Die fünf Spulen-Mutations-Routen — `POST /api/filaments/:id/spools`, `PUT` und `DELETE /api/filaments/:id/spools/:spoolId`, `POST .../usage` und `POST .../dry-cycles` — antworten historisch mit dem **gesamten Filament-Dokument**: jedem `photoDataUrl`-Blob und dem vollständigen `usageHistory`-Ledger jeder Geschwisterspule, für einen Schreibvorgang, der einen einzelnen Skalar geändert hat. Seit v1.72 (#1027) akzeptieren sie einen optionalen Query-Parameter `shape`:
@@ -557,6 +592,33 @@ Liefert die nächste vorzuschlagende numerische Rollennummer für ein Spulen-Lab
 Die Abfrage filtert bewusst **nichts**: Filamente im Papierkorb, gepurgte Tombstones und ausgemusterte Spulen zählen alle mit. Rollennummern sind physisch und dauerhaft — eine Nummer, die auf einer ausgemusterten Spule steht, liegt weiterhin im Regal, und eine Nummer aus einem Filament im Papierkorb würde in dem Moment kollidieren, in dem dieses wiederhergestellt wird. Eine Nummer zu überspringen, die man für frei halten könnte, ist die sichere Richtung.
 
 Reine Vorschlagssemantik: Es wird nichts reserviert oder zugewiesen, das Feld bleibt editierbar, und zwei gleichzeitige Leser können denselben Wert erhalten.
+
+### GET /api/spools/usage-search
+
+Spulenübergreifende Suche im Nutzungs-Journal (v1.79, #1168) — entfaltet `spools[].usageHistory` jedes aktiven Filaments in flache Zeilen, neueste zuerst. Manuelle Nutzungseinträge (`source: "manual"`, `jobId: null`) existieren **nur** in Spulen-Subdokumenten, dies ist also die einzige Oberfläche, auf der sich die `jobLabel`-Bezeichnung eines manuellen Eintrags spulenübergreifend wiederfinden lässt; der Endpunkt versorgt den Tab „Spulennutzungs-Journal" der `/history`-Seite.
+
+Query-Parameter:
+
+- `label` — case-insensitiver Teilstring der `jobLabel`-Bezeichnung des Eintrags. Regex-Metazeichen werden wörtlich behandelt; auf 128 Zeichen begrenzt (die GH-#513-Schranke — dies ist ein Regex-kompilierender GET, der ohne den CSRF-Guard erreichbar ist).
+- `source` — `manual | slicer | job | nfc`. Die UI verwendet standardmäßig `manual`: `job`-/`slicer`-Einträge sind Projektionen von PrintHistory-Zeilen (siehe die Trennung von Aufträgen und manuellen Einträgen in der Zählung), ein zusammengelegter Standard würde also jeden Auftrag neben dem Druckaufträge-Tab doppelt zeigen.
+- `limit` — 1..1000, Standard 100, angewandt nach der absteigenden Datumssortierung.
+
+```json
+{
+  "entries": [
+    {
+      "filamentId": "…", "filamentName": "Prusament PLA", "vendor": "Prusa Research",
+      "type": "PLA", "color": "#ff0000",
+      "spoolId": "…", "spoolLabel": "42",
+      "date": "2026-01-07T00:00:00.000Z", "grams": 30,
+      "jobLabel": "Calibration cube", "source": "job"
+    }
+  ],
+  "limit": 100
+}
+```
+
+Soft-gelöschte Filamente sind ausgeschlossen, und die Projektion der Aggregation trägt nie `photoDataUrl`/`dryCycles` (die #1005-Haltung). Vollständigkeits-Hinweis: Das Journal jeder Spule ist auf 1.000 Einträge begrenzt, wobei manuelle/nfc-Einträge zuerst verdrängt werden (`src/lib/capUsageHistory.ts`) — sehr alte Einträge können also fehlen; die UI weist per Fußnote darauf hin.
 
 ---
 
@@ -792,7 +854,7 @@ Liefert `202 Accepted`:
 }
 ```
 
-400, wenn der Body kein gültiges JSON ist, kein Objekt ist oder weder einen Filament-Match noch dekodierte Felder enthält (nichts, worauf ein Konsument reagieren könnte).
+400, wenn der Body kein gültiges JSON ist, kein Objekt ist oder weder einen Filament-Match noch dekodierte Felder enthält (nichts, worauf ein Konsument reagieren könnte). 413, wenn der Request-Body die 64-KB-Obergrenze überschreitet (v1.75, #1076) — geprüft sowohl gegen den `Content-Length`-Header als auch gegen die gestreamte Bytezahl, da das veröffentlichte Event als Replay-Cache gehalten und an jeden SSE-Subscriber verteilt wird.
 
 ---
 
@@ -1209,13 +1271,13 @@ Extrahierte Felder umfassen: Name, Hersteller, Typ, Dichte, Durchmesser, Tempera
 
 Lädt einen JSON-Snapshot der Kern-App-Daten herunter: Filamente, Düsen, Drucker, Druckbett-Typen, Locations, Druckverlauf und Shared Catalogs (inklusive soft-gelöschter Dokumente und Tombstones). Der Snapshot bewahrt `_id`-Werte, Zeitstempel und Referenzen, damit er exakt wiederhergestellt werden kann.
 
-Die Snapshot-Schema-Version ist `6`. Die Historie: v2 ergänzte die Druckbett-Typen, v3 Locations + Druckverlauf, v4 die Shared Catalogs (v1.14.0), v5 das Top-Level-Provenance-Flag `legacyNozzleCleanupComplete` und v6 `Location.desiccantChangedAt`. Ältere Snapshots lassen sich weiterhin wiederherstellen — Collections, die eine v1-/v2-/v3-Datei nicht mitführt, kommen als leer zurück. Die Sprünge auf v5 und v6 existieren gerade deshalb, damit ein **älterer** Build die Datei ablehnt (siehe die Restore-Sperre weiter unten), statt sie anzunehmen und stillschweigend das Feld zu verwerfen, das sein Schema nicht kennt.
+Die Snapshot-Schema-Version ist `6`. Die Historie: v2 ergänzte die Druckbett-Typen, v3 Locations + Druckverlauf, v4 die Shared Catalogs (v1.14.0), v5 das Top-Level-Provenance-Flag `legacyNozzleCleanupComplete` und v6 `Location.desiccantChangedAt`. Ältere Snapshots lassen sich weiterhin wiederherstellen — Collections, die eine v1-/v2-/v3-Datei nicht mitführt, bleiben **unangetastet** und werden in einem `skipped`-Array der Restore-Antwort benannt (GH #1104); ein Schlüssel, der als explizit **leeres Array** vorhanden ist, leert diese Collection weiterhin. Die Sprünge auf v5 und v6 existieren gerade deshalb, damit ein **älterer** Build die Datei ablehnt (siehe die Restore-Sperre weiter unten), statt sie anzunehmen und stillschweigend das Feld zu verwerfen, das sein Schema nicht kennt.
 
 Liefert eine JSON-Datei mit `Content-Disposition: attachment`-Header.
 
 ### POST /api/snapshot
 
-Stellt die Datenbank aus einem zuvor exportierten Snapshot wieder her. Dies ist eine destruktive Operation: Alle vorhandenen Snapshot-bezogenen Daten werden durch die Snapshot-Inhalte ersetzt.
+Stellt die Datenbank aus einem zuvor exportierten Snapshot wieder her. Dies ist eine destruktive Operation **für die Collections, die die Datei mitführt**: Jede davon wird geleert und durch die Snapshot-Inhalte ersetzt. Ein Collection-Schlüssel, der in der Datei **fehlt**, lässt diese Collection in Ruhe (GH #1104 — stellvertretend für die Datei zu leeren war genau das, was beim Wiederherstellen eines älteren Snapshot-Formats Locations/Druckverlauf/Shared Catalogs stillschweigend entleerte); ein als explizit leeres Array vorhandener Schlüssel leert die Collection weiterhin. Die unberührten Collections werden im `skipped`-Array der Antwort benannt.
 
 Upload per `multipart/form-data` mit einem `file`-Feld, das das Snapshot-JSON enthält, oder sende das JSON direkt als Request-Body.
 
@@ -1235,7 +1297,8 @@ Liefert:
     "locations": 4,
     "printHistory": 12,
     "sharedCatalogs": 1
-  }
+  },
+  "skipped": []
 }
 ```
 
@@ -1385,7 +1448,7 @@ Antwort: das angelegte `PrintHistory`-Dokument, `201`.
 
 ### DELETE /api/print-history/{id}
 
-Mache einen Job rückgängig: Für jeden `usage`-Eintrag des Records, finde die passende Spule, erstatte ihren `totalWeight` um die aufgezeichneten Gramm und entferne den entsprechenden `usageHistory`-Eintrag. Dann **soft-lösche** das `PrintHistory`-Dokument, indem `_deletedAt` gesetzt wird (statt eines harten `deleteOne`), damit der Peer-Sync das Löschen über den Tombstone propagieren kann — ein hartes Löschen würde dem anderen Peer erlauben, die Zeile im nächsten Sync-Zyklus zurück zu pushen.
+Mache einen Job rückgängig: Für jeden `usage`-Eintrag des Records, finde die passende Spule, erstatte ihren `totalWeight` und entferne den entsprechenden `usageHistory`-Eintrag. Die Erstattung wird aus dem **`debitedGrams`-Wert des gematchten Ledger-Eintrags** berechnet — dem *tatsächlich* abgebuchten Betrag, der kleiner sein kann als die `grams` des Jobs, wenn das POST die Abbuchung an der Null-Grenze der Spule gekappt hat (v1.75, #1074: ein Job, der eine 50-g-Spule mit einer 100-g-Schätzung „leergefahren" hat, erstattet 50 g, nicht 100 g Phantom-Bestand). Legacy-Einträge vor #1074 tragen kein `debitedGrams` und fallen auf die vollen aufgezeichneten `grams` zurück (ebenso ein korruptes `debitedGrams`, das die `grams` des Eintrags übersteigt). Dann **soft-lösche** das `PrintHistory`-Dokument, indem `_deletedAt` gesetzt wird (statt eines harten `deleteOne`), damit der Peer-Sync das Löschen über den Tombstone propagieren kann — ein hartes Löschen würde dem anderen Peer erlauben, die Zeile im nächsten Sync-Zyklus zurück zu pushen.
 
 Erstattungs-Matching erfolgt über `usageHistory.jobId === entry._id` — eindeutig, sodass ein manueller Usage-Log, der zufällig `(grams, date)` mit dem Job teilt, **nicht** betroffen ist. Legacy-Einträge, die vor der Einführung von `jobId` geschrieben wurden (pre-v1.12.7), fallen auf einen `(grams, date, source)`-Match zurück, der weiterhin auf `source: "job" | "slicer"` beschränkt ist, sodass manuelle Logs auch auf diesem Pfad überleben.
 
@@ -1550,7 +1613,7 @@ Eine einzelne Anfrage ist von `parseCsv` auf 10.000 Zeilen gedeckelt; darüber w
 
 ### GET /api/spools/export-csv
 
-Pendant zu `GET /api/filaments/export-csv` für das Spulen-Inventar. Streamt jede aktive Spule aus jedem aktiven Filament als eine einzelne CSV mit einer Zeile pro Spule. Spalten umfassen `filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location` und `retired`. Soft-gelöschte Filamente und ausschließlich ausgemusterte Spulen werden standardmäßig ausgeschlossen. Geeignet für Round-Trip über `POST /api/spools/import` bei der Migration zwischen Instanzen.
+Pendant zu `GET /api/filaments/export-csv` für das Spulen-Inventar. Streamt jede Spule aus jedem aktiven Filament als eine einzelne CSV mit einer Zeile pro Spule. Die round-trip-fähigen führenden Spalten (`filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location`) entsprechen `POST /api/spools/import`; nachgestellte Kontextspalten umfassen `type`, `color`, `spoolWeight`, `netFilamentWeight`, `retired`, `dryCyclesCount`, `lastDriedAt`, `usedGrams`, `createdAt`, die Pro-Spule-`instanceId` (#732), `filamentId`, `spoolId` sowie `Parent` / `Variant Count`. Ausgeschlossen werden nur **soft-gelöschte Filamente**; **ausgemusterte Spulen SIND enthalten** und tragen `retired: true`. Geeignet für Round-Trip über `POST /api/spools/import` bei der Migration zwischen Instanzen.
 
 Response-Header: `Content-Type: text/csv` und `Content-Disposition: attachment; filename="spools.csv"`.
 
@@ -1696,6 +1759,18 @@ Antwort-Form:
 `totalSpools` ist die Summe der `count`-Werte aller Gruppen, sodass der Seitenkopf eine einzige Zahl anzeigen kann, ohne sie clientseitig neu zu summieren.
 
 Soft-gelöschte Filamente und ihre Spulen werden unabhängig von `includeRetired` aus der Aggregation ausgeschlossen.
+
+### GET /api/name-conflicts (v1.77)
+
+Versorgt die Seite **Einstellungen → Datenzustand**. Read-only-Scan (keine Schreibvorgänge), der jede Zeile auflistet, deren Reparatur die #1116-Namens-Trim-Migration verweigert hat, klassifiziert nach derselben geteilten Entscheidung, die auch die Migration verwendet: Zeilen, deren gespeicherter Name Leerzeichen am Rand trägt und getrimmt entweder mit einer aktiven Zeile kollidiert oder nur aus Leerzeichen besteht. Zurückgegeben werden nur **aktive** Konflikte — der Name einer tombstoned/gepurgten Zeile ist unauflösbar und unsichtbar.
+
+Liefert `{ "conflicts": [...] }`, jeder Eintrag `{ collection, id, name, trimsTo, reason, active, collidesWith, dependents }`:
+
+- `collection` — `filaments | nozzles | printers | bedtypes | locations`; `id` ist die `_id` der blockierten Zeile (die Auflösung läuft über die gewöhnlichen ID-adressierten PUT-/DELETE-Routen — per *Name* ist die Zeile durch Mongoose nicht erreichbar).
+- `name` ist wortwörtlich gespeichert (Rand-Leerzeichen intakt); `trimsTo` ist, worauf er getrimmt würde (`null`, wenn das Trimmen ihn leert); `reason` ist `"collision"` oder `"empty-name"`; `collidesWith` benennt die aktive Zeile, die den getrimmten Namen bereits hält, sofern bekannt.
+- `dependents` trägt `{ total, breakdown }`, gezählt nach denselben Prädikaten, mit denen die Entity-DELETE-Sperren ablehnen — `total === 0` heißt, die Zeile ist ein reines Duplikat und kann sicher gelöscht werden; mit Abhängigen gibt ein Umbenennen die kanonische Schreibweise frei, ohne eine Referenz anzufassen.
+
+In Hybrid-Deployments deckt das nur die Datenbank ab, mit der dieser Server spricht; Konflikte auf der Gegenseite sind nur für den Desktop-Sync-Dienst sichtbar.
 
 ### GET /api/embed-check?url=…
 

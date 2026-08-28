@@ -12,7 +12,7 @@ vi.mock("@/lib/mongoUriGuard", () => ({
 }));
 
 /**
- * GH #1021 (Codex P1 r20) — the Atlas import allow-lists `settings` and
+ * GH #1021 — the Atlas import allow-lists `settings` and
  * discards the source's `compatibleNozzles`, so a pre-#1022 source database's
  * stamped machine condition used to import verbatim with its provenance
  * thrown away — and the local one-shot marker (already completed) meant

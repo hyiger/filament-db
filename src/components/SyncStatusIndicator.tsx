@@ -85,9 +85,8 @@ export default function SyncStatusIndicator() {
     const api = window.electronAPI;
     if (!api?.getSyncStatus) return;
 
-    // GH #319: the IPC calls below resolve asynchronously; guard every
-    // setState behind an `active` flag so a fast unmount can't trigger a
-    // "setState on an unmounted component" warning.
+    // The IPC calls below resolve asynchronously; guard every setState
+    // behind `active` so a fast unmount can't set state after unmount.
     let active = true;
 
     api.getConfig().then((config) => {
@@ -101,11 +100,11 @@ export default function SyncStatusIndicator() {
       }
     });
 
-    // A live event can beat this promise (Codex P2, GH #1164). Adopting the
-    // older snapshot then rolls the indicator back to a pre-completion state
-    // — and with it the conflict count and its Data health link, which may be
-    // the only notice a remote-only conflict ever gets — until some later
-    // status arrives. So the mount snapshot yields to anything already seen.
+    // A live event can beat this promise; adopting the older snapshot
+    // would roll the indicator back to a pre-completion state — and with
+    // it the conflict count, which may be the only notice a remote-only
+    // conflict ever gets. The mount snapshot yields to anything already
+    // seen.
     let sawLiveStatus = false;
     api.getSyncStatus().then((s) => {
       if (active && !sawLiveStatus) setStatus(s);
@@ -177,11 +176,10 @@ export default function SyncStatusIndicator() {
     );
   }
 
-  // GH #527: first-run Electron has connectionMode === "" because the
-  // wizard hasn't completed yet. Suppress the pill entirely until the
-  // user picks a mode — pre-fix the empty string fell through to the
-  // hybrid branch and rendered a misleading green "Connected" while
-  // /setup was still asking the user to choose.
+  // First-run Electron has connectionMode === "" (wizard not completed).
+  // Suppress the pill entirely until the user picks a mode — the empty
+  // string would fall through to the hybrid branch and render a
+  // misleading green "Connected".
   if (!mode) return null;
 
   // Electron: offline mode
@@ -238,9 +236,8 @@ export default function SyncStatusIndicator() {
           label: t("sync.status.syncError"),
         };
       case "partial":
-        // GH #369: amber, distinct from red — partial convergence is
-        // recoverable. The tooltip surfaces status.error which names the
-        // failed collection(s) so the user knows what to re-run.
+        // Amber, distinct from red — partial convergence is recoverable;
+        // the tooltip's status.error names the failed collection(s).
         return {
           bg: "bg-amber-100 dark:bg-amber-900/40",
           dot: "bg-amber-500",
@@ -272,16 +269,10 @@ export default function SyncStatusIndicator() {
         ref={buttonRef}
         type="button"
         onClick={() => setShowTooltip(!showTooltip)}
-        // GH #414: SR users had no signal that this pill expands a
-        // tooltip with sync controls. `aria-haspopup="dialog"` plus
-        // `aria-expanded` makes the trigger announce its role.
-        //
-        // Codex P2 on PR #475 round 3: an aria-label of just "Open sync
-        // details" hid the visible state from SR users — failures,
-        // partial-sync, offline, syncing-in-progress all collapsed to
-        // the same generic name. Fold pill.label into the accessible
-        // name so the status the sighted user sees is the status the
-        // SR user hears, with the action affordance appended.
+        // `aria-haspopup="dialog"` + `aria-expanded` announce that this
+        // pill expands sync controls. The aria-label folds pill.label in
+        // — a static "Open sync details" label would hide the visible
+        // state (error/partial/offline/syncing) from SR users.
         aria-haspopup="dialog"
         aria-expanded={showTooltip}
         aria-label={`${pill.label} — ${t("sync.tooltip.openDetails")}`}
@@ -294,10 +285,6 @@ export default function SyncStatusIndicator() {
       {showTooltip && (
         <div
           ref={tooltipRef}
-          // GH #407: paired light + dark variants. Pre-fix the tooltip
-          // was dark-mode-only (`bg-gray-800 border-gray-700`) and
-          // rendered as a dark island on the light-mode UI. Every
-          // other popover in the codebase pairs `bg-white dark:bg-…`.
           className="absolute top-full right-0 mt-1.5 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-3 z-50 text-xs text-gray-700 dark:text-gray-200"
         >
           <div className="text-gray-700 dark:text-gray-300 mb-2">

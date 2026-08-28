@@ -636,7 +636,7 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // nominal weight: per the OpenPrintTag spec an absent key 17 already resolves
   // to nominal on read, and fabricating a nominal "actual" for a filament with
   // no current roll (all spools retired / weight unknown) would assert a full
-  // roll the user doesn't have (Codex P2 on PR #707).
+  // roll the user doesn't have.
   if (input.actualWeightGrams != null && input.actualWeightGrams > 0) {
     encodeCBORKey(buf, OPT_KEY.ACTUAL_NETTO_FULL_WEIGHT);
     encodeCBORCompactNumber(buf, input.actualWeightGrams);
@@ -790,7 +790,7 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // fractional tag would silently change its meaning to a different tag id.
   // The upper bound matches encodeCBORUint's 4-byte branch, which uses
   // `>>> 24` arithmetic and silently truncates values above 2^32-1 to
-  // their low 32 bits — a different tag id on the wire (Codex P2 on #650).
+  // their low 32 bits — a different tag id on the wire (GH #650).
   const tagSet = new Set<number>(
     (input.optTags ?? []).filter(isEncodableOptTag),
   );
@@ -799,8 +799,7 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   if (tagSet.size > 0) {
     const tagValues = [...tagSet].sort((a, b) => a - b);
     encodeCBORKey(buf, OPT_KEY.TAGS);
-    // Encode as CBOR array (major type 4)
-    // Encode CBOR definite array header (major type 4)
+    // CBOR definite array header (major type 4)
     if (tagValues.length < 24) {
       buf.push(0x80 | tagValues.length);
     } else if (tagValues.length < 256) {

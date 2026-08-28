@@ -119,7 +119,7 @@ export function isStagingPlaceholder(name: unknown): boolean {
 /**
  * Does this name match the COMPLETE generated placeholder grammar —
  * `__sync-staging-<8 hex nonce>-<24 hex ObjectId>` — not merely the prefix?
- * (GH #1153, Codex P2.)
+ * (GH #1153.)
  *
  * The sweep's grammar backstop ACTS on rows it recognizes: it rewrites the
  * name to the peer's, or fails the collection every cycle when it cannot.
@@ -173,7 +173,7 @@ export function planRenameStaging(
    * Which rows can actually VACATE the name they hold?
    *
    * Not just "is it moving" — its own destination has to be reachable too.
-   * Checking one level is insufficient (Codex P1): with A->B, B->C and C
+   * Checking one level is insufficient: with A->B, B->C and C
    * standing still, a one-level check stages B for A, A takes B's name, and
    * then B cannot take C. Settlement cannot restore B either, because A now
    * owns its original name — B is stranded as `__sync-staging-…` permanently.
@@ -195,7 +195,7 @@ export function planRenameStaging(
     }
   }
 
-  // A CONTESTED destination poisons every row that desires it (Codex P1).
+  // A CONTESTED destination poisons every row that desires it.
   //
   // Two rows desiring the same name can only happen when the SOURCE holds
   // duplicate active names — a state the trim pass refuses to index and the
@@ -284,7 +284,7 @@ export function planRenameStaging(
  * Staging a blocker is a bet that its own pending write — later in this same
  * pass — will rename it away, vacating the name for good. The write's body is
  * hydrated from the source document AT WRITE TIME, so the only honest way to
- * predict it is to read that same document now (Codex P1, sixth pass — the
+ * predict it is to read that same document now (the
  * previous check compared the blocker's fresh name against its SNAPSHOT
  * desired name, and a source renamed after the snapshot made the two diverge:
  * staging was authorized for a rename that was no longer coming, and the

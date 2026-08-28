@@ -27,7 +27,7 @@ function parseSize(v: unknown): number {
 /**
  * Derive the snapshot route's cap from its source rather than hard-coding it, so
  * raising `MAX_SNAPSHOT_SIZE` without also raising the proxy cap fails this test
- * (Codex P3) instead of silently passing. The handler defines it as a local
+ * instead of silently passing. The handler defines it as a local
  * const (not exported), and importing the route would pull in mongoose/db deps —
  * so read the literal arithmetic and evaluate it safely (digits / `*` only).
  */
@@ -51,7 +51,7 @@ function snapshotRouteCapBytes(): number {
 // under a few KB for a single file field). Require a clear margin above the route
 // cap rather than allowing equality, so a near-limit snapshot can't be truncated
 // and a future proxyCap == routeCap (or a route-cap raised to match the proxy
-// cap) fails this test instead of silently reintroducing #878 (Codex P3).
+// cap) fails this test instead of silently reintroducing #878.
 const MULTIPART_HEADROOM = 1024 * 1024; // 1 MiB — generous vs the real envelope
 
 describe("#878 — proxy body limit covers the largest API route body + multipart overhead", () => {

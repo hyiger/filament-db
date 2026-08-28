@@ -8,7 +8,7 @@ import {
 import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
- * GH #605 (codex round 3, Finding A) — the shared, race-hardened variant
+ * GH #605 — the shared, race-hardened variant
  * creation gate (src/lib/createVariantGated.ts), factored out of
  * POST /api/filaments so the OpenPrintTag variant import enforces identical
  * semantics. Route-level behavior is pinned by
@@ -200,7 +200,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     expect(result).toEqual({ outcome: "parent_not_found" });
   });
 
-  // ── round 8 F1: rootness re-asserted in-lock ──────────────────────────
+  // ── rootness re-asserted in-lock ──────────────────────────
 
   it("parent became a VARIANT before the lock → parent_is_variant, nothing written (round 8 F1)", async () => {
     const grandparent = await Filament.create({
@@ -339,7 +339,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     });
   });
 
-  // ── gateFirstVariantAdoption (codex round 4, F2/F6) ───────────────────
+  // ── gateFirstVariantAdoption ───────────────────
 
   it("adoption: carrying variant-less parent without the flag → promotion_required, onReady never runs", async () => {
     const parent = await seedCarryingParent();
@@ -528,7 +528,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     expect(lockedKeyCount()).toBe(0);
   });
 
-  // ── round 7 P2: orphaned lowStockThreshold on ungated first variants ────
+  // ── orphaned lowStockThreshold on ungated first variants ────
 
   async function seedThresholdOnlyParent(name = "Threshold Parent") {
     return Filament.create({
@@ -698,7 +698,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     expect(fresh.lowStockThreshold).toBe(200);
   });
 
-  // ── round 10: stale promotion markers are lazily cleared by gate passes ─
+  // ── stale promotion markers are lazily cleared by gate passes ─
 
   it("createVariantGated on a NON-carrying parent with a stale marker: clears the marker, never resumes", async () => {
     // A crashed promotion's marker outlived its carried state (cleared by

@@ -74,8 +74,8 @@ export type TrimmableCollection = (typeof TRIMMABLE_COLLECTIONS)[number];
  * Every character `String.prototype.trim` strips: ECMA-262's WhiteSpace and
  * LineTerminator productions, plus U+FEFF.
  *
- * Spelled out because the MongoDB pre-filter has to select the SAME set
- * (Codex P2). Mongo's `\s` is PCRE's — ASCII-only in practice — so a name
+ * Spelled out because the MongoDB pre-filter has to select the SAME set.
+ * Mongo's `\s` is PCRE's — ASCII-only in practice — so a name
  * ending in U+00A0 or U+3000 was never returned by the query, and the JS
  * re-check below never got the chance to repair it. Which is the worst
  * possible failure here: the schema setter WOULD trim that name on the
@@ -109,7 +109,7 @@ export interface TrimNameConflict {
    *
    * Every conflict is worth LOGGING, but only an active one can actually
    * make two databases disagree about identity in a way someone can fix,
-   * which is what gates the hybrid sync (Codex P1). A soft-deleted or
+   * which is what gates the hybrid sync. A soft-deleted or
    * `_purged` row with a whitespace-only name is untrimmable and always will
    * be, and it is invisible in the UI — so treating it as a gate would block
    * that collection's sync forever with no user-accessible resolution.
@@ -140,7 +140,7 @@ export interface TrimEntityNamesResult {
   trimmed: number;
   /**
    * Collections left ENTIRELY untouched because the protective unique index
-   * could not be established (Codex P1).
+   * could not be established.
    *
    * Writing without it is not "best effort", it is unsafe: the check and the
    * write are not atomic, so two writers — the app's dbConnect and the
@@ -156,7 +156,7 @@ export interface TrimEntityNamesResult {
   conflicts: TrimNameConflict[];
   /**
    * Rows whose trim failed for a reason that WILL resolve on its own, so the
-   * caller must keep the migration unsettled and retry (Codex P2).
+   * caller must keep the migration unsettled and retry.
    *
    * The one producer: a peer still carrying the pre-#303 LEGACY plain unique
    * `name_1`, which — unlike the partial index this repo intends — also covers
@@ -210,15 +210,6 @@ export interface MinimalTrimDb {
   collection(name: string): MinimalCollection;
 }
 
-/**
- * Does a unique index on `name` already exist?
- *
- * Any unique `{name: 1}` index serializes the writes this pass makes — the
- * legacy plain one from before GH #303 is strictly stricter than the partial
- * one the models now declare, since it also covers soft-deleted rows. The
- * partialFilterExpression is deliberately NOT compared: this asks "am I
- * serialized", not "is the index the one I would have built".
- */
 /**
  * Convert a legacy NON-unique `name_1` into the partial-unique index this
  * repo intends, returning whether the collection now has adequate protection.
@@ -280,6 +271,15 @@ async function replaceInadequateNameIndex(collection: {
   }
 }
 
+/**
+ * Does a unique index on `name` already exist?
+ *
+ * Any unique `{name: 1}` index serializes the writes this pass makes — the
+ * legacy plain one from before GH #303 is strictly stricter than the partial
+ * one the models now declare, since it also covers soft-deleted rows. The
+ * partialFilterExpression is deliberately NOT compared: this asks "am I
+ * serialized", not "is the index the one I would have built".
+ */
 async function hasUniqueNameIndex(collection: {
   indexes?(): Promise<
     { key?: unknown; unique?: unknown; partialFilterExpression?: unknown }[]
@@ -291,7 +291,7 @@ async function hasUniqueNameIndex(collection: {
     return existing.some((i) => {
       if (i.unique !== true) return false;
 
-      // The key must be EXACTLY `{name: 1}` (Codex P1). A compound
+      // The key must be EXACTLY `{name: 1}`. A compound
       // `{name: 1, vendor: 1}` is unique over the PAIR and serializes nothing
       // about `name` on its own.
       const key = i.key as Record<string, unknown> | undefined;
@@ -344,7 +344,7 @@ async function classifyTrimCandidate(
   if (typeof doc.name !== "string") return { kind: "skip" };
   if (!hasEdgeWhitespace(doc.name)) return { kind: "skip" };
   // A `_purged` row is NOT active for gating purposes, even when its
-  // `_deletedAt` is still null (Codex P1 round 2).
+  // `_deletedAt` is still null.
   //
   // The previous version leaned on the `purgedZombies` migration having
   // re-tombstoned it — which is precisely the assumption
@@ -381,7 +381,7 @@ async function classifyTrimCandidate(
     };
   }
   // Check the target name BEFORE writing, rather than relying on the
-  // unique index to report the collision (Codex P1). On a database whose
+  // unique index to report the collision. On a database whose
   // partial index is missing or stale — precisely the case `dbConnect`'s
   // `coreModelIndexes` pass exists to repair, and it runs AFTER this one
   // — both `"X"` and `"X "` would write through as `"X"`, and that later
@@ -403,8 +403,7 @@ async function classifyTrimCandidate(
       // The clash is real either way — the index covers `_deletedAt: null`
       // rows including a purge zombie, so the write genuinely can't
       // succeed. But whether it may GATE A SYNC depends on the CLASHING
-      // row too, not just the candidate (Codex P1, the mirror of the
-      // previous round): if the only thing in the way is a hidden
+      // row too, not just the candidate: if the only thing in the way is a hidden
       // untombstoned zombie, the user has nothing to act on — it isn't in
       // the trash, and the remote never runs the migration that would
       // repair it — so gating would block that collection forever.
@@ -528,7 +527,7 @@ export async function trimEntityNames(
 
   for (const collectionName of TRIMMABLE_COLLECTIONS) {
     const collection = db.collection(collectionName);
-    // `_purged` is a Filament-only concept (Codex P2). The other four schemas
+    // `_purged` is a Filament-only concept. The other four schemas
     // don't declare it, so strict mode strips it and their APIs expose rows on
     // `_deletedAt: null` alone — a row carrying a stray `_purged` from legacy
     // or raw-synced data is still VISIBLE there, therefore still resolvable by
@@ -540,8 +539,8 @@ export async function trimEntityNames(
     const isHidden = (row: { _purged?: unknown }) =>
       honorsPurged && row._purged === true;
 
-    // Establish the constraint this pass RELIES on, before relying on it
-    // (Codex P2). The pre-write clash check exists precisely because the
+    // Establish the constraint this pass RELIES on, before relying on it.
+    // The pre-write clash check exists precisely because the
     // index may be missing on an upgrading database — but a check and a
     // write are not atomic, and nothing else serializes them. Two writers
     // (the app's dbConnect and the Electron sync service both run this, on
@@ -563,7 +562,7 @@ export async function trimEntityNames(
         { unique: true, partialFilterExpression: { _deletedAt: null } },
       );
     } catch (err) {
-      // A refusal is not necessarily an absence (Codex P1). A peer upgraded
+      // A refusal is not necessarily an absence. A peer upgraded
       // from the pre-#303 schema still carries the LEGACY plain unique
       // `name_1`, and `createIndex` rejects a differing
       // partialFilterExpression with IndexOptionsConflict — while that index
@@ -578,7 +577,7 @@ export async function trimEntityNames(
       if (await hasUniqueNameIndex(collection)) {
         // Adequately serialized after all; carry on.
       } else if (await replaceInadequateNameIndex(collection)) {
-        // GH #1116 (Codex P1): an INADEQUATE index — a legacy NON-unique
+        // GH #1116: an INADEQUATE index — a legacy NON-unique
         // `name_1` — is a different case from a duplicate-data refusal, and
         // it is the one that cannot clear on its own.
         //
@@ -634,7 +633,7 @@ export async function trimEntityNames(
       }
       const { next, active } = decision;
       try {
-        // Conditional on the name we SCANNED (Codex P2). This runs on every
+        // Conditional on the name we SCANNED. This runs on every
         // hybrid cycle while the app can still write to either database, so a
         // user rename landing between the read and this write must win —
         // filtering on `_id` alone would stamp the stale candidate's trimmed
@@ -665,8 +664,7 @@ export async function trimEntityNames(
         // rows. `coreModelIndexes` replaces that index later in this same
         // connect, after which the identical write succeeds.
         //
-        // The question is INDEX COVERAGE, not schema activeness (Codex P2) —
-        // and conflating the two is what the previous version did.
+        // The question is INDEX COVERAGE, not schema activeness.
         //
         // `isActiveLikeSchema` treats `_deletedAt: ""` as active, because
         // Mongoose casts an empty string to null on a Date path. MongoDB does
@@ -700,7 +698,7 @@ export async function trimEntityNames(
 /**
  * How many items keep the migration UNSETTLED, i.e. force another pass.
  *
- * Extracted so the decision is testable (Codex P2): it used to be an inline
+ * Extracted so the decision is testable: it used to be an inline
  * expression inside `dbConnect`'s migration block, which no test could reach —
  * so the rule that `deferred` must block was unpinned, and an unpinned rule is
  * one refactor away from silently reverting.
@@ -749,21 +747,6 @@ export function describeTrimResult(result: TrimEntityNamesResult): string | null
 }
 
 /**
- * A collision the trim setter would create on INSERT (GH #1116).
- *
- * A snapshot taken before the setter existed can legitimately contain both
- * `X` and `X `. Mongoose applies the setter on `insertMany`, so both land as
- * `X` and the ordered batch aborts on E11000 — after the destructive wipe,
- * which means the restore path leans on its rollback for what is really a
- * predictable, statable problem with the FILE. Detecting it up front turns
- * that into a clean 400 with the database untouched, the posture GH #1004
- * F2(b) established for schema-validation failures.
- *
- * Only ACTIVE rows are compared: every one of these `name` indexes is partial
- * on `_deletedAt: null`, so a trashed row is free to share a name (that is
- * the whole point of GH #213's name reuse).
- */
-/**
  * The value Mongoose's `String` SchemaType would store for `raw`, or null
  * when it wouldn't cast at all.
  *
@@ -773,7 +756,7 @@ export function describeTrimResult(result: TrimEntityNamesResult): string | null
  */
 export function castNameLikeSchema(raw: unknown): string | null {
   if (typeof raw === "string") return raw;
-  // EVERY number, including the non-finite ones (Codex P2). `JSON.parse`
+  // EVERY number, including the non-finite ones. `JSON.parse`
   // turns a valid JSON literal like `1e400` into `Infinity`, and Mongoose's
   // String cast is `value.toString()` — so it stores `"Infinity"`, which
   // collides with a `"Infinity "` sibling. A `Number.isFinite` gate skipped
@@ -781,7 +764,7 @@ export function castNameLikeSchema(raw: unknown): string | null {
   if (typeof raw === "number") return String(raw);
   if (typeof raw === "boolean") return String(raw);
   // Transcribed from mongoose/lib/cast/string.js, in ITS order, because
-  // paraphrasing it has now been wrong twice (Codex P2 ×2):
+  // paraphrasing it has now been wrong twice:
   //
   //   1. a value with a STRING `_id` casts to that `_id` — the populated-doc
   //      case, and reachable from JSON as plain `{"_id": "X"}`, so it hits
@@ -814,7 +797,7 @@ export function castNameLikeSchema(raw: unknown): string | null {
  *
  * The name indexes are partial on `_deletedAt: null`, so "is this row active"
  * decides whether it participates in a collision — and the raw JSON value is
- * not the answer (Codex P2). Mongoose's Date path casts `null`, `undefined`
+ * not the answer. Mongoose's Date path casts `null`, `undefined`
  * AND the empty string to `null`, so `{_deletedAt: ""}` inserts as an ACTIVE
  * row while a `!= null` test reads it as deleted. That mismatch is enough for
  * `{name: "X", _deletedAt: ""}` and `{name: "X "}` to slip past the precheck
@@ -831,14 +814,14 @@ export function isActiveLikeSchema(rawDeletedAt: unknown): boolean {
 /**
  * Is this snapshot row one the partial unique index will actually cover?
  *
- * Active-ness alone isn't the answer for FILAMENTS (Codex P2). The restore
+ * Active-ness alone isn't the answer for FILAMENTS. The restore
  * path runs `normalizePurgedTombstone` before inserting, which stamps
  * `_deletedAt` on a `_purged` zombie — so a legacy snapshot holding an active
  * `"X"` beside a purged `"X "` is perfectly restorable, and rejecting it
  * would refuse a file the existing zombie repair handles correctly.
  *
- * `honorsPurged` is REQUIRED rather than defaulted, and that is the point
- * (Codex P2 round 2). The restore only re-tombstones filaments, printHistory
+ * `honorsPurged` is REQUIRED rather than defaulted, and that is the point.
+ * The restore only re-tombstones filaments, printHistory
  * and sharedCatalogs; `_purged` is not in the Nozzle / Printer / BedType /
  * Location schemas at all, so strict mode STRIPS it and the row inserts
  * ACTIVE. Exempting those would suppress a real collision and hand the caller
@@ -851,7 +834,7 @@ export function isIndexedRow(
   honorsPurged: boolean,
 ): boolean {
   // The `_deletedAt == null` half mirrors `normalizePurgedTombstone`'s OWN
-  // condition, and it is load-bearing (Codex P2 round 2). That helper stamps
+  // condition, and it is load-bearing. That helper stamps
   // a tombstone only when `_deletedAt == null` — an EMPTY STRING isn't, so it
   // survives untouched (`restoreTypes` leaves it alone too, since "" doesn't
   // match the ISO date pattern) all the way to `insertMany`, where the Date
@@ -862,6 +845,21 @@ export function isIndexedRow(
   return isActiveLikeSchema(row._deletedAt);
 }
 
+/**
+ * A collision the trim setter would create on INSERT (GH #1116).
+ *
+ * A snapshot taken before the setter existed can legitimately contain both
+ * `X` and `X `. Mongoose applies the setter on `insertMany`, so both land as
+ * `X` and the ordered batch aborts on E11000 — after the destructive wipe,
+ * which means the restore path leans on its rollback for what is really a
+ * predictable, statable problem with the FILE. Detecting it up front turns
+ * that into a clean 400 with the database untouched, the posture GH #1004
+ * F2(b) established for schema-validation failures.
+ *
+ * Only ACTIVE rows are compared: every one of these `name` indexes is partial
+ * on `_deletedAt: null`, so a trashed row is free to share a name (that is
+ * the whole point of GH #213's name reuse).
+ */
 export function findTrimmedNameCollision(
   rows: readonly unknown[],
   /** True only for `filaments`, the one unique-name collection whose
@@ -874,7 +872,7 @@ export function findTrimmedNameCollision(
     if (typeof row !== "object" || row === null) continue;
     const record = row as { name?: unknown; _deletedAt?: unknown; _purged?: unknown };
     if (!isIndexedRow(record, honorsPurged)) continue;
-    // Key by the value the SCHEMA will store, not the raw JSON (Codex P2).
+    // Key by the value the SCHEMA will store, not the raw JSON.
     // Mongoose casts a `String` path, so a snapshot holding the number `1`
     // and the string `"1 "` passes per-document validation on both — and then
     // `insertMany` casts and trims them to the same `"1"` and raises E11000

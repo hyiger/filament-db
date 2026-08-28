@@ -7,34 +7,22 @@ import { countEntityDependents } from "@/lib/entityDependents";
 /**
  * GET /api/name-conflicts  (GH #1149)
  *
- * The trim-collision surface: every row the #1116 name-trim migration REFUSED
- * to repair (a stored `"X "` whose trim would collide with an active `"X"`,
- * or a whitespace-only name), classified by the exact same shared decision
- * the migration uses (`scanTrimConflicts` — read-only, no index build, no
- * writes), and enriched with the per-collection dependent counts that gate
- * the safe resolutions:
- *
- *   - zero dependents → the row is a plain duplicate of the row that already
- *     won the name; "Move to trash" via the existing id-addressed DELETE is
- *     safe and reversible.
- *   - dependents      → "Rename" (e.g. to `"X (2)"`) via the existing
- *     id-addressed PUT frees the canonical spelling without touching a
- *     single reference.
+ * Every row the #1116 name-trim migration REFUSED to repair, classified by
+ * the SAME shared decision the migration uses (`scanTrimConflicts` —
+ * read-only), enriched with the dependent counts that gate the safe
+ * resolutions (zero dependents → trash is safe; dependents → rename frees
+ * the canonical spelling without touching a reference).
  *
  * Only ACTIVE conflicts are returned — a tombstoned/purged row's name is
- * unresolvable and invisible, exactly why the migration doesn't gate on it.
+ * unresolvable and invisible.
  *
- * RAW driver on purpose: these rows are unreachable through Mongoose by name
- * (the schema's trim setter casts query values — the GH #1116 mechanism
- * itself), while the raw driver reads them fine. Resolution then happens by
- * `_id` through the ordinary guarded routes.
+ * RAW driver on purpose: these rows are unreachable through Mongoose by
+ * name (the trim setter casts query values — the GH #1116 mechanism
+ * itself). Resolution then happens by `_id` through the guarded routes.
  *
  * Read-only GET → no `assertSameOriginRequest` (the #360 sweep covers
- * mutating verbs); the optional bearer gate applies via `src/proxy.ts`.
- *
- * In HYBRID mode this covers the database the server talks to (the local
- * one). Remote-side conflicts are only visible to the desktop sync service —
- * a follow-up (see the issue) will surface those through SyncStatus.
+ * mutating verbs). In HYBRID mode this covers only the local database;
+ * remote-side conflicts are visible only to the desktop sync service.
  */
 export async function GET() {
   try {

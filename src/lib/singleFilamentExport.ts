@@ -52,8 +52,7 @@ export async function resolveFilamentForExport(
   // is ALREADY URL-decoded. Do NOT call decodeURIComponent on it again:
   // a valid filament name containing a literal `%` (e.g. "ABS 100%")
   // arrives here decoded, and a second decode throws URIError on the
-  // dangling `%` — turning a valid export into a 500 (Codex P2 on
-  // PR #247).
+  // dangling `%` — turning a valid export into a 500.
 
   // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try it
   // FIRST, falling back to a name lookup only when that _id misses (a preset
@@ -66,7 +65,7 @@ export async function resolveFilamentForExport(
     ).lean()) as FilamentDoc | null;
   }
   if (!filament) {
-    // GH #1116 (Codex P2): the export is ADDRESSED by this name, so a cast
+    // GH #1116: the export is ADDRESSED by this name, so a cast
     // that lands on a different row hands the user a download containing
     // another filament's settings — silently, under the name they asked for.
     // "Read-only" is not the same as harmless.

@@ -154,7 +154,7 @@ export default function NetworkSettingsPage() {
                             return;
                           }
                           setModeSwitching(true);
-                          // GH #1006 F2 (Codex P2 on #1015): a failed server respawn
+                          // GH #1006 F2: a failed server respawn
                           // RESOLVES with { success: false } — it doesn't reject — so
                           // the catch below never fires for it. Check the result (the
                           // exposeToLan toggle's pattern) or the toast shows
@@ -199,7 +199,7 @@ export default function NetworkSettingsPage() {
                       setModeSwitching(true);
                       setModeResult(null);
                       try {
-                        // GH #1006 F2 (Codex P2 on #1015): same result check as the
+                        // GH #1006 F2: same result check as the
                         // connect-and-switch path above — {success:false} resolves.
                         const saveRes = await window.electronAPI!.saveConfig({ connectionMode: pendingMode });
                         if (!saveRes?.success) {

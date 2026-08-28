@@ -31,14 +31,11 @@ interface MongooseCache {
   /** Per-migration completion flags. Each migration only runs until it
    * succeeds — a transient failure (network blip, MongoDB busy) won't
    * permanently mark the migration done, so the next request will retry
-   * instead of leaving the install stuck on stale data/index state.
-   *
-   * GH #457 — the `instanceIds` backfill that used to run here was
-   * retired in v1.32.x: it predates v1.0 and any production install
-   * has been backfilled long ago. The flag was removed from this
-   * cache shape; if you ever see legacy callsites referencing
-   * `cached.migrations.instanceIds`, they're safe to drop. */
+   * instead of leaving the install stuck on stale data/index state. */
   migrations: {
+    /** GH #457 — filament-level instanceId backfill; cannot be retired
+     * (see the migration block: the partial-unique instanceId index build
+     * needs it). */
     instanceIds: boolean;
     /** GH #732 — backfill a per-spool `instanceId` onto every spool that
      * lacks one (the first missing spool adopts the filament's id, the rest
@@ -54,48 +51,29 @@ interface MongooseCache {
      * plain unique `name` (or `instanceId`) index is dropped and rebuilt
      * as the partial-unique-on-non-deleted index the schema declares. */
     coreModelIndexes: boolean;
-    /** GH #1004 F1 — re-tombstone "zombie" rows: filaments carrying
-     * `_purged: true` while ACTIVE (`_deletedAt: null`). The pre-#1004
-     * CSV/XLSX importer could resurrect a purge tombstone without
-     * clearing the flag; such rows poison hybrid sync (the engine
-     * short-circuits on `_purged` before LWW) and vanish unrecoverably
-     * if re-trashed. Their intended state is gone-forever, so restore
-     * `_deletedAt`. Idempotent: matches 0 rows on healthy installs. */
+    /** GH #1004 F1 — re-tombstone "zombie" rows (`_purged: true` while
+     * ACTIVE). Full rationale at the migration block below. */
     purgedZombies: boolean;
     /** GH #1116 — trim edge whitespace off stored entity names. Settles only
      *  on a pass with NO ACTIVE conflicts, so a pair the user still has to
      *  separate keeps the pass retryable (throttled by `trimRetryAt`). */
     trimEntityNames: boolean;
-    /** GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based
-     * `shrinkageXY` values. The pre-#1016 Bambu/Orca importer stored
-     * `filament_shrink` RAW, so a stock profile's "98%" (remaining size)
-     * persisted as `shrinkageXY: 98` — which the convention-aware export
-     * would double-convert into catastrophic compensation ("2% of size").
-     * Real 0-based shrinkage is physically ≤ ~10% while legacy remaining-size
-     * values are ~90–100, so `>= 50` is an unambiguous separator. Idempotent:
-     * a converted value lands in [0, 50] — below the threshold for every real
-     * input, and the x = 50 boundary maps to itself (a no-op re-match). */
+    /** GH #1008 F1 — normalize legacy 100-based `shrinkageXY` values.
+     * Full rationale at the migration block below. */
     legacyShrinkage: boolean;
     /** GH #1041 — repair AMS slots tracking a spool with no loaded-filament
-     * ref. The pre-#1041 filament-side assignment wrote only
-     * `amsSlots[].spoolId`; PrinterForm renders slots keyed on `filamentId`,
-     * so these assignments were invisible (and trample-prone) on the printer
-     * side. Backfill `filamentId` from the spool's owning filament; a spool
-     * that no longer exists clears the dangling `spoolId` instead.
-     * Idempotent: matches nothing once repaired. */
+     * ref. Full rationale at the migration block below. */
     amsSlotFilamentIds: boolean;
     /** GH #1021 — clear machine-derived `nozzle_diameter[0]==D [or ...]`
-     * values the pre-#1021 export wrote into
-     * `settings.compatible_printers_condition` and round-trips persisted.
-     * One-shot by design: after this runs, any pure nozzle-only condition in
-     * a settings bag is user-authored by construction, so the export can pass
-     * every pin through untouched (an export-time purge cannot distinguish
-     * the two — Codex P1 ×2 on #1022). UNLIKE the other migrations this one
+     * values from `settings.compatible_printers_condition`. One-shot by
+     * design: after this runs, any pure nozzle-only condition in a settings
+     * bag is user-authored by construction, so the export can pass every pin
+     * through untouched. UNLIKE the other migrations this one
      * is NOT safe to re-run (a pin authored AFTER the cleanup is
      * indistinguishable from the legacy values), and this in-process flag
      * resets on every restart — so completion is persisted DURABLY as a
      * marker document in the `_migrations` collection; the clear runs only
-     * when the marker is absent (Codex P1 r3 on #1022). This flag then only
+     * when the marker is absent. This flag then only
      * records "checked this process". */
     legacyNozzleConditions: boolean;
   };
@@ -264,7 +242,7 @@ export default async function dbConnect() {
       const result = await trimEntityNames(db as unknown as MinimalTrimDb);
       const line = describeTrimResult(result);
       if (line) console.log(line);
-      // Settle ONLY on a clean pass (Codex P2). A row this pass had to leave
+      // Settle ONLY on a clean pass. A row this pass had to leave
       // alone — because trimming it would collide with a live sibling — is
       // unreachable by name for as long as it stays untrimmed: Mongoose
       // trims query values, so `find({name: "X "})` casts to `"X"` and misses
@@ -276,10 +254,10 @@ export default async function dbConnect() {
       // block re-enter on every connect (i.e. every request) and this pass is
       // five regex scans. A minute is far below "the user renames a row and
       // gets on with it" and far above per-request.
-      // A SKIPPED collection also means "not done" (Codex P1): its rows were
+      // A SKIPPED collection also means "not done": its rows were
       // deliberately left untouched because the unique index couldn't be
       // established, so the pass must stay retryable until that is resolved.
-      // `deferred` counts too (Codex P2): those rows failed ONLY because a
+      // `deferred` counts too: those rows failed ONLY because a
       // legacy plain unique index still covers deleted rows, which
       // `coreModelIndexes` replaces later in this same connect. Settling on
       // them would strand an untrimmed tombstone forever — and restoring it
@@ -304,7 +282,7 @@ export default async function dbConnect() {
     }
   }
 
-  // GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based shrinkageXY.
+  // GH #1008 F1 — normalize legacy 100-based shrinkageXY.
   // The pre-#1016 Bambu/Orca importer stored `filament_shrink` raw, so a stock
   // profile's "98%" (Orca remaining-size) persisted as `shrinkageXY: 98`; the
   // convention-aware export would double-convert that into "2%" — a
@@ -370,7 +348,7 @@ export default async function dbConnect() {
         "[migration] Failed to clear legacy nozzle conditions (will retry on next connect):",
         err,
       );
-      // Codex P1 r7 on #1022: unlike the best-effort migrations above (all
+      // Unlike the best-effort migrations above (all
       // safe to re-run), this one gates correctness — a request served before
       // the DB reaches a terminal cleanup state could export stale conditions
       // or author a pin while a claimed destructive update is still in flight
@@ -393,11 +371,11 @@ export default async function dbConnect() {
       const { default: Printer } = await import("@/models/Printer");
       const { default: Filament } = await import("@/models/Filament");
       // Every slot TRACKING a spool is checked — not just filamentId-null
-      // ones (PR #1046 review): the old path could also overwrite spoolId on
+      // ones: the old path could also overwrite spoolId on
       // a slot already dedicated to a DIFFERENT filament (an "Any spool"
       // dedication), leaving a non-null but MISMATCHED pair that renders the
       // wrong filament's spools in the form.
-      // $elemMatch is REQUIRED here (PR #1046 round 2): the bare form
+      // $elemMatch is REQUIRED here: the bare form
       // `"amsSlots.spoolId": { $ne: null }` applies MongoDB's negated-array
       // semantics — it matches only when EVERY element differs from null —
       // so a printer with one tracked and one empty slot (the normal
@@ -430,7 +408,7 @@ export default async function dbConnect() {
           const set = owner
             ? { "amsSlots.$[s].filamentId": owner._id }
             : { "amsSlots.$[s].spoolId": null };
-          // Compare-and-set (PR #1046 round 3): the filter matches the
+          // Compare-and-set: the filter matches the
           // spoolId this repair was COMPUTED from, not just the slot id.
           // Another process (a second desktop on the same Atlas DB) can
           // reassign the slot between our read and this write; an id-only
@@ -442,7 +420,7 @@ export default async function dbConnect() {
             { $set: set },
             { arrayFilters: [{ "s._id": slot._id, "s.spoolId": slot.spoolId }] },
           );
-          // PR #1046 round 4: a CAS miss means a concurrent writer changed
+          // A CAS miss means a concurrent writer changed
           // the slot — possibly a still-running pre-#1041 process writing a
           // NEW orphaned pair. Swallowing the miss and flipping the flag
           // would leave that slot unrepaired for this process's lifetime.
@@ -507,7 +485,7 @@ export default async function dbConnect() {
     }
   }
 
-  // GH #457 — RESTORED (Codex P1 on PR #467): the per-startup
+  // GH #457: the per-startup
   // `backfillInstanceIds` pass cannot be retired safely. The
   // `coreModelIndexes` migration below calls `Filament.syncIndexes()`,
   // and the Filament schema declares a unique partial index on
@@ -520,7 +498,7 @@ export default async function dbConnect() {
   // (count === 0, flag flips immediately) and the retry tracking
   // ensures a transient blip is recoverable on the next request.
   //
-  // GATED ON spoolInstanceIds (GH #732, Codex P2): this MUST NOT run until the
+  // GATED ON spoolInstanceIds (GH #732): this MUST NOT run until the
   // spool backfill above has succeeded. Otherwise, if the spool backfill threw
   // (transient failure, caught above), minting a fresh filament id here would
   // make the next retry's carry-over adopt that brand-new id into the first
@@ -575,7 +553,7 @@ export default async function dbConnect() {
   // idempotent on fresh DBs, corrective on upgraded ones. Same
   // retry-tracked pattern as the SharedCatalog block above.
   //
-  // GATED ON BOTH instanceId backfills (#955.14, Codex re-review): this MUST NOT
+  // GATED ON BOTH instanceId backfills (#955.14): this MUST NOT
   // run until every active filament has an `instanceId`. Building the
   // partial-unique `instanceId` index over legacy rows the backfill hasn't
   // filled yet E11000s on the SHARED null value — but that's exactly what the
@@ -716,7 +694,7 @@ export default async function dbConnect() {
         // First printer keeps the original ref. For every other
         // printer, mint a clone and swap the reference.
         //
-        // Codex P1 review on PR #233: the swap must be atomic at the
+        // The swap must be atomic at the
         // printer-document level. A naive `$pull` followed by
         // `$addToSet` would lose the assignment if the second write
         // fails (transient DB error, process restart) — and the next
@@ -809,40 +787,11 @@ export default async function dbConnect() {
   return cached.conn;
 }
 
-/**
- * GH #1021 (Codex P1 r11/r12): a snapshot restore REPLACES the filament +
- * nozzle collections, but snapshots don't carry `_migrations` — so a
- * completed legacyNozzleConditions marker would keep reporting "already-done"
- * over freshly-restored PRE-upgrade data, and any stamped machine conditions
- * in the backup would survive and hide presets forever. Call this AFTER a
- * successful restore with the snapshot's own provenance flag
- * (`legacyNozzleCleanupComplete`, stamped by the snapshot GET since r12):
- *
- *  - `true` — the backup's data is already post-cleanup, so a byte-identical
- *    pure nozzle condition in it is a USER PIN; re-running the intentionally
- *    non-repeatable cleanup would erase it (Codex P1 r12). We only make sure
- *    the durable marker reflects completion so no later first-connect
- *    re-judges the restored rows either.
- *  - `false`/absent — a pre-upgrade or unknown-provenance backup: invalidate
- *    the marker (the restored dataset is a different world — old observations
- *    are meaningless) and re-run the cleanup against the restored rows.
- *
- * ORDER MATTERS in the re-run branch (Codex P1 r12): the marker is deleted
- * BEFORE the process-local flag flips, so no concurrent dbConnect can observe
- * (flag false + completed marker), return "already-done", and flip the flag
- * back to true — which would silently cancel the retry-on-next-connect if the
- * cleanup below then failed transiently. With the marker gone first, a racer
- * either early-returns on the still-true flag (the same unavoidable dirty
- * window the restore's own wipe/insert phase has) or joins the cleanup
- * through the claim protocol. On failure the flag stays false, so the next
- * dbConnect retries (and, per the r7 prerequisite posture, fails requests
- * until the DB reaches a terminal cleanup state again).
- */
 /** Thrown when the DURABLE marker state could not be updated to reflect the
  * restore — nothing was invalidated, so no later dbConnect (or restart) will
  * re-run the cleanup. The caller must NOT report the retry as scheduled; the
  * snapshot route surfaces this as a restore failure so the user re-runs the
- * (idempotent) restore instead. Codex P1 r16. */
+ * (idempotent) restore instead. */
 export class RestoreCleanupInvalidationError extends Error {
   constructor(cause: unknown) {
     super(
@@ -853,6 +802,35 @@ export class RestoreCleanupInvalidationError extends Error {
   }
 }
 
+/**
+ * GH #1021: a snapshot restore REPLACES the filament +
+ * nozzle collections, but snapshots don't carry `_migrations` — so a
+ * completed legacyNozzleConditions marker would keep reporting "already-done"
+ * over freshly-restored PRE-upgrade data, and any stamped machine conditions
+ * in the backup would survive and hide presets forever. Call this AFTER a
+ * successful restore with the snapshot's own provenance flag
+ * (`legacyNozzleCleanupComplete`, stamped by the snapshot GET):
+ *
+ *  - `true` — the backup's data is already post-cleanup, so a byte-identical
+ *    pure nozzle condition in it is a USER PIN; re-running the intentionally
+ *    non-repeatable cleanup would erase it. We only make sure
+ *    the durable marker reflects completion so no later first-connect
+ *    re-judges the restored rows either.
+ *  - `false`/absent — a pre-upgrade or unknown-provenance backup: invalidate
+ *    the marker (the restored dataset is a different world — old observations
+ *    are meaningless) and re-run the cleanup against the restored rows.
+ *
+ * ORDER MATTERS in the re-run branch: the marker is deleted
+ * BEFORE the process-local flag flips, so no concurrent dbConnect can observe
+ * (flag false + completed marker), return "already-done", and flip the flag
+ * back to true — which would silently cancel the retry-on-next-connect if the
+ * cleanup below then failed transiently. With the marker gone first, a racer
+ * either early-returns on the still-true flag (the same unavoidable dirty
+ * window the restore's own wipe/insert phase has) or joins the cleanup
+ * through the claim protocol. On failure the flag stays false, so the next
+ * dbConnect retries (and, per the rethrow posture in the migration block,
+ * fails requests until the DB reaches a terminal cleanup state again).
+ */
 export async function rerunLegacyNozzleCleanupAfterRestore(
   snapshotIsPostCleanup: boolean,
 ): Promise<void> {
@@ -873,14 +851,14 @@ export async function rerunLegacyNozzleCleanupAfterRestore(
       );
     } catch (err) {
       // Without a completed marker a later first-connect could re-judge the
-      // restored post-cleanup pins — surface as a restore failure (r16).
+      // restored post-cleanup pins — surface as a restore failure.
       throw new RestoreCleanupInvalidationError(err);
     }
     if (cached) cached.migrations.legacyNozzleConditions = true;
     return;
   }
 
-  // Codex P1 r16: the durable invalidation is ONE atomic marker conversion
+  // The durable invalidation is ONE atomic marker conversion
   // (completed → released, prior-world observations wiped, claim token
   // unset so any in-flight pre-restore runner is fenced out). If it fails,
   // NOTHING changed — the completed marker and the true flag both stand — so
@@ -898,7 +876,7 @@ export async function rerunLegacyNozzleCleanupAfterRestore(
   } catch (err) {
     throw new RestoreCleanupInvalidationError(err);
   }
-  // Codex P1 r12 ordering: only AFTER the durable state reflects "not
+  // Ordering: only AFTER the durable state reflects "not
   // completed" may the process-local flag flip — a racer can then never
   // observe (flag false + completed marker) and flip it back.
   if (cached) cached.migrations.legacyNozzleConditions = false;

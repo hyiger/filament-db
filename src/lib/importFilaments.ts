@@ -15,13 +15,10 @@ export interface ImportRow {
   vendor?: string;
   type?: string;
   color?: string;
-  /** GH #477: comma-separated list of secondary color hexes from the
-   *  "Secondary Colors" column. Round-trips with the EXPORT_COLUMNS
-   *  entry of the same name. Empty/blank entries are filtered out;
-   *  entries that don't match `#RRGGBB` are silently dropped (the
-   *  schema validator would reject them anyway and the importer's
-   *  job is to be tolerant of partial sources). Capped at 5 entries
-   *  to match the spec. */
+  /** GH #477: comma-separated secondary color hexes from the "Secondary
+   *  Colors" column (round-trips with EXPORT_COLUMNS). Blank entries are
+   *  filtered; non-`#RRGGBB` entries silently dropped; capped at 5 per the
+   *  spec. */
   secondaryColors?: string;
   diameter?: number | null;
   cost?: number | null;
@@ -50,22 +47,17 @@ export interface ImportRow {
   tdsUrl?: string | null;
   instanceId?: string | null;
   /**
-   * GH #379: optional parent-filament name surfaced as the `Parent` column
-   * in the filament CSV/XLSX export (see EXPORT_COLUMNS in
-   * `src/lib/exportFilaments.ts`). Only honoured on CREATE/RESURRECT — for
-   * an existing active filament we ignore it, because silently re-parenting
-   * a row from a re-imported edit is a surprising user experience and the
-   * "Create variant" / Clone-from-parent UI already covers the manual case.
+   * GH #379: optional parent-filament name from the export's `Parent`
+   * column. Only honoured on CREATE/RESURRECT — silently re-parenting an
+   * existing active filament from a re-imported CSV is a surprising UX, and
+   * the "Create variant" / Clone-from-parent UI covers the manual case.
    */
   parentName?: string | null;
   /**
-   * GH #954: OpenPrintTag `optTags` (color arrangement + finish) as a
-   * comma-separated list of numeric ids, round-tripping the `Tags` export
-   * column. Honoured on CREATE/RESURRECT only — like the `Parent` column,
-   * re-writing tags on an existing filament from a re-import is surprising,
-   * and honouring it on the update path would need the same variant-inheritance
-   * split `secondaryColors` gets (out of scope; the create-path round-trip is
-   * the reported loss).
+   * GH #954: OpenPrintTag `optTags` as a comma-separated list of numeric ids
+   * (the `Tags` export column). Honoured on CREATE/RESURRECT only — the
+   * update path would need the same variant-inheritance split
+   * `secondaryColors` gets.
    */
   optTags?: string | null;
 }
@@ -144,10 +136,7 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   "nozzle range max (°c)": "nozzleRangeMax",
   "standby temp": "standbyTemp",
   "standby temp (°c)": "standbyTemp",
-  // GH #379: round-trip the filament-level export's parent/variant columns.
-  // "Parent" carries the parent filament's name (string); "Variant Count"
-  // is derived/read-only and explicitly skipped so a re-import doesn't try
-  // to set it as a field.
+  // GH #379: "Variant Count" is derived/read-only and explicitly skipped.
   parent: "parentName",
   "parent name": "parentName",
   parentname: "parentName",
@@ -194,35 +183,28 @@ function parseNum(val: unknown): number | null {
 }
 
 /**
- * GH #627 item 3: free-text string fields whose exported form may carry the
- * formula-injection guard apostrophe (`csvCell` prefixes `'` to cells
- * starting with `=`, `+`, `-`, `@`, tab, CR — and since GH #627 item 5 the
- * XLSX export applies the same prefix). These get run through
- * `unsanitizeCsvCell` on import so a filament named `+95A TPU` exports as
- * `'+95A TPU` and re-imports as `+95A TPU` — pre-fix the apostrophe
- * persisted verbatim, the name no longer matched the existing row, and the
- * import created a corrupted duplicate. Mirrors what `/api/spools/import`
- * has done since the Codex P2 follow-up to PR #144.
+ * GH #627: free-text string fields whose exported form may carry the
+ * formula-injection guard apostrophe (CSV and XLSX exports both prefix `'`
+ * to trigger-leading cells). Run through `unsanitizeCsvCell` on import so
+ * `+95A TPU` (exported `'+95A TPU`) re-imports unchanged — otherwise the
+ * apostrophe persists, the name misses the existing row, and the import
+ * creates a corrupted duplicate. Mirrors `/api/spools/import`.
  *
  * Deliberately NOT applied to `color` / `secondaryColors` / `tdsUrl` — those
  * are format-validated (`#rrggbb`, http(s)://) and can never start with a
- * trigger character, so a genuine leading apostrophe (if a user somehow stored
- * one) survives untouched.
+ * trigger character, so a genuine leading apostrophe survives untouched.
  */
 const UNSANITIZE_FIELDS = new Set<keyof ImportRow>([
   "name",
   "vendor",
-  // `type` is a required free-text field the exporter also prefixes, so a
-  // type like `+PLA` / `-CF` would re-import as `'+PLA` / `'-CF` and corrupt
-  // the row without this (Codex P2 on PR #649).
+  // `type` is required free-text the exporter also prefixes (`+PLA` / `-CF`).
   "type",
   "colorName",
   "spoolType",
   "parentName",
-  // `instanceId` is NOT strictly hex-validated — legacy/custom IDs (e.g.
-  // `custom-id-123`, or one starting with `-`/`+`/`=`/`@`) get formula-prefixed
-  // on export, so it must be unstripped symmetrically or it round-trips
-  // corrupted as `'...` (#679).
+  // `instanceId` is NOT strictly hex-validated — legacy/custom IDs starting
+  // with a trigger get formula-prefixed on export, so it must be unstripped
+  // symmetrically or it round-trips corrupted as `'...` (#679).
   "instanceId",
 ]);
 
@@ -269,29 +251,26 @@ export interface ImportResult {
   skipped: number;
   skippedRows: SkippedRow[];
   /**
-   * GH #605 (codex P2, importer sweep): per-row NON-FATAL notes — content a
-   * row's update refused to apply while the row itself still imported. Today
-   * the only producer is the template strip on a name-matched EXISTING row
-   * (the shared TEMPLATE_STRIP_FIELDS: a CSV echoing the promoted-away
-   * color/colorName back onto a template). Distinct from `skippedRows`
-   * (whole-row failures, counted in `skipped`); same optional shape as the
-   * `errors` channel the atlas / INI / OpenPrintTag bulk importers surface.
-   * Present only when non-empty.
+   * GH #605: per-row NON-FATAL notes — content a row's update refused to
+   * apply while the row itself still imported (today: the template strip on
+   * a name-matched EXISTING row). Distinct from `skippedRows` (whole-row
+   * failures, counted in `skipped`); same optional shape as the `errors`
+   * channel the atlas / INI / OpenPrintTag bulk importers surface. Present
+   * only when non-empty.
    */
   errors?: string[];
 }
 
 /**
  * GH #628: scalar fields that participate in variant→parent inheritance —
- * the subset of `INHERITABLE_FIELDS` in `src/lib/resolveFilament.ts` that is
- * a plain scalar (`temperatures.*` dot-keys and the `secondaryColors` array
- * are handled separately in `splitInheritedImportSet` / `pruneInheritedCreateDoc`
- * below). Deliberately covers the FULL set of inheritable scalars, not just the
- * columns the CSV/XLSX importer maps, because GH #951 shares
- * `splitInheritedImportSet` with the PrusaSlicer per-id sync route (which also
- * writes `shrinkageXY`/`shrinkageZ`). Keys the CSV importer never emits are
- * simply absent from its `setBody`, so listing them here is a no-op for that
- * path while making the shared helper correct for the sync path too.
+ * the plain-scalar subset of `INHERITABLE_FIELDS` in
+ * `src/lib/resolveFilament.ts` (keep in sync; `temperatures.*` dot-keys and
+ * the `secondaryColors` array are handled separately below). Deliberately
+ * covers the FULL set of inheritable scalars, not just the columns the
+ * CSV/XLSX importer maps, because `splitInheritedImportSet` is shared with
+ * the PrusaSlicer per-id sync route (which also writes
+ * `shrinkageXY`/`shrinkageZ`); keys the CSV importer never emits are simply
+ * absent from its `setBody`.
  */
 const IMPORT_INHERITABLE_SCALARS = new Set<string>([
   "vendor",
@@ -315,17 +294,16 @@ const IMPORT_INHERITABLE_SCALARS = new Set<string>([
   "maxPrintSpeed",
   "spoolType",
   "tdsUrl",
-  // GH #951 (Codex): `inherits` (PrusaSlicer preset-inheritance key) is
-  // inheritable per resolveFilament and carried top-level by parseIniFilaments,
-  // so an INI round-trip would otherwise pin the parent's echoed value onto a
-  // variant. The CSV/XLSX importer maps no `inherits` column, so listing it
-  // here is a no-op for that path (it never appears in the CSV setBody).
+  // GH #951: `inherits` (PrusaSlicer preset-inheritance key) is inheritable
+  // per resolveFilament and carried top-level by parseIniFilaments, so an
+  // INI round-trip would otherwise pin the parent's echoed value onto a
+  // variant. The CSV/XLSX importer maps no `inherits` column — no-op there.
   "inherits",
 ]);
 
 /** Required by the Filament schema — never `$unset` on a variant (the
  *  write would fail validation). Same rule as `REQUIRED_FIELDS` in
- *  `src/lib/bambuStudioApply.ts` (Codex P2 on PR #473 round 3). */
+ *  `src/lib/bambuStudioApply.ts` (keep in sync). */
 const IMPORT_REQUIRED_FIELDS = new Set<string>(["vendor", "type"]);
 
 /** Loosely-typed filament doc — same posture as resolveFilament. */
@@ -333,53 +311,39 @@ const IMPORT_REQUIRED_FIELDS = new Set<string>(["vendor", "type"]);
 type LeanFilament = Record<string, any>;
 
 /**
- * GH #628: the CSV/XLSX export flattens variants through `resolveFilament`
- * (correct for export — every row stands alone), but re-importing that
- * flattened row onto an EXISTING variant used to `$set` every value,
- * pinning inherited fields as local overrides and severing the GH #106
- * live-inheritance link — parent edits silently stopped propagating.
- *
- * This helper splits the prepared `$set` body for a variant row following
- * the same semantics as `setIfNotInherited` in
- * `src/lib/bambuStudioApply.ts` (GH #403 / #473):
+ * GH #628: the CSV/XLSX export flattens variants through `resolveFilament`,
+ * so re-importing that flattened row onto an EXISTING variant used to `$set`
+ * every value, pinning inherited fields as local overrides and severing the
+ * GH #106 live-inheritance link. This helper splits the prepared `$set` body
+ * for a variant row (same semantics as `setIfNotInherited` in
+ * `src/lib/bambuStudioApply.ts`):
  *
  *   - incoming value equals the parent's value → SKIP the $set so the
  *     variant keeps inheriting dynamically at read time;
  *   - …and if the variant currently carries ANY local override of that field
- *     (divergent OR parent-equal — see the GH #971 note below), emit an
- *     `$unset` so inheritance resumes — except for schema-required fields,
- *     which are left in place;
- *   - incoming value differs from the parent → $set normally (a genuine
- *     variant override).
+ *     (divergent OR parent-equal — see GH #971 below), emit an `$unset` so
+ *     inheritance resumes — except schema-required fields, left in place;
+ *   - incoming value differs from the parent → $set normally.
  *
- * GH #971: when the incoming section reports a field EQUAL to the parent, the
- * export (which flattens through resolveFilament) can't tell a deliberate pin
- * from a true inherit — both serialize to the same value — so the safe re-import
- * default is to CLEAR any variant-local override so it tracks the parent live
- * (GH #106). The `$unset` therefore fires on PRESENCE of a local override, not
- * on divergence: a variant value equal to the parent is still a stored pin that
- * would block a future parent edit, so it's cleared too (this matches the
- * settings self-heal added in #969). Divergent pins were already cleared; #971
- * extends it to parent-equal pins across the scalar, temperature, AND
- * secondaryColors branches.
+ * GH #971: when the incoming section reports a field EQUAL to the parent,
+ * the export can't tell a deliberate pin from a true inherit — both
+ * serialize to the same value — so the safe re-import default is to CLEAR
+ * any variant-local override so it tracks the parent live. The `$unset`
+ * fires on PRESENCE of a local override, not on divergence: a variant value
+ * equal to the parent is still a stored pin that would block a future
+ * parent edit.
  *
  * Array + nested handling:
  *   - `temperatures.*` dot-keys compare against the parent's same subfield
- *     (resolveFilament inherits each temp independently via `??`); a local temp
- *     override of a parent-equal subfield is cleared.
- *   - `secondaryColors` inherits as a WHOLE array (resolveFilament treats
- *     an empty array as "inherit"); when the incoming array matches the parent's
- *     array exactly (order-sensitive — order is meaningful for multi-color
- *     rendering), any non-empty variant-local array is cleared so it inherits.
- *   - `settings` inherits by SHALLOW PER-KEY merge, so it's rebuilt to hold
- *     only keys that differ from the parent's `settings` (parent-equal keys
- *     keep inheriting). This runs only when the caller supplies the parent's
- *     settings; without them it writes through (GH #951, Codex). (Note: the
- *     bulk INI path's `settingsSelfHealUnset` clears stored parent-equal
- *     settings pins on top of this; the per-id sync path does not yet — GH #972.)
- *   - The variant-local empty-string rule mirrors resolveFilament:67-72 —
- *     a variant value of `""` counts as "missing" (already inheriting), so
- *     it never triggers an $unset.
+ *     (resolveFilament inherits each temp independently via `??`).
+ *   - `secondaryColors` inherits as a WHOLE array (empty array = inherit);
+ *     comparison is order-sensitive (order is meaningful for multi-color
+ *     rendering).
+ *   - `settings` inherits by SHALLOW PER-KEY merge — rebuilt to hold only
+ *     keys that differ from the parent's. Runs only when the caller supplies
+ *     the parent's settings; without them it writes through.
+ *   - A variant-local value of `""` counts as "missing" (already
+ *     inheriting), mirroring resolveFilament — it never triggers an $unset.
  *
  * Pure + exported for unit tests.
  */
@@ -431,17 +395,13 @@ export function splitInheritedImportSet(
     }
 
     if (key === "settings" && incoming && typeof incoming === "object" && !Array.isArray(incoming)) {
-      // GH #951 (Codex): `settings` is inherited by SHALLOW PER-KEY merge
-      // (resolveFilament: `{ ...parent.settings, ...variant.settings }`), so a
-      // variant that inherits a setting has the parent's value echoed back into
-      // the incoming bag on a round-trip. Treating `settings` as pass-through
-      // (variant-only) would copy those echoed keys onto the variant and sever
-      // inheritance. Store only keys that DIFFER from the parent — parent-equal
-      // keys keep inheriting, and because we rebuild the whole bag a stale
-      // variant key that now matches the parent self-heals (same equal-==-inherit
-      // rule as the scalar path). When the caller doesn't supply the parent's
-      // settings (e.g. the INI import's projection omits them, keeping its raw
-      // settings-bag behaviour unchanged), fall back to writing through.
+      // GH #951: `settings` inherits by SHALLOW PER-KEY merge, so a variant
+      // that inherits a setting has the parent's value echoed back into the
+      // incoming bag on a round-trip — treating it as pass-through would pin
+      // those echoed keys and sever inheritance. Store only keys that DIFFER
+      // from the parent; rebuilding the whole bag also self-heals a stale
+      // variant key that now matches the parent. Without the parent's
+      // settings supplied, write through.
       const parentSettings =
         parent.settings && typeof parent.settings === "object"
           ? (parent.settings as Record<string, unknown>)
@@ -451,9 +411,8 @@ export function splitInheritedImportSet(
         continue;
       }
       const filtered: Record<string, unknown> = {};
-      // GH #678 r7: array-aware equality via the shared settingValuesEqual
-      // — three sites made the identity-compare mistake independently; one
-      // helper now owns the rule.
+      // GH #678: array-aware equality via the shared settingValuesEqual —
+      // an identity compare mis-judges array values.
       for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
         if (!settingValuesEqual(parentSettings[sk], sv)) filtered[sk] = sv;
       }
@@ -467,12 +426,10 @@ export function splitInheritedImportSet(
       if (incoming != null && parentVal === incoming) {
         if (IMPORT_REQUIRED_FIELDS.has(key)) {
           // Required fields (vendor/type) are never null on a variant and
-          // never inherit at read time — resolveFilament always uses the
-          // variant's own value — so they can't be unset to "track the
-          // parent". When incoming == parent but the stored value is stale
-          // (e.g. a parent+variant import where the parent's vendor/type
-          // changed), still write the new value through; otherwise the
-          // variant keeps a stale required value (Codex P2 on #649).
+          // never inherit at read time, so they can't be unset to "track the
+          // parent". When incoming == parent but the stored value is stale,
+          // still write the new value through — otherwise the variant keeps
+          // a stale required value.
           if (variantVal !== incoming) set[key] = incoming;
           continue;
         }
@@ -497,32 +454,20 @@ export function splitInheritedImportSet(
 }
 
 /**
- * GH #951: the create/resurrect counterpart to `splitInheritedImportSet`.
+ * GH #951: the create/resurrect counterpart to `splitInheritedImportSet` —
+ * the CREATE and RESURRECT paths wrote the whole flattened doc verbatim,
+ * pinning every inherited field as a local override and severing GH #106
+ * live inheritance exactly the way #628 fixed for updates.
  *
- * The CSV/XLSX export flattens a variant's inherited values through
- * `resolveFilament` (correct for export — every row stands alone). Re-importing
- * that flattened row on the UPDATE path already skips pinning parent-equal
- * values (splitInheritedImportSet, GH #628), but the CREATE path
- * (`Filament.create`) and the RESURRECT path (`updateOne` on a trashed row)
- * wrote the whole flattened doc verbatim — so a fresh-DB migration or a
- * trashed-variant restore pinned every inherited field as a local override,
- * severing GH #106 live inheritance exactly the way #628 fixed for updates.
+ * Returns a copy of the create doc with each inheritable field whose
+ * incoming value equals the parent's reset to its "inherit" sentinel:
+ * scalars + `temperatures.*` subfields → `null`; `secondaryColors` → `[]`
+ * (order-sensitive comparison, matching splitInheritedImportSet). No
+ * `$unset` step: a create/resurrect writes the whole document, so there is
+ * no pre-existing divergent override to clear.
  *
- * Returns a copy of the create doc with each inheritable field whose incoming
- * value equals the parent's value reset to its "inherit" sentinel:
- *   - scalars + `temperatures.*` subfields → `null`
- *   - `secondaryColors` → `[]` (resolveFilament treats an empty array as
- *     "inherit"; comparison is order-sensitive, matching splitInheritedImportSet)
- *
- * There is no `$unset` step (unlike the update path): a create/resurrect writes
- * the whole document, so a value that equals the parent just becomes the
- * inherit sentinel — there is no pre-existing divergent override to clear.
- *
- * Never touched: `vendor`/`type` (schema-required — a variant always carries
- * its own value and resolveFilament never inherits them) and the
- * always-variant-specific `name`/`color`. `vendor`/`type` are excluded via
- * `IMPORT_REQUIRED_FIELDS`; `name`/`color` are simply not in any inheritable
- * set here.
+ * Never touched: `vendor`/`type` (schema-required — resolveFilament never
+ * inherits them) and the always-variant-specific `name`/`color`.
  *
  * Pure + exported for unit tests.
  */
@@ -586,10 +531,9 @@ export function pruneInheritedCreateDoc(
   return out;
 }
 
-// GH #605 (codex round 3 sweep) / GH #1073: the first-variant adoption gate
-// lives in src/lib/firstVariantGate.ts — extracted so the INI + Bambu bulk
-// phase-2 resurrect paths share the identical decision (see its docblock for
-// the full rationale, including why color deliberately doesn't gate).
+// GH #605 / #1073: the first-variant adoption gate lives in
+// src/lib/firstVariantGate.ts, shared with the INI + Bambu bulk phase-2
+// resurrect paths (see its docblock for why color deliberately doesn't gate).
 
 export async function upsertImportRows(
   inputRows: ImportRow[],
@@ -608,27 +552,17 @@ export async function upsertImportRows(
   /** The line number to report for row `i`. */
   const lineOf = (i: number) => sourceLines?.[i] ?? i + 2;
 
-  // GH #1116: trim the NAME the importer matches on.
-  //
-  // The schema now trims `name` on write, so the stored value is the identity
-  // key every lookup here already assumed it was. The importer has to agree,
-  // or a legacy export re-imported after the migration would miss its own row
-  // and take the CREATE path — producing the duplicate this issue is about,
-  // in the other direction. (`csvCell` now quotes edge whitespace, so an
-  // untrimmed legacy name survives a round-trip verbatim instead of being
-  // silently stripped by `parseCsv`; that fidelity is what makes the trim
-  // here load-bearing rather than cosmetic.)
-  //
-  // Rows are copied rather than mutated: the caller owns the array, and the
-  // two-pass driver plus `sourceLines` both key on INDEX, which a 1:1 map
-  // preserves. A whitespace-only name collapses to "" and is then caught by
-  // the existing missing-required-field check — the right answer for a name
-  // that renders as nothing.
-  //
-  // The trim is what the ROW REPORTING and the create body use; the lookup
-  // below would be trimmed anyway, because Mongoose applies a String schema
-  // setter to query values too. Doing it here means the name we match on, the
-  // name we store, and the name we quote back in a skip reason are one value.
+  // GH #1116: trim the NAME the importer matches on. The schema trims `name`
+  // on write, so the importer has to agree or a legacy export re-imported
+  // after the migration would miss its own row and take the CREATE path —
+  // a duplicate. (`csvCell` quotes edge whitespace, so an untrimmed legacy
+  // name survives a round-trip verbatim; that fidelity is what makes this
+  // trim load-bearing rather than cosmetic.) Rows are copied rather than
+  // mutated: the caller owns the array, and the two-pass driver plus
+  // `sourceLines` both key on INDEX, which a 1:1 map preserves. A
+  // whitespace-only name collapses to "" and is caught by the
+  // missing-required-field check. Trimming here means the name we match on,
+  // store, and quote in a skip reason are one value.
   const rows = inputRows.map((r) =>
     typeof r.name === "string" && r.name !== r.name.trim()
       ? { ...r, name: r.name.trim() }
@@ -639,18 +573,16 @@ export async function upsertImportRows(
   let updated = 0;
   let skipped = 0;
   const skippedRows: SkippedRow[] = [];
-  // GH #605: per-row non-fatal notes (see ImportResult.errors). Collected
-  // with their row number so the final report can be sorted back into
-  // original-row order despite the two-pass driver visiting rows out of
-  // order — same treatment skippedRows gets.
+  // Per-row non-fatal notes (see ImportResult.errors), collected with their
+  // row number so the report sorts back into original-row order despite the
+  // two-pass driver visiting rows out of order — same treatment skippedRows
+  // gets.
   const noteRows: { row: number; note: string }[] = [];
 
-  // Batch-load all existing filaments by name to avoid N+1 queries.
-  // GH #379: also include every Parent value, because a variant row's
-  // parent may not itself appear as an import row (i.e. only the variant
-  // is being imported, against an already-active parent in the DB). Also
-  // project `parentId` so the parent-validity check below can reject a
-  // parentName pointing at a row that's itself a variant.
+  // Batch-load all existing filaments by name (avoids N+1). GH #379: also
+  // include every Parent value — a variant row's parent may not itself be an
+  // import row — and project `parentId` so the parent-validity check can
+  // reject a parentName pointing at a row that's itself a variant.
   const namesToLoad = new Set<string>();
   for (const r of rows) {
     if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
@@ -676,37 +608,28 @@ export async function upsertImportRows(
     .select(INHERITANCE_PROJECTION)
     .lean();
 
-  // GH #1116 (Codex P1 ×2): ALSO find stored rows whose TRIMMED name matches —
-  // with the RAW DRIVER, which is the only thing that can see them.
+  // GH #1116: ALSO find stored rows whose TRIMMED name matches — with the
+  // RAW DRIVER, the only thing that can see them. `trimEntityNames` can
+  // legitimately leave a row untrimmed, and such a row is invisible to every
+  // Mongoose query because a String schema setter applies to QUERY values
+  // too — the `$in` above is itself trimmed, so it asks for `"PLA"` and
+  // never matches a stored `"PLA "`.
   //
-  // `trimEntityNames` can legitimately leave a row untrimmed: its normalized
-  // name would collide with a live sibling, or its whole collection was
-  // skipped because no adequate unique index could be established. Such a row
-  // is invisible to every Mongoose query, because a String schema setter
-  // applies to QUERY values too — the `$in` above is itself trimmed, so it
-  // asks for `"PLA"` and never matches a stored `"PLA "`.
+  // The predicate is on the STORED value, not the input's spelling —
+  // whatever whitespace either side carries, the question is the one the
+  // schema asks: do the trimmed forms match. (Filtering the INPUT for
+  // untrimmed names missed the ordinary case: canonical `"PLA"` against a
+  // surviving `"PLA "` produced no candidates and created a duplicate.)
   //
-  // The predicate is on the STORED value, not on the input's spelling. An
-  // earlier version filtered the INPUT for untrimmed names, which missed the
-  // ordinary case entirely: importing a canonical `"PLA"` against a surviving
-  // `"PLA "` produced no candidates at all, and the importer created `"PLA"`
-  // beside it. Whatever whitespace either side happens to carry, the question
-  // is the same one the schema asks — do the trimmed forms match.
+  // Only names the indexed lookup did NOT resolve, so the healthy path adds
+  // nothing. `$expr` can't use the index, so this is a scan — acceptable on
+  // an explicit, batch, user-initiated import versus a silent duplicate.
   //
-  // Only names the indexed lookup did NOT already resolve, so the healthy
-  // path adds nothing. `$expr` can't use the index, so this is a scan; it
-  // runs on an explicit, batch, user-initiated import, and the alternative
-  // is a silent duplicate.
-  //
-  // Collisions resolve explicitly rather than by insertion luck: the index
-  // below keys on the TRIMMED name and prefers a row already stored exactly
-  // that way, so a canonical row always wins and the untrimmed one is left
-  // for the migration to report.
-  // ACTIVE matches only (Codex P2). A tombstone is not a match for this
-  // purpose: with the collection skipped, an active `"PLA "` can coexist with
-  // a soft-deleted `"PLA"`, and counting the tombstone as "found" skipped the
-  // scan — so the importer resurrected the tombstone and left TWO active rows
-  // rendering identically, which is the duplicate this exists to prevent.
+  // Collisions resolve explicitly: the index below keys on the TRIMMED name
+  // and prefers a row stored exactly that way, so a canonical row always
+  // wins. ACTIVE matches only — a tombstone is not a match here: counting a
+  // soft-deleted `"PLA"` as "found" would skip the scan and resurrect it
+  // beside an active `"PLA "`, exactly the duplicate this exists to prevent.
   const alreadyFound = new Set(
     (allExisting as unknown as LeanFilament[])
       .filter((d) => d._deletedAt == null)
@@ -751,16 +674,10 @@ export async function upsertImportRows(
       parentId: doc.parentId ?? null,
       doc,
     };
-    // GH #1116: index by the TRIMMED name.
-    //
-    // Belt to the row keys' braces. Mongoose applies a String schema setter
-    // to QUERY values as well as writes, so once `name` carries `trim: true`
-    // the `$in` above is itself trimmed and a stored untrimmed row can no
-    // longer be returned by it at all (verified, not assumed). Keying the map
-    // on the trimmed name keeps this side honest if that lookup ever moves to
-    // the raw driver — several hot paths in this repo already have — and it
-    // costs nothing. When both `"X"` and `"X "` somehow survive, the exactly-
-    // named one wins the slot: it is the row every other lookup resolves to.
+    // GH #1116: index by the TRIMMED name — keeps this side honest if the
+    // lookup ever moves to the raw driver (several hot paths already have).
+    // When both `"X"` and `"X "` somehow survive, the exactly-named one wins
+    // the slot: it is the row every other lookup resolves to.
     const key = doc.name.trim();
     if (doc._deletedAt == null) {
       if (!activeByName.has(key) || doc.name === key) activeByName.set(key, entry);
@@ -777,21 +694,14 @@ export async function upsertImportRows(
     }
   }
 
-  // GH #628: batch-load the PARENT docs of every existing active variant
-  // we might update. A variant's parent is referenced by id and may not
-  // appear in the import file at all, so the name-keyed load above can't
-  // be relied on to have it.
-  //
-  // GH #649 (Codex P2): load this AFTER pass 1, not before. The two-pass
-  // driver below runs every parent/standalone row in pass 1 and every
-  // variant row in pass 2, and `parentById` is read ONLY in pass 2 (a
-  // pass-1 row has no parentId, so the inheritance split is skipped). If
-  // a parent row updated its own value in pass 1, a fresh load here lets
-  // pass 2 compare the variant's incoming value against the NEW parent
-  // value — so a bulk restore that changes the parent doesn't get written
-  // as a local override on the variant (severing GH #106 inheritance).
-  // Recomputing the id set after pass 1 also picks up parents that were
-  // resurrected into `activeByName` during pass 1.
+  // GH #628: batch-load the PARENT docs of every existing active variant we
+  // might update — a variant's parent is referenced by id and may not appear
+  // in the import file at all. Must be RELOADED after pass 1 (GH #649): if a
+  // parent row updated its own value in pass 1, pass 2 must compare the
+  // variant's incoming value against the NEW parent value, or a bulk restore
+  // that changes the parent gets written as a local override on the variant
+  // (severing GH #106 inheritance). Recomputing the id set after pass 1 also
+  // picks up parents resurrected into `activeByName` during pass 1.
   const parentById = new Map<string, LeanFilament>();
   async function loadParentDocs() {
     parentById.clear();
@@ -813,12 +723,11 @@ export async function upsertImportRows(
   // its parent for the inheritance split. Pass 2 gets a fresh reload below.
   await loadParentDocs();
 
-  // GH #379 (Codex P2 follow-up): share one trim between the two-pass
-  // router and processRow. If routing used raw `row.parentName` while
-  // processRow trimmed before checking, a whitespace-only Parent cell
-  // would be routed to pass 2 (delaying processing of a row that's
-  // really a standalone), and any variant referencing that row's name
-  // would skip with a misleading "Parent not found".
+  // Share ONE trim between the two-pass router and processRow: if routing
+  // used raw `row.parentName` while processRow trimmed, a whitespace-only
+  // Parent cell would route a real standalone to pass 2, and any variant
+  // referencing that row's name would skip with a misleading "Parent not
+  // found".
   function trimmedParentName(row: ImportRow): string {
     return row.parentName ? row.parentName.trim() : "";
   }
@@ -839,12 +748,9 @@ export async function upsertImportRows(
     const existing = activeByName.get(row.name);
     const softDeleted = !existing ? deletedByName.get(row.name) : undefined;
 
-    // GH #379: resolve the optional Parent column. Honoured ONLY when this
-    // row will produce a new active filament (create or resurrect); for an
-    // already-active row we silently ignore it, because re-parenting an
-    // existing filament via a re-imported CSV is a surprising UX and the
-    // app already exposes the relationship explicitly via "Create variant"
-    // and Clone-from-parent. Self-references are blocked outright.
+    // GH #379: resolve the optional Parent column — honoured ONLY on
+    // create/resurrect (see ImportRow.parentName). Self-references are
+    // blocked outright.
     let resolvedParentId: mongoose.Types.ObjectId | null = null;
     const parentName = trimmedParentName(row);
     if (parentName && !existing) {
@@ -879,27 +785,20 @@ export async function upsertImportRows(
       resolvedParentId = parentEntry._id;
     }
 
-    // Build the update doc using only fields that were actually present in the
-    // import row. This prevents overwriting existing data (e.g. temperatures,
-    // calibrations) with nulls when the CSV simply doesn't have those columns.
-    //
-    // GH #183: pre-fix `color` and `diameter` were unconditionally set with
-    // defaults (`#808080` / `1.75`), so importing a row that only carried
-    // name/vendor/type would silently reset an existing filament's color
-    // and diameter. Only attach them to `doc` when the row supplied them;
-    // for the create path the Mongoose schema-level defaults still kick in
-    // for missing fields.
+    // Build the update doc using only fields actually present in the import
+    // row, so a CSV without those columns can't overwrite existing data with
+    // nulls. GH #183: `color`/`diameter` must NOT be set with defaults —
+    // only attach them when the row supplied them; the create path's
+    // schema-level defaults still cover missing fields.
     const doc: Record<string, unknown> = {
       name: row.name,
       vendor: row.vendor,
       type: row.type,
     };
     if (row.color !== undefined && row.color !== "" && row.color !== null) {
-      // GH #503: drop bad-hex rows into skippedRows the same way the
-      // route-level validators reject them on direct API calls. Without
-      // this per-row guard the new schema validator on `color` would
-      // throw on the bulk save() and we'd lose the WHOLE batch's
-      // accounting rather than the one bad row.
+      // GH #503: without this per-row guard the schema validator on `color`
+      // would throw on the bulk save() and lose the WHOLE batch's accounting
+      // rather than the one bad row.
       if (!/^#[0-9A-Fa-f]{6}$/.test(String(row.color))) {
         skippedRows.push({
           row: lineOf(rowIdx),
@@ -911,11 +810,9 @@ export async function upsertImportRows(
       }
       doc.color = row.color;
     }
-    // GH #477: parse the comma-separated "Secondary Colors" column,
-    // trim/dedupe-empty, validate per-entry hex, cap at 5 to match the
-    // schema validator. Defensive — the schema rejects bad shapes too,
-    // but the importer should produce a clean doc rather than a
-    // bulk-import row that fails save.
+    // GH #477: parse the "Secondary Colors" column — per-entry hex
+    // validation + the 5-cap, so the importer produces a clean doc rather
+    // than a bulk-import row that fails save.
     if (row.secondaryColors !== undefined && row.secondaryColors !== null) {
       const raw = String(row.secondaryColors).trim();
       if (raw !== "") {
@@ -926,29 +823,23 @@ export async function upsertImportRows(
           .slice(0, 5);
         if (slots.length > 0) {
           doc.secondaryColors = slots;
-          // GH #477 (Codex P2 on PR #484 r2): preserve null primary for
-          // coextruded CSV round-trips. When the export side wrote an
-          // empty Color cell (coextruded filaments have `color: null`
-          // per OpenPrintTag spec) AND secondaryColors has entries,
-          // the import would otherwise skip setting `doc.color` and the
-          // schema default "#808080" would re-introduce a phantom gray
-          // primary. Explicit `null` keeps the export → import → re-
-          // export round-trip identity-preserving.
+          // GH #477: preserve null primary for coextruded CSV round-trips —
+          // an empty Color cell + populated secondaries must set an explicit
+          // `null`, or the schema default "#808080" re-introduces a phantom
+          // gray primary.
           if (row.color === null || row.color === "" || row.color === undefined) {
             doc.color = null;
           }
         }
       }
     }
-    // GH #954: parse the "Tags" column (comma-separated OpenPrintTag ids) into a
-    // numeric array. Honoured on CREATE/RESURRECT only — the update path deletes
-    // it below. `rowToImport` maps a PRESENT-but-empty cell to `null` and an
-    // ABSENT column to `undefined`: when the column is present (incl. an empty
-    // cell) we always set `doc.optTags` (empty → []), so re-importing a
-    // solid/untagged row CLEARS a tombstone's tags on resurrect rather than
-    // leaving them untouched (Codex). Empty tokens are dropped BEFORE Number()
-    // so a trailing/double comma ("28,16," / "28,,16") can't become
-    // `Number("") === 0` and add a phantom tag 0 (glass-fiber).
+    // GH #954: parse the "Tags" column into a numeric array. Honoured on
+    // CREATE/RESURRECT only — the update path deletes it below. A
+    // PRESENT-but-empty cell maps to [] (not skipped), so re-importing a
+    // solid/untagged row CLEARS a tombstone's tags on resurrect. Empty
+    // tokens are dropped BEFORE Number() so a trailing/double comma
+    // ("28,16," / "28,,16") can't become `Number("") === 0` and add a
+    // phantom tag 0 (glass-fiber).
     if (row.optTags !== undefined) {
       doc.optTags =
         row.optTags == null
@@ -1006,25 +897,20 @@ export async function upsertImportRows(
     if (row.standbyTemp !== undefined) temps.standby = row.standbyTemp ?? null;
 
     if (existing) {
-      // For updates, use dot-notation for temperatures to avoid overwriting
-      // sub-fields that weren't in the import
+      // Updates use dot-notation for temperatures to avoid overwriting
+      // sub-fields that weren't in the import.
       const updateDoc = { ...doc };
       delete updateDoc.temperatures;
-      // GH #954: `optTags` (the Tags column) is honoured on CREATE/RESURRECT
-      // only — like the Parent column. Drop it from the update `$set` so a
-      // re-import can't re-pin a variant's tags (which would need the same
-      // whole-array inheritance split secondaryColors gets).
+      // GH #954: drop `optTags` from the update `$set` so a re-import can't
+      // re-pin a variant's tags (would need the same whole-array inheritance
+      // split secondaryColors gets).
       delete updateDoc.optTags;
       let $set: Record<string, unknown> = { ...updateDoc };
       for (const [tempKey, tempVal] of Object.entries(temps)) {
         $set[`temperatures.${tempKey}`] = tempVal;
       }
-      // GH #628: when the target is a VARIANT, the export flattened its
-      // inherited values through resolveFilament — blindly $set-ing them
-      // back would pin every inherited field as a local override and
-      // sever GH #106 live inheritance. Skip fields whose incoming value
-      // matches the parent (and $unset stale diverging overrides) so the
-      // variant keeps tracking parent edits after a round-trip.
+      // GH #628: when the target is a VARIANT, split the $set so parent-equal
+      // values don't pin as local overrides (see splitInheritedImportSet).
       const update: Record<string, unknown> = {};
       const parentDoc = existing.parentId
         ? parentById.get(String(existing.parentId))
@@ -1037,22 +923,19 @@ export async function upsertImportRows(
         }
       }
       update.$set = $set;
-      // GH #605 (codex P2, importer sweep): a name-matched EXISTING row may
-      // be a TEMPLATE (≥1 live variant) — a CSV row (like a stale edit form
-      // or a slicer preset) echoes the promoted-away color/colorName back
+      // GH #605: a name-matched EXISTING row may be a TEMPLATE (≥1 live
+      // variant) — a CSV row echoes the promoted-away color/colorName back
       // verbatim, and blindly $set-ing them would re-materialize per-variant
       // state on the template. Strip the shared TEMPLATE_STRIP_FIELDS with
       // the PUT's semantics (non-null only; an explicit null — an EMPTY
       // Color Name cell — still passes as legitimate cleanup). Decision +
-      // write share the per-filament mutex the promotion paths lock (PUT
-      // review P1-c): the round-3 parent-gate lock only covers the
-      // create/resurrect branch below, so this plain-update path needs its
-      // own. The strip never fails the row (atlas posture) — it's reported
-      // as a per-row note on the `errors` channel.
+      // write MUST share the per-filament mutex the promotion paths lock;
+      // the parent-gate lock only covers the create/resurrect branch below,
+      // so this plain-update path needs its own. The strip never fails the
+      // row — it's reported as a per-row note on the `errors` channel.
       //
       // GH #276: runValidators so a CSV updating an existing filament
-      // (e.g. `cost = -50`) can't bypass the schema validators — the
-      // sibling resurrect path below was already hardened the same way.
+      // (e.g. `cost = -50`) can't bypass the schema validators.
       const stripped = await runExclusive(
         filamentLockKey(existing._id),
         async () => {
@@ -1077,7 +960,7 @@ export async function upsertImportRows(
       }
       updated++;
     } else {
-      // For creates/resurrections, include temperatures as a nested object
+      // Creates/resurrections include temperatures as a nested object.
       if (Object.keys(temps).length > 0) {
         doc.temperatures = {
           nozzle: temps.nozzle ?? null,
@@ -1091,24 +974,19 @@ export async function upsertImportRows(
       }
       if (resolvedParentId) doc.parentId = resolvedParentId;
 
-      // GH #951: create/resurrect inheritance parity with the UPDATE path.
-      // The export flattened this variant's inherited values through
-      // resolveFilament; writing them verbatim would pin every inherited field
-      // as a local override and sever GH #106 live inheritance (a fresh-DB
-      // migration or trashed-variant restore). Null/empty each field whose
-      // incoming value equals the parent's so the new/resurrected variant keeps
-      // tracking parent edits. The effective parent after a resurrect is
-      // `resolvedParentId ?? softDeleted.parentId` (see the resurrect note
-      // below — parentId only rides `doc` when a Parent column was supplied).
+      // GH #951: create/resurrect inheritance parity with the UPDATE path
+      // (see pruneInheritedCreateDoc). The effective parent after a resurrect
+      // is `resolvedParentId ?? softDeleted.parentId` — parentId only rides
+      // `doc` when a Parent column was supplied.
       let writeDoc = doc;
       const createParentId = softDeleted
         ? resolvedParentId ?? softDeleted.parentId
         : resolvedParentId;
       if (createParentId) {
-        // `parentById` (loaded after pass 1) indexes the parents of EXISTING
-        // active variants, so it won't hold a parent freshly created earlier in
-        // THIS batch — fall back to a direct fetch. Guard a missing/soft-deleted
-        // parent (nothing to inherit → write the doc as-is).
+        // `parentById` indexes the parents of EXISTING active variants, so it
+        // won't hold a parent freshly created earlier in THIS batch — fall
+        // back to a direct fetch. A missing/soft-deleted parent → nothing to
+        // inherit → write the doc as-is.
         let parentDoc = parentById.get(String(createParentId));
         if (!parentDoc) {
           parentDoc =
@@ -1125,14 +1003,9 @@ export async function upsertImportRows(
       const rowName = row.name;
       const performWrite = async (): Promise<void> => {
         if (softDeleted) {
-          // GH #228: the resurrect path was the only Filament write in the
-          // codebase running `updateOne` without `runValidators`. The pre-
-          // update hook on `tdsUrl` still fires (it's gated by the
-          // `update.tdsUrl` check inside the hook, not by `runValidators`),
-          // but every other schema-level validator — `cost.min`,
-          // `lowStockThreshold.min`, type coercions — was bypassed. A
-          // malformed re-import of a previously-trashed row could persist
-          // invalid numeric fields.
+          // GH #228: runValidators — without it every schema-level validator
+          // (`cost.min`, type coercions) was bypassed and a malformed
+          // re-import of a trashed row could persist invalid numeric fields.
           // GH #1004 F1 (race belt-and-suspenders): the bucketing above
           // already excludes _purged tombstones, but a permanent delete can
           // land BETWEEN the batch load and this row's write. Guard the
@@ -1146,20 +1019,15 @@ export async function upsertImportRows(
           );
           if (res.matchedCount === 0) {
             // The tombstone was purged mid-import — mint a fresh doc (the
-            // partial-unique name index permits it; the purged row keeps
-            // its gone-forever state). `writeDoc` carries parentId only
-            // when a Parent column was supplied, matching the plain-create
-            // branch's semantics.
-            //
-            // Codex P2 on #1009: writeDoc may have been pruned against the
-            // TOMBSTONE's parent (createParentId = softDeleted.parentId) to
-            // support a variant resurrect. But this fallback creates a STANDALONE
-            // record whenever no Parent column was supplied (resolvedParentId is
-            // null) — and a standalone doc has no parent to inherit the pruned
-            // fields from, so creating from the pruned doc would drop every
-            // flattened CSV value that matched the old parent to null/[]. Use the
-            // UNPRUNED doc in that case; keep the pruned writeDoc only when the
-            // created row is actually a variant (a Parent column resolved).
+            // partial-unique name index permits it; the purged row keeps its
+            // gone-forever state). writeDoc may have been pruned against the
+            // TOMBSTONE's parent, but this fallback creates a STANDALONE
+            // whenever no Parent column was supplied — a standalone has no
+            // parent to inherit the pruned fields from, so creating from the
+            // pruned doc would drop every flattened CSV value that matched
+            // the old parent to null/[]. Use the UNPRUNED doc in that case;
+            // keep the pruned writeDoc only when the created row is actually
+            // a variant.
             const createDoc = resolvedParentId ? writeDoc : doc;
             const newDoc = await Filament.create(createDoc);
             activeByName.set(rowName, { _id: newDoc._id, parentId: resolvedParentId });
@@ -1167,13 +1035,10 @@ export async function upsertImportRows(
             created++;
           } else {
             // GH #379: re-promote into activeByName so a later pass-2 row
-            // referencing this name as Parent resolves correctly. The
-            // effective parentId after resurrect is `resolvedParentId ??
-            // softDeleted.parentId` because we only include `parentId` in
-            // `doc` when a Parent column was provided — without it the
-            // soft-deleted row's prior parentId survives unchanged, and a
-            // pass-2 row that tried to point its Parent at this resurrected
-            // row would otherwise wrongly skip the variant-of-variant guard.
+            // referencing this name as Parent resolves correctly — including
+            // its effective parentId, or a pass-2 row pointing at this
+            // resurrected row would wrongly skip the variant-of-variant
+            // guard.
             const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
             activeByName.set(rowName, { _id: softDeleted._id, parentId: effectiveParentId });
             deletedByName.delete(rowName);
@@ -1181,26 +1046,22 @@ export async function upsertImportRows(
           }
         } else {
           const newDoc = await Filament.create(writeDoc);
-          // GH #379: seed activeByName with the freshly-created row so a
-          // later pass-2 row referencing it as Parent can resolve in-batch
-          // (the round-trip case: parent and variant rows in the same CSV).
+          // GH #379: seed activeByName so a later pass-2 row referencing this
+          // fresh row as Parent resolves in-batch (parent + variant rows in
+          // the same CSV).
           activeByName.set(rowName, { _id: newDoc._id, parentId: resolvedParentId });
           created++;
         }
       };
 
-      // GH #605 (codex round 3 sweep): when this row's write surfaces a live
-      // VARIANT (a create with a resolved Parent column, or a resurrect of a
-      // trashed variant), gate it on the parent's held INVENTORY (see
-      // firstVariantGateInfo for why color deliberately doesn't gate
-      // here) and run the decision + write inside the same per-parent mutex
-      // the interactive promotion gate locks — so a concurrent spool push
-      // or first-variant promotion strictly serializes with this write. A
+      // GH #605: when this row's write surfaces a live VARIANT (create with a
+      // resolved Parent column, or resurrect of a trashed variant), gate it
+      // on the parent's held INVENTORY (see firstVariantGateInfo for why
+      // color deliberately doesn't gate) and run the decision + write inside
+      // the same per-parent mutex the interactive promotion gate locks. A
       // bulk import can't confirm a promotion, so a gated row SKIPS with a
       // per-row reason rather than silently minting the mixed
-      // template-with-inventory state #605 forbids. `createParentId` covers
-      // both shapes (it already resolves `resolvedParentId ??
-      // softDeleted.parentId` above).
+      // template-with-inventory state #605 forbids.
       if (createParentId) {
         const gateReason = await runExclusive(
           filamentLockKey(createParentId),
@@ -1208,14 +1069,13 @@ export async function upsertImportRows(
             const gate = await firstVariantGateInfo(Filament, createParentId);
             if (gate.reason) return gate.reason;
             await performWrite();
-            // Round 7 P2: an ungated first variant of a threshold-ONLY
-            // parent just surfaced — the parent's lowStockThreshold is now
-            // dead config; clear it AFTER the write (parent state change
-            // last), still inside the per-parent lock. Re-checking
-            // hasVariants (rather than trusting the pre-write snapshot)
-            // covers the purged-tombstone fallback above, which can create
-            // a STANDALONE when no Parent column was supplied — no variant
-            // surfaced there, so the threshold must stay.
+            // An ungated first variant of a threshold-ONLY parent just
+            // surfaced — clear the now-dead lowStockThreshold AFTER the
+            // write (parent state change last), still inside the per-parent
+            // lock. Re-checking hasVariants (rather than trusting the
+            // pre-write snapshot) covers the purged-tombstone fallback,
+            // which can create a STANDALONE when no Parent column was
+            // supplied — no variant surfaced there, so the threshold stays.
             if (
               gate.orphanedThreshold &&
               (await hasVariants(Filament, String(createParentId)))
@@ -1236,13 +1096,12 @@ export async function upsertImportRows(
     }
   }
 
-  // GH #627 item 2: per-row error isolation. Any error escaping a row's
+  // GH #627: per-row error isolation. Any error escaping a row's
   // create/update — an E11000 from the partial-unique `instanceId` index
-  // (realistic trigger: re-importing an export after renaming a filament,
-  // so the name misses but the carried Instance ID collides), a
-  // ValidationError the pre-write guards didn't cover, a transient driver
-  // error — used to abort the WHOLE batch with a bare 500 and no report
-  // of the rows already committed. Route it into skippedRows instead,
+  // (e.g. re-importing an export after renaming a filament, so the name
+  // misses but the carried Instance ID collides), a ValidationError, a
+  // transient driver error — must not abort the WHOLE batch with a bare 500
+  // and no report of the rows already committed. Route it into skippedRows,
   // with a named reason for duplicate-key errors (mirrors the spool
   // importer's GH #370 per-row posture).
   function importErrorReason(err: unknown): string {
@@ -1272,18 +1131,16 @@ export async function upsertImportRows(
     }
   }
 
-  // GH #379: two-pass driver. Rows without a Parent column run first so
-  // any new top-level filaments are present in `activeByName` by the time
-  // pass-2 (variant rows) tries to resolve them. Use the same trimmed
-  // view of the cell that processRow does so a whitespace-only Parent
-  // resolves to pass 1 (treated as a standalone). The skipped report is
-  // sorted at the end to preserve original-row order even though we
-  // visited rows out of order.
+  // GH #379: two-pass driver. Rows without a Parent column run first so any
+  // new top-level filaments are present in `activeByName` by the time pass 2
+  // (variant rows) tries to resolve them. Uses the same trimmed view of the
+  // cell as processRow so a whitespace-only Parent resolves to pass 1. The
+  // skipped report is sorted at the end to preserve original-row order.
   for (let i = 0; i < rows.length; i++) {
     if (!trimmedParentName(rows[i])) await processRowSafe(i);
   }
-  // GH #649 (Codex P2): refresh parent values written during pass 1 before
-  // the variant rows compare against them in pass 2.
+  // GH #649: refresh parent values written during pass 1 before the variant
+  // rows compare against them in pass 2.
   await loadParentDocs();
   for (let i = 0; i < rows.length; i++) {
     if (trimmedParentName(rows[i])) await processRowSafe(i);

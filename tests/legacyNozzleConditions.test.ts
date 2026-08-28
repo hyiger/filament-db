@@ -79,7 +79,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     await seed("machine-multi", "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6", {
       compatibleNozzles: [noz06, noz025, noz025, nozJunk, danglingRef],
     });
-    // THE round-6 P1 case: a pre-upgrade USER-authored pure nozzle pin — same
+    // A pre-upgrade USER-authored pure nozzle pin — same
     // syntax, but it does not match the derivation from the row's ticks.
     await seed("user-pin-mismatch", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz06] });
     // Shape match but NO tick provenance at all — nothing to attribute it to.
@@ -147,7 +147,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   it("leaves a row alone when its condition changes between scan and write (concurrent ordinary writer)", async () => {
     // Claiming serializes CLEANUP runners only — an Atlas DB keeps serving
     // other clients mid-clear. The destructive write must therefore re-assert
-    // the scanned value (Codex P1 r7).
+    // the scanned value.
     const noz04 = await seedNozzle(0.4);
     const rowId = await seed("toctou", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
@@ -570,7 +570,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
       compatibleNozzles: [noz04],
       updatedAt: new Date(),
     });
-    // Row B (Codex P1 r11): examined but NOT a provenance match in attempt 1
+    // Row B: examined but NOT a provenance match in attempt 1
     // (its recorded ticks derivation differed); between attempts the user
     // edited it — the app save bumped updatedAt — into something that NOW
     // provenance-matches. Still untouchable: the observation mismatches.

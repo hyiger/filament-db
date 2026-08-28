@@ -15,13 +15,11 @@ const MAX_PRUSAMENT_HTML_BYTES = 4 * 1024 * 1024;
 const MAX_REDIRECTS = 5;
 
 /**
- * Manually-followed fetch with per-hop SSRF revalidation. Same pattern as
- * `src/lib/tdsExtractor.ts` and `src/app/api/embed-check/route.ts`. Without
- * this, undici's automatic `redirect: "follow"` would silently chase a
- * 3xx Location into RFC1918 / loopback / cloud-metadata space without
- * re-checking the target. The risk on prusament.com specifically is low
- * (hardcoded host) but the asymmetry breaks the invariant that every
- * outbound fetch goes through the SSRF dispatcher.
+ * Manually-followed fetch with per-hop SSRF revalidation (same pattern as
+ * tdsExtractor / embed-check). `redirect: "follow"` would silently chase a
+ * 3xx into RFC1918 / loopback / cloud-metadata space; the risk on the
+ * hardcoded prusament.com host is low, but every outbound fetch must go
+ * through the SSRF dispatcher — no asymmetries.
  */
 async function fetchWithSsrfGuard(
   initialUrl: string,

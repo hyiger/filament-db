@@ -173,7 +173,7 @@ describe("nextFilterHref", () => {
 });
 
 /**
- * GH #1141 (Codex P2). `parseFilterParams` cannot answer "did the URL actually
+ * GH #1141. `parseFilterParams` cannot answer "did the URL actually
  * say anything about this key?" — it returns the fallback either way, which is
  * right for a fresh visit and wrong for a key backed by a persisted preference.
  * Clicking the header link while filtered navigates to a bare route; treating
@@ -215,7 +215,7 @@ describe("presentFilterKeys", () => {
 });
 
 /**
- * GH #1141 (Codex P1). Serialization omits a value equal to its fallback, so a
+ * GH #1141. Serialization omits a value equal to its fallback, so a
  * sender sorted cost/ASC shared `?sort=cost` and said nothing about direction —
  * a recipient with a saved DESC opened the same link sorted differently, and
  * the mirror then rewrote the URL to match. Two people, one link, two views.
@@ -444,7 +444,7 @@ describe("seedFilterState", () => {
 });
 
 /**
- * GH #1141 (Codex P2, third pass). The own-write marker must store exactly
+ * GH #1141. The own-write marker must store exactly
  * what `useSearchParams().toString()` will echo — which never includes a
  * fragment, while `nextFilterHref` (correctly) preserves one. A marker with
  * the hash baked in never matches, so the page misclassifies its own write as
@@ -471,7 +471,7 @@ describe("queryStringOf", () => {
 });
 
 /**
- * GH #1141 (Codex P2, fourth pass). Type and vendor are EXACT keys into
+ * GH #1141. Type and vendor are EXACT keys into
  * stored data — the schema trims `name` but not these, and the list APIs
  * compare them with `$eq` — so a stored `"PLA "` is a selectable value that
  * must round-trip byte-exact. `textParam`'s trim broke the refresh: select

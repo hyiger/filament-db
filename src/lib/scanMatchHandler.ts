@@ -9,8 +9,8 @@ import type { DecodedOpenPrintTag } from "@/lib/openprinttag-decode";
  * own `/api/filaments/match` fetch, and whichever resolved last won.
  * If the slower one was older (e.g. user puts down tag A, then quickly
  * swaps in tag B), the local dialog and the SSE replay cache ended up
- * with tag A's filament after the user had moved on to B (codex P1 on
- * PR #234). The sequencer fixes both halves:
+ * with tag A's filament after the user had moved on to B. The sequencer
+ * fixes both halves:
  *
  *   1. Each invocation bumps a monotonic counter and stashes it as
  *      `mySeq`. Before any state write the handler re-reads the counter

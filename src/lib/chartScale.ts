@@ -1,14 +1,8 @@
 /**
  * Compute a "nice" axis scale for a small bar chart — a rounded maximum plus
- * evenly-spaced tick values — so users can read magnitudes off gridlines
- * instead of guessing from bar heights (GH #717... see issue #716: the
- * "Usage by day" chart had no Y-axis at all).
- *
- * Returns `{ max, ticks }` where `ticks` ascends from 0 to `max` inclusive.
- * Bars should be scaled against `max` (not the raw data max) so the tallest
- * bar aligns under the top gridline.
- *
- * Pure + unit-tested (tests/chartScale.test.ts).
+ * evenly-spaced tick values (GH #716). Returns `{ max, ticks }` where `ticks`
+ * ascends from 0 to `max` inclusive. Bars should be scaled against `max` (not
+ * the raw data max) so the tallest bar aligns under the top gridline.
  */
 export interface AxisScale {
   max: number;

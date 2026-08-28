@@ -25,15 +25,11 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * GH #1076: per-field length bounds, belt-and-braces under the request-body
- * byte cap below. Every string copied into the event is sliced so no single
- * field can dominate the retained "last scan" even if the body cap is ever
- * loosened. `MAX_ID_CHARS` matches the app-wide instanceId bound
- * (`validateSpoolInstanceId` accepts 1–128 chars, and the /filaments/match
- * route caps its params at 128 for the same reason) so a legitimate legacy
- * or custom id is never corrupted; ObjectIds are 24 chars, so this is
- * generous for `_id`. `MAX_TEXT_CHARS` mirrors the label's pre-existing
- * 200-char slice with headroom for long decoded material names.
+ * GH #1076: per-field length bounds, belt-and-braces under the body byte
+ * cap below — no single field can dominate the retained "last scan" even
+ * if the body cap is ever loosened. `MAX_ID_CHARS` matches the app-wide
+ * instanceId bound (128, like /filaments/match) so a legitimate legacy or
+ * custom id is never corrupted.
  */
 const MAX_ID_CHARS = 128;
 const MAX_TEXT_CHARS = 256;
@@ -53,24 +49,18 @@ function pickFilament(value: unknown): ScanEventFilament | null {
 }
 
 /**
- * GH #271: cap the candidates array. The published event is retained in
+ * GH #271: cap the candidates array — the published event is retained in
  * `scanBus` as the "last scan" and replayed to every new SSE subscriber,
- * so an unauthenticated POST with a multi-megabyte `candidates` array
- * would otherwise be held in memory indefinitely and fanned out to every
- * connection. A real tag match produces a handful of candidates; 25 is a
- * generous bound. GH #1076 completes the mitigation on the BYTE axis:
- * the whole request body is capped at `MAX_PUBLISH_BODY` (preflight +
- * post-buffer re-check in the handler) and every copied string field is
- * length-bounded above, so neither the count nor the bytes of a published
- * event are attacker-controlled.
+ * so an unauthenticated multi-megabyte `candidates` array would be held in
+ * memory indefinitely and fanned out. GH #1076 completes the mitigation on
+ * the BYTE axis (body cap + per-field slices), so neither the count nor
+ * the bytes of a published event are attacker-controlled.
  */
 const MAX_CANDIDATES = 25;
 
 /**
- * GH #1076: request-body byte cap. Real scan events are under 2 KB (a match
- * plus a handful of candidates); 64 KB is generous. Mirrors the sibling
- * /api/nfc/decode preflight + the /api/spools/import (#991) post-buffer
- * re-check for a missing/lying Content-Length.
+ * GH #1076: request-body byte cap. Real scan events are under 2 KB; 64 KB
+ * is generous.
  */
 const MAX_PUBLISH_BODY = 64 * 1024;
 
@@ -85,10 +75,9 @@ function pickCandidates(value: unknown): ScanEventFilament[] {
   return out;
 }
 
-/** #732: validate the matched-spool object (a renderer-supplied, same-origin
- * payload). Requires a string _id + instanceId; all fields length-bounded
- * (#1076 extended the pre-existing label slice to the id fields). Returns
- * null for anything malformed. */
+/** #732: validate the matched-spool object. Requires a string _id +
+ * instanceId; all fields length-bounded (#1076). Returns null for anything
+ * malformed. */
 function pickMatchedSpool(value: unknown): ScanEventSpool | null {
   if (!isObject(value)) return null;
   const id = value._id;
@@ -138,13 +127,12 @@ export async function POST(request: NextRequest) {
   const tooLarge = checkContentLength(request, MAX_PUBLISH_BODY);
   if (tooLarge) return tooLarge;
 
-  // Belt-and-suspenders: checkContentLength only inspects the Content-Length
-  // header, so a chunked / header-less / lying body slips past it. Codex P2
-  // round 2 on PR #1090: enforce the cap WHILE READING rather than after
-  // `request.text()` buffers everything — the same-origin guard deliberately
-  // admits header-less non-browser clients, so a lying client could
-  // otherwise stream an arbitrarily large body into memory before the 413.
-  // The reader is cancelled at first overflow so nothing more is pulled.
+  // Belt-and-suspenders: checkContentLength only inspects the header, so a
+  // chunked / header-less / lying body slips past it. Enforce the cap WHILE
+  // READING rather than after `request.text()` buffers everything — the
+  // same-origin guard deliberately admits header-less non-browser clients,
+  // so a lying client could otherwise stream an arbitrarily large body into
+  // memory before the 413. The reader is cancelled at first overflow.
   const chunks: Uint8Array[] = [];
   let received = 0;
   const bodyStream = request.body;
@@ -166,10 +154,9 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-  // Codex P2 round 3 on PR #1090: Fetch's request.json() strips a UTF-8 BOM
-  // during decoding, but Buffer.toString("utf8") preserves it as U+FEFF —
-  // which would newly 400 a BOM-prefixed payload (files saved by
-  // BOM-emitting editors) that the pre-streaming path accepted.
+  // Fetch's request.json() strips a UTF-8 BOM during decoding, but
+  // Buffer.toString("utf8") preserves it as U+FEFF — which would 400 a
+  // BOM-prefixed payload the pre-streaming path accepted.
   let raw = Buffer.concat(chunks).toString("utf8");
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
 

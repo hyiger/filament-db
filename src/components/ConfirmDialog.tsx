@@ -4,43 +4,29 @@ import { createContext, useContext, useState, useCallback, useEffect, useRef, ty
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 /**
- * GH #343 (#1): in-app confirm replacement for native `window.confirm()`.
- *
- * Why a custom modal:
- *   - Native confirms don't theme (jarring on the dark UI).
- *   - They block CDP/automation (the renderer freezes while open),
- *     which broke the Chrome QA pass and any future Playwright suite.
- *   - "Delete" rows currently use them; mixing styled buttons with an
- *     OS-chrome dialog reads as unfinished.
+ * In-app confirm replacement for native `window.confirm()` — native
+ * confirms don't theme and block CDP/automation (the renderer freezes
+ * while open).
  *
  * Usage:
  *   const confirm = useConfirm();
  *   if (await confirm({ message: "Delete this filament?" })) { ... }
  *
- * The returned promise resolves to `true` on confirm, `false` on cancel
- * (including Escape / outside-click).
- *
- * Behaviour parity with `window.confirm`:
- *   - returns a falsy value when the user cancels
- *   - blocks no JavaScript (it's async)
- *   - one pending dialog at a time; calling again replaces the first
+ * Resolves `true` on confirm, `false` on cancel (including Escape /
+ * outside-click). One pending dialog at a time; calling again replaces
+ * the first.
  */
 
 export interface ConfirmOptions {
-  /** The body text. Required. */
   message: string;
-  /** Optional bolded title above the body. */
   title?: string;
-  /** Confirm-button label. Defaults to "OK". */
   confirmLabel?: string;
-  /** Cancel-button label. Defaults to "Cancel". */
   cancelLabel?: string;
-  /** When true, the confirm button is styled as a destructive action. */
+  /** Style the confirm button as a destructive action. */
   destructive?: boolean;
-  /** When true, hide the cancel button — turns the dialog into a simple
-   * acknowledge-only notice (e.g. an aggregated error report). The
-   * confirm button (and Esc / outside-click) still resolve, so the
-   * promise always settles. */
+  /** Hide the cancel button — an acknowledge-only notice. The confirm
+   * button (and Esc / outside-click) still resolve, so the promise
+   * always settles. */
   hideCancel?: boolean;
 }
 
@@ -70,17 +56,13 @@ interface PendingState {
 }
 
 export default function ConfirmProvider({ children }: { children: ReactNode }) {
-  // Codex P2 on PR #351: the cancel-button fallback used to be the
-  // English literal "Cancel"; callers never pass `cancelLabel`, so the
-  // fallback was effectively the production label and shipped in every
-  // non-English locale. Pull both fallbacks (cancel + ok) from the
-  // shared `common.*` translation keys so they follow the active locale.
+  // Button-label fallbacks come from the shared `common.*` translation
+  // keys — callers rarely pass labels, so the fallback is effectively the
+  // production label and must follow the active locale.
   const { t } = useTranslation();
   const [pending, setPending] = useState<PendingState | null>(null);
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
-  // Codex P2 round 2: needed for the Tab-key focus trap below — the
-  // confirm-button ref alone wasn't enough to cycle focus between the
-  // two buttons.
+  // Needed for the Tab-key focus trap below.
   const cancelBtnRef = useRef<HTMLButtonElement>(null);
 
   const confirm = useCallback<ConfirmFn>((arg) => {
@@ -104,28 +86,22 @@ export default function ConfirmProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Focus the confirm button when the dialog opens; Esc cancels from
-  // anywhere. Codex P1 on PR #351 round 1: the previous document-level
-  // handler ALSO mapped Enter→decide(true) unconditionally, so a keyboard
-  // user who tabbed to Cancel and hit Enter still confirmed the
-  // destructive action (and `preventDefault` suppressed the focused
-  // button's normal activation). Enter is now left to the browser —
-  // autoFocus on the confirm button means Enter naturally triggers it
-  // when nothing else has been focused; on a different focused button
-  // (e.g. Cancel), pressing Enter activates THAT button.
+  // anywhere. Enter is deliberately left to the browser — a document-level
+  // Enter→decide(true) mapping would confirm the destructive action even
+  // when the user tabbed to Cancel; with focus on the confirm button Enter
+  // naturally triggers it, and on any other focused button Enter activates
+  // THAT button.
   //
-  // Codex P2 round 2: aria-modal="true" on its own doesn't trap Tab —
-  // after the two buttons, focus escapes to background page controls
-  // while the overlay is still up. Cycle Tab/Shift+Tab between the two
-  // buttons so focus stays inside the dialog until it's dismissed.
+  // aria-modal="true" on its own doesn't trap Tab — focus escapes to
+  // background page controls while the overlay is up. Cycle Tab/Shift+Tab
+  // between the two buttons.
   //
   // GH #1081: capture the invoking element BEFORE focusing the confirm
-  // button and restore it on cleanup — every other modal in the codebase
-  // does this (GH #320), but this one dropped focus to <body> on close,
-  // sending keyboard/SR users back to the top of the document after the
-  // app's most common interaction. The `document.contains` guard covers
-  // the confirm path where the triggering control was removed (a deleted
-  // row) — restoring focus to a detached node is a silent no-op that
-  // still leaves focus on <body>, so we only restore when it's live.
+  // button and restore it on cleanup (like every other modal, GH #320) —
+  // otherwise focus drops to <body> on close. The `document.contains`
+  // guard covers the confirm path where the triggering control was
+  // removed (a deleted row) — restoring focus to a detached node is a
+  // silent no-op that still leaves focus on <body>.
   useEffect(() => {
     if (!pending) return;
     const prevFocus = document.activeElement as HTMLElement | null;
@@ -170,11 +146,9 @@ export default function ConfirmProvider({ children }: { children: ReactNode }) {
           className="fixed inset-0 z-[150] flex items-center justify-center bg-black/50"
           role="dialog"
           aria-modal="true"
-          // Codex P2 round 2: when the caller doesn't pass a `title`,
-          // `aria-labelledby` used to be `undefined` and there was no
-          // accessible name at all — screen readers announced an unnamed
-          // dialog. Fall back to a translated `aria-label` so the dialog
-          // always has a name. The message text is reachable separately
+          // When the caller doesn't pass a `title`, fall back to a
+          // translated `aria-label` so the dialog always has an
+          // accessible name; the message text is reachable separately
           // via `aria-describedby`.
           aria-labelledby={pending.opts.title ? "confirm-title" : undefined}
           aria-label={pending.opts.title ? undefined : t("common.confirmDialog")}

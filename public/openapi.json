@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Filament DB API",
-    "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
+    "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. Authentication is off by default; deployments that set the FILAMENTDB_API_KEY environment variable require `Authorization: Bearer <key>` on every /api request (see the bearerAuth security scheme) — no operation is marked as requiring it because the gate is optional and all-or-nothing.",
     "version": "1.79.0",
     "license": {
       "name": "AGPL-3.0-or-later",
@@ -4802,6 +4802,9 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Request body exceeds the 64 KB cap (checked against both the Content-Length header and the streamed byte length, so a chunked or header-less body cannot slip past)."
           }
         }
       }
@@ -8685,6 +8688,13 @@
           "parentColor",
           "spoolCount"
         ]
+      }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Optional bearer-token gate, applied only when the server's FILAMENTDB_API_KEY environment variable is set (off by default — the API is unauthenticated for localhost/desktop use). When set, EVERY /api request must send `Authorization: Bearer <key>`; there is no same-origin exemption, so the gate also locks out the first-party browser UI. Requests without a valid key get 401 with `WWW-Authenticate: Bearer`."
       }
     }
   }

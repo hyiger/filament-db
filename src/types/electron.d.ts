@@ -37,10 +37,8 @@ interface ElectronAPI {
     lastSyncAt: string | null;
     error: string | null;
     progress: string | null;
-    /** GH #1164: ACTIVE trim-collision conflicts from the last sync cycle,
-     *  tagged with the database side they live on. Optional so an older
-     *  main process (no field) still typechecks against a newer renderer.
-     *  Keep in lockstep with SyncStatus in electron/sync-service.ts. */
+    /** See the GH #1164 note on getSyncStatus above; keep in lockstep
+     *  with SyncStatus in electron/sync-service.ts. */
     nameConflicts?: Array<{
       collection: string;
       name: string;

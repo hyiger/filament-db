@@ -41,26 +41,20 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
   const acRef = useRef<AbortController | null>(null);
   useEffect(() => () => acRef.current?.abort(), []);
 
-  // GH #522.1: focus capture/restore + Tab loop + initial focus, mirroring
-  // ImportAtlasDialog and PrusamentImportDialog. Pre-fix the dialog
-  // declared role="dialog" aria-modal="true" but the dialogRef was unused,
-  // so keyboard users could Tab past the backdrop into the underlying
-  // page (still focusable, still actionable via Enter/Space) and
-  // screen-readers landed on whatever was previously focused, breaking
-  // the aria-modal contract. Two effects — one for capture/restore +
-  // initial-focus + Tab trap (empty deps so a parent re-render doesn't
-  // bounce focus, see #522.2 below), one for Escape (live onClose).
+  // Focus capture/restore + Tab loop + initial focus, mirroring
+  // ImportAtlasDialog and PrusamentImportDialog (aria-modal alone doesn't
+  // trap focus). Two effects — one for capture/restore + initial-focus +
+  // Tab trap (empty deps so a parent re-render doesn't bounce focus),
+  // one for Escape (live onClose).
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    // Codex P2 round 1 on PR #540: filter out elements that can't
-    // actually receive focus. The dialog's first DOM input is the
-    // `className="hidden"` file input (display:none), so a naive
+    // Filter out elements that can't actually receive focus: the dialog's
+    // first DOM input is the `className="hidden"` file input, so a naive
     // "first focusable" query would .focus() something invisible — and
-    // including it in the Tab-boundary list means Shift+Tab from the
-    // first VISIBLE button lands on a hidden node, which the browser
-    // skips, letting focus escape to the page behind the modal. Filter
-    // on offsetParent !== null (covers display:none ancestors) +
-    // hidden/inert attributes.
+    // including it in the Tab-boundary list lets Shift+Tab from the first
+    // VISIBLE button land on a hidden node the browser skips, letting
+    // focus escape the modal. Filter on offsetParent !== null (covers
+    // display:none ancestors) + hidden/inert attributes.
     const collectFocusable = (): HTMLElement[] => {
       if (!dialogRef.current) return [];
       return Array.from(
@@ -146,7 +140,6 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
         onImported();
       }
     } catch (err) {
-      // GH #319: a network error used to escape with no user feedback.
       if (ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
       toast(t("spoolImport.error"), "error");
     } finally {

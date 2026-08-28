@@ -132,7 +132,7 @@ async function renderLabelBitmap(args: Args): Promise<{
   // spec-required 4-module quiet zone included) to find the total
   // pixel height and pick the largest fitting scale. Payloads too long
   // even at scale=1 throw rather than silently clipping or producing
-  // an unscannable code. (Codex P2 rounds 4 + 5 on PR #487.)
+  // an unscannable code. (PR #487.)
   const QR_QUIET_ZONE_MODULES = 4;
   const MAX_QR_DOTS_SPIKE = PRINT_HEAD_DOTS - 12; // 6 padding each side
   const probePng = await QRCode.toBuffer(args.qr, {
@@ -187,12 +187,10 @@ async function renderLabelBitmap(args: Args): Promise<{
   const textWidth = textMeta.width!;
 
   /* --- compose --- */
-  // Gap between QR and text.
   const qrTextGap = 12;
   const labelWidthDots =
     HORIZONTAL_PADDING_DOTS + qrDots + qrTextGap + textWidth + HORIZONTAL_PADDING_DOTS;
 
-  // Canvas: 128 dots tall, label-width wide. White background.
   // Sharp's `create` requires 3 or 4 channels (RGB / RGBA); we collapse
   // to grayscale at the threshold step below.
   const canvas = sharp({
@@ -204,7 +202,6 @@ async function renderLabelBitmap(args: Args): Promise<{
     },
   });
 
-  // Center QR vertically; center text vertically; both left-padded.
   const qrTop = Math.floor((PRINT_HEAD_DOTS - qrDots) / 2);
   const textTop = Math.floor((PRINT_HEAD_DOTS - textMeta.height!) / 2);
 

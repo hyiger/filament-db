@@ -18,31 +18,26 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
- * POST /api/filaments/{id}/openprinttag/sync  (GH #607, Phase 1)
+ * POST /api/filaments/{id}/openprinttag/sync  (GH #607)
  *
  * Applies the user-accepted subset of OpenPrintTag updates to a linked
- * filament. Body: `{ fields: string[] }` — the field keys (from the check
- * endpoint's changelist) the user chose to adopt.
+ * filament. Body: `{ fields: string[] }` from the check endpoint's
+ * changelist.
  *
  * Two guards on what can be written:
  *   1. Only keys in OPT_MANAGED_FIELD_KEYS are honoured — an arbitrary path
  *      can't be `$set` through this route.
- *   2. Each requested field must actually appear in the live `diffOptFields`
- *      changelist — so a stale / hand-crafted POST can't push a value OPT
- *      isn't offering (e.g. wiping local `density` when the upstream
- *      material has `density: null`). Sparse OPT data must never clear good
- *      local data (Codex P2, round 3).
+ *   2. Each requested field must appear in the live `diffOptFields`
+ *      changelist — a stale / hand-crafted POST can't push a value OPT
+ *      isn't offering (sparse OPT data must never clear good local data).
  *
- * The provenance snapshot (`openprinttagSnapshot`) is refreshed to the FULL
- * current OPT offer on every sync, regardless of which fields were applied,
- * so a later check can still tell "OPT changed it" from "the user changed
- * it" for the fields that were declined.
+ * The provenance snapshot is refreshed to the FULL current OPT offer on
+ * every sync, regardless of which fields were applied, so a later check can
+ * still tell "OPT changed it" from "the user changed it" for declined
+ * fields.
  *
- * Responses:
- *   { error: "not linked" } 400         — no openprinttag_slug on the row
- *   { error: "No current … update" } 400 — a requested field isn't offered
- *   { error: "Material not found" } 404 — slug gone upstream
- *   { applied: string[], filament }     — fields actually written + fresh doc
+ * Responses: 400 not linked / field not offered; 404 slug gone upstream;
+ * 200 { applied: string[], filament }.
  */
 export async function POST(
   request: NextRequest,
@@ -53,8 +48,8 @@ export async function POST(
 
   try {
     const { id } = await params;
-    // Reject a non-ObjectId id up front (400) instead of letting Mongoose's
-    // CastError fall to the generic 500, matching the sibling routes. (#818)
+    // Reject a non-ObjectId id up front (400) instead of a CastError 500
+    // (#818).
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
     }
@@ -115,17 +110,15 @@ export async function POST(
       );
     }
 
-    // GH #605 (codex round 4, F5): the offered-set derivation (which decides
-    // whether `color` may land — `excludeColor` via hasVariants) and the
-    // final write are one check-then-act pair. Un-serialized, a FIRST
-    // variant created between the check and the write would promote the
-    // parent to a colorless template and this sync would then re-attach a
-    // color to it. Run the whole derive→validate→write sequence inside the
-    // same per-filament mutex the promotion gate holds (runExclusive on
-    // filamentLockKey), re-fetching the filament and re-deriving hasVariants
-    // INSIDE the lock, so the variant creation lands strictly before (the
-    // in-lock diff then excludes color → 400 not-offered) or strictly after
-    // (the promotion moves the just-synced color onto the carrying variant).
+    // GH #605: the offered-set derivation (which decides whether `color`
+    // may land) and the final write are one check-then-act pair —
+    // un-serialized, a FIRST variant created in between would promote the
+    // parent to a colorless template and this sync would re-attach a color.
+    // Run derive→validate→write inside the same per-filament mutex the
+    // promotion gate holds, re-fetching + re-deriving hasVariants IN-LOCK,
+    // so the variant creation lands strictly before (in-lock diff excludes
+    // color → 400) or strictly after (the promotion moves the just-synced
+    // color onto the carrying variant).
     return await runExclusive(filamentLockKey(id), async () => {
       const locked = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
       if (!locked) {
@@ -158,29 +151,22 @@ export async function POST(
 
       const payload = mapToFilamentPayload(material);
 
-      // GH #607 (Codex P2, round 3): validate each requested field against the
-      // SAME diff the check endpoint computes — don't blindly turn the current
-      // payload into a $set. `buildOptSyncUpdate` alone would let a stale or
-      // hand-crafted POST of e.g. `fields: ["density"]` wipe the user's local
-      // density when the upstream material has `density: null`, because OPT
-      // offers nothing there. `diffOptFields` intentionally skips that case
-      // (sparse OPT data must never clear good local data), so only fields
-      // that actually appear in the changelist may be applied.
-      // GH #607 follow-up: validate against the SAME effective (variant→parent)
-      // view the check route diffs, passing the same `parentEffective` — so
-      // check and sync agree exactly on what's offered (including suppressing an
-      // array clear that can't take on a variant; see diffOptFields). Without
-      // the shared resolution + parent values, an inherited field could be
-      // offered by one route and rejected by the other.
+      // GH #607: validate each requested field against the SAME diff the
+      // check endpoint computes — `buildOptSyncUpdate` alone would let a
+      // stale POST of `fields: ["density"]` wipe local density when the
+      // upstream material offers nothing there. And validate against the
+      // SAME effective (variant→parent) view the check route diffs, passing
+      // the same `parentEffective`, so check and sync agree exactly on
+      // what's offered — otherwise an inherited field could be offered by
+      // one route and rejected by the other.
       const snapshotForDiff = locked.openprinttagSnapshot as Record<string, unknown> | undefined;
       const { effective, parentEffective } = await resolveEffectiveFilament(
         locked as unknown as Record<string, unknown>,
       );
-      // GH #605: templates (filaments with ≥1 live variant) are colorless —
-      // the check route drops `color` from a template's changelist, so the
-      // same flag here makes a sync naming `color` for a template fall out of
-      // `offered` and 400 as not-offered, exactly like any other stale field.
-      // Derived IN-LOCK (round 4, F5) — see the runExclusive rationale above.
+      // GH #605: templates are colorless — the same excludeColor flag the
+      // check route uses makes a sync naming `color` for a template fall
+      // out of `offered` and 400 as not-offered. Derived IN-LOCK (see the
+      // runExclusive rationale above).
       const excludeColor = await hasVariants(Filament, id);
       const offered = new Set(
         diffOptFields(effective, payload, snapshotForDiff, parentEffective, {
@@ -207,10 +193,8 @@ export async function POST(
       };
 
       // GH #629: re-filter `_deletedAt: null` on the final write so a
-      // concurrent soft-delete between the findOne above and this update
-      // doesn't quietly mutate a tombstoned row — the same race the Bambu
-      // per-id sync closed (Codex P2 on PR #387 round 6). 404 when the row
-      // was trashed in the window.
+      // concurrent soft-delete can't quietly mutate a tombstoned row (same
+      // race the Bambu per-id sync closed) — 404 when trashed in the window.
       const updated = await Filament.findOneAndUpdate(
         { _id: locked._id, _deletedAt: null },
         { $set },

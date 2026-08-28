@@ -1,13 +1,6 @@
 /**
  * Shared rules for the /compare selection, so the client page and the API
  * route agree on the cap instead of each hard-coding `8` (GH #1109).
- *
- * The page used to parse `?ids=` with no cap and no dedupe and hand whatever
- * it found straight to the API, which rejects more than 8 with a 400. The page
- * swallowed the 400 into an empty array, and none of its render gates matched
- * that state — so a 9-id link produced a silent blank page under a header that
- * cheerfully read "(9/8)".
- *
  * Deliberately free of Node and DOM APIs: imported by both a `"use client"`
  * page and a route handler.
  */

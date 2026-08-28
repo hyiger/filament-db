@@ -156,7 +156,7 @@ describe("pruneParentEqualPrefill", () => {
     expect(
       pruneParentEqualPrefill({ density: 1.27 }, { density: 1.24 }),
     ).toEqual({ density: 1.27 });
-    // The PARENT side stays exact (Codex r5): an off-grid imported parent
+    // The PARENT side stays exact: an off-grid imported parent
     // 1.244 differs from the tag's snapped 1.24 — the override survives,
     // because the form never snaps an inherited value and the variant
     // would otherwise resolve to 1.244 while the user saw 1.24.
@@ -182,7 +182,7 @@ describe("pruneParentEqualPrefill", () => {
         { settings: { chamber_temperature: ["45", "50"] } },
       ),
     ).toEqual({ settings: { chamber_temperature: "50" } });
-    // Numeric parent values are String-coerced like getSettingVal (round 15):
+    // Numeric parent values are String-coerced like getSettingVal:
     // a Mixed bag can hold 45 or [45], both of which the form shows as "45".
     expect(
       pruneParentEqualPrefill(
@@ -198,7 +198,7 @@ describe("pruneParentEqualPrefill", () => {
     ).toEqual({ settings: {} });
     // filament_notes compares through unwrapIniString on both sides: the NFC
     // prefill writes the quoted wire form while an imported parent may hold
-    // the bare string — the form displays both identically (Codex r6).
+    // the bare string — the form displays both identically.
     expect(
       pruneParentEqualPrefill(
         { settings: { filament_notes: '"Origin: CZ"' } },

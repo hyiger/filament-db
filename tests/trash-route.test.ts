@@ -64,7 +64,6 @@ describe("Filament trash workflow", () => {
     // parent's multi-color data — otherwise a deleted variant under a
     // coextruded parent would render as a gray/solid dot in the trash
     // UI even though it inherits stripes everywhere else in the app.
-    // (Codex P2 on PR #486 r6.)
     const parent = await Filament.create({
       name: "Tri-color silk",
       vendor: "T",

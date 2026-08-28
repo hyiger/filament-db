@@ -14,40 +14,31 @@ import {
 } from "@/lib/apiErrorHandler";
 
 /**
- * POST /api/nfc/decode — decode raw NFC tag bytes server-side and attach a DB
- * match. The mobile scanner app's whole job is: read NFC bytes → POST here →
- * render the result. The decode logic (OpenPrintTag CBOR, Bambu MIFARE) is
- * complex, edge-case-laden, and — for Bambu — depends on Node crypto that
- * won't run in React Native, so it lives on the server (GH: mobile-scanner
- * Phase 0). Keeping it here also means one tested code path instead of a
- * duplicate client decoder that drifts from the desktop reader.
+ * POST /api/nfc/decode — decode raw NFC tag bytes server-side and attach a
+ * DB match. The mobile scanner is a thin client (read bytes → POST here →
+ * render); the decode logic lives server-side because Bambu decoding needs
+ * Node crypto that won't run in React Native, and one tested code path
+ * can't drift from the desktop reader.
  *
  * Request (application/json):
- *   {
- *     tagType: "openprinttag" | "bambu",
- *     // OpenPrintTag (ISO 15693 / NFC-V) — supply ONE of:
- *     payload?:   base64,  // the NDEF record payload (CBOR) — preferred; iOS
- *                          // Core NFC hands back already-parsed NDEF records
- *     tagMemory?: base64,  // raw tag memory; the route runs parseNdefFromTag
- *     // Bambu (MIFARE Classic / ISO 14443-3A):
- *     blocks?: { [blockNumber: string]: base64 }  // 16-byte plaintext blocks
- *   }
+ *   { tagType: "openprinttag" | "opentag3d" | "bambu",
+ *     payload?: base64,    // pre-parsed NDEF record payload — preferred
+ *     tagMemory?: base64,  // raw tag memory — auto-sniffed
+ *     blocks?: { [blockNumber: string]: base64 } }  // Bambu MIFARE
  *
- * Response 200: { decoded: DecodedOpenPrintTag, match: Filament | null, candidates: Filament[] }
+ * Response 200: { decoded, match, candidates, matchedBy, matchedSpool }.
  * Errors: 400 invalid body / undecodable bytes; 415 unknown tagType.
  *
- * Like GET /api/filaments/match, this route is intentionally NOT behind
- * assertSameOriginRequest: it performs no mutation (decode + read-only lookup)
- * and is meant to be reached by the cross-origin mobile app and slicer
- * integrations, exactly as the match route is. When FILAMENTDB_API_KEY is set,
- * src/proxy.ts requires EVERY /api caller (this route included) to present the
- * bearer key — so the optional key, not assertSameOriginRequest, is what gates
+ * Intentionally NOT behind assertSameOriginRequest (like
+ * GET /api/filaments/match): no mutation, and it must be reachable by the
+ * cross-origin mobile app. When FILAMENTDB_API_KEY is set, src/proxy.ts
+ * gates EVERY /api caller — the optional key, not the origin guard, gates
  * off-device access here.
  */
 
-// Tag data is tiny (OpenPrintTag ~320 bytes, a full MIFARE 1K dump ~1 KB);
-// base64 inflates ~33%. 64 KB is a generous ceiling that still bounds the
-// CBOR/NDEF parse work a hostile caller can trigger.
+// Tag data is tiny (~320 B–1 KB; base64 inflates ~33%) — 64 KB is a
+// generous ceiling that still bounds the parse work a hostile caller can
+// trigger.
 const MAX_DECODE_BODY = 64 * 1024;
 
 function toBytes(b64: unknown): Uint8Array | null {
@@ -64,16 +55,12 @@ function boundedField(v: string | undefined): string | null {
 
 /**
  * Decode an NDEF-borne tag (OpenPrintTag or OpenTag3D, #864).
- *
- * - `payload` (a pre-parsed NDEF record payload — no NDEF framing to sniff): the
- *   explicit `tagType` selects the codec (default OpenPrintTag). Checked FIRST
- *   so it keeps precedence over `tagMemory` when a caller sends both, matching
- *   the pre-#864 order.
- * - `tagMemory` (raw tag memory): parse the NDEF records and AUTO-SNIFF the
- *   format by record MIME via the codec registry — the SAME raw dump decodes
- *   whether it carries an `application/vnd.openprinttag` or an
- *   `application/opentag3d` record, regardless of the `tagType` hint. The CC
- *   position (Type-5 SLIX2 vs Type-2 NTAG) is auto-detected.
+ * - `payload` (pre-parsed record payload, no framing to sniff): `tagType`
+ *   selects the codec. Checked FIRST so it keeps precedence over
+ *   `tagMemory` when both are sent.
+ * - `tagMemory` (raw dump): AUTO-SNIFF by record MIME via the codec
+ *   registry, regardless of the `tagType` hint; the CC position (Type-5 vs
+ *   Type-2) is auto-detected.
  */
 function decodeNdefTag(
   body: Record<string, unknown>,
@@ -113,18 +100,15 @@ function decodeBambu(body: Record<string, unknown>): DecodedOpenPrintTag {
     blockArray[n] = Buffer.from(value, "base64");
     populated++;
   }
-  // An empty / all-invalid block map would otherwise parse into an all-zero
-  // array and yield a fabricated tag (brandName "Bambu Lab", black color, blank
-  // material) returned as a 200 success — so a failed phone read or malformed
-  // payload would masquerade as a decoded tag (Codex P2 on PR #690). Require at
-  // least one usable block.
+  // An empty / all-invalid block map would parse into an all-zero array and
+  // yield a fabricated tag returned as a 200 — a failed phone read
+  // masquerading as a decoded tag. Require at least one usable block.
   if (populated === 0) {
     throw new Error("bambu decode requires at least one readable MIFARE block");
   }
   const parsed = parseBambuBlocks(blockArray);
-  // Even with some blocks present, a dump carrying none of the identity blocks
-  // (variant/material id, filament type) has nothing we can match or create a
-  // filament from — treat it as an undecodable read rather than inventing a tag.
+  // A dump carrying none of the identity blocks has nothing to match or
+  // create from — treat as undecodable rather than inventing a tag.
   if (!parsed.filamentType && !parsed.materialVariantId && !parsed.detailedFilamentType) {
     throw new Error("bambu blocks contained no readable filament identity (blocks 1/2/4)");
   }
@@ -135,11 +119,10 @@ export async function POST(request: NextRequest) {
   const tooLarge = checkContentLength(request, MAX_DECODE_BODY);
   if (tooLarge) return tooLarge;
 
-  // Belt-and-suspenders: checkContentLength only inspects the Content-Length
-  // header, so a chunked / header-less body slips past it. Re-check the
-  // buffered byte length before parsing so this public, cross-origin-reachable
-  // endpoint has a real memory bound (the pattern src/app/api/filaments/
-  // prusaslicer/route.ts adopted for the same gap, Codex P2 on PR #685).
+  // Belt-and-suspenders: checkContentLength only inspects the header, so a
+  // chunked / header-less body slips past it — re-check the buffered byte
+  // length so this cross-origin-reachable endpoint has a real memory bound
+  // (same pattern as the prusaslicer route).
   const raw = await request.text();
   if (Buffer.byteLength(raw, "utf8") > MAX_DECODE_BODY) {
     return errorResponse(
@@ -178,13 +161,10 @@ export async function POST(request: NextRequest) {
 
   try {
     await dbConnect();
-    // An OpenPrintTag written by Filament DB carries the filament's instanceId
-    // in its spool_uid field (see GET /api/filaments/{id}/openprinttag, which
-    // sets spoolUid = filament.instanceId), so the decoded spoolUid is the
-    // strongest match signal for our own tags — matchFilament tries it first.
-    // For a Bambu tag (spoolUid = 32-char tray UID) or a community OpenPrintTag
-    // it won't collide with a 10-char FDB instanceId, so it harmlessly falls
-    // through to the name/vendor/type matching that mirrors scanMatchHandler.
+    // A tag written by Filament DB carries the instanceId in its spool_uid
+    // field — the strongest match signal, tried first. A Bambu tray UID or
+    // community tag won't collide with a 10-char FDB instanceId, so it
+    // harmlessly falls through to the name/vendor/type matching.
     const queriedInstanceId = boundedField(decoded.spoolUid);
     const { match, candidates, matchedSpool } = await matchFilament({
       instanceId: queriedInstanceId,
@@ -192,23 +172,16 @@ export async function POST(request: NextRequest) {
       vendor: boundedField(decoded.brandName),
       type: boundedField(decoded.materialType),
     });
-    // Tell the scanner HOW we matched. Only an instanceId match is a confident
-    // "this exact physical tag is in the DB" — the tag's spool_uid equals a
-    // filament's instanceId, which is what Filament DB wrote into the tag for
-    // that filament (GET /api/filaments/{id}/openprinttag). The weaker name /
-    // vendor+type heuristics (matchFilament's fallback tiers) can
-    // open an existing sibling color, so the scanner must NOT treat them as
-    // exact: it offers "create new" alongside opening the heuristic match.
-    // instanceId is detected EITHER by a spool-level hit (#732 — matchedSpool
-    // is non-null, the tag's spool_uid equals a spools[].instanceId) OR by the
-    // filament-level fallback (the matched row's top-level instanceId equals
-    // the queried spool_uid, case-insensitively). Both are confident "this
-    // exact physical tag is in the DB". A spool hit's matched FILAMENT carries a
-    // DIFFERENT top-level instanceId than the queried spool id, so the
-    // matchedSpool check must come first — otherwise a genuine spool match would
-    // be mislabelled "heuristic". The weaker name / vendor+type tiers
-    // (matchedSpool null AND no filament-id equality) stay "heuristic" so the
-    // scanner offers "create new" alongside opening the heuristic match.
+    // Tell the scanner HOW we matched. Only an instanceId match is a
+    // confident "this exact physical tag is in the DB"; the weaker name /
+    // vendor+type tiers stay "heuristic" so the scanner offers "create new"
+    // alongside opening the match. instanceId is detected EITHER by a
+    // spool-level hit (#732 — matchedSpool non-null) OR by the
+    // filament-level fallback (top-level instanceId equals the queried
+    // spool_uid, case-insensitively). The matchedSpool check must come
+    // first: a spool hit's matched FILAMENT carries a DIFFERENT top-level
+    // instanceId, so a genuine spool match would otherwise be mislabelled
+    // "heuristic".
     let matchedBy: "instanceId" | "heuristic" | null = null;
     if (match) {
       const matchedInstanceId = (match as { instanceId?: unknown }).instanceId;

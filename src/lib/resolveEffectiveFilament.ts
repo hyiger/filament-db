@@ -9,7 +9,7 @@ export interface EffectiveFilament {
    *  parent can't be loaded). Used to decide whether clearing an inherited
    *  array would actually take — clearing a variant's array `$set`s `[]`,
    *  which then resolves back to the parent's array, so a clear only reaches
-   *  empty when the parent's array is also empty (GH #607, Codex P2). */
+   *  empty when the parent's array is also empty (GH #607). */
   parentEffective: Record<string, unknown> | null;
 }
 

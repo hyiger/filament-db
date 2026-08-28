@@ -1,10 +1,9 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 /**
- * A slot in a multi-material system (Bambu AMS position, Prusa MMU tool head,
- * etc.). Holds a reference to a specific spool of a specific filament. The
- * compound reference lets the UI show "AMS 1 Slot A · PLA Basic Matte · spool 2
- * (410g remaining)" without needing to duplicate data.
+ * A slot in a multi-material system (Bambu AMS position, Prusa MMU tool
+ * head, etc.). Holds a reference to a specific spool of a specific
+ * filament.
  */
 export interface IAmsSlot {
   _id?: mongoose.Types.ObjectId;
@@ -21,14 +20,12 @@ export interface IPrinter extends Document {
   manufacturer: string;
   printerModel: string;
   installedNozzles: mongoose.Types.ObjectId[];
-  /** Bed surfaces this printer can use (GH — printer↔bed-type association).
-   * Unlike `installedNozzles`, which are physical instances (one nozzle =
-   * one printer, enforced since #232), bed types are a SHARED catalog: a
-   * surface spec like "Textured PEI" can legitimately be referenced by
+  /** Unlike `installedNozzles`, which are physical instances (one nozzle
+   * = one printer, enforced since #232), bed types are a SHARED catalog:
+   * a surface spec like "Textured PEI" can legitimately be referenced by
    * many printers at once. No conflict detection applies here. */
   installedBedTypes: mongoose.Types.ObjectId[];
   notes: string;
-  // v1.11 additions — expanded printer profile
   /** Build volume in mm. Null means unspecified. */
   buildVolume: { x: number | null; y: number | null; z: number | null };
   /** Rated max volumetric flow rate in mm³/s — useful for validating filament max flow. */
@@ -49,13 +46,9 @@ export interface IPrinter extends Document {
 const PrinterSchema = new Schema<IPrinter>(
   {
     // GH #1116: `trim: true` makes the stored name the identity key every
-    // lookup already assumes it is. Nothing normalized a name on write, so
-    // `Drybox #1 ` and `Drybox #1` were two distinct rows that render
-    // identically — and a CSV round-trip silently created the second one.
-    // Mongoose applies this setter on create/save, updateOne,
-    // findOneAndUpdate and insertMany, but NOT on raw driver writes, so the
-    // hybrid-sync engine (which copies whole documents through the driver)
-    // bypasses it: the invariant is per-instance, not global.
+    // lookup already assumes it is. Applied on create/save, updateOne,
+    // findOneAndUpdate and insertMany, but NOT on raw driver writes, so
+    // the hybrid-sync engine bypasses it: per-instance, not global.
     name: { type: String, required: true, trim: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
     manufacturer: { type: String, required: true, index: true },
@@ -76,15 +69,13 @@ const PrinterSchema = new Schema<IPrinter>(
       {
         slotName: { type: String, required: true },
         filamentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null },
-        // GH #280: `spoolId` is intentionally ref-less. A spool is a
-        // *subdocument* of a Filament, not a top-level collection, so
-        // Mongoose `ref`/`populate` cannot resolve it. Slot assignment is
-        // funnelled through `assignSpoolToSlot` (src/lib/spoolSlots.ts),
-        // which is the enforcement point for the "one spool, one slot"
-        // invariant; the spool DELETE / retire routes clear stale ids.
-        // The hybrid-sync engine additionally nulls this on every
-        // cross-side remap (no stable cross-side spool id — see the
-        // v1.13 notes in CLAUDE.md), so a dangling id is self-healing.
+        // `spoolId` is intentionally ref-less: a spool is a *subdocument*
+        // of a Filament, so Mongoose `ref`/`populate` cannot resolve it.
+        // Slot assignment funnels through `assignSpoolToSlot`
+        // (src/lib/spoolSlots.ts) — the enforcement point for the
+        // "one spool, one slot" invariant; the spool DELETE / retire
+        // routes clear stale ids, and the hybrid-sync engine nulls this
+        // on cross-side remap (no stable cross-side spool id).
         spoolId: { type: Schema.Types.ObjectId, default: null },
       },
     ],
@@ -99,14 +90,11 @@ PrinterSchema.index(
   { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
-// GH #525.3: index the AMS-slot ref fields. spoolSlots.findSpoolSlot,
-// assignSpoolToSlot (clear-everywhere), clearSpoolsFromOtherPrinters,
-// and the sync-engine repair pass all query into amsSlots.spoolId /
-// amsSlots.filamentId on hot paths (every spool DELETE / retire /
-// assignment, every filament DELETE, every Printer save, every sync
-// cycle). Sparse so docs without amsSlots entries don't bloat the
-// index. Personal-use installs have 1-5 printers so the perf delta
-// is small; this is defensive hardening for the maker-space case.
+// Index the AMS-slot ref fields — spoolSlots.findSpoolSlot,
+// assignSpoolToSlot, clearSpoolsFromOtherPrinters, and the sync-engine
+// repair pass all query into amsSlots.spoolId / amsSlots.filamentId on
+// hot paths. Sparse so docs without amsSlots entries don't bloat the
+// index.
 PrinterSchema.index({ "amsSlots.spoolId": 1 }, { sparse: true });
 PrinterSchema.index({ "amsSlots.filamentId": 1 }, { sparse: true });
 

@@ -22,8 +22,7 @@ type FilamentDoc = Record<string, any>;
  * raw (no parent fallback) by the `/api/filaments` list aggregation and
  * the dashboard low-stock loop, so inheriting it here would make a
  * variant's detail/export view disagree with its list badge + dashboard
- * card (Codex P2 on PR #648). Keeping it variant-only still fixes the
- * original silent-drop bug — it's now in an allowlist rather than neither.
+ * card.
  * Exported (along with INHERITABLE_FIELDS) so the schema-drift guard in
  * tests/resolveFilament.test.ts can diff the allowlists against the
  * Filament schema's top-level paths — a new schema field that lands in

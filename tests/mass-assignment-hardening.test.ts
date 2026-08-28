@@ -188,7 +188,7 @@ describe("mass-assignment & data-integrity hardening", () => {
     expect(fresh.openprinttagSnapshot).toBeNull();
   });
 
-  // ── GH #605 round 10: the durable promotion-marker pair is server-owned ──
+  // ── GH #605: the durable promotion-marker pair is server-owned ──
   //
   // promotionInFlight (parent side) + promotedByToken (copy side) are the
   // PROOF a promotion resume requires. A client-forged pair could make a

@@ -10,23 +10,17 @@ export default function ApiDocsPage() {
   const { t } = useTranslation();
   const hostRef = useRef<HTMLDivElement>(null);
 
-  // GH #321 / #554: swagger-ui-react's internal components (ModelCollapse,
-  // OperationContainer, …) still use the legacy UNSAFE_componentWillReceiveProps
-  // lifecycle. Under the app's React StrictMode (Next's default), React logs a
-  // "not recommended in strict mode" warning, and Next's dev overlay then
-  // surfaces it as a blocking "Issue" that makes /api-docs look broken during
-  // local/Electron QA.
-  //
-  // #321 removed the old global console.error monkey-patch (it intercepted ALL
-  // logging app-wide while this page was open) and deliberately left the
-  // warnings. Rather than re-patch console or disable StrictMode app-wide, we
-  // mount SwaggerUI in its OWN React root: a root created here is not a
-  // descendant of the StrictMode that Next wraps the app root in, so swagger's
-  // legacy lifecycles run without the strict-mode warning while the rest of the
-  // app keeps StrictMode. A fresh child node per effect run avoids React's
-  // "container already passed to createRoot" warning under StrictMode's dev
-  // double-invoke, and the unmount is deferred to a microtask to dodge the
-  // "synchronous unmount during render" warning when the effect tears down.
+  // GH #321 / #554: swagger-ui-react's internals still use legacy
+  // UNSAFE_ lifecycles, which React StrictMode warns about and Next's dev
+  // overlay surfaces as a blocking "Issue". Rather than patch console or
+  // disable StrictMode app-wide, SwaggerUI mounts in its OWN React root: a
+  // root created here is not a descendant of the app's StrictMode, so
+  // swagger's legacy lifecycles run without the warning while the rest of
+  // the app keeps StrictMode. A fresh child node per effect run avoids
+  // React's "container already passed to createRoot" warning under
+  // StrictMode's dev double-invoke, and the unmount is deferred to a
+  // microtask to dodge the "synchronous unmount during render" warning when
+  // the effect tears down.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;

@@ -62,8 +62,6 @@ describe("/api/spools/import", () => {
     });
   }
 
-  // ── GH #605 (codex round 3 sweep): templates take no NEW spools ────────
-
   describe("template guard (GH #605)", () => {
     /** A template: a parent with one live variant. */
     async function seedTemplate(name = "Template PLA") {
@@ -335,7 +333,7 @@ describe("/api/spools/import", () => {
     expect(body.imported).toBe(1);
   });
 
-  // Codex P2 on PR #141 — round-trip parity with `/api/spools/export-csv`,
+  // Round-trip parity with `/api/spools/export-csv`,
   // which emits an empty `totalWeight` cell for spools that genuinely have
   // no recorded weight (e.g. spools created via POST /api/filaments/[id]/spools
   // which defaults to null). Pre-fix the importer coerced "" → 0 because
@@ -364,7 +362,7 @@ describe("/api/spools/import", () => {
     expect(body.results[1].error).toMatch(/non-negative/);
   });
 
-  // Codex P2 follow-up to PR #144 — `csvCell` prefixes formula-leading
+  // `csvCell` prefixes formula-leading
   // STRING cells with a `'` so spreadsheets read them as text. The
   // importer must strip that guard so a row exported with a name like
   // `=Eval` round-trips back to the original filament without keeping
@@ -638,7 +636,7 @@ describe("/api/spools/import", () => {
     });
   });
 
-  // Codex P1 on PR #546: two rows for the SAME filament that resolve via
+  // Two rows for the SAME filament that resolve via
   // different cache keys (one omits vendor, one supplies the matching vendor)
   // used to hydrate two separate Mongoose document instances for the same
   // _id. Only the bucket's instance was saved, so the other row's spool was
@@ -664,7 +662,7 @@ describe("/api/spools/import", () => {
       expect(fresh.spools.map((s: { totalWeight: number }) => s.totalWeight).sort()).toEqual([700, 800, 900]);
     });
 
-    // Codex P2 on PR #547: registering the touched bucket BEFORE date
+    // Registering the touched bucket BEFORE date
     // validation meant a row that resolved a filament but then failed
     // validation still got the filament save()'d (no mutation, wasted write).
     // A row that fails validation must leave its filament completely untouched.
@@ -735,7 +733,7 @@ describe("/api/spools/import", () => {
     });
   });
 
-  // GH #372 (Codex follow-up): a CSV row carrying an ISO-shaped but
+  // GH #372: a CSV row carrying an ISO-shaped but
   // impossible calendar date (e.g. "2025-02-29") must NOT silently shift
   // the spool to a different day via JS Date normalisation.
   describe("date validity in CSV rows", () => {
@@ -777,7 +775,7 @@ describe("/api/spools/import", () => {
       expect(fresh.spools).toHaveLength(0);
     });
 
-    // Codex P2 on PR #375: a row failing date validation must not leave
+    // A row failing date validation must not leave
     // behind an auto-created Location. resolveLocationId upserts by name,
     // so if validation ran AFTER the upsert an invalid CSV row would
     // dirty the catalog with a phantom location even though no spool
@@ -958,7 +956,7 @@ describe("/api/spools/import", () => {
     it("rejects an instanceId colliding with another filament's top-level id", async () => {
       // matchFilament resolves spool ids BEFORE the filament-level fallback,
       // so a spool id equal to another filament's top-level id would shadow
-      // that filament's labels/tags (Codex P2). isSpoolInstanceIdTaken guards
+      // that filament's labels/tags. isSpoolInstanceIdTaken guards
       // both halves.
       await Filament.create({
         name: "Top Level",
@@ -981,7 +979,7 @@ describe("/api/spools/import", () => {
     });
 
     it("ignores a legacy filament-level id in the column (pre-Phase-5 export round-trip)", async () => {
-      // Codex P2 on PR #742: before this phase the exporter wrote the
+      // Before this phase the exporter wrote the
       // FILAMENT's top-level id into the instanceId column for EVERY spool
       // row, alongside spoolId. Re-importing such a CSV must NOT (a) fail rows
       // 2..N as within-batch dups or (b) rewrite either spool's own id to the
@@ -1030,7 +1028,7 @@ describe("/api/spools/import", () => {
     });
 
     it("honors a cell equal to the filament's top-level id on the CREATE path (carry-over preservation)", async () => {
-      // Codex P2 follow-up: the legacy guard is scoped to the UPDATE path. On
+      // The legacy guard is scoped to the UPDATE path. On
       // CREATE, a real per-spool id that equals the filament's top-level id
       // (e.g. a Phase-1 carry-over spool re-created from its printed label /
       // NFC tag) must be HONORED, not silently regenerated. No existing spool
@@ -1298,7 +1296,7 @@ describe("/api/spools/import", () => {
 });
 
 /**
- * GH #1111 (Codex P2) — importing a spool row against a LEGACY single-spool
+ * GH #1111 — importing a spool row against a LEGACY single-spool
  * filament IS the migration to a real spool, so it must clear the now-stale
  * filament-level `totalWeight`. Otherwise the two coexist and every helper's
  * `spools.length === 0` fallback waits to resurrect the old roll the moment
@@ -1452,8 +1450,8 @@ describe("/api/spools/import — legacy roll migration (#1111)", () => {
     });
 
     /**
-     * The case above assumes the pass SUCCEEDED. This is the one that bites
-     * (Codex P1, round 23): `trimEntityNames` skips a collection whose
+     * The case above assumes the pass SUCCEEDED. This is the one that bites:
+     * `trimEntityNames` skips a collection whose
      * protective unique index cannot be established — which is exactly what a
      * database with pre-existing duplicate active names does — and the raw
      * untrimmed row survives.

@@ -25,12 +25,11 @@ export async function POST(request: NextRequest) {
     if (sizeError) return sizeError;
 
     const content = await file.text();
-    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
-    // base filament so a bundle round-trip updates the original instead of
-    // spawning "<base> <Ø> <type>" orphan records (Codex P2). NOTE the per-nozzle
-    // calibration model is NOT reconstructed from a flat bundle — a fresh import of
-    // a multi-nozzle export lands the base filament without its baked temps /
-    // calibrations by design; Settings → Backup & Restore is the lossless path.
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into
+    // their base filament so a bundle round-trip updates the original
+    // instead of spawning "<base> <Ø> <type>" orphans. NOTE the per-nozzle
+    // calibration model is NOT reconstructed from a flat bundle — by
+    // design; Settings → Backup & Restore is the lossless path.
     const filaments = collapsePerNozzleImportSections(parseIniFilaments(content));
 
     if (filaments.length === 0) {
@@ -60,18 +59,15 @@ export async function POST(request: NextRequest) {
 
     for (const filament of filaments) {
       try {
-        // GH #951: the three-phase atomic upsert (active → resurrect-trashed →
-        // create/race) lives in `upsertIniFilament`, shared with
+        // GH #951: the three-phase atomic upsert (active → resurrect-trashed
+        // → create/race) lives in `upsertIniFilament`, shared with
         // POST /api/filaments/prusaslicer, and preserves variant→parent
-        // inheritance — the export flattens a variant's inherited values
-        // through resolveFilament, so re-importing must NOT pin them as local
-        // overrides (that would sever GH #106 live inheritance). See
-        // src/lib/iniImportApply.ts.
+        // inheritance — re-importing flattened values must NOT pin them as
+        // local overrides (severing GH #106 live inheritance).
         const outcome = await upsertIniFilament(filament, {
           // GH #605: a name-matched TEMPLATE target had per-variant fields
-          // (color) stripped rather than re-materialized. Reported as a
-          // per-row note through the existing errors channel — the row
-          // itself still imported (matching the atlas importer's posture).
+          // stripped rather than re-materialized — reported as a per-row
+          // note; the row itself still imported.
           onTemplateFieldsStripped: (fields) =>
             errors.push(
               `${filament.name}: skipped ${fields.join(", ")} — the local filament is a template (inventory and color live on its variants)`,

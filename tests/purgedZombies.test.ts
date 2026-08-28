@@ -7,7 +7,7 @@ import {
 import { trimEntityNames, type MinimalTrimDb } from "@/lib/trimEntityNames";
 
 /**
- * GH #1004 F1, made load-bearing by GH #1116 (Codex P1, round 27).
+ * GH #1004 F1, made load-bearing by GH #1116.
  *
  * A zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
  * MongoDB is concerned, so it occupies the partial unique name index — and on

@@ -86,10 +86,9 @@ export default function PrintDryBoxLabelDialog({
   //
   // THREE states, and the distinction is load-bearing: `undefined` = the
   // IPC read is still pending, `null` = resolved as not-configured, string
-  // = configured. Collapsing pending into null let a fast manifest fetch
-  // enable Print before the saved URL arrived, baking localhost into a
-  // PHYSICAL label for a user who had configured a public URL correctly
-  // (PR #1043 round 3) — a race whose loser is a reprint.
+  // = configured. Collapsing pending into null lets a fast manifest fetch
+  // enable Print before the saved URL arrives, baking localhost into a
+  // PHYSICAL label for a user who had configured a public URL correctly.
   const [publicUrl, setPublicUrl] = useState<string | null | undefined>(undefined);
   useEffect(() => {
     if (!open) return;
@@ -128,12 +127,10 @@ export default function PrintDryBoxLabelDialog({
   }, [publicUrl, location._id]);
 
   // The manifest is fetched HERE, unfiltered — never taken from the page's
-  // rows. The inventory page passes its type/vendor filters to the API and
-  // search-filters client-side, so its group.spools is the VISIBLE subset;
-  // printing that under an active filter produces a label asserting a
-  // partial list is the box's full contents, dated as if authoritative
-  // (PR #1043 P1). The default query excludes retired spools server-side —
-  // retired means out of inventory, not "in the box".
+  // rows: the inventory page's group.spools is the VISIBLE subset under
+  // its filters, and printing that would assert a partial list as the
+  // box's full, dated contents. The default query excludes retired spools
+  // server-side — retired means out of inventory, not "in the box".
   type ManifestState =
     | { status: "loading" }
     | { status: "ready"; items: DryBoxLabelItem[] }

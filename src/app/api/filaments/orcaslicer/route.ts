@@ -39,8 +39,8 @@ export async function GET(request: NextRequest) {
     if (typeFilter) query.type = typeFilter;
     if (vendorFilter) query.vendor = vendorFilter;
     if (idsFilter) {
-      // Validate each id is a real ObjectId before the $in — an invalid value
-      // would otherwise throw a Mongoose CastError and 500 (#677).
+      // Validate each id before the $in — an invalid value would CastError
+      // into a 500 (#677).
       const ids = idsFilter.split(",").map((id) => id.trim()).filter(Boolean);
       const bad = ids.filter((id) => !OBJECT_ID_RE.test(id));
       if (bad.length > 0) {
@@ -51,9 +51,8 @@ export async function GET(request: NextRequest) {
 
     const filaments = await Filament.find(query)
       .sort({ name: 1 })
-      // GH #1005 F2: the OrcaSlicer bundle mapping never reads spools; exclude
-      // the whole array (photoDataUrl blobs + usageHistory ledgers) so a
-      // slicer startup doesn't deserialize hundreds of MB to emit the JSON.
+      // GH #1005 F2: the bundle mapping never reads spools — exclude the
+      // array so a slicer startup doesn't deserialize photo blobs + ledgers.
       .select("-spools")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")

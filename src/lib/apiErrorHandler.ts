@@ -1,15 +1,9 @@
 import { NextResponse } from "next/server";
 
-/**
- * Extracts a human-readable error message from an unknown error value.
- */
 export function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Creates a standardized JSON error response.
- */
 export function errorResponse(
   error: string,
   status: number,
@@ -22,9 +16,8 @@ export function errorResponse(
 }
 
 /**
- * True when an error is a MongoDB duplicate-key error (code 11000) —
- * e.g. a `create` that collided with a partial-unique index. Useful for
- * retry-on-duplicate logic where a concurrent insert raced this one.
+ * True when an error is a MongoDB duplicate-key error (code 11000) — e.g. a
+ * `create` that collided with a partial-unique index.
  */
 export function isDuplicateKeyError(err: unknown): boolean {
   return (
@@ -35,10 +28,7 @@ export function isDuplicateKeyError(err: unknown): boolean {
   );
 }
 
-/**
- * Checks if an error is a MongoDB duplicate-key error (code 11000).
- * Returns a formatted 409 response if so, otherwise null.
- */
+/** Returns a formatted 409 response for a duplicate-key error, else null. */
 export function handleDuplicateKeyError(
   err: unknown,
   entityName: string,
@@ -64,11 +54,10 @@ export function handleDuplicateKeyError(
  *
  * `Invalid URL:` is colon-anchored on purpose. `assertExternalUrl` re-throws
  * its constructor failure as `Invalid URL: <input>` so it matches here, while
- * the bare `new URL(...)` constructor (used by the TDS redirect resolver in
- * src/lib/tdsExtractor.ts when the upstream Location header is malformed)
- * throws just `Invalid URL`. The bare form is an upstream/bad-gateway
- * failure, not user input, and must NOT be mapped to 400 (Codex P2 on PR
- * #167).
+ * a bare `new URL(...)` constructor failure (e.g. a malformed upstream
+ * Location header in src/lib/tdsExtractor.ts) throws just `Invalid URL` —
+ * an upstream/bad-gateway failure, not user input, which must NOT be mapped
+ * to 400.
  */
 export function isClientInputErrorMessage(message: string): boolean {
   return /must be a valid|Disallowed URL scheme|private\/internal address|URL hostname does not resolve|URL has no hostname|Invalid URL:/i.test(message);
@@ -76,17 +65,10 @@ export function isClientInputErrorMessage(message: string): boolean {
 
 /**
  * True when an error is a client-input rejection rather than a server fault —
- * Mongoose schema validators (`ValidationError`), Mongoose ObjectId-cast
- * rejections (`CastError` — fired when a route's path param like `{id}` is
- * not a parseable ObjectId — GH #202), our pre-update hooks (`tdsUrl must
- * be a valid http(s) URL`), and the shared SSRF guard (`assertExternalUrl`
- * rejections from src/lib/externalUrlGuard.ts).
- *
- * Used by route handlers to distinguish 4xx-worthy "your input was bad"
- * from 5xx "the server crashed". Without this, validators throw a generic
- * Error and the catch-all returns 500/502, which is wrong for monitoring
- * (alerts on legitimate user-input rejections) and bad UX (renderers can't
- * branch on "show form error" vs "show server error").
+ * Mongoose `ValidationError`, Mongoose `CastError` (a route path param like
+ * `{id}` that isn't a parseable ObjectId — GH #202), plus the message shapes
+ * in `isClientInputErrorMessage`. Route handlers use it to distinguish
+ * 4xx-worthy input rejections from 5xx server faults.
  */
 export function isClientInputError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
@@ -112,29 +94,14 @@ export function errorResponseFromCaught(
 }
 
 /**
- * GH #504: Mongoose `Error.VersionError` is the optimistic-concurrency
- * signal — two writers raced the same document version. Surface it as
- * 409 so the caller can re-fetch and retry against the fresh state
- * (instead of seeing a generic 500). `print-history`'s POST handler
- * has had this branch since GH #224; this helper lifts the pattern so
- * every `.save()` site can share it without duplicating message copy.
- *
- * Pass the caught error AND an optional context label for the message.
- * Returns the 409 NextResponse on a VersionError, or null when the
- * caller should fall through to its existing generic-error branch.
- *
- * Usage:
- *   } catch (err) {
- *     const conflict = handleVersionError(err);
- *     if (conflict) return conflict;
- *     return errorResponseFromCaught(err, "Failed to ...");
- *   }
+ * GH #504: Mongoose `VersionError` is the optimistic-concurrency signal — two
+ * writers raced the same document version. Surface it as 409 so the caller can
+ * re-fetch and retry, instead of a generic 500. Returns null when the caller
+ * should fall through to its generic-error branch.
  */
 export function handleVersionError(err: unknown): NextResponse | null {
-  // Use a runtime instanceof check — but lazy-import to avoid pulling
-  // mongoose into edge-runtime callers. Mongoose's VersionError extends
-  // Error with name "VersionError"; matching on the name is portable
-  // and survives across the framework-internal subclass.
+  // Match on the name, not instanceof, to avoid importing mongoose into
+  // edge-runtime callers; the name survives the framework-internal subclass.
   if (
     err instanceof Error &&
     (err.name === "VersionError" || err.constructor?.name === "VersionError")
@@ -149,14 +116,10 @@ export function handleVersionError(err: unknown): NextResponse | null {
 
 /**
  * GH #519: assert every id in `ids` corresponds to an active (non-trashed)
- * document in `model`. Returns null when every id resolves; returns a 400
- * NextResponse naming the offending field when any are missing. Same shape
- * as the printer-route existence checks so error messages stay consistent.
- *
- * The check ignores order and duplicates (`countDocuments` is on the
- * deduped `$in` set) — combine with a `Array.from(new Set(ids))` at the
- * route entry to make the per-route message match the deduped count
- * (see GH #524.4).
+ * document in `model`. Returns null when every id resolves, else a 400 naming
+ * the offending field. The check ignores order and duplicates (counts the
+ * deduped `$in` set) — dedupe ids at the route entry so per-route messages
+ * match the deduped count.
  */
 interface CountableModel {
   countDocuments(filter: Record<string, unknown>): Promise<number> | { exec(): Promise<number> };
@@ -190,17 +153,11 @@ const SPOOL_OID_RE = /^[a-f0-9]{24}$/i;
 
 /**
  * GH #953: assert a spool's `locationId` references an existing, ACTIVE
- * (non-soft-deleted) Location. No spool write path validated this — unlike the
- * nozzle/printer/bed-type refs on the filament routes, which flow through
- * assertActiveRefs — so a dangling ref (e.g. a mobile offline-queue move
- * replayed after the referenced location was deleted, or an API retry) persisted
- * and produced a phantom "no location" group in every location-grouped view
- * (/inventory, ?kind= filters silently drop the spool, the home-page
- * "N spools in M locations" stat overcounts).
- *
- * `null`/empty = "no location" and passes. The Location model is injected (same
- * pattern as assertActiveRefs) so this module doesn't import a model and stays
- * edge-safe. Returns a 400 NextResponse on a bad/dangling ref, else null.
+ * (non-soft-deleted) Location — a dangling ref (e.g. a mobile offline-queue
+ * move replayed after the location was deleted) produces phantom "no location"
+ * groups in every location-grouped view. `null`/empty = "no location" and
+ * passes. The Location model is injected so this module stays edge-safe.
+ * Returns a 400 on a bad/dangling ref, else null.
  */
 export async function assertActiveSpoolLocation(
   locationModel: CountableModel,
@@ -225,9 +182,6 @@ export async function assertActiveSpoolLocation(
 /** Maximum upload file size (10 MB) */
 export const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
 
-/**
- * Validates a file upload isn't too large. Returns an error response if it is.
- */
 export function checkFileSize(file: File): NextResponse | null {
   if (file.size > MAX_UPLOAD_SIZE) {
     const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
@@ -254,9 +208,7 @@ export function checkContentLength(
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > max) {
     const sizeMB = (declared / (1024 * 1024)).toFixed(1);
-    // Codex P2 on PR #1090: format a sub-megabyte limit in KB — a 64 KB cap
-    // used to render as the nonsensical "Maximum is 0 MB." All pre-existing
-    // callers use MB-scale limits, so their messages are unchanged.
+    // Format a sub-megabyte limit in KB — a 64 KB cap used to render as "0 MB".
     const maxLabel =
       max < 1024 * 1024
         ? `${Math.round(max / 1024)} KB`
@@ -270,14 +222,9 @@ export function checkContentLength(
 }
 
 /**
- * GH #338: short-circuit a route when the body isn't `multipart/form-data`,
- * before the downstream `await request.formData()` throws the runtime's
- * "Content-Type was not one of …" error — which the catch-all error
- * handlers then map to 500. A wrong/missing content type is a CLIENT
- * input error and belongs at 400 with a clear message.
- *
- * Returns `null` when the request is multipart; an `errorResponse(...)`
- * otherwise, ready to short-circuit the handler.
+ * GH #338: short-circuit a route with a 400 when the body isn't
+ * `multipart/form-data` — otherwise `request.formData()` throws and the
+ * catch-all maps a client input error to 500. Returns null when multipart.
  */
 export function assertMultipartFormData(request: Request): NextResponse | null {
   const contentType = (request.headers.get("content-type") || "").toLowerCase();

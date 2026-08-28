@@ -90,7 +90,7 @@ describe("buildFilamentGroups", () => {
     expect(allRendered.filter((id) => id === "v1")).toHaveLength(1);
   });
 
-  // Codex P2 on #788: the FIRST arg (source) controls membership, so the
+  // GH #788: the FIRST arg (source) controls membership, so the
   // caller can pass a content-filtered set (e.g. the `hasSpools` quick filter)
   // and the group will only carry variants that pass the filter — it must NOT
   // reach past the source into a wider list.

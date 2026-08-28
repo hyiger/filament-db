@@ -25,8 +25,6 @@ import { JS_TRIM_CHARS, castNameLikeSchema } from "@/lib/trimEntityNames";
  *
  * ## Why it is one shared helper
  *
- * This rule was applied to the CSV importer and to nothing else, and the two
- * call sites that needed it next were each found by review, one round apart.
  * A single exported filter means the next resolve-or-create path either uses it
  * or is visibly not using it.
  *
@@ -155,32 +153,6 @@ export async function findSurvivorId(
 }
 
 /**
- * The mirror problem: a NAME-ADDRESSED request whose name is the addressing
- * key, where the cast can silently redirect it to a DIFFERENT row.
- *
- * The importers above ask "does a row for this name already exist?", and a
- * miss costs a duplicate. The slicer sync routes ask something stricter — "the
- * preset is literally called this; give me THAT filament" — and there a cast
- * costs something worse than a duplicate.
- *
- * With both `"X"` and `"X "` active (an unresolved migration), a preset
- * addressed as `"X "` casts to `"X"` and selects the CANONICAL row. The sync
- * then writes the preset's settings and calibration onto a filament that is
- * not the one the slicer was talking about. Before `trim: true` the same query
- * matched the raw `"X "` exactly, so this is a redirection the schema change
- * introduced, and no amount of create-on-404 removal makes it safe: nothing is
- * created, the wrong record is simply overwritten.
- *
- * So: when the addressing name carries edge whitespace, look for that EXACT
- * stored spelling with the raw driver first. A hit is unambiguous — the slicer
- * named a row that literally exists under that spelling. A miss (including
- * after the migration has since normalized it) falls through to the ordinary
- * cast query, which is then correct.
- *
- * Returns null when the name has no edge whitespace, because the cast query is
- * already an exact match and a second round trip would buy nothing.
- */
-/**
  * Would writing `name` produce a row indistinguishable from an existing one?
  *
  * The ordinary CRUD creates and renames leaned entirely on the partial unique
@@ -198,8 +170,8 @@ export async function findSurvivorId(
  * because this is a raw-driver query where an ObjectId never equals a string
  * and the row would fail to exclude itself.
  *
- * The incoming value is normalized through `castNameLikeSchema` FIRST (Codex
- * P2). A bare `typeof name !== "string"` skip is a hole: a JSON client can
+ * The incoming value is normalized through `castNameLikeSchema` FIRST.
+ * A bare `typeof name !== "string"` skip is a hole: a JSON client can
  * send `7` or `{"_id": "X"}`, Mongoose stores those as `"7"` and `"X"`, and
  * beside a survivor stored as `"7 "` or `"X "` the raw index sees different
  * strings and admits the duplicate — while the guard, having decided the value
@@ -214,7 +186,7 @@ export async function survivorNameConflict(
   const cast = castNameLikeSchema(name);
   if (cast === null || !cast.trim()) return null;
 
-  // Look PAST a match that turns out to be the row being renamed (Codex P2).
+  // Look PAST a match that turns out to be the row being renamed.
   //
   // Several active rows can trim to the same name — that is exactly the state
   // a skipped migration leaves — and a single-match lookup returns an
@@ -246,6 +218,32 @@ export async function survivorNameConflict(
   return selfId != null && id === String(selfId) ? null : id;
 }
 
+/**
+ * The mirror problem: a NAME-ADDRESSED request whose name is the addressing
+ * key, where the cast can silently redirect it to a DIFFERENT row.
+ *
+ * The importers above ask "does a row for this name already exist?", and a
+ * miss costs a duplicate. The slicer sync routes ask something stricter — "the
+ * preset is literally called this; give me THAT filament" — and there a cast
+ * costs something worse than a duplicate.
+ *
+ * With both `"X"` and `"X "` active (an unresolved migration), a preset
+ * addressed as `"X "` casts to `"X"` and selects the CANONICAL row. The sync
+ * then writes the preset's settings and calibration onto a filament that is
+ * not the one the slicer was talking about. Before `trim: true` the same query
+ * matched the raw `"X "` exactly, so this is a redirection the schema change
+ * introduced, and no amount of create-on-404 removal makes it safe: nothing is
+ * created, the wrong record is simply overwritten.
+ *
+ * So: when the addressing name carries edge whitespace, look for that EXACT
+ * stored spelling with the raw driver first. A hit is unambiguous — the slicer
+ * named a row that literally exists under that spelling. A miss (including
+ * after the migration has since normalized it) falls through to the ordinary
+ * cast query, which is then correct.
+ *
+ * Returns null when the name has no edge whitespace, because the cast query is
+ * already an exact match and a second round trip would buy nothing.
+ */
 export async function findExactRawNameId(
   collection: MinimalNameCollection,
   name: string,

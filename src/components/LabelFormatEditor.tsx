@@ -56,7 +56,6 @@ export default function LabelFormatEditor() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
 
-  // Re-render the preview whenever the format changes.
   useEffect(() => {
     let cancelled = false;
     renderLabelPreviewDataUrl({ filament: SAMPLE_FILAMENT, qrPayload: SAMPLE_QR_PAYLOAD, format })

@@ -1,34 +1,26 @@
 /**
  * True when `hostname` (as returned by URL.hostname) addresses the
  * local machine. Used by the label-printer public-URL validator
- * (electron/main.ts) and by the PrintLabelDialog's UX-gate for
- * URL-mode QRs (src/components/PrintLabelDialog.tsx) — both sides
- * must agree, so the helper is shared from src/lib/ rather than
- * duplicated. (Codex P2 round 11 on PR #487 caught the original
- * drift when the renderer was using a much weaker regex.)
- *
- * Pure regex / string ops — no Node OR browser deps, so the same
- * function runs in:
- *   - Electron main (validator at write time, security boundary)
- *   - Renderer (UX gate at preview time, prevents printing an
- *     unscannable QR before the user clicks Print)
- *   - Vitest tests in tests/loopbackHost.test.ts
+ * (electron/main.ts, the security boundary) and by the PrintLabelDialog's
+ * UX-gate for URL-mode QRs — both sides must agree, so the helper is shared
+ * from src/lib/ rather than duplicated. Pure regex / string ops — no Node OR
+ * browser deps.
  *
  * Handles every shape URL.hostname can produce:
  *   - "localhost" (case-insensitive)
  *   - DNS absolute-name notation with trailing dot ("localhost.",
- *     "127.0.0.1.", etc.) — Codex P2 round 3 on PR #487
+ *     "127.0.0.1.", etc.)
  *   - IPv4 loopback: 127.0.0.0/8 (commonly 127.0.0.1)
  *   - IPv4 unspecified bind: "0.0.0.0"
  *   - IPv6 loopback bare:      "::1"
  *   - IPv6 loopback bracketed: "[::1]"  ← URL.hostname keeps the
- *     brackets for IPv6 literals (Codex P2 round 2)
+ *     brackets for IPv6 literals
  *   - IPv6 loopback uncompressed: "0:0:0:0:0:0:0:1" (+ bracketed)
  *   - IPv4-mapped IPv6 loopback: "::ffff:127.0.0.1" (+ bracketed)
  *   - ...and the hex-normalised form Node's URL parser produces:
  *     "::ffff:7fNN:YYYY"
  *   - IPv6 unspecified bind: "::" (+ "[::]", "0:0:0:0:0:0:0:0") —
- *     the v6 analog of "0.0.0.0" (Codex P2 round 10)
+ *     the v6 analog of "0.0.0.0"
  */
 export function isLoopbackHostname(hostname: string): boolean {
   // Strip IPv6 literal brackets if present.
@@ -65,8 +57,7 @@ export function isLoopbackHostname(hostname: string): boolean {
   // IPv4-mapped IPv6 unspecified (the v6-mapped form of 0.0.0.0).
   // Dotted: `::ffff:0.0.0.0`. Hex-normalised by Node's URL parser:
   // `::ffff:0:0` (or with leading zeros `::ffff:0000:0000`). Same
-  // bind-anywhere semantic as bare 0.0.0.0 / ::. (Codex P2 round 12
-  // on PR #487.)
+  // bind-anywhere semantic as bare 0.0.0.0 / ::.
   if (h === "::ffff:0.0.0.0") return true;
   if (/^::ffff:0+:0+$/.test(h)) return true;
 

@@ -1297,7 +1297,7 @@ describe("isGeminiModelGoneError (GH #1179)", () => {
     expect(isGeminiModelGoneError(400, "model X is not supported for generateContent")).toBe(true);
     expect(isGeminiModelGoneError(429, "model quota exceeded")).toBe(false);
     // The #916 retirement surfaced as HTTP 429 — an explicit marker wins
-    // over the status (Codex P2 #1185).
+    // over the status (#1185).
     expect(isGeminiModelGoneError(429, "model gemini-2.0-flash has been retired")).toBe(true);
     expect(isGeminiModelGoneError(400, "API_KEY invalid")).toBe(false);
     expect(isGeminiModelGoneError(500, "internal error")).toBe(false);

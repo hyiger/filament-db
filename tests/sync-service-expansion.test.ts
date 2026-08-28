@@ -81,8 +81,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     return new SyncService(localServer.getUri(), remoteServer.getUri());
   }
 
-  // ── bedtypes ──────────────────────────────────────────────────────────
-
   describe("bedtypes", () => {
     it("pushes a local-only bedtype to remote", async () => {
       await localClient.db("filament-db").collection("bedtypes").insertOne({
@@ -134,8 +132,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── filaments name-collision reconciliation ───────────────────────────
-
   describe("filaments name reconciliation", () => {
     it("reconciles same-name filaments across DBs without tripping the partial-unique-name index", async () => {
       // Reproduces the v1.30.x E11000 cycle abort: both sides independently
@@ -177,8 +173,6 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(phResult?.error).toBeUndefined();
     });
   });
-
-  // ── filament calibrations[].bedType remap ─────────────────────────────
 
   describe("filament calibrations.bedType remap", () => {
     it("translates calibrations[].bedType ObjectId across DBs via syncId", async () => {
@@ -240,8 +234,6 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(cal.bedType.toString()).not.toBe(localBedTypeId.toString());
     });
   });
-
-  // ── printer.amsSlots[].filamentId repair ──────────────────────────────
 
   describe("printer amsSlots.filamentId repair", () => {
     it("rewrites a stale amsSlots.filamentId to point at the right side's filament id", async () => {
@@ -314,8 +306,6 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(localPrinter?.amsSlots?.[0].spoolId).toBeNull();
     });
   });
-
-  // ── printhistories ────────────────────────────────────────────────────
 
   describe("printhistories", () => {
     it("syncs print history records, remapping printerId + usage.filamentId and clearing usage.spoolId", async () => {
@@ -453,8 +443,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── sharedcatalogs ────────────────────────────────────────────────────
-
   describe("sharedcatalogs", () => {
     it("pushes a local-only shared catalog to remote", async () => {
       await localClient.db("filament-db").collection("sharedcatalogs").insertOne({
@@ -522,9 +510,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── _purged tombstone propagation ─────────────────────────────────────
-  //
-  // Codex flagged a P1 on PR #213: the original "permanently delete from
+  // The original "permanently delete from
   // trash" path called `Filament.deleteOne`, but syncCollection pairs docs
   // by `syncId` and treats "remote has it, local doesn't" as a fresh
   // insert from remote. So a hard delete on one peer was getting
@@ -698,8 +684,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── GH #511 — slim-diff fetch + hydrate ───────────────────────────────
-
   describe("#511 — slim diff + hydrate transfers the full body", () => {
     it("pushes a heavy local-only filament body (photoDataUrl) intact", async () => {
       // The diff loop reads only the slim projection, but the push must
@@ -757,8 +741,6 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(local?.spools?.[0]?.photoDataUrl).toBe("data:image/png;base64,ZZZZ");
     });
   });
-
-  // ── GH #317 — conflict-resolution edge cases ──────────────────────────
 
   describe("#317 — conflict resolution", () => {
     it("a soft-delete wins over a same-millisecond remote update (no resurrection)", async () => {
@@ -820,8 +802,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── GH #1004 F3: whole-doc LWW copy must DROP un-pinned fields ─────────
-  //
   // A last-write-wins copy used $set, which can only add/overwrite keys —
   // never remove one the source dropped. So when a variant override is
   // un-pinned (the #951/#969/#971 $unset flows leave a field absent so GH
@@ -945,7 +925,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1). "Paired" was not the right condition either.
+     * GH #1142. "Paired" was not the right condition either.
      *
      * A paired blocker's own LWW can copy in the OPPOSITE direction, so
      * nothing rewrites its name on THIS target — the placeholder is stranded,
@@ -988,7 +968,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1): a TRASHED row must not enter the holder graph.
+     * GH #1142: a TRASHED row must not enter the holder graph.
      *
      * The unique index is partial on `_deletedAt: null`, so a trashed row
      * named "X" does not occupy that slot — GH #213 name reuse depends on it.
@@ -1032,7 +1012,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1): the whole CHAIN has to terminate, not just the
+     * GH #1142: the whole CHAIN has to terminate, not just the
      * first hop. A -> B, B -> C, and C standing still: a one-hop check stages
      * B for A, A takes "B", and B can then never take "C" — settlement cannot
      * restore B either, because A owns its original name. B would be left as
@@ -1079,7 +1059,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1, second pass): the holder graph must use MONGODB's
+     * GH #1142: the holder graph must use MONGODB's
      * predicate, not JS truthiness. `{_deletedAt: null}` matches null AND
      * missing and nothing else, so a raw `_deletedAt: ""` — Mongoose casts an
      * empty string to null on a Date path, the driver stores it verbatim, and
@@ -1131,7 +1111,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1, third pass): the staging PREDICTOR has to classify
+     * GH #1142: the staging PREDICTOR has to classify
      * deletion the way the LOOP does, not merely the way the index does.
      *
      * `desiredNameOn` used JS truthiness while the loop uses `_deletedAt !=
@@ -1222,7 +1202,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1142 (Codex P1, fifth pass): a CONTESTED destination must refuse the
+     * GH #1142: a CONTESTED destination must refuse the
      * whole tangle, because the cached plan cannot follow mid-pass reality.
      *
      * The state: the SOURCE holds duplicate active names ("Y" twice), which the
@@ -1303,7 +1283,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       sync = makeSync();
       const results = await sync.sync();
 
-      // GH #1142 (Codex P1): it must SURFACE. A counter nothing reads left the
+      // GH #1142: it must SURFACE. A counter nothing reads left the
       // cycle reporting idle while a whole-document update was silently
       // skipped and would fail identically forever.
       expect(results.find((r) => r.collection === "bedtypes")?.error).toMatch(/name conflict/i);
@@ -1803,7 +1783,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       // collection must not read as green around it.
       const firstTakenErr = first.find((r) => r.collection === "bedtypes")?.error;
       expect(firstTakenErr).toMatch(/rename it back manually/i);
-      // Self-describing stranding, no false collision preamble (round 18).
+      // Self-describing stranding, no false collision preamble.
       expect(firstTakenErr).not.toMatch(/Rename one of them/);
       const kept = await localDb.collection("_migrations").findOne({ _id: QUEUE_ID as never });
       expect((kept?.entries ?? []).length).toBe(1);
@@ -1858,7 +1838,7 @@ describe("SyncService — v1.12 sync expansion", () => {
           await db.collection("bedtypes").countDocuments({ name: { $regex: "^__sync-staging-" } }),
         ).toBe(0);
       }
-      // The healed pair holds this cycle (Codex P1 round 17: another service
+      // The healed pair holds this cycle (another service
       // can stage the row right after the heal, with the scan finished and
       // coveredIds blind) — reported as a hold, not a collision — and the
       // next cycle is clean.
@@ -1871,7 +1851,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The aged-drain window (Codex P1): draining a dead record over a LIVE
+     * The aged-drain window: draining a dead record over a LIVE
      * row leaves the same resume race the young branch closed — a suspended
      * owner can stage between the row read and the slim reads, with the
      * backstop blinded by coveredIds. The drain proceeds, but the pair sits
@@ -1921,7 +1901,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The multi-writer race (Codex P2): two services share one database, and
+     * The multi-writer race: two services share one database, and
      * an entry is durable BEFORE its row is staged. A concurrent sweep that
      * judged a YOUNG entry would misread the enqueue-to-update window — the
      * row still holds its original name — as "resolved" and drain the record
@@ -1935,7 +1915,7 @@ describe("SyncService — v1.12 sync expansion", () => {
 
       // The window shape: row holds its ORIGINAL name, the entry is fresh —
       // and the row is the LWW winner, so pre-quarantine it would have synced
-      // mid-window (Codex P1: the owner can stage between the sweep and the
+      // mid-window (the owner can stage between the sweep and the
       // slim reads, at which point the backstop is blinded by coveredIds).
       const { insertedId } = await localDb.collection("bedtypes").insertOne({
         name: "Mid Stage (edited)", material: "PEI", syncId: "sw-e", _deletedAt: null,
@@ -1968,7 +1948,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The quarantine (Codex P2): reporting an unresolved placeholder is not
+     * The quarantine: reporting an unresolved placeholder is not
      * enough — the row still entered the row loop, and a user edit bumping
      * its updatedAt while stranded made the placeholder the LWW WINNER,
      * copying `__sync-staging-…` over the peer's legitimate name. A stranded
@@ -2015,7 +1995,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The versioned drain (Codex P2): a sweeper judges a SNAPSHOT, and the
+     * The versioned drain: a sweeper judges a SNAPSHOT, and the
      * owner can stage + re-assert between that snapshot and the $pull. The
      * drain must match the observed stamp, or it removes the FRESH record —
      * and a later owner crash leaves the placeholder without its
@@ -2061,7 +2041,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The young-holding case (Codex P1): youth defers the destructive verbs,
+     * The young-holding case: youth defers the destructive verbs,
      * not inspection. A settlement-taken stranding re-observed five minutes
      * later sits well under the fifteen-minute bound — and skipping it
      * entirely left its syncId unquarantined, so an edit while stranded let
@@ -2093,7 +2073,7 @@ describe("SyncService — v1.12 sync expansion", () => {
 
       // The peer's name survives and the row and record are both UNTOUCHED —
       // youth forbids restore and drain alike. The report is a HOLD, not a
-      // stranding (Codex P2, round 18): this state is usually a healthy owner
+      // stranding: this state is usually a healthy owner
       // between staging and settlement, and telling the user to rename a row
       // the owner is about to fix was a false prescription. A crash-stranded
       // row ages into the real stranding text at the bound.
@@ -2108,7 +2088,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * Resolved by deletion (Codex P2): a user may deal with a stranded row by
+     * Resolved by deletion: a user may deal with a stranded row by
      * trashing it. The name no longer needs restoring — but quarantining the
      * pair blocked the one thing that still matters: the tombstone
      * propagating to the peer, forever.
@@ -2154,7 +2134,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The literal $pull (Codex P2): a bare document operand is a MATCH
+     * The literal $pull: a bare document operand is a MATCH
      * CONDITION, so dropping a malformed `{c: "bedtypes"}` subset would pull
      * every valid entry for the collection along with itself.
      */
@@ -2201,7 +2181,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The free-form-name case (Codex P2): a user may name a row with the
+     * The free-form-name case: a user may name a row with the
      * placeholder PREFIX. The backstop must not touch it — not rename it to
      * its peer's value, not report it — because acting on recognition is
      * exactly why recognition must be the complete generated grammar.
@@ -2287,7 +2267,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     };
 
     /**
-     * Codex P2, round 21: settlement drained its queue entry and IGNORED the
+     * Settlement drained its queue entry and IGNORED the
      * result, so a landed rename whose `_migrations` cleanup failed reported
      * SUCCESS — while the live entry made every later cycle fail as "being
      * renamed by another sync service", for the age window or forever.
@@ -2352,7 +2332,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * The sweep's own restore has the same obligation (round 21 class sweep):
+     * The sweep's own restore has the same obligation:
      * a restored placeholder whose record failed to drain must say so, not
      * claim a clean "synced on the next".
      */
@@ -2385,7 +2365,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * Round 22 (Codex P2): quarantine means "names must not transfer", not
+     * Quarantine means "names must not transfer", not
      * "nothing may happen". A stranded pair whose PEER was deleted used to be
      * blocked forever — the blanket skip stopped the delete-wins branch, the
      * name stayed taken, and every cycle re-quarantined. Flag-only outcomes
@@ -2495,7 +2475,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * Round 24 (Codex P2): a TOMBSTONED placeholder row must not be
+     * A TOMBSTONED placeholder row must not be
      * quarantined by the slim-snapshot guard — for an unpaired one, the
      * insert branch is the only path that propagates the tombstone, and the
      * grammar backstop deliberately leaves tombstoned strays alone. Blanket
@@ -2525,7 +2505,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * Round 23 (Codex P1): a quarantined row still holding its REAL name
+     * A quarantined row still holding its REAL name
      * must be unavailable to blocker staging. Before the fix, an earlier
      * pair wanting that name found the quarantined row movable (the plan
      * knew nothing of quarantine, and processedSyncIds was only stamped at
@@ -2554,7 +2534,7 @@ describe("SyncService — v1.12 sync expansion", () => {
         name: "Quar N", material: "PEI", syncId: "qb", _deletedAt: null, createdAt: older, updatedAt: older,
       });
       // A YOUNG queue entry over remote B — the sweep quarantines the pair
-      // while B still holds its real name (the round-18 window case).
+      // while B still holds its real name (the young-holding window case).
       await remoteDb.collection("_migrations").updateOne(
         { _id: QUEUE_ID as never },
         { $set: { entries: [{ c: "bedtypes", i: String(bRemote), o: "Quar B orig", p: `${PH}q3`, at: new Date() }] } },
@@ -2706,7 +2686,7 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
 
     /**
-     * GH #1116 (Codex P1). Holding rows back is only half safe: a DEPENDENT
+     * GH #1116. Holding rows back is only half safe: a DEPENDENT
      * copied against the resulting partial mapping silently drops the
      * references it cannot resolve.
      *
@@ -2924,7 +2904,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       const now = new Date();
       // A zombie exactly as Atlas can hold it: `_purged` set but NOT yet
       // tombstoned, because the remote never runs dbConnect's purgedZombies
-      // migration (Codex P1 round 2 — the sync must not assume it ran).
+      // migration (the sync must not assume it ran).
       await localDb.collection("filaments").insertOne({
         name: "   ", vendor: "V", type: "PLA", spools: [],
         syncId: "fil-tombstone", _deletedAt: null, _purged: true, createdAt: now, updatedAt: now,
@@ -2985,7 +2965,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       const localA = await localDb.collection("locations").findOne({ syncId: "pair-A" });
       expect(localA!.name).toBe("Pair X");
 
-      // 2. And the collection CONVERGES (Codex P1). Preventing the fusion is
+      // 2. And the collection CONVERGES. Preventing the fusion is
       //    worth nothing if locations then fails on the unique index every
       //    cycle and filaments + print history stay cascade-skipped. The
       //    rename must reach the remote and A must land beside it.
@@ -3095,7 +3075,6 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── GH #1021 (Codex P1 ×2 on #1022): legacyNozzleConditions cleanup ──
   // The remote (Atlas) DB never runs dbConnect's startup migrations, and on
   // first hybrid startup the sync can run BEFORE the local dbConnect does —
   // while the cleanup preserves updatedAt, so LWW would never propagate it.
@@ -3137,7 +3116,7 @@ describe("SyncService — v1.12 sync expansion", () => {
         },
         syncId: "fil-remote-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
       });
-      // …and on the LOCAL side (the round-6 case: local sync starts before the
+      // …and on the LOCAL side (local sync starts before the
       // Next server's dbConnect migrations have run).
       await localDb.collection("filaments").insertOne({
         name: "LocalLegacy", vendor: "T", type: "PLA",
@@ -3228,7 +3207,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       await sync.sync();
 
       // The copy landed VERBATIM (honest timestamps — nothing in-transit is
-      // authoritative, r25), and the post-sync field-level pair-clear then
+      // authoritative), and the post-sync field-level pair-clear then
       // set the condition to "" on BOTH sides in the same cycle…
       const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
       expect(localCopy!.settings.compatible_printers_condition).toBe("");
@@ -3265,7 +3244,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       // The partial state a crashed prior cycle can leave: target already
       // cleared, source still stale, both at the SAME updatedAt (frozen for
       // plain LWW) — with the pending pairs durably queued, each carrying
-      // its provenance (r26).
+      // its provenance.
       const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
         name: "LNC q 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-q04", createdAt: now, updatedAt: now,
       })).insertedId;
@@ -3295,7 +3274,7 @@ describe("SyncService — v1.12 sync expansion", () => {
                 { d: "toLocal", s: "fil-queued", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNoz04] },
                 // Provenance DRIFTED since the enqueue (this nozzle is now
                 // 0.8) → the replay must DROP the entry without clearing:
-                // the surviving value is a possible user pin (r26).
+                // the surviving value is a possible user pin.
                 { d: "toLocal", s: "fil-drift", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNozDrift] },
               ],
             },
@@ -3315,7 +3294,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(localQueued!.settings.compatible_printers_condition).toBe("");
       // …the drifted-provenance pair kept its (possible pin) value on the
       // source AND had it RESTORED onto the partially-cleared side before
-      // the entry was dropped (r27) — no frozen ""/pin divergence…
+      // the entry was dropped — no frozen ""/pin divergence…
       const driftRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-drift" });
       expect(driftRow!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
       const localDrift = await localDb.collection("filaments").findOne({ syncId: "fil-drift" });

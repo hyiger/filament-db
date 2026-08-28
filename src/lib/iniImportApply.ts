@@ -5,25 +5,20 @@
  *
  * Both parse the bundle the same way (`collapsePerNozzleImportSections(
  * parseIniFilaments(...))`) and then upsert each collapsed section by NAME.
- * This module owns the write half so the two routes can't drift — and so the
- * GH #951 variant-inheritance fix lands in one place.
+ * This module owns the write half so the two routes can't drift.
  *
  * GH #951: the bundle EXPORT resolves a variant through `resolveFilament`, so
- * each variant's flat `[filament:Name]` section carries the parent's
- * cost/density/temperatures/… as materialised values. The old importers
- * `$set` that whole doc onto the name-matched variant, pinning every inherited
- * field as a local override and severing GH #106 live inheritance on an
- * otherwise-idempotent round-trip. We reuse the CSV importer's battle-tested
- * `splitInheritedImportSet` (GH #628 / #649): for a variant target, drop each
- * inheritable field whose incoming value equals the parent's (keep inheriting)
- * and `$unset` a stale diverging override so inheritance resumes.
+ * each variant's flat section carries the parent's values materialised.
+ * `$set`-ing that whole doc onto the name-matched variant pins every
+ * inherited field as a local override and severs GH #106 live inheritance —
+ * so for a variant target the CSV importer's `splitInheritedImportSet`
+ * applies (drop parent-equal fields, `$unset` stale overrides).
  *
  * The three-phase atomic upsert (active → resurrect-trashed → create/race)
  * mirrors `src/app/api/filaments/bambustudio/route.ts`: read the target, then
  * write by `_id` with the soft-delete state re-checked in the filter so a
  * concurrent delete/purge/restore in the read→write window falls through to
- * the next phase instead of silently mis-writing (the same safety the old
- * single-op `findOneAndUpdate({name})` had, kept intact).
+ * the next phase instead of silently mis-writing.
  */
 
 import Filament from "@/models/Filament";
@@ -46,22 +41,19 @@ import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
  * Fields a collapsed INI section can carry that participate in
- * variant→parent inheritance (the top-level fields `parseIniFilaments` lifts:
- * vendor/type/cost/density/diameter/maxVolumetricSpeed/inherits/spoolWeight/
- * shrinkageXY/shrinkageZ + the four temp subfields). Projected on the variant
- * AND its parent so `splitInheritedImportSet` can compare incoming vs parent and
- * detect a stale variant override to clear. GH #950.8b: `settings` is now projected
- * too so `splitInheritedImportSet`'s per-key merge runs for a variant — it stores
- * only settings keys that DIFFER from the parent (parent-equal keys keep
- * inheriting) instead of pinning the whole resolved bag. `buildIniUpdate` then
- * dot-flattens the resulting `settings` object into `settings.<k>` `$set` keys, so
- * the write MERGES into the stored subdocument — preserving both inheritance and
- * keys the section omitted (e.g. openprinttag_slug/_uuid, the OPT re-sync linkage).
- * `stripStructuredSettings` still removes the top-level shadows first. GH #951 / #950.8b.
+ * variant→parent inheritance. Projected on the variant AND its parent so
+ * `splitInheritedImportSet` can compare incoming vs parent. GH #950.8b:
+ * `settings` is projected too so the per-key merge runs for a variant —
+ * storing only settings keys that DIFFER from the parent; `buildIniUpdate`
+ * then dot-flattens `settings` into `settings.<k>` `$set` keys so the write
+ * MERGES into the stored subdocument, preserving both inheritance and keys
+ * the section omitted (e.g. openprinttag_slug/_uuid, the OPT re-sync
+ * linkage). `stripStructuredSettings` still removes the top-level shadows
+ * first.
  */
 const INI_INHERITANCE_PROJECTION =
   "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits " +
-  // compatibleNozzles: refs only, for the GH #1021 r10 legacy-condition
+  // compatibleNozzles: refs only, for the GH #1021 legacy-condition
   // ingestion guard in buildIniUpdate (stripLegacyMachineCondition).
   "spoolWeight shrinkageXY shrinkageZ temperatures settings compatibleNozzles";
 
@@ -93,15 +85,13 @@ function toUpdateSet(collapsed: CollapsedFilamentData): Record<string, unknown> 
 /**
  * GH #950.8b: convert a whole `settings` object in an update `$set` body into
  * `settings.<key>` DOT-keys, so the write MERGES into the stored settings
- * subdocument instead of REPLACING it. A whole-object `$set: { settings }` dropped
- * every key the incoming section didn't carry — notably settings.openprinttag_slug
- * / _uuid (the #607 OPT re-sync linkage) when importing a foreign/hand-crafted INI
- * by name over an OPT-linked filament. Dot-keys preserve omitted keys, matching the
- * per-id sync route's mergeSlicerSettings semantics (INI import is additive for
- * settings; key DELETION is not expressible via bulk import). Runs AFTER
- * `splitInheritedImportSet` so the variant per-key inheritance diff still operates
- * on the whole object. An empty incoming bag emits no settings key → the stored bag
- * is left untouched (an empty `$set:{settings:{}}` would previously have wiped it).
+ * subdocument instead of REPLACING it — a whole-object `$set: { settings }`
+ * dropped every key the incoming section didn't carry, notably
+ * openprinttag_slug/_uuid (the #607 OPT re-sync linkage). INI import is
+ * additive for settings; key DELETION is not expressible via bulk import.
+ * Runs AFTER `splitInheritedImportSet` so the variant per-key inheritance
+ * diff still operates on the whole object. An empty incoming bag emits no
+ * settings key → the stored bag is left untouched.
  */
 function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, unknown> {
   const settings = setBody.settings;
@@ -118,47 +108,36 @@ function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, 
 }
 
 /**
- * GH #969 (Codex on #950.8b): compute the `settings.<k>` $unset keys that keep a
- * variant tracking its parent for section-carried settings keys under the
- * dot-key MERGE.
+ * GH #969: compute the `settings.<k>` $unset keys that keep a variant
+ * tracking its parent for section-carried settings keys under the dot-key
+ * MERGE.
  *
  * Why clearing is correct: a bundle export resolves a variant through
- * `resolveFilament`, so a *pinned* key (`variant.settings.cooling = "1"`) and an
- * *inherited* one (variant blank, parent `"1"`) BOTH flatten to the same
- * `cooling = 1` in the exported section. The INI format can't express pin-vs-
- * inherit intent, so on re-import the only safe default for a key the section
- * reports equal to the parent is to drop the local override and let the variant
- * track the parent live (GH #106).
+ * `resolveFilament`, so a *pinned* key and an *inherited* one BOTH flatten to
+ * the same value in the exported section — the INI format can't express
+ * pin-vs-inherit intent, so the only safe default for a key the section
+ * reports equal to the parent is to drop the local override and let the
+ * variant track the parent live (GH #106).
  *
- * Why a dedicated $unset is needed: `splitInheritedImportSet` already filters a
- * parent-equal key OUT of `set.settings` (so `mergeSettingsDotKeys` never writes
- * it). But #950.8b switched the settings write from a whole-object `$set` to a
- * per-key dot-key merge so keys the section OMITS survive (e.g.
- * `openprinttag_slug` — the #607 OPT linkage). The merge only touches keys it
- * emits, so a *stored* variant override of a now-inherited key SURVIVES — whether
- * it diverges (`cooling = "0"`, round 1) or already equals the parent
- * (`cooling = "1"`, round 2, this fix; resolves right today but wouldn't track a
- * later parent edit through resolveFilament's shallow settings merge). So for
- * every incoming settings key the section reports equal to the parent that the
- * variant STILL has locally, emit a `settings.<k>` $unset. A PRESENCE check
- * (`hasOwnProperty`), not a value comparison: settings values are `string | null`
- * and resolveFilament merges them shallowly with NO empty=inherit rule, so any
- * present key is a genuine override worth clearing.
+ * Why a dedicated $unset is needed: `splitInheritedImportSet` filters a
+ * parent-equal key OUT of `set.settings`, and the #950.8b dot-key merge only
+ * touches keys it emits — so a *stored* variant override of a now-inherited
+ * key SURVIVES, whether it diverges or already equals the parent (resolves
+ * right today but wouldn't track a later parent edit). Emit a `settings.<k>`
+ * $unset for every incoming parent-equal key the variant STILL has locally.
+ * A PRESENCE check (`hasOwnProperty`), not a value comparison: settings
+ * values merge shallowly with NO empty=inherit rule, so any present key is a
+ * genuine override worth clearing.
  *
- * Disjointness: the loop only ever touches keys the section carries (so OMITTED
- * keys stay put), and it emits ONLY parent-equal keys while `mergeSettingsDotKeys`
- * emits ONLY differs-from-parent keys — disjoint, so $set and $unset never
- * collide on one path. That invariant holds because BOTH sides key off the same
- * strict parent-equality predicate (`splitInheritedImportSet`'s `!==`); a future
- * change to one must keep the other in lockstep.
+ * Disjointness: this emits ONLY parent-equal keys while
+ * `mergeSettingsDotKeys` emits ONLY differs-from-parent keys, so $set and
+ * $unset never collide — an invariant that holds because BOTH sides key off
+ * the same strict parent-equality predicate; a change to one must keep the
+ * other in lockstep.
  *
- * Sibling paths (GH #971, now fixed): the SCALAR / temperature / secondaryColors
- * branches of `splitInheritedImportSet` now also clear a parent-*equal* pin
- * (presence-based `$unset`), matching this settings self-heal across all three
- * shared call sites (CSV import, per-id sync, INI import). The one remaining
- * asymmetry is that THIS settings self-heal is still wired only into the INI
- * path; the per-id PrusaSlicer sync route doesn't yet clear stored parent-equal
- * settings pins — tracked in GH #972.
+ * Asymmetry: this settings self-heal is wired only into the INI path; the
+ * per-id PrusaSlicer sync route doesn't yet clear stored parent-equal
+ * settings pins — GH #972.
  */
 function settingsSelfHealUnset(
   incoming: unknown,
@@ -179,7 +158,7 @@ function settingsSelfHealUnset(
   for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
     // Only keys the section says should INHERIT (incoming matches parent); a
     // divergent value is written through mergeSettingsDotKeys' $set instead.
-    if (!settingValuesEqual(parentSettings[sk], sv)) continue; // GH #678 r7: array-aware
+    if (!settingValuesEqual(parentSettings[sk], sv)) continue; // GH #678: array-aware
     // Clear ANY local override of that key — divergent OR parent-equal — so the
     // variant truly inherits and future parent edits propagate.
     if (Object.prototype.hasOwnProperty.call(variantSettings, sk)) {
@@ -204,20 +183,16 @@ const STALE_SETTINGS_SHADOW_KEYS = new Set<string>([
 ]);
 
 /**
- * GH #969 (Codex rounds 4 & 5): $unset stale shadow keys still stored on the
- * EXISTING doc's settings. The incoming section is already stripped of both key
- * classes (routing/id hints AND top-level-field shadows), and the dot-key merge
- * (#950.8b) only writes keys it emits — so a LEGACY stored shadow (from older
- * import code) SURVIVES. That's harmful because `filamentToSlicerKeys` seeds the
+ * GH #969: $unset stale shadow keys still stored on the EXISTING doc's
+ * settings. The incoming section is already stripped of both key classes,
+ * and the #950.8b dot-key merge only writes keys it emits — so a LEGACY
+ * stored shadow SURVIVES. Harmful because `filamentToSlicerKeys` seeds the
  * export from the settings bag and only overrides a key when the resolved
  * top-level value is truthy: a stale `settings.filament_settings_id` keeps
  * overriding the re-derived current name, and a stale `settings.temperature`
- * resurfaces once the canonical top-level field goes null/inherited. The
- * pre-#950.8b whole-object replace dropped these for free (the stripped incoming
- * replaced the bag); restore that purge explicitly. OPT keys
- * (openprinttag_slug/_uuid) are NOT in either set, so they're preserved. Disjoint
- * from every $set path (the incoming never carries these keys) and from the
- * self-heal/inheritance $unsets (different keys), so no path collision.
+ * resurfaces once the canonical top-level field goes null/inherited. OPT
+ * keys (openprinttag_slug/_uuid) are in NEITHER set, so they're preserved.
+ * Disjoint from every $set path and the other $unsets — no path collision.
  */
 function staleSettingsShadowUnset(existing: LeanFilament): string[] {
   const settings =
@@ -237,22 +212,22 @@ function staleSettingsShadowUnset(existing: LeanFilament): string[] {
  * name-matched INI import target. For a variant it applies the inheritance
  * split; for a root (or a variant whose parent is missing/trashed — nothing to
  * inherit) it writes the flattened doc verbatim. Every UPDATE path also purges
- * legacy stale settings shadows (GH #969 r4/r5, staleSettingsShadowUnset).
+ * legacy stale settings shadows (GH #969, staleSettingsShadowUnset).
  */
 async function buildIniUpdate(
   collapsed: CollapsedFilamentData,
   existing: LeanFilament,
 ): Promise<Record<string, unknown>> {
-  // GH #1021 (Codex P1 r10): a PRE-upgrade INI still carries the
-  // machine-derived nozzle condition the old export stamped; re-persisting it
-  // would resurrect the hidden-preset bug after the one-shot DB cleanup.
-  // Strip it (→ "") when it provenance-matches the target's effective ticks.
-  // All three update paths (active / resurrect / create-race) funnel through
-  // here; fresh creates carry no ticks to test against and are unguarded.
-  // Codex P2 r15: strip a per-invocation CLONE of the settings bag, never the
-  // shared section object — the caller reuses `collapsed` across its fallback
-  // phases, and a strip decision based on THIS row's ticks must not leak into
-  // a later phase's different target (or the create path).
+  // GH #1021: a PRE-upgrade INI still carries the machine-derived nozzle
+  // condition the old export stamped; re-persisting it would resurrect the
+  // hidden-preset bug after the one-shot DB cleanup. Strip it (→ "") when it
+  // provenance-matches the target's effective ticks. All three update paths
+  // (active / resurrect / create-race) funnel through here; fresh creates
+  // carry no ticks to test against and are unguarded. Strip a per-invocation
+  // CLONE of the settings bag, never the shared section object — the caller
+  // reuses `collapsed` across its fallback phases, and a strip decision based
+  // on THIS row's ticks must not leak into a later phase's different target
+  // (or the create path).
   const scoped: CollapsedFilamentData = { ...collapsed, settings: { ...collapsed.settings } };
   await stripLegacyMachineCondition(scoped.settings, existing);
   const flat = toUpdateSet(scoped);
@@ -293,15 +268,12 @@ async function buildIniUpdate(
 export type IniUpsertOutcome = "created" | "updated";
 
 /**
- * GH #605 (codex P2, slicer-sync sweep): optional per-row reporting hooks.
- * `onTemplateFieldsStripped` fires when the name-matched target was a
- * TEMPLATE (≥1 live variant) and the section's per-variant fields (`color`
- * — the INI's `filament_colour` — plus the rest of the shared
- * TEMPLATE_STRIP_FIELDS) were stripped rather than re-materialized on it.
- * The strip never fails the row (the rest of the section still applies);
- * the routes surface the note through their per-row `errors` channel,
- * matching the atlas importer's posture. A callback (not a changed return
- * shape) so existing callers/tests of the "created"/"updated" outcome stay
+ * GH #605: optional per-row reporting hooks. `onTemplateFieldsStripped`
+ * fires when the name-matched target was a TEMPLATE and the section's
+ * per-variant fields (the shared TEMPLATE_STRIP_FIELDS) were stripped rather
+ * than re-materialized. The strip never fails the row; the routes surface
+ * the note through their per-row `errors` channel. A callback (not a changed
+ * return shape) so existing callers of the "created"/"updated" outcome stay
  * untouched.
  */
 export interface IniUpsertOptions {
@@ -309,18 +281,14 @@ export interface IniUpsertOptions {
 }
 
 /**
- * GH #951 (Codex): drop the structured keys that also live in a top-level
+ * GH #951: drop the structured keys that also live in a top-level
  * `FilamentData` field from the raw INI `settings` bag. `parseIniFilaments`
  * dumps every `key=value` line into `settings`, so the bag shadows the
- * top-level fields. On a VARIANT re-import the top-level scalars are correctly
- * left inheriting (null), but the settings-bag shadow would survive verbatim
- * and leak back into exports (`filamentToSlicerKeys` seeds `keys` from the
- * settings bag, then only overwrites when the resolved top-level value is
- * truthy — a null resolved value with a non-null shadow is a no-op). Stripping
- * keeps the settings bag to genuine passthrough keys, matching the per-id sync
- * route (which already excludes STRUCTURED_KEYS). Returns a shallow clone so
- * the caller's parsed object isn't mutated; every stripped key round-trips via
- * its top-level field, so nothing is lost.
+ * top-level fields — and on a VARIANT re-import the shadow would survive
+ * verbatim and leak back into exports (`filamentToSlicerKeys` seeds from the
+ * bag and only overwrites when the resolved top-level value is truthy).
+ * Matches the per-id sync route (which excludes STRUCTURED_KEYS). Returns a
+ * shallow clone; every stripped key round-trips via its top-level field.
  */
 function stripStructuredSettings(collapsed: CollapsedFilamentData): CollapsedFilamentData {
   if (!collapsed.settings) return collapsed;
@@ -372,14 +340,12 @@ export async function upsertIniFilament(
     const byId = await Filament.findOne({ _id: fid, _deletedAt: null })
       .select("_id name")
       .lean();
-    // GH #1116 (Codex P1): compare TRIMMED, or this guard fires on the exact
-    // survivor the fallback below exists to repair. `parseIni` trims a section
-    // name, while an `_id` lookup returns the RAW stored value — so a row the
-    // migration could not trim resolves as `"PLA "` against a section named
-    // `"PLA"`, and the ordinary exported-INI round trip threw here before ever
-    // reaching phase 1. Differing only by edge whitespace is not the ambiguity
-    // this guard is about (a renamed preset vs a copied id): it is one
-    // identity, recorded in two spellings, and the update normalizes it.
+    // GH #1116: compare TRIMMED, or this guard fires on the exact survivor
+    // the fallback below exists to repair — `parseIni` trims a section name
+    // while an `_id` lookup returns the RAW stored value. Differing only by
+    // edge whitespace is not the ambiguity this guard is about (a renamed
+    // preset vs a copied id): it is one identity, recorded in two spellings,
+    // and the update normalizes it.
     if (byId && String(byId.name ?? "").trim() !== name.trim()) {
       throw new Error(
         `filamentdb_id ${fid} resolves to "${byId.name}", but this section is named ` +
@@ -389,14 +355,13 @@ export async function upsertIniFilament(
     idSelected = byId ?? null;
   }
 
-  // GH #1116 (Codex P1): once the id has SELECTED a row, keep it.
-  //
-  // Accepting a trim-equal pair above and then re-resolving by name below
-  // sends the update to the wrong row: with an active `"PLA"` and a survivor
-  // `"PLA "`, an exported INI carrying the SURVIVOR's `filamentdb_id` passes
-  // the guard, and the canonical-first query in phase 1 then selects `"PLA"` —
-  // so the survivor's settings are written onto the canonical bystander. The
-  // id is the more specific address; it wins.
+  // GH #1116: once the id has SELECTED a row, keep it. Accepting a trim-equal
+  // pair above and then re-resolving by name below sends the update to the
+  // wrong row: with an active `"PLA"` and a survivor `"PLA "`, an exported
+  // INI carrying the SURVIVOR's `filamentdb_id` passes the guard, and the
+  // canonical-first query in phase 1 then selects `"PLA"` — writing the
+  // survivor's settings onto the canonical bystander. The id is the more
+  // specific address; it wins.
   const idSelectedIsSurvivor =
     idSelected !== null && String(idSelected.name ?? "") !== name;
 
@@ -411,10 +376,10 @@ export async function upsertIniFilament(
         .lean();
   let activeIsSurvivor = idSelectedIsSurvivor && existingActive != null;
   if (!existingActive) {
-    // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
-    // absence — the setter casts this query, so it cannot select a row whose
-    // stored name is still raw. Re-read through the SAME projection so the
-    // shape the caller depends on is unchanged.
+    // GH #1116: the miss may be a LOOKUP failure rather than an absence — the
+    // setter casts this query, so it cannot select a row whose stored name is
+    // still raw. Re-read through the SAME projection so the shape the caller
+    // depends on is unchanged.
     const survivorId = await findSurvivorId(
       Filament.collection as unknown as MinimalNameCollection,
       name,
@@ -429,19 +394,14 @@ export async function upsertIniFilament(
   }
   if (existingActive) {
     const update = await buildIniUpdate(collapsed, existingActive);
-    // GH #1116 (Codex P1): do not RENAME a survivor into an occupied name.
-    //
-    // Dropping `name` from the write FILTER is not enough — `toUpdateSet` also
-    // puts the section's canonical name in `$set`, so the by-`_id` update
-    // would try to rename `"PLA "` to `"PLA"`, collide with the canonical row
-    // that already holds it, and throw E11000 instead of applying the
-    // settings.
-    //
-    // Conditional on a twin ACTUALLY holding it, though: a LONE survivor has
-    // nothing to collide with, and normalizing it there is a free repair the
-    // existing coverage relies on. Only when the name is taken does the
-    // rename get dropped — resolving that pair is the migration's job, and it
-    // is the thing that knows how to refuse rather than clobber.
+    // GH #1116: do not RENAME a survivor into an occupied name. Dropping
+    // `name` from the write FILTER is not enough — `toUpdateSet` also puts
+    // the section's canonical name in `$set`, so the by-`_id` update would
+    // try to rename `"PLA "` to `"PLA"`, collide with the canonical row, and
+    // throw E11000 instead of applying the settings. Conditional on a twin
+    // ACTUALLY holding it: a LONE survivor has nothing to collide with, and
+    // normalizing it there is a free repair the existing coverage relies on —
+    // resolving a taken pair is the migration's job.
     if (activeIsSurvivor) {
       // name-lookup-ok: `name` is already the canonical trimmed form here
       const canonicalTwin = await Filament.findOne({ name, _deletedAt: null })
@@ -451,17 +411,16 @@ export async function upsertIniFilament(
         delete (update.$set as Record<string, unknown> | undefined)?.name;
       }
     }
-    // GH #605 (codex P2, slicer-sync sweep): the name-matched target may be a
-    // TEMPLATE (≥1 live variant) — strip the per-variant fields the section
-    // echoes (`color` from filament_colour; the shared TEMPLATE_STRIP_FIELDS)
-    // instead of re-materializing them, with the SAME semantics as the PUT
-    // (non-null only; a null passes — though INI can't express one for color:
-    // parseIni folds `filament_colour = nil` into its gray default).
-    // Decision + write share the per-id mutex the promotion paths lock (PUT
-    // review P1-c). The strip never fails the row; it's reported through the
-    // caller's hook only when the write actually landed (a rename race that
-    // misses the filter falls through to CREATE, where nothing was stripped
-    // from — phase 3 uses `collapsed`, not this $set body).
+    // GH #605: the name-matched target may be a TEMPLATE (≥1 live variant) —
+    // strip the per-variant fields the section echoes (the shared
+    // TEMPLATE_STRIP_FIELDS) instead of re-materializing them, with the SAME
+    // semantics as the PUT (non-null only; a null passes — though INI can't
+    // express one for color: parseIni folds `filament_colour = nil` into its
+    // gray default). Decision + write MUST share the per-id mutex the
+    // promotion paths lock. The strip never fails the row; it's reported
+    // through the caller's hook only when the write actually landed (a
+    // rename race that misses the filter falls through to CREATE, where
+    // nothing was stripped from — phase 3 uses `collapsed`, not this $set).
     const { doc, stripped } = await runExclusive(
       filamentLockKey(existingActive._id),
       async () => {
@@ -472,16 +431,16 @@ export async function upsertIniFilament(
         );
         const doc = await Filament.findOneAndUpdate(
           // `name` re-checked so a concurrent rename in the read→write window
-          // misses here and falls through (rather than the by-id write reverting
-          // the rename via the `name` in `$set`). GH #951 (Codex).
+          // misses here and falls through (rather than the by-id write
+          // reverting the rename via the `name` in `$set`) — GH #951.
           // GH #1116: the `name` clause CANNOT be used against a survivor —
-          // it is Mongoose-cast, so it asks for the trimmed form and can never
-          // match the raw stored value. Left in, the by-`_id` write would miss
-          // and fall straight through to the phase-3 create, making the
-          // survivor lookup above completely inert. `_id` + `_deletedAt` still
-          // pin the row we resolved and its liveness; only the #951
-          // concurrent-rename check is given up, and only for a row that is
-          // already in the degraded state the migration reports.
+          // it is Mongoose-cast, so it asks for the trimmed form and can
+          // never match the raw stored value; left in, the by-`_id` write
+          // would miss and fall through to the phase-3 create, making the
+          // survivor lookup above inert. `_id` + `_deletedAt` still pin the
+          // row and its liveness; only the #951 concurrent-rename check is
+          // given up, and only for a row already in the degraded state the
+          // migration reports.
           activeIsSurvivor
             ? { _id: existingActive._id, _deletedAt: null }
             : { _id: existingActive._id, name, _deletedAt: null },
@@ -528,24 +487,22 @@ export async function upsertIniFilament(
   }
   if (existingTrashed) {
     const update = await buildIniUpdate(collapsed, existingTrashed);
-    // GH #605: no template strip on the resurrect — a TRASHED doc cannot have
-    // live variants (soft-deleting a parent with variants is refused, in-lock
-    // with the trash write since round 8 F3 — the same per-filament mutex the
-    // first-variant gates lock, so the check can't be raced by a mid-flight
-    // first variant; restoring a variant under a trashed parent is refused;
-    // variant creation requires an ACTIVE parent), so the revived row is never
-    // a TEMPLATE at this write. But that only covers one direction — the
-    // revived row may itself be a VARIANT (GH #1073): with it trashed,
-    // `hasVariants` reads false, so its parent may legitimately have
-    // re-acquired spools/inventory as a standalone. Reviving the row would
-    // surface the FIRST live variant of an inventory-carrying parent — the
-    // stranded-inventory state #605 forbids — so the resurrect runs through
-    // the same adoption gate the CSV importer uses (firstVariantGateInfo),
-    // inside the parent's mutex; a gated section FAILS this row (throw → the
-    // routes' per-row errors[] channel) instead of resurrecting.
+    // GH #605: no template strip on the resurrect — a TRASHED doc cannot
+    // have live variants (soft-deleting a parent with variants is refused,
+    // in-lock with the trash write on the same per-filament mutex the
+    // first-variant gates lock; restoring a variant under a trashed parent
+    // is refused; variant creation requires an ACTIVE parent), so the
+    // revived row is never a TEMPLATE at this write. But the revived row may
+    // itself be a VARIANT (GH #1073): with it trashed, `hasVariants` reads
+    // false, so its parent may legitimately have re-acquired
+    // spools/inventory as a standalone — reviving it would surface the FIRST
+    // live variant of an inventory-carrying parent, the stranded-inventory
+    // state #605 forbids. So the resurrect runs through the same adoption
+    // gate the CSV importer uses (firstVariantGateInfo), inside the parent's
+    // mutex; a gated section FAILS this row instead of resurrecting.
     //
-    // Splice the tombstone clear into the $set so the resurrect is one atomic
-    // write; any $unset for stale variant overrides composes alongside.
+    // Splice the tombstone clear into the $set so the resurrect is one
+    // atomic write; any $unset for stale variant overrides composes alongside.
     update.$set = {
       ...(update.$set as Record<string, unknown>),
       _deletedAt: null,
@@ -566,13 +523,12 @@ export async function upsertIniFilament(
         const gate = await firstVariantGateInfo(Filament, existingTrashed.parentId);
         if (gate.reason) throw new Error(gate.reason);
         const doc = await doResurrect();
-        // Round 7 P2 parity with the CSV importer: an ungated first variant
-        // of a threshold-ONLY parent just surfaced — the parent's
-        // lowStockThreshold is now dead config; clear it AFTER the write
-        // (parent state change last), still inside the per-parent lock.
-        // Re-checking hasVariants (rather than trusting the pre-write
-        // snapshot) covers a resurrect that missed its filter (purged /
-        // renamed mid-window) — no variant surfaced, the threshold stays.
+        // Parity with the CSV importer: an ungated first variant of a
+        // threshold-ONLY parent just surfaced — clear the now-dead
+        // lowStockThreshold AFTER the write (parent state change last),
+        // still inside the per-parent lock. Re-checking hasVariants (rather
+        // than trusting the pre-write snapshot) covers a resurrect that
+        // missed its filter — no variant surfaced, the threshold stays.
         if (gate.orphanedThreshold && (await hasVariants(Filament, parentKey))) {
           await clearOrphanedParentThreshold(Filament, existingTrashed.parentId);
         }

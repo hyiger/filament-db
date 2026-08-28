@@ -322,7 +322,7 @@ describe("inventoryStats", () => {
     });
 
     it("reports the tare as missing for weighted spools with net set but no spoolWeight", () => {
-      // The Codex shape: getRemainingGrams tolerates a null spoolWeight in
+      // getRemainingGrams tolerates a null spoolWeight in
       // the spools-array branch (0-tare fallback, #954) but getRemainingPct
       // needs BOTH weights — so the pre-fix tooltip told the user to set
       // the net weight, which was already set and couldn't fix the bar.

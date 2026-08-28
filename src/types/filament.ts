@@ -6,16 +6,14 @@
 export interface FilamentVariant {
   _id: string;
   name: string;
-  /** GH #477: primary color hex. May be `null` per OpenPrintTag spec key
-   *  19 — coextruded / rainbow filaments don't have a single primary,
-   *  and the form's "Coextruded" arrangement toggle writes `null` here.
-   *  UI sites that need a single representative color should call
-   *  `displayColor()` from `src/lib/filamentColors.ts` to fall back to
-   *  `secondaryColors[0]`. */
+  /** Primary color hex. May be `null` per OpenPrintTag spec key 19
+   *  (coextruded / rainbow filaments have no single primary). UI sites
+   *  that need a single representative color call `displayColor()` from
+   *  `src/lib/filamentColors.ts` to fall back to `secondaryColors[0]`. */
   color: string | null;
-  /** GH #477: up to 5 additional color hexes, mirroring OpenPrintTag
-   *  spec keys 20–24. Inherits as a whole array from parent when this
-   *  variant's array is empty. */
+  /** Up to 5 additional color hexes (OpenPrintTag spec keys 20–24).
+   *  Inherits as a whole array from parent when this variant's array is
+   *  empty. */
   secondaryColors?: string[];
   cost: number | null;
   /** Tag IDs that drive the finish-derived swatch texture + chip when
@@ -77,7 +75,7 @@ export interface FilamentPreset {
 
 export interface FilamentSpool {
   _id: string;
-  /** #732: per-spool 5-byte hex id (10 hex chars). */
+  /** Per-spool 5-byte hex id (10 hex chars). */
   instanceId?: string;
   label: string;
   totalWeight: number | null;
@@ -106,9 +104,9 @@ export interface FilamentDetail {
   instanceId?: string;
   vendor: string;
   type: string;
-  /** GH #477: nullable per OpenPrintTag spec. See FilamentVariant.color. */
+  /** Nullable per OpenPrintTag spec. See FilamentVariant.color. */
   color: string | null;
-  /** GH #477: spec keys 20–24, up to 5 secondary color hexes. */
+  /** Spec keys 20–24, up to 5 secondary color hexes. */
   secondaryColors?: string[];
   cost: number | null;
   density: number | null;
@@ -179,38 +177,37 @@ export interface FilamentSummary {
   name: string;
   vendor: string;
   type: string;
-  /** GH #477: nullable per OpenPrintTag spec. See FilamentVariant.color. */
+  /** Nullable per OpenPrintTag spec. See FilamentVariant.color. */
   color: string | null;
-  /** GH #477: spec keys 20–24, up to 5 secondary color hexes. */
+  /** Spec keys 20–24, up to 5 secondary color hexes. */
   secondaryColors?: string[];
   cost: number | null;
   density: number | null;
   parentId: string | null;
   spools: {
     _id: string;
-    /** #732 — per-spool 5-byte hex id (10 hex chars). */
+    /** Per-spool 5-byte hex id (10 hex chars). */
     instanceId?: string;
-    /** #717 — per-spool label, shown in the home-page spool panel so the user
-     * can tell spools apart when changing a location. */
+    /** Per-spool label, shown in the home-page spool panel. */
     label?: string | null;
     totalWeight: number | null;
-    /** v1.11 — retired spools are excluded from inventory totals and list
-     * weight bars, but the spool itself remains for historical reference. */
+    /** Retired spools are excluded from inventory totals and list weight
+     * bars, but the spool itself remains for historical reference. */
     retired?: boolean;
-    /** #616 — location reference, used to count distinct spool locations for
-     * the home-page stat line AND (#717) to show/change a spool's location
-     * inline in the expandable per-spool panel. Null when unassigned. */
+    /** Location reference — counts distinct spool locations for the
+     * home-page stat line and drives the inline location change in the
+     * per-spool panel. Null when unassigned. */
     locationId?: string | null;
-    /** #941 — provenance dates (ISO strings after JSON serialization), used to
-     * sort/display the home list's Purchased/Opened columns. Null when unset. */
+    /** ISO strings after JSON serialization; sort/display the home list's
+     * Purchased/Opened columns. Null when unset. */
     purchaseDate?: string | null;
     openedDate?: string | null;
   }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
-  /** v1.11 — remaining-grams threshold below which this filament is flagged
-   * as low stock in the list and on the dashboard. Null = not configured. */
+  /** Remaining-grams threshold below which this filament is flagged as
+   * low stock in the list and on the dashboard. Null = not configured. */
   lowStockThreshold?: number | null;
   temperatures: {
     nozzle: number | null;

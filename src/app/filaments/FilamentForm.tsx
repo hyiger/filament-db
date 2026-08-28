@@ -48,18 +48,15 @@ interface FilamentFormData {
   name: string;
   vendor: string;
   type: string;
-  /** GH #477: primary color (OpenPrintTag spec key 19). Nullable for
-   *  coextruded / rainbow filaments where the spec says primary "can
-   *  be null". The form normalises `null` to empty string in the input
-   *  (seedFormColorHex), and the submit handler converts back to null
-   *  when the arrangement is coextruded OR the user cleared / never
-   *  completed the hex (submittedColorValue — GH #605). */
+  /** Primary color (OpenPrintTag spec key 19), nullable for coextruded.
+   *  The form normalises `null` to empty string (seedFormColorHex); the
+   *  submit handler converts back to null when the arrangement is
+   *  coextruded OR the user cleared / never completed the hex
+   *  (submittedColorValue — GH #605). */
   color: string;
-  /** GH #477: up to 5 additional color hexes (OpenPrintTag spec keys
-   *  20–24). The arrangement radio derived from optTags (27 = gradient,
-   *  28 = dual_color, 29 = triple_color; GH #507) drives the swatch
-   *  rendering — coextruded (28/29) shows stripes, gradient (27) shows a
-   *  linear-gradient. */
+  /** Up to 5 additional color hexes (OpenPrintTag spec keys 20–24). The
+   *  arrangement is derived from optTags (27 = gradient, 28 = dual_color,
+   *  29 = triple_color; GH #507). */
   secondaryColors: string[];
   colorName: string;
   cost: string;
@@ -216,9 +213,9 @@ interface Props {
    * a TEMPLATE. Templates don't hold inventory, so the INVENTORY fields
    * (total weight, low-stock threshold) are hidden — the PUT route strips a
    * non-null totalWeight anyway. The SPEC pair (spool weight / net filament
-   * weight) stays editable: it describes the product line and every variant
-   * inherits it (GH #1048). Derived by the edit page from the detail GET's
-   * `_variants`; template-ness is never a schema flag. */
+   * weight) stays editable: every variant inherits it (GH #1048). Derived by
+   * the edit page from the detail GET's `_variants`; template-ness is never
+   * a schema flag. */
   isParent?: boolean;
 }
 
@@ -227,12 +224,12 @@ const DEFAULT_FILAMENT_TYPES = [
   "POM", "PP", "HIPS", "PVA", "PET-GF", "PPA", "IGLIDUR",
 ];
 
-/** GH #678 r17: the ONE derivation of what a scalar control shows for an
+/** GH #678: the ONE derivation of what a scalar control shows for an
  *  array-valued setting — first element, String-coerced (the Mixed bag can
  *  hold numbers), null/absent as "". `getSettingVal` seeds through it and
  *  the unedited-restore pass mirrors through it, so the seed and its mirror
- *  cannot drift apart — they did twice (r9's join mirror, r15's uncoerced
- *  comparison), each time flattening a stored array on an unrelated save. */
+ *  cannot drift apart — drift here flattens a stored array on an unrelated
+ *  save. */
 function displayFirstElement(arr: readonly unknown[]): string {
   return arr[0] == null ? "" : String(arr[0]);
 }
@@ -241,15 +238,12 @@ function getSettingVal(data: Record<string, unknown> | undefined, key: string): 
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
   const val = settings[key];
-  // GH #678 round 9: an array displays its FIRST element — the pre-#678
-  // read semantics for every scalar control. A ';'-join fed into an
-  // <input type="number"> is sanitized by browsers to an EMPTY control
-  // (Codex P2), hiding the imported value entirely. The one list-shaped
-  // field (compatible_printers) seeds via getSettingListVal instead. The
-  // SAME derivation feeds the unedited-restore pass, so an untouched
+  // GH #678: an array displays its FIRST element — a ';'-join fed into an
+  // <input type="number"> is sanitized by browsers to an EMPTY control,
+  // hiding the imported value entirely. The one list-shaped field
+  // (compatible_printers) seeds via getSettingListVal instead. The SAME
+  // derivation feeds the unedited-restore pass, so an untouched
   // multi-value field maps back to its stored array on save.
-  // Round 15: String-coerce — the Mixed bag can hold non-strings, and the
-  // declared string type would otherwise be a lie feeding form state.
   if (Array.isArray(val)) return displayFirstElement(val);
   if (!val || val === "nil") return "";
   return String(val);
@@ -271,13 +265,12 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
   if (!data?.settings) return "";
   const settings = data.settings as Record<string, string | string[] | null>;
   const raw = settings.start_filament_gcode;
-  // GH #678 rounds 2+11: an array scans its FIRST element only — the same
-  // convention every reader follows (and pre-#678's collapse semantics).
-  // Scanning ALL elements (the round-2 join) derived a PA the textarea
-  // doesn't display: ["", "M572 S0.04"] seeded a blank textarea plus a
-  // populated PA field, and the submit then synthesized a scalar M572 line
-  // that no longer matched the blank first-element seed — the restore pass
-  // read it as edited and the per-extruder array was lost on any save.
+  // GH #678: an array scans its FIRST element only — the same convention
+  // every reader follows. Scanning ALL elements derives a PA the textarea
+  // doesn't display: ["", "M572 S0.04"] would seed a blank textarea plus a
+  // populated PA field, and the submit then synthesizes a scalar M572 line
+  // that no longer matches the blank first-element seed — the restore pass
+  // reads it as edited and the per-extruder array is lost on any save.
   const gcode = Array.isArray(raw) ? raw[0] : raw;
   if (!gcode) return "";
   // Match M572 S<value> — take the first occurrence
@@ -320,11 +313,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     // density + diameter are CBOR half-floats on an OpenPrintTag, so an
-    // NFC/TDS prefill can hand us e.g. 1.2392578125 / 2.849609375. Snap to
-    // the inputs' step="0.01" grid so the value the user sees is one the
-    // field can actually hold — otherwise native step validation blocks
-    // save on every NFC-read filament (#570). Snapping an already-clean
-    // stored value (1.24, 2.85, 1.75) is a no-op.
+    // NFC/TDS prefill can hand us e.g. 1.2392578125. Snap to the inputs'
+    // step="0.01" grid — otherwise native step validation blocks save on
+    // every NFC-read filament (#570). Snapping an already-clean stored
+    // value is a no-op.
     density:
       initialData?.density != null
         ? snapToStep(initialData.density, 0.01).toString()
@@ -399,22 +391,20 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     dryingTime: initialData?.dryingTime?.toString() || "",
     transmissionDistance: initialData?.transmissionDistance?.toString() || "",
     // GH #1070: unwrap + UNESCAPE via the shared INI value codec — a
-    // fork-synced multi-line gcode is stored as `"...\n..."` (literal
-    // backslash-n escapes), so the textarea shows real newlines instead of
-    // `\n` sequences; the submit handler re-escapes via wrapIniString, so
-    // the round-trip is byte-identical on the wire.
+    // fork-synced multi-line gcode is stored with literal backslash-n
+    // escapes, so the textarea shows real newlines; the submit handler
+    // re-escapes via wrapIniString, so the round-trip is byte-identical.
     startGcode: unwrapIniString(getSettingVal(initialData, "start_filament_gcode")),
     endGcode: unwrapIniString(getSettingVal(initialData, "end_filament_gcode")),
     notes: unwrapIniString(getSettingVal(initialData, "filament_notes")),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
-    // GH #1066 (review P1): adopt a legacy settings-bag `inherits` shadow
-    // into the editable field when no top-level value masks it — the submit
-    // handler purges the shadow on every save, and without the adopt an
-    // unrelated save would silently drop the exported preset's parent (the
-    // export seed emitted the shadow exactly when the resolved top-level
-    // value was empty). A parent-supplied value masks the shadow the same
-    // way (exports resolve variants), so it blocks the adopt too.
+    // GH #1066: adopt a legacy settings-bag `inherits` shadow into the
+    // editable field when no top-level value masks it — the submit handler
+    // purges the shadow on every save, and without the adopt an unrelated
+    // save would silently drop the exported preset's parent. A
+    // parent-supplied value masks the shadow the same way (exports resolve
+    // variants), so it blocks the adopt too.
     inherits:
       initialData?.inherits ||
       ((initialData?._parent as { inherits?: string | null } | undefined)?.inherits
@@ -422,18 +412,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         : getSettingVal(initialData, "inherits")),
     // GH #1066: surface the PrusaSlicer printer-restriction pair from the
     // settings bag. A preset duplicated in the slicer from another printer's
-    // profile carries its source's `compatible_printers_condition` (e.g.
-    // `printer_model=~/(COREONE|...)/`), which silently hides the synced
-    // preset on every other printer — and, pre-#1066, nothing in the app
-    // showed or cleared it.
+    // profile carries its source's `compatible_printers_condition`, which
+    // silently hides the synced preset on every other printer.
     compatPrinters: getSettingListVal(initialData, "compatible_printers"),
     compatPrintersCondition: getSettingVal(initialData, "compatible_printers_condition"),
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
   const [saving, setSaving] = useState(false);
   const savedRef = useRef(false);
-  // GH #286: dirty state is derived below, once `calibrations` and
-  // `presets` are declared — see the `dirty` block after those.
+  // Dirty state is derived below, after `calibrations` and `presets`.
 
   // Which tab of the form is visible. All panels stay mounted (hidden via the
   // `hidden` attribute) so native required-field validation still fires on
@@ -454,17 +441,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   const [vendorDropdownOpen, setVendorDropdownOpen] = useState(false);
   const [vendorHighlight, setVendorHighlight] = useState(-1);
   const vendorRef = useRef<HTMLDivElement>(null);
-  // colorName typeahead — suggestions come from the user's own
-  // (colorName, color) pairs first ("Prusa Orange" remembers the hex
-  // you saved last time), then the 148 CSS named colors as a fallback
-  // for generic names. Selecting a suggestion sets BOTH the colorName
-  // and the hex `color` field, so the user gets a working swatch
-  // without leaving the keyboard.
+  // colorName typeahead — the user's own (colorName, color) pairs first,
+  // then the CSS named colors. Selecting a suggestion sets BOTH the
+  // colorName and the hex `color` field.
   const [colorNameSuggestions, setColorNameSuggestions] = useState<ColorSuggestion[]>([]);
   const [colorNameDropdownOpen, setColorNameDropdownOpen] = useState(false);
   const [colorNameHighlight, setColorNameHighlight] = useState(-1);
-  // GH #794 (Codex P2): does the user OWN the current hex? True once they edit
-  // it via the picker / text field — including deliberately choosing the gray
+  // GH #794: does the user OWN the current hex? True once they edit it via
+  // the picker / text field — including deliberately choosing the gray
   // #808080, which the sentinel check would otherwise treat as "blank". While
   // false (a fresh form, or a hex that was itself auto-filled from a name), a
   // color-name commit may fill/replace the hex; once true, a name is just a
@@ -499,7 +483,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   const addFetchError = (label: string) =>
     setFetchErrors((prev) => (prev.includes(label) ? prev : [...prev, label]));
 
-  // Fetch distinct filament types from DB and merge with defaults
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/filaments/types", { signal: ac.signal })
@@ -515,7 +498,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     return () => ac.abort();
   }, []);
 
-  // Fetch distinct vendors from DB
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/filaments/vendors", { signal: ac.signal })
@@ -528,10 +510,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     return () => ac.abort();
   }, []);
 
-  // Fetch the user's previously-saved (colorName, color) pairs so the
-  // colorName typeahead can suggest "Prusa Orange → #FA6E1C" etc.
-  // Falls back to CSS named colors when the DB has no match for what
-  // the user is typing.
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/filaments/colors", { signal: ac.signal })
@@ -546,7 +524,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     return () => ac.abort();
   }, []);
 
-  // Fetch potential parent filaments
   useEffect(() => {
     const ac = new AbortController();
     const exclude = initialData?._id || "";
@@ -581,7 +558,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Fetch TDS suggestions from other filaments with same vendor
   useEffect(() => {
     if (!form.vendor) return;
     const ac = new AbortController();
@@ -672,27 +648,20 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   const [presets, setPresets] = useState<PresetEntry[]>(getInitialPresets);
 
   // GH #286: derive dirtiness from a snapshot of *all* editable state —
-  // form fields, calibrations, and presets. The previous effect watched
-  // only `form`, so a calibration- or preset-only edit navigated away
-  // with no unsaved-changes warning — silent loss of exactly the tedious
-  // data this app exists to capture — and it one-way latched `dirty` to
-  // true, so reverting an edit still warned. Deriving the value during
-  // render makes it both two-way and complete. `baselineRef` is
-  // re-pointed after a successful save so the saved state becomes the
-  // new clean baseline.
+  // form fields, calibrations, and presets. Deriving the value during
+  // render (not an effect watching only `form`) makes it both two-way
+  // (reverting an edit un-dirties) and complete (calibration/preset-only
+  // edits count).
   const dirtySnapshot = useMemo(
     () => JSON.stringify({ form, calibrations, presets }),
     [form, calibrations, presets],
   );
 
-  // Printer tabs in the Calibrations section should only offer printers
-  // that physically own at least one of this filament's compatible
-  // nozzles. A nozzle lives on exactly one printer at a time (GH #232,
-  // enforced by `findNozzleConflicts`), so selecting the Bambu 0.4mm
-  // nozzle as compatible should not invite a Core One calibration row
-  // — Core One literally doesn't have that nozzle installed and any
-  // calibration captured against (Core One, Bambu 0.4mm) is meaningless.
-  // Built from the `NozzleOption.printers` reverse-mapping already
+  // Printer tabs in the Calibrations section only offer printers that
+  // physically own at least one of this filament's compatible nozzles —
+  // a nozzle lives on exactly one printer at a time (GH #232), so a
+  // calibration captured against a printer that doesn't have the nozzle
+  // is meaningless. Built from the `NozzleOption.printers` reverse-mapping
   // populated by `/api/nozzles?withPrinters` so this stays in sync with
   // printer-form edits without an extra fetch.
   const relevantPrinters = useMemo(() => {
@@ -729,9 +698,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       // `finally` that clears each loading flag runs on failure too, so a 500
       // from /api/printers would otherwise present an empty array as
       // authoritative and list valid rows as orphans with an active Remove
-      // button (Codex P2 on PR #1130). Explicit rather than inferred from
-      // array length, because zero printers is a legitimate state in which a
-      // printer-scoped row really IS orphaned.
+      // button. Explicit rather than inferred from array length, because
+      // zero printers is a legitimate state in which a printer-scoped row
+      // really IS orphaned.
       nozzlesLoaded: !nozzlesLoading && !fetchErrors.includes("nozzles"),
       printersLoaded: !printersLoading && !fetchErrors.includes("printers"),
       bedTypesLoaded: !bedTypesLoading && !fetchErrors.includes("bed types"),
@@ -748,13 +717,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     fetchErrors,
   ]);
 
-  // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
-  // picker hard-filters to hardened ones when abrasive. The abrasive marker can
-  // come from EITHER the form boolean (settings.filament_abrasive) OR optTags tag 4
-  // (e.g. OpenPrintTag/Atlas data) — mirror the Material Tags checkbox's effective
-  // state (form.optTags.includes(4) || form.abrasive) so the gate isn't silently
-  // bypassed when only the tag is set (Codex P2). Already-selected nozzles stay
-  // visible (even if soft) so the user can still deselect them — they're flagged;
+  // An abrasive filament needs a hardened nozzle, so the compatible-nozzle
+  // picker hard-filters to hardened ones when abrasive. The abrasive marker
+  // can come from EITHER the form boolean OR optTags tag 4 — mirror the
+  // Material Tags checkbox's effective state so the gate isn't silently
+  // bypassed when only the tag is set. Already-selected nozzles stay visible
+  // (even if soft) so the user can still deselect them — they're flagged;
   // only NEW soft nozzles are hidden.
   const isAbrasive = form.abrasive || form.optTags.includes(4);
   const visibleNozzles = useMemo(() => {
@@ -912,19 +880,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.filament_wipe = form.wipe ? "1" : "0";
     // GH #1070: escape + wrap via the shared INI value codec — a raw newline
     // or quote from the textarea must not reach the settings bag unescaped
-    // (it used to split the exported `key = value` line and corrupt the
-    // whole PrusaSlicer bundle, and a re-import parsed the continuation
-    // lines as INI keys/sections).
+    // (it would split the exported `key = value` line and a re-import would
+    // parse the continuation lines as INI keys/sections).
     //
-    // Codex P1 round 4 on PR #1086: an UNCHANGED field writes back the
-    // ORIGINAL stored wire bytes, never a re-encode. The bag legally holds
-    // UNQUOTED wire values with literal `\n` escapes (a long-supported
-    // shape — see tests/prusaSlicerBundle.test.ts's unquoted gcode
+    // An UNCHANGED field writes back the ORIGINAL stored wire bytes, never a
+    // re-encode. The bag legally holds UNQUOTED wire values with literal
+    // `\n` escapes (see tests/prusaSlicerBundle.test.ts's unquoted gcode
     // fixtures); unwrapIniString leaves those verbatim for display, so
     // re-encoding them on save would escape each backslash (`\n` → `\\n`)
     // and hand PrusaSlicer literal backslash-n text instead of line breaks.
-    // Only a field the user actually EDITED goes through wrapIniString —
-    // WYSIWYG: the stored content is exactly the textarea's text.
+    // Only a field the user actually EDITED goes through wrapIniString.
     const wireOrEdited = (storedKey: string, content: string) => {
       if (!content) return undefined;
       const stored = getSettingVal(initialData, storedKey);
@@ -943,18 +908,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     if (form.compatPrinters !== getSettingListVal(initialData, "compatible_printers")) {
       // GH #678: `;` splits an edited value back into the array form when it
       // yields multiple entries — the shape a multi-printer list is stored
-      // and exported in. A single entry stays a scalar (the common case,
-      // byte-identical to pre-#678).
+      // and exported in. A single entry stays a scalar.
       const parts = form.compatPrinters
         .split(";")
         .map((p) => p.trim())
         .filter((p) => p !== "");
-      // Round 16 (Codex P2): store the NORMALIZED value in every arm. The
-      // raw field could keep a stray separator ("A;" after deleting the
-      // second entry) or surrounding whitespace, which the exporters then
-      // emit as the printer NAME — matching nothing and hiding the preset.
-      // parts is already trimmed and empty-filtered: >1 is the list, 1 is
-      // the scalar, 0 clears the restriction.
+      // Store the NORMALIZED value in every arm. The raw field could keep a
+      // stray separator ("A;" after deleting the second entry) or
+      // whitespace, which the exporters then emit as the printer NAME —
+      // matching nothing and hiding the preset. parts is already trimmed
+      // and empty-filtered: >1 is the list, 1 is the scalar, 0 clears the
+      // restriction.
       settings.compatible_printers =
         parts.length > 1 ? parts : parts.length === 1 ? parts[0] : "";
     }
@@ -986,22 +950,21 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       settings.start_filament_gcode = undefined;
     }
 
-    // GH #678 round 2 (Codex P1): every form-backed key above was SEEDED
-    // through getSettingVal's ';'-join, so an UNEDITED multi-element value
-    // would write back as its flattened join and silently destroy the
-    // array on any save. ONE enforcement point instead of thirty per-field
-    // guards: an outgoing scalar equal to the stored array's join is the
-    // unedited case BY CONSTRUCTION — restore the stored array. An edited
-    // value no longer equals the join and writes as the user typed it.
-    // (compatible_printers has its own edited-only split above; its
-    // unedited case never reaches the bag at all.)
+    // GH #678: every form-backed key above was SEEDED through getSettingVal,
+    // so an UNEDITED multi-element value would write back as its scalar
+    // display and silently destroy the array on any save. ONE enforcement
+    // point instead of thirty per-field guards: an outgoing scalar equal to
+    // the stored array's seed derivation is the unedited case BY
+    // CONSTRUCTION — restore the stored array. An edited value no longer
+    // equals it and writes as the user typed it. (compatible_printers has
+    // its own edited-only split above; its unedited case never reaches the
+    // bag at all.)
     {
       const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
-      // Round 3 (Codex P1): checkbox-backed keys don't seed via the join —
-      // they seed settingFlagIsOn(...) and write back "1"/"0", so
-      // join-identity can never detect their unedited case. Their unedited
-      // test mirrors the seed via the SAME helper. Keep this set in
-      // lockstep with the settingFlagIsOn seeds above.
+      // Checkbox-backed keys seed via settingFlagIsOn(...) and write back
+      // "1"/"0", so display-identity can never detect their unedited case.
+      // Their unedited test mirrors the seed via the SAME helper. Keep this
+      // set in lockstep with the settingFlagIsOn seeds above.
       const CHECKBOX_SETTING_KEYS = new Set([
         "filament_abrasive",
         "filament_soluble",
@@ -1013,18 +976,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         if (!Array.isArray(sv)) continue;
         // A blank first element seeds "", and the `|| undefined` submit
         // writes turn an untouched "" into undefined — which JSON-omits the
-        // key and would silently DELETE the stored array (round 10, Codex
-        // P2). Outgoing undefined therefore normalizes to the "" it came
-        // from before the unedited comparison. Anything non-string/non-
-        // undefined is not a form-written scalar; leave it alone.
+        // key and would silently DELETE the stored array. Outgoing undefined
+        // therefore normalizes to the "" it came from before the unedited
+        // comparison. Anything non-string/non-undefined is not a
+        // form-written scalar; leave it alone.
         const outgoing = typeof v === "string" ? v : v === undefined ? "" : null;
         if (outgoing === null) continue;
         // Every unedited test mirrors its field's SEED derivation exactly:
         // checkboxes via settingFlagIsOn, everything else via the
-        // first-element display getSettingVal produces (round 9 — the
-        // join mirror matched a join seed that no longer exists).
-        // compatible_printers never reaches this loop (its write is
-        // edited-only, guarded on the join comparison above).
+        // first-element display getSettingVal produces.
         const unedited = CHECKBOX_SETTING_KEYS.has(k)
           ? outgoing === (settingFlagIsOn(sv) ? "1" : "0")
           : outgoing === displayFirstElement(sv);
@@ -1033,24 +993,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     }
 
     try {
-      // GH #477: when the user has opted into the "Coextruded"
-      // arrangement (auto-toggled via tag 29 in optTags), the
-      // OpenPrintTag spec says primary color SHOULD be null for
-      // coextruded — "Does not have a primary color, number of colors
-      // can be derived from the defined secondary colors." Submit null
-      // so resolveFilament + every read site honour that semantic. For
-      // gradient and solid arrangements the primary stays as set.
-      //
-      // Codex P2 round 1 on PR #533: BOTH the dual_color tag (28) AND
-      // the triple_color tag (29) represent coextruded — pre-fix this
-      // only checked 29, so a dual-color save (the common 2-secondary
-      // shape) kept the primary on the doc and rendered with an extra
-      // unwanted stripe. submittedColorValue uses deriveArrangement to
-      // stay aligned with every other render site.
-      //
-      // GH #605: a cleared / incomplete hex ("" or "#12") also submits
-      // null — the API and schema accept it; pre-fix the UI could never
-      // produce a null color outside the coextruded arrangement.
+      // GH #477: the OpenPrintTag spec says primary color SHOULD be null
+      // for coextruded. BOTH the dual_color tag (28) AND the triple_color
+      // tag (29) represent coextruded; submittedColorValue uses
+      // deriveArrangement to stay aligned with every other render site.
+      // GH #605: a cleared / incomplete hex ("" or "#12") also submits null.
       const submittedColor = submittedColorValue(form.color, form.optTags);
       await onSubmit({
         name: form.name,
@@ -1084,22 +1031,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         minPrintSpeed: parseNum(form.minPrintSpeed),
         maxPrintSpeed: parseNum(form.maxPrintSpeed),
         compatibleNozzles: form.compatibleNozzles,
-        // GH #1101: `hasCalibrationData` is now the ONLY filter. This block
-        // used to also drop rows whose nozzle wasn't in
-        // `form.compatibleNozzles` and printer-scoped rows whose printer no
-        // longer owned the nozzle. `[].includes(x)` is always false, so an
+        // GH #1101: `hasCalibrationData` is the ONLY filter. A nozzle-tick
+        // filter here is forbidden: `[].includes(x)` is always false, so an
         // EMPTY tick list deleted EVERY calibration — and empty is exactly
-        // what the slicer sync-back leaves behind (the #859 fallback resolves
-        // a nozzle from the global catalog and never writes compatibleNozzles).
-        // The rows were loaded into state, never rendered, and destroyed on the
-        // next save of any field; on a template, every inheriting variant lost
-        // them at once.
-        //
-        // PR #358's goal — that a row the UI can't show mustn't become an
-        // undeletable orphan — is preserved by making such rows VISIBLE (the
-        // "not shown above" list below) instead of deleting them. Blanking a
-        // card is still the delete gesture, and still the only one that runs
-        // implicitly.
+        // what the slicer sync-back leaves behind (the #859 fallback
+        // resolves a nozzle from the global catalog and never writes
+        // compatibleNozzles). PR #358's goal — that a row the UI can't show
+        // mustn't become an undeletable orphan — is preserved by making such
+        // rows VISIBLE (the orphan list) instead of deleting them. Blanking
+        // a card is still the delete gesture, and still the only one that
+        // runs implicitly.
         calibrations: keepCalibrationEntries(Object.entries(calibrations))
           .map(([key, cal]) => {
             const [printerId, nozzleId, bedTypeId] = key.split(":");
@@ -1177,10 +1118,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   // Edit mode is identified by the presence of `_id` on initialData — only
   // /filaments/{id}/edit fetches a real doc with that field; the populate-from
   // flows on /filaments/new (clone, NFC, Prusament, INI, TDS, parent) all
-  // synthesise an initialData object without an _id. Branching on the bare
-  // truthiness of initialData (the prior behaviour) made every populate-from
-  // flow show "Update Filament" on what is in fact a create — confusing on a
-  // destructive-feeling action like Clone (GH #164).
+  // synthesise an initialData object without an _id, and branching on bare
+  // truthiness would label those creates "Update Filament" (GH #164).
   const isEdit = Boolean(initialData?._id);
   const submitLabel = saving
     ? t("form.saving")
@@ -1188,15 +1127,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       ? t("form.updateFilament")
       : t("form.createFilament");
 
-  // Placeholder helpers — when the form is opened from `?parentId=`, the
-  // parent doc rides along on `initialData._parent`. We render the parent's
-  // values as faded placeholders on every inheritable input so the user
-  // can see what they're inheriting without leaving the page. Inputs stay
-  // empty in form state and on submit, so the variant doc records no
-  // explicit override and continues to track the parent at read time via
-  // resolveFilament (GH #106 — placeholders must NEVER bleed into form
-  // state). Returns `undefined` when there is no parent, no value, or an
-  // empty-string value, so callers can fall back to a static placeholder.
+  // Placeholder helpers — the parent doc rides along on
+  // `initialData._parent` and its values render as faded placeholders on
+  // every inheritable input. Inputs stay empty in form state and on submit,
+  // so the variant doc records no explicit override and continues to track
+  // the parent at read time via resolveFilament (GH #106 — placeholders
+  // must NEVER bleed into form state). Returns `undefined` when there is no
+  // parent, no value, or an empty-string value, so callers can fall back to
+  // a static placeholder.
   type ParentDocLike = Record<string, unknown>;
   const parentDoc =
     (initialData?._parent && typeof initialData._parent === "object"
@@ -1215,10 +1153,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     if (value === null || value === undefined || value === "") return undefined;
     return String(value);
   };
-  // Tabs group the form's sections so only one group shows at a time. The
-  // panels below (each carrying `data-tab` with the matching id) stay mounted
-  // in the form — see FormTabs for why that keeps native validation working
-  // across tabs.
+  // The panels below (each carrying `data-tab` with the matching id) stay
+  // mounted in the form — see FormTabs for why that keeps native validation
+  // working across tabs.
   const tabs: FormTab[] = useMemo(
     () => [
       { id: "basics", label: t("form.tab.basics") },
@@ -1292,11 +1229,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </button>
       </div>
       {form.parentId && initialData?._parent && (
-        // Variant banner — without this users edit a clone, see the parent's
-        // values pre-filled (as they used to before GH #106 was fixed), and
-        // don't realise that clicking Save copies every field onto the
-        // child. Now the edit form fetches ?raw=true and shows only the
-        // variant's own overrides; inherited fields render blank. This
+        // Variant banner — the edit form fetches ?raw=true and shows only
+        // the variant's own overrides; inherited fields render blank. This
         // banner spells that out so the empty inputs don't look buggy.
         <div className="px-3 py-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-800 dark:text-blue-200">
           {t("form.variantHint", {
@@ -1612,18 +1546,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
       </div>
 
-      {/* Two columns, not four: at the form's width four cells were too
-          narrow to fit the colour swatch + hex input together, and the
-          "Density (g/cm³)" label wrapped to two lines, pushing its input
-          out of alignment with the rest of the row. Two columns matches
-          the vendor/type row above and gives every field room. */}
+      {/* Two columns, not four: four cells were too narrow to fit the colour
+          swatch + hex input together. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* GH #605: templates (filaments with variants) are colorless — the
-            primary color + color name live on each variant, and FilamentSwatch
-            renders parents as the hatched color group regardless. Hide both
+            primary color + color name live on each variant. Hide both
             editors and explain; the untouched seeded values are resubmitted
             verbatim so a legacy parent's stored color survives an edit until
-            the user explicitly converts (decision 4, enforce forward only).
+            the user explicitly converts (enforce forward only).
             The multi-color editor below stays: secondaryColors is inheritable
             (GH #477), so the shared set legitimately lives on the template. */}
         {isParent ? (
@@ -1637,10 +1567,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           <div className="flex gap-2">
             {form.color === "" ? (
               // GH #605: cleared color. <input type="color"> can't render an
-              // empty value, so show a hatched placeholder instead — same
-              // hatch vocabulary as FilamentSwatch's "no single color"
-              // treatment. Clicking forwards to the always-mounted hidden
-              // picker below so choosing a color back is still one click.
+              // empty value, so show a hatched placeholder instead. Clicking
+              // forwards to the always-mounted hidden picker below so
+              // choosing a color back is still one click.
               <button
                 type="button"
                 aria-label={t("form.color.cleared")}
@@ -1745,24 +1674,18 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             }}
             onBlur={() => {
               // Exact (case- and whitespace-insensitive) match on a CSS
-              // named color — populate the hex even though the user
-              // never opened the dropdown. Mirrors how a user expects
-              // the picker to behave after typing "navy" and tabbing.
-              // DB matches are NOT auto-applied on blur because there
-              // can be multiple hexes under the same name (e.g. several
-              // brands of "Galaxy Black"); the user must explicitly
-              // pick which one they meant via the dropdown.
-              // GH #794: fill the hex from the name only when the hex isn't
-              // user-owned — i.e. it's incomplete, or never picked / itself
-              // auto-filled (tracked by colorHexUserSet, which stays false after
-              // an autofill so a later name can replace it). Never clobber a hex
-              // the user picked, including a deliberately-chosen gray sentinel.
+              // named color — populate the hex even though the user never
+              // opened the dropdown. DB matches are NOT auto-applied on blur
+              // because there can be multiple hexes under the same name;
+              // the user must explicitly pick via the dropdown.
+              // GH #794: fill the hex from the name only when it isn't
+              // user-owned (see colorHexUserSet above).
               const cssHex = lookupCssNamedColor(form.colorName);
               if (cssHex && (isIncompleteColorHex(form.color) || !colorHexUserSet)) {
                 setForm((f) => ({ ...f, color: cssHex }));
-                // Now name-auto-filled (not user-owned), so a later name can
-                // still replace it — even if the user had just cleared the field,
-                // which set the flag true (Codex P2).
+                // Name-auto-filled (not user-owned), so a later name can
+                // still replace it — even if the user had just cleared the
+                // field, which set the flag true.
                 setColorHexUserSet(false);
               }
             }}
@@ -1785,17 +1708,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
               ) {
                 e.preventDefault();
                 const s = filtered[colorNameHighlight];
-                // GH #794: always set the name; adopt the suggestion's hex only
-                // when the hex isn't user-owned (incomplete, or never picked /
-                // auto-filled) — don't clobber a user-picked color.
+                // GH #794: always set the name; adopt the suggestion's hex
+                // only when the hex isn't user-owned (see colorHexUserSet).
                 const applyHex = isIncompleteColorHex(form.color) || !colorHexUserSet;
                 setForm((f) => ({
                   ...f,
                   colorName: s.name,
                   ...(applyHex ? { color: s.hex } : {}),
                 }));
-                // Filling from a name leaves the hex name-owned, so subsequent
-                // names keep updating it (Codex P2).
                 if (applyHex) setColorHexUserSet(false);
                 setColorNameDropdownOpen(false);
                 setColorNameHighlight(-1);
@@ -1808,10 +1728,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           {colorNameDropdownOpen && (() => {
             const filtered = filterColorSuggestions(colorNameSuggestions, form.colorName);
             if (filtered.length === 0) return null;
-            // Section boundaries — render a small "From your filaments"
-            // / "Standard colors" header before each source group.
-            // Pre-computing the first-of-each-source flag avoids an
-            // extra pass during render.
+            // Render a source-group header before each group.
             let lastSource: "db" | "css" | null = null;
             return (
               <ul
@@ -1824,11 +1741,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                   const showHeader = s.source !== lastSource;
                   lastSource = s.source;
                   return (
-                    // GH #637 (#3): was a <span> wrapping the <li>s — a
-                    // <span> is an invalid <ul> child (and put the <li>s
-                    // outside the list's content model), so AT could fail
-                    // to enumerate the options. A keyed Fragment keeps the
-                    // <li>s as direct <ul> children.
+                    // GH #637: a keyed Fragment, not a wrapping <span> — a
+                    // <span> is an invalid <ul> child, so AT could fail to
+                    // enumerate the options.
                     <Fragment key={`${s.source}-${s.name}-${s.hex}`}>
                       {showHeader && (
                         <li
@@ -1851,17 +1766,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                           // input's onBlur fires first and the dropdown closes
                           // before the click registers.
                           e.preventDefault();
-                          // GH #794: name always; hex only when not user-owned
-                          // (incomplete, or never picked / auto-filled) — never
-                          // clobber a user-picked color.
+                          // GH #794: name always; hex only when not
+                          // user-owned (see colorHexUserSet).
                           const applyHex = isIncompleteColorHex(form.color) || !colorHexUserSet;
                           setForm((f) => ({
                             ...f,
                             colorName: s.name,
                             ...(applyHex ? { color: s.hex } : {}),
                           }));
-                          // Name-owned after a fill, so later names keep updating
-                          // it (Codex P2).
                           if (applyHex) setColorHexUserSet(false);
                           setColorNameDropdownOpen(false);
                           setColorNameHighlight(-1);
@@ -1884,8 +1796,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
         </>
         )}
-        {/* GH #477: Multi-color editor + arrangement radio. Spans the
-            full 2-col grid via sm:col-span-2. */}
         <div className="sm:col-span-2">
           <MultiColorEditor
             form={form}
@@ -1921,15 +1831,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
       </div>
 
-      {/* GH #605: a template (filament with variants) doesn't hold inventory —
-          spools and the total weight live on its color variants, and the PUT
-          route strips a non-null totalWeight for parents. But the SPEC pair
-          (empty-spool tare + net filament weight) legitimately lives on the
-          template: both are inheritable (resolveFilament), so setting them
-          here gives every variant its remaining-weight denominator (GH
-          #1048). Show the section with only the spec fields for parents;
-          hide the inventory inputs (initial weight, low-stock threshold)
-          whose values wouldn't mean anything / wouldn't persist. */}
+      {/* GH #605: a template doesn't hold inventory — the PUT route strips a
+          non-null totalWeight for parents. But the SPEC pair (empty-spool
+          tare + net filament weight) legitimately lives on the template:
+          both are inheritable, so setting them here gives every variant its
+          remaining-weight denominator (GH #1048). Show only the spec fields
+          for parents; hide the inventory inputs. */}
       <CollapsibleSection
         id="spool-weight"
         title={t("form.section.spoolWeight")}
@@ -1969,13 +1876,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             />
             <p className="text-xs text-gray-400 mt-1">{t("form.emptySpoolHint")}</p>
           </div>
-          {/* Inventory inputs — hidden for templates (see the section
-              comment above): totalWeight is stripped by the PUT route, and
-              the low-stock threshold keys off remaining weight, which a
-              spool-less template doesn't have. The untouched seeded values
-              are still resubmitted verbatim (same posture as the hidden
-              color editor), so a legacy parent's stored value survives an
-              edit until explicitly converted/cleared. */}
+          {/* Inventory inputs — hidden for templates. The untouched seeded
+              values are still resubmitted verbatim (same posture as the
+              hidden color editor), so a legacy parent's stored value
+              survives an edit until explicitly converted/cleared. */}
           {!isParent && (
           <>
           <div>
@@ -2065,9 +1969,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         className="space-y-4"
       >
 
-      {/* #872: framed "Print Speed" section. These three fields used to be an
-          unframed orphan grid between sections, so they didn't align with the
-          other (bordered) groups. */}
       <CollapsibleSection id="print-speed" title={t("form.section.printSpeed")} defaultOpen>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
@@ -2094,11 +1995,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             placeholder={t("form.placeholder.zOffset")}
           />
         </div>
-        {/* GH #1148: the base (all-nozzles) value. The whole persistence
-            pipeline already existed — importers, exporters, PUT, the detail
-            tile — but nothing rendered an editor, so a CSV-imported value
-            was uneditable in the UI. Per-nozzle calibrations override it;
-            their MVS placeholder mirrors this value live. */}
+        {/* GH #1148: the base (all-nozzles) value. Per-nozzle calibrations
+            override it; their MVS placeholder mirrors this value live. */}
         <div>
           <label htmlFor="filament-max-vol-speed" className={labelClass} title={t("form.tooltip.maxVol")}>
             {t("form.maxVolumetricSpeed")}
@@ -2704,7 +2602,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             {t("form.noNozzlesDefined")} <a href="/nozzles/new" className="text-blue-600 hover:underline">{t("form.addOneFirst")}</a>
           </p>
         )}
-        {/* #872: when abrasive hides soft nozzles, say so (and why). */}
         {hiddenSoftNozzleCount > 0 && (
           <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">
             {t("form.nozzle.hardenedOnly", { count: hiddenSoftNozzleCount })}
@@ -2729,9 +2626,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                 />
                 <span>
                   {n.name}
-                  {/* #872: always show diameter + type so same-diameter nozzles
-                      (e.g. 0.4 Brass vs 0.4 Diamondback) are distinguishable
-                      regardless of how the nozzle was named. */}
+                  {/* Always show diameter + type so same-diameter nozzles are
+                      distinguishable regardless of how the nozzle was named. */}
                   <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
                     · {n.diameter}mm{nozzleTypeLabel(n.type, t) ? ` ${nozzleTypeLabel(n.type, t)}` : ""}
                   </span>
@@ -2740,8 +2636,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                       HF
                     </span>
                   )}
-                  {/* #872: a soft nozzle that is still selected on an abrasive
-                      filament is flagged so the user knows to swap it out. */}
+                  {/* A soft nozzle still selected on an abrasive filament is
+                      flagged so the user knows to swap it out. */}
                   {isAbrasive && !n.hardened && (
                     <span className="ml-1 px-1.5 py-0.5 bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200 rounded text-xs">
                       {t("form.nozzle.notHardened")}
@@ -2774,11 +2670,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             {printers.length > 0 && ` ${t("form.calibrationsPrinterHint")}`}
           </p>
 
-          {/* Printer selector tabs — restricted to printers that
-              physically own at least one of this filament's compatible
-              nozzles. See the `relevantPrinters` memo above for the
-              rationale (a calibration against a printer that doesn't
-              have the nozzle is meaningless). */}
+          {/* Printer selector tabs — restricted to printers that physically
+              own one of the compatible nozzles (see relevantPrinters). */}
           {!printersLoading && relevantPrinters.length > 0 && (
             <div className="flex flex-wrap gap-1 mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
               <button
@@ -3091,9 +2984,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
 
           {/* GH #1101: rows the grid above can't reach — a nozzle that isn't
               ticked (the slicer sync-back case), one no longer in the catalog,
-              or a printer/bed scope with no tab. These used to be DELETED on
-              the next save to stop them becoming invisible orphans (PR #358);
-              showing them achieves the same goal without destroying data. */}
+              or a printer/bed scope with no tab. Showing them (instead of the
+              old delete-on-save) keeps them from becoming invisible orphans
+              without destroying data. */}
           {orphanCalibrationKeys.length > 0 && (
             <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
               <h4 className="text-sm font-medium text-amber-700 dark:text-amber-400">
@@ -3280,11 +3173,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
       </div>
 
-      {/* GH #1066: surface the PrusaSlicer printer-restriction pair. A preset
-          duplicated in the slicer from another printer's profile carries its
-          source's compatible_printers_condition, silently hiding the synced
-          preset on every other printer — with no way to see or clear it
-          in-app before this. Empty = visible for every printer. */}
+      {/* GH #1066: the PrusaSlicer printer-restriction pair (see the seed
+          comment on compatPrinters). Empty = visible for every printer. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label htmlFor="compat-printers" className={labelClass}>
@@ -3350,21 +3240,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
 }
 
 /**
- * GH #477 — Multi-color editor + arrangement radio.
+ * Multi-color editor + arrangement radio (GH #477).
  *
- * Renders below the primary color picker. The arrangement radio toggles
- * the canonical OpenPrintTag arrangement tags (GH #507: 27 = gradient,
- * 28 = dual_color, 29 = triple_color — both 28 and 29 render coextruded)
- * in the user's `optTags` array — there's no separate "arrangement" field
- * on the schema, just bits in the existing tags
- * list. When the user opts into the multi-color treatment we surface
- * 0–5 secondary-color slots; the swatch preview to the right updates
- * live so the user sees what the list / detail page will render.
- *
- * Kept as a sub-component so the (already very long) FilamentForm body
- * doesn't grow another 100 lines. State stays in the parent — we read
- * `form` / call `setForm` — so the existing dirty-tracking +
- * unsaved-changes guard work unchanged.
+ * The arrangement radio toggles the canonical OpenPrintTag arrangement
+ * tags (GH #507: 27 = gradient, 28 = dual_color, 29 = triple_color — both
+ * 28 and 29 render coextruded) in `optTags` — there's no separate
+ * "arrangement" schema field. State stays in the parent — we read `form` /
+ * call `setForm` — so the existing dirty-tracking + unsaved-changes guard
+ * work unchanged.
  */
 function MultiColorEditor({
   form,
@@ -3377,19 +3260,13 @@ function MultiColorEditor({
 }) {
   const arrangement: ColorArrangement = deriveArrangement(form.optTags);
 
-  /** Toggle a single arrangement tag on/off in optTags, removing every
-   *  other arrangement tag so they're always mutually exclusive from
-   *  the UI's perspective.
-   *
-   *  GH #507: arrangement is driven by the canonical OPT_TAG enum —
-   *  27 = gradient, 28 = dual_color, 29 = triple_color. Both 28 and 29
-   *  surface as `"coextruded"` at render time; `arrangementToOptTag`
-   *  picks dual vs triple based on the current secondary-color count
-   *  so toggling the radio writes the right id. `stripArrangementTags`
-   *  removes ALL three so a prior arrangement's tag doesn't survive
-   *  the switch (pre-fix, swapping gradient → coextruded left tag 27
-   *  on the doc and deriveArrangement would then disagree with the
-   *  UI on the next render).
+  /** Toggle a single arrangement tag in optTags, removing every other
+   *  arrangement tag so they're always mutually exclusive from the UI's
+   *  perspective. `arrangementToOptTag` picks dual vs triple based on the
+   *  current secondary-color count; `stripArrangementTags` removes ALL
+   *  three so a prior arrangement's tag doesn't survive the switch (a
+   *  surviving tag makes deriveArrangement disagree with the UI on the
+   *  next render).
    *
    *  Coextruded + gradient simultaneously is theoretically possible per
    *  spec but the form only models one arrangement at a time. */
@@ -3402,10 +3279,10 @@ function MultiColorEditor({
     });
   };
 
-  /** GH #507: when the user adds/removes a coextruded secondary slot,
-   *  refresh the arrangement tag so dual→triple (or back) flips on the
-   *  saved doc without the user having to re-click the radio. Gradient
-   *  + solid don't carry a count distinction so they're untouched. */
+  /** When the user adds/removes a coextruded secondary slot, refresh the
+   *  arrangement tag so dual→triple (or back) flips on the saved doc
+   *  without re-clicking the radio. Gradient + solid don't carry a count
+   *  distinction so they're untouched. */
   const refreshArrangementTagForCount = (
     nextSecondaries: string[],
     optTagsAfter: number[],
@@ -3416,15 +3293,13 @@ function MultiColorEditor({
     return newTag != null ? [...stripped, newTag] : stripped;
   };
 
-  // GH #637: stable row keys. `form.secondaryColors` is a plain string[]
-  // shared with the parent form's prefill/submit paths, so rows carry no
-  // natural id — a parallel uid list gives each slot the stable key that
-  // bedTypeTemps/presets/amsSlots rows carry as `_uid` (see the makeUid
-  // docblock for why index keys jump focus on mid-list deletes). The
-  // add/remove handlers keep `uids` in lockstep with the array; a render-
-  // time length reconcile covers external resizes (NFC/clone prefill) via
-  // React's "adjust state during render" pattern — keeps existing rows'
-  // uids, only the appended/trimmed tail changes.
+  // GH #637: stable row keys. `form.secondaryColors` is a plain string[],
+  // so rows carry no natural id — a parallel uid list gives each slot a
+  // stable key (see the makeUid docblock for why index keys jump focus on
+  // mid-list deletes). The add/remove handlers keep `uids` in lockstep with
+  // the array; a render-time length reconcile covers external resizes
+  // (NFC/clone prefill) via React's "adjust state during render" pattern —
+  // keeps existing rows' uids, only the appended/trimmed tail changes.
   const [uids, setUids] = useState<string[]>(() =>
     form.secondaryColors.map(() => makeUid()),
   );
@@ -3477,9 +3352,7 @@ function MultiColorEditor({
         {t("form.multiColor.title")}
       </legend>
 
-      {/* Arrangement radio — three exclusive options driving optTags
-          28/29. "None" clears both, "Coextruded" sets 29, "Gradient"
-          sets 28. */}
+      {/* Arrangement radio — three exclusive options. */}
       <div>
         <span className={labelClass}>{t("form.multiColor.arrangement")}</span>
         <div className="flex flex-wrap gap-2" role="radiogroup"
@@ -3522,9 +3395,9 @@ function MultiColorEditor({
         )}
       </div>
 
-      {/* Secondary color slots — only render when the user has chosen a
-          multi-color arrangement OR already has secondaries set. Lets
-          a "solid" single-color filament keep a quiet form. */}
+      {/* Secondary color slots — only when a multi-color arrangement is
+          chosen OR secondaries already exist, so a "solid" single-color
+          filament keeps a quiet form. */}
       {(arrangement !== "solid" || form.secondaryColors.length > 0) && (
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -3590,13 +3463,9 @@ function MultiColorEditor({
             </ul>
           )}
           {/* Live preview using the same swatch the list / detail page
-              renders — the user sees exactly what their multi-color
-              filament will look like everywhere else. Codex P2 on PR
-              #483: mirror the submit handler's "coextruded clears
-              primary to null" so the preview doesn't show a phantom
-              extra gray stripe (#808080) that would disappear after
-              save. For coextruded, only secondaryColors paint the
-              swatch — exactly what the list/detail view will render. */}
+              renders. Mirror the submit handler's "coextruded clears
+              primary to null" so the preview doesn't show a phantom extra
+              gray stripe that would disappear after save. */}
           <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
             <span>{t("form.multiColor.preview")}:</span>
             <FilamentSwatch

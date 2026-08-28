@@ -2,22 +2,14 @@
  * Explains why a location can't be deleted (GH #1106).
  *
  * The delete guard refuses while ANY non-purged filament still has a spool at
- * the location. The `/locations` list, meanwhile, counted only spools that are
- * both non-retired AND on an active filament. So two whole buckets of blocking
- * spools were invisible on the page that offers the Delete button:
- *
- *   1. retired spools on active filaments — hidden from /inventory unless the
- *      "Include retired" pref is on;
- *   2. spools on trashed (non-purged) filaments — unreachable from /inventory
- *      at ANY setting, because that aggregation matches `_deletedAt: null`.
- *
- * The result was a row reading "Spools 0" that refused to delete and told the
- * user to reassign spools the same page insisted did not exist.
+ * the location — including two buckets invisible on the page that offers the
+ * Delete button: retired spools on active filaments (hidden from /inventory
+ * unless "Include retired" is on) and spools on trashed (non-purged)
+ * filaments (unreachable from /inventory at ANY setting).
  *
  * The blocking PREDICATE is deliberately unchanged — excluding retired spools
  * from it would delete the location out from under them and leave a dangling
- * `locationId`. What changes is that the app stops contradicting itself before
- * the click, and says something actionable after it.
+ * `locationId`. This module only makes the refusal visible and actionable.
  *
  * Pure so the summary + message are unit-testable; the route supplies the
  * per-filament rows.

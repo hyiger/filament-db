@@ -352,7 +352,7 @@ describe("POST /api/prusament/import", () => {
     });
 
     it("recovery against a TEMPLATE winner → 400 template_no_spools, no spool attached", async () => {
-      // GH #605 (codex round 3, Finding B): even the E11000 recovery push
+      // GH #605: even the E11000 recovery push
       // must not land inventory on a template.
       const FilamentModel = (await import("@/models/Filament")).default;
       const spy = vi

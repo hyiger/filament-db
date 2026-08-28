@@ -50,13 +50,11 @@ function resolveFor(pref: ThemePreference, systemDark: boolean): "light" | "dark
 }
 
 export default function ThemeProvider({ children }: { children: ReactNode }) {
-  // GH #1007 F2: seed to SSR-safe constants and read localStorage + matchMedia
-  // in a mount effect — mirroring the GH #639 fix in useCurrency /
-  // TranslationProvider. Seeding these in the useState initializers runs during
-  // hydration, so a stored non-"system" theme made the client's first render
-  // (which highlights `preference` in ThemeSection) disagree with the server's
-  // "system" render → a React 19 hydration mismatch + full client re-render on
-  // every /settings/ui visit.
+  // Seed to SSR-safe constants and read localStorage + matchMedia in a
+  // mount effect — mirroring useCurrency / TranslationProvider (GH #639).
+  // Seeding these in the useState initializers runs during hydration, so a
+  // stored non-"system" theme would make the client's first render
+  // disagree with the server's → a React 19 hydration mismatch.
   const [preference, setPreferenceState] = useState<ThemePreference>("system");
   // systemDark tracks the OS media query so `resolved` is a pure derivation
   // of (preference, systemDark) rather than a DOM-read side effect.

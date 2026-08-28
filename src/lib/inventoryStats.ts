@@ -61,19 +61,13 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
     }
     return any ? grams : null;
   }
-  // GH #524.3: legacy single-spool fallback — same shape getSpoolCount
-  // and getRemainingPct already honour. Without this branch, the home
-  // page's isLowStock helper (which calls getRemainingGrams and treats
-  // null as "not low") never lights up the badge for a pre-migration
-  // filament with a top-level `totalWeight`, even though the same row's
-  // remaining-% bar renders correctly via getRemainingPct's legacy path.
-  // GH #1118: 0-tare fallback, matching the spools branch above. GH #954
-  // aligned that branch to "the 0-tare posture by-location / dashboard /
-  // locations already use" and never revisited this sibling four lines below,
-  // leaving the legacy path the lone surface that returns null without a tare.
-  // The dashboard's own legacy branch computes `totalWeight - 0` and raises a
-  // low-stock alert with a gram figure the home list then refused to render at
-  // all — that divergence is this line, not the dashboard.
+  // GH #524.3: legacy single-spool fallback — same shape getSpoolCount and
+  // getRemainingPct already honour. Without this branch the home page's
+  // isLowStock helper never lights up for a pre-migration filament with a
+  // top-level `totalWeight`. GH #1118: 0-tare fallback here too, matching
+  // the spools branch — otherwise the legacy path is the lone surface that
+  // returns null without a tare while the dashboard computes `totalWeight -
+  // 0` for the same row.
   if (f.totalWeight == null) return null;
   return Math.max(0, f.totalWeight - (f.spoolWeight ?? 0));
 }

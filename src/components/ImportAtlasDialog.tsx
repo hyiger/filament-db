@@ -62,9 +62,8 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
         return;
       }
       if (e.key !== "Tab") return;
-      // GH #1081: exclude disabled elements — the connect step's disabled
-      // Connect button used to be the trap boundary, so Tab from Cancel
-      // escaped into the background page (same selector as
+      // Exclude disabled elements — a disabled button as the trap boundary
+      // lets Tab escape into the background page (same selector as
       // SpoolCsvImportDialog).
       const focusable = dialog.querySelectorAll<HTMLElement>(
         'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'

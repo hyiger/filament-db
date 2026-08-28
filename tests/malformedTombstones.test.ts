@@ -135,7 +135,7 @@ describe("repairMalformedTombstones (GH #1152)", () => {
     expect(await repairMalformedTombstones(double as never)).toBe(2);
     // `$eq` wrapping is part of the contract: it is what keeps a BSON regex
     // or operator-shaped observed value a LITERAL rather than live query
-    // syntax (the second Codex P2 on this file).
+    // syntax.
     expect(ops.map((o) => o.updateOne.filter)).toEqual([
       { _id: "id1", _deletedAt: { $eq: "" } },
       { _id: "id2", _deletedAt: { $eq: "garbage" } },

@@ -11,30 +11,24 @@ import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
 
 /**
- * GET /api/filaments/{id}/openprinttag/check  (GH #607, Phase 1)
+ * GET /api/filaments/{id}/openprinttag/check  (GH #607)
  *
  * Compares an OpenPrintTag-linked filament against the *current* upstream
- * material and returns a field-level changelist. Read-only — nothing is
- * mutated; the user picks which changes to apply via the sibling POST
- * `.../sync` endpoint.
+ * material and returns a field-level changelist. Read-only — the user
+ * applies changes via the sibling POST `.../sync`.
  *
  * Responses:
- *   { linked: false }                        — row has no openprinttag_slug
- *   { linked: true, found: false, slug }     — slug no longer in the OPT db
+ *   { linked: false }                     — row has no openprinttag_slug
+ *   { linked: true, found: false, slug }  — slug no longer in the OPT db
  *   { linked: true, found: true, slug, materialName, changes: [...] }
+ * `changes[]` entries carry `kind ∈ {adopt, conflict}` (src/lib/optResync).
  *
- * `changes[]` entries are `{ field, labelKey, current, incoming, kind }`
- * where `kind ∈ {adopt, conflict}` (see src/lib/optResync.ts). An empty
- * `changes` array means the row is already up to date with OPT.
- *
- * GH #605 (codex round 4, F5): this route deliberately does NOT take the
- * per-filament mutex the sync route holds. Its output is ADVISORY — a
- * changelist the user picks from — and the sync route re-derives the whole
- * offered set (including the template `excludeColor` flag) from a fresh
- * in-lock snapshot before any write, so a changelist staled by a concurrent
- * first-variant promotion can never be applied; it just 400s on sync and
- * the user re-checks. Locking here would serialize a read-only endpoint
- * against every write on the filament for no correctness gain.
+ * GH #605: this route deliberately does NOT take the per-filament mutex the
+ * sync route holds — its output is ADVISORY, and the sync route re-derives
+ * the whole offered set from a fresh in-lock snapshot before any write, so
+ * a staled changelist can never be applied (it 400s on sync and the user
+ * re-checks). Locking here would serialize a read-only endpoint against
+ * every write for no correctness gain.
  */
 export async function GET(
   _request: NextRequest,
@@ -43,9 +37,8 @@ export async function GET(
   try {
     await dbConnect();
     const { id } = await params;
-    // A non-ObjectId id makes Mongoose throw a CastError that the generic
-    // catch maps to 500; reject it up front as a 400 like the sibling routes
-    // (bambustudio, print-history/[id]). (#818)
+    // Reject a non-ObjectId id up front (400) instead of a CastError 500
+    // (#818).
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
     }
@@ -71,27 +64,21 @@ export async function GET(
 
     const payload = mapToFilamentPayload(material);
 
-    // GH #607 follow-up: diff against the variant's EFFECTIVE values, not its
-    // raw doc. A field a variant leaves unset to inherit from its parent
-    // reads as null on the raw doc, so diffOptFields would classify it as an
-    // empty local value and offer it as a spurious "adopt" gap-fill — even
-    // though the resolved (inherited) value already matches OPT. The sibling
-    // `sync` route resolves the same way so the two stay in lockstep. The
-    // slug and snapshot still come from the raw doc: `settings` isn't carried
-    // through resolveFilament, and `openprinttagSnapshot` is variant-only (so
-    // it survives resolution unchanged either way). Root filaments have no
-    // parentId, so they diff exactly as before.
+    // Diff against the variant's EFFECTIVE values, not its raw doc — a
+    // field left unset to inherit reads as null raw, so diffOptFields would
+    // offer it as a spurious "adopt" gap-fill even though the inherited
+    // value already matches OPT. The sibling `sync` route resolves the same
+    // way so the two stay in lockstep. The slug and snapshot still come
+    // from the raw doc (`settings` isn't carried through resolveFilament;
+    // `openprinttagSnapshot` is variant-only).
     const { effective, parentEffective } = await resolveEffectiveFilament(
       filament as unknown as Record<string, unknown>,
     );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    // GH #605: a filament with ≥1 live variant is a TEMPLATE — templates are
-    // colorless (color lives on the variants), so the diff must not offer
-    // the primary color. secondaryColors stays offered: it's inheritable
-    // (GH #477), so the shared multi-color set legitimately lives on the
-    // template. The sibling sync route passes the same flag so check and
-    // sync agree on what's offered.
+    // GH #605: templates are colorless, so the diff must not offer the
+    // primary color. secondaryColors stays offered (inheritable, GH #477).
+    // The sibling sync route passes the same flag so check and sync agree.
     const excludeColor = await hasVariants(Filament, id);
     const changes = diffOptFields(effective, payload, snapshot, parentEffective, {
       excludeColor,

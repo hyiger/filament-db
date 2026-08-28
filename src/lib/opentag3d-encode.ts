@@ -197,7 +197,7 @@ export function filamentToOpenTag3DFields(
   // ── identity / remaining ──
   // The serial drives EXACT per-spool matching on scan (decoder → spoolUid), so
   // a truncated value would read back as a DIFFERENT id and silently mis-match
-  // (#927 r6). Unlike the display strings above, OMIT an over-length id (write
+  // (#927). Unlike the display strings above, OMIT an over-length id (write
   // without it + notice) rather than truncate — auto-generated ids are 10 hex
   // chars and always fit; only a long custom id (the app allows ≤128) trips this.
   const serial = (opts.spoolInstanceId ?? "").trim();

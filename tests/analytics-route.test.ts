@@ -230,8 +230,8 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * Variant color inheritance MATCHES `src/lib/resolveFilament.ts`:
    *
    *   - `color` is variant-only — a blank-primary variant does NOT
-   *     inherit the parent's primary color (Codex P2 on PR #936; would
-   *     otherwise diverge from every list/detail/export path).
+   *     inherit the parent's primary color (would otherwise diverge
+   *     from every list/detail/export path).
    *   - `secondaryColors` uses the array-fallback rule: a variant with
    *     an empty/absent array inherits the parent's whole array (GH
    *     #477), so a blank-primary variant under a parent with
@@ -357,7 +357,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * select string — trimming that select would silently regress every
    * PrintHistory-driven segment to the `"#808080"` sentinel. This test
    * pins the populate-select shape against both parent-secondary
-   * inheritance and coextruded fallback (Codex P2 on PR #936). Variant
+   * inheritance and coextruded fallback. Variant
    * primary `color` is NOT inherited (matches `resolveFilament`'s
    * `VARIANT_ONLY_FIELDS`); only parent's `secondaryColors` may fall
    * through.
@@ -444,8 +444,8 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * resolve through `parentColorMap.get(...) → displayColor(p)` →
    * `secondaryColors[0]`. The other inheritance test gives the parent a
    * primary `color`, so this is the only case that pins
-   * `.select("_id cost color secondaryColors")` at the parents query
-   * (Codex P2 on PR #936) — trimming `secondaryColors` from that select
+   * `.select("_id cost color secondaryColors")` at the parents query —
+   * trimming `secondaryColors` from that select
    * would silently break only this case.
    */
   it("variant inherits parent's secondaryColors[0] when both color and own secondaryColors are empty", async () => {
@@ -495,7 +495,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * `every(d => d.grams === 0)` then hid the day from the chart even
    * though the headline showed 1 g of usage.
    *
-   * Post-fix (Codex P2 on PR #936 + the follow-up round on `034788bc`):
+   * Post-fix:
    *   1. `day.grams = Math.round(rawDaySum)` — the sub-0.5g entries are
    *      preserved in the day total.
    *   2. `filter(([, v]) => v.grams > 0)` filters on RAW grams, so
@@ -561,8 +561,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * Filter-position regression guard. The route filters on RAW grams
    * BEFORE rounding: `filter(([, v]) => v.grams > 0)`. Reverting to a
    * filter on rounded grams (`filter((e) => e.grams > 0)` after the
-   * rounding map) would silently drop sub-0.5g segments — the exact
-   * regression Codex flagged on PR #936. This test pins the current
+   * rounding map) would silently drop sub-0.5g segments. This test pins the current
    * shape by seeding one sub-0.5g filament ALONGSIDE a well-above
    * filament on the same day, so the day.grams total is non-trivially
    * non-zero and the small segment MUST appear in the breakdown.
@@ -733,7 +732,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * at `now`), so it silently vanished from `usageByDay` — chart and
    * headline disagreed. Post-fix both loops skip `date > now` at
    * ingestion time and the DB query caps `startedAt: { $lte: now }`
-   * as belt-and-suspenders (Codex P3 on PR #936).
+   * as belt-and-suspenders.
    */
   it("skips future-dated entries in ALL aggregates so headline and chart agree", async () => {
     const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
@@ -988,7 +987,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       );
       const body = await res.json();
       // totals.jobs is now incremented ONLY for rows that pass the JS
-      // guards (Codex P2 on PR #936), so the spy's future row is
+      // guards, so the spy's future row is
       // excluded from the count too. This is what pins that the JS
       // guard actually skipped the row rather than silently letting it
       // through — if the guard were removed, `jobs` would become 2 AND
@@ -1024,7 +1023,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * days; i++)` covered only integer i, stopping at `since + 30d` —
    * 0.9d before now. Today's `dayKey` had no bucket, so today's usage
    * silently dropped from `usageByDay` while `totals.grams` /
-   * `byFilament` still counted it (Codex P3 on PR #936).
+   * `byFilament` still counted it.
    *
    * Post-fix: `Math.floor(days)` after the clamp, so the seed range
    * and the query range end on the same UTC calendar day, and today's

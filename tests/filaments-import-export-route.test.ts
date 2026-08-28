@@ -874,7 +874,7 @@ filament_shrinkage_compensation_xy = 0.3%
       // name on export, so it's stripped from the stored bag (a stale copy would
       // make a renamed filament export its old name).
       expect(vs.filament_settings_id).toBeUndefined();
-      // GH #951 (R3): spool weight + shrinkage now HAVE a top-level home, so they
+      // GH #951: spool weight + shrinkage now HAVE a top-level home, so they
       // are stripped from the settings bag and stored as structured fields.
       expect(vs.filament_spool_weight).toBeUndefined();
       expect(vs.filament_shrinkage_compensation_xy).toBeUndefined();
@@ -1102,7 +1102,7 @@ filamentdb_nozzle = 0.6 Brass
     });
 
     it("#888: a trailing blank/separator line does not count toward the data-row cap", async () => {
-      // Codex P2: the data-row cap applies AFTER blanks are filtered, so a valid
+      // The data-row cap applies AFTER blanks are filtered, so a valid
       // file with a trailing blank line isn't falsely rejected as "too large".
       const csv =
         "name,vendor,type\r\n" +

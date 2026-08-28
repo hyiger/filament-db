@@ -23,9 +23,10 @@ export async function POST(request: NextRequest) {
     if (sizeError) return sizeError;
 
     const content = await file.text();
-    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
-    // base so the new-filament prefill shows the base name (not "PLA 0.4 Brass")
-    // and doesn't carry one nozzle's baked values into the form (Codex P2).
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into
+    // their base so the new-filament prefill shows the base name (not
+    // "PLA 0.4 Brass") and doesn't carry one nozzle's baked values into the
+    // form.
     const filaments = collapsePerNozzleImportSections(parseIniFilaments(content));
 
     if (filaments.length === 0) {

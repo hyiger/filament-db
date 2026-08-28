@@ -74,9 +74,9 @@ export function validatePrintJobForm(
   if (form.jobLabel.trim() === "") return { ok: false, code: "label_required" };
   if (form.jobLabel.length > MAX_JOB_LABEL_LENGTH) return { ok: false, code: "label_too_long" };
   if (form.notes.length > MAX_NOTES_LENGTH) return { ok: false, code: "notes_too_long" };
-  // Codex P1 (PR #1182): analytics excludes `startedAt > now`, so a
-  // future-dated job would debit inventory NOW while staying invisible in
-  // every aggregate until its date arrives. YYYY-MM-DD compares lexically.
+  // Analytics excludes `startedAt > now`, so a future-dated job would debit
+  // inventory NOW while staying invisible in every aggregate until its date
+  // arrives. YYYY-MM-DD compares lexically.
   if (form.date !== "" && form.date > todayLocal) return { ok: false, code: "date_in_future" };
   if (form.usage.length === 0) return { ok: false, code: "no_rows" };
   if (form.usage.length > MAX_USAGE_ROWS) return { ok: false, code: "too_many_rows" };
@@ -105,7 +105,7 @@ export interface PrintJobBody {
 /**
  * Build the POST body. Call only after validatePrintJobForm returns ok.
  *
- * Codex P1 (PR #1182): when the picked date IS today (local), startedAt is
+ * When the picked date IS today (local), startedAt is
  * OMITTED so the server stamps the current instant. A bare YYYY-MM-DD parses
  * as UTC midnight, which for a user east of UTC is still in the FUTURE
  * before UTC reaches midnight — and analytics excludes `startedAt > now`,

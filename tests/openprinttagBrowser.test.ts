@@ -399,7 +399,7 @@ properties:
     expect(toOptNumber(Infinity)).toBeNull();
     expect(toOptNumber(NaN)).toBeNull();
     expect(toOptNumber(0)).toBe(0); // a real zero survives
-    // GH #959 (Codex P2): a malformed boolean/sequence must NOT fabricate a
+    // GH #959: a malformed boolean/sequence must NOT fabricate a
     // number — Number(false)/Number([]) are 0, Number(true) is 1, Number([65])
     // is 65. Treat them as absent (null) so the resync guard skips bad data.
     expect(toOptNumber(true)).toBeNull();
@@ -875,7 +875,7 @@ describe("clearCache", () => {
 
 describe("getProxyDispatcher", () => {
   // Pure-function test that doesn't touch fetch — covers the env-var
-  // matrix the Codex feedback flagged. Each call passes its own env so
+  // matrix. Each call passes its own env so
   // we don't have to mutate process.env.
 
   it("returns undefined when no proxy env vars are set", () => {
@@ -1027,7 +1027,7 @@ type: Resin
   });
 
   it("attaches an EnvHttpProxyAgent dispatcher when HTTPS_PROXY is set", async () => {
-    // Regression for the Codex P2 on PR #137: bare fetch() ignores
+    // Regression on PR #137: bare fetch() ignores
     // HTTP_PROXY/HTTPS_PROXY by default, so any proxy-restricted
     // deployment that worked through the old curl pipeline would silently
     // fail after the migration. We ship a dispatcher when those env vars
@@ -1139,7 +1139,7 @@ type: Resin
   });
 
   it("#743: clearCache during an in-flight load doesn't start a duplicate fetch", async () => {
-    // Codex P1: a refresh (clearCache + refetch) while a cold load is still
+    // A refresh (clearCache + refetch) while a cold load is still
     // running must JOIN that load, not start a second download+parse. clearCache
     // therefore must NOT forget the in-flight promise.
     const tarballPath = mockFetchTarball({
@@ -1399,7 +1399,7 @@ describe("relabelTimeoutError", () => {
 });
 
 describe("extractAndParse maxExtractBytes cap", () => {
-  // Parity test for PR #933 review follow-up: downloadTarballToBuffer({maxBytes})
+  // Parity test for PR #933: downloadTarballToBuffer({maxBytes})
   // is exported + tested for the compressed download cap. The symmetric guard
   // on the DECOMPRESSED stream (the counting Transform between gunzip and
   // tar.x) needs the same coverage so a future refactor can't silently drop

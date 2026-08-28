@@ -16,20 +16,14 @@ const nextConfig: NextConfig = {
     // the request body so it can be read in both the proxy and the route. That
     // buffer defaults to 10MB — over which Next silently keeps only the first
     // 10MB and lets the request continue with a PARTIAL body (it does not error).
-    // `POST /api/snapshot` accepts up to 50MB (MAX_SNAPSHOT_SIZE), so a valid
-    // 10–50MB backup was truncated before the handler, parsed as partial JSON,
-    // and rejected with a misleading "Invalid JSON in snapshot file" instead of
-    // restoring (or returning the route's real 413). Raise the cap above the
-    // largest accepted route body (50MB) with headroom for the multipart
-    // envelope, so legitimate bodies reach the handler and the route's own size
-    // guard stays authoritative. Keep this >= MAX_SNAPSHOT_SIZE.
+    // `POST /api/snapshot` accepts up to 50MB (MAX_SNAPSHOT_SIZE). Raise the cap
+    // above the largest accepted route body (50MB) with headroom for the
+    // multipart envelope, so legitimate bodies reach the handler and the route's
+    // own size guard stays authoritative. Keep this >= MAX_SNAPSHOT_SIZE.
     proxyClientMaxBodySize: "52mb",
   },
   async headers() {
-    // GH #225 — Content-Security-Policy:
-    //
-    // Adds CSP alongside the existing X-Content-Type-Options /
-    // X-Frame-Options / Referrer-Policy trio. Matters most for the
+    // GH #225 — Content-Security-Policy. Matters most for the
     // Docker / web deployment — Electron's contextIsolation already
     // sandboxes the renderer.
     //
@@ -40,9 +34,7 @@ const nextConfig: NextConfig = {
     //   stable nonce we can plumb in without a per-request middleware
     //   layer (see #225 follow-up — move to nonce-based once we have a
     //   custom edge middleware). The anti-FOUC theme-init script in
-    //   `src/lib/themeInitScript.ts` is also inline. Until both move to
-    //   a nonce, `'unsafe-inline'` is the price of having CSP at all on
-    //   this codebase.
+    //   `src/lib/themeInitScript.ts` is also inline.
     // - `style-src`: Tailwind emits inline `<style>` tags (its preflight
     //   and the JIT-compiled atomic classes) and swagger-ui-react injects
     //   per-component styles into the head. Both rely on `'unsafe-inline'`.

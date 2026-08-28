@@ -125,7 +125,6 @@ function analyzeNdef(raw: Buffer): void {
 
     if (tlvTag === 0x03) {
       console.log(`  NDEF TLV: length=${tlvLen}`);
-      // Parse NDEF records
       const end = offset + tlvLen;
       let recNum = 0;
       while (offset < end) {
@@ -198,13 +197,11 @@ async function main() {
       if (!(changes & reader.SCARD_STATE_PRESENT)) return;
       if (!(status.state & reader.SCARD_STATE_PRESENT)) return;
 
-      // Tag detected — try to connect
       await new Promise(r => setTimeout(r, 500)); // brief settle time
       const protocol = await tryConnect(reader);
       if (!protocol && protocol !== 0) return;
 
       try {
-        // Get UID
         const uid = await getUID(reader, protocol);
         console.log(`\n═══ Tag Detected ═══`);
         console.log(`  UID: ${uid}`);
@@ -215,7 +212,6 @@ async function main() {
         const numBlocks = Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT);
         console.log(`  Memory: ${mlen * 8} bytes (${numBlocks} blocks)`);
 
-        // Read all blocks
         const allData = Buffer.alloc(numBlocks * BLOCK_SIZE);
         block0.copy(allData, 0);
 
@@ -229,7 +225,6 @@ async function main() {
           }
         }
 
-        // Raw hex dump
         if (showRaw) {
           console.log("\n═══ Raw Tag Memory ═══");
           for (let i = 0; i < allData.length; i += 16) {
@@ -243,16 +238,13 @@ async function main() {
           }
         }
 
-        // Save to file
         if (saveFile) {
           fs.writeFileSync(saveFile, allData);
           console.log(`\n  💾 Saved raw tag image to ${saveFile}`);
         }
 
-        // Analyze NDEF structure
         analyzeNdef(allData);
 
-        // Decode OpenPrintTag
         try {
           const cborPayload = parseNdefFromTag(allData);
           console.log(`\n═══ CBOR Payload ═══`);
@@ -264,7 +256,6 @@ async function main() {
           const decoded = decodeOpenPrintTagBinary(cborPayload);
           console.log("\n═══ Decoded OpenPrintTag Data ═══");
 
-          // Material info
           console.log("\n  ── Material ──");
           if (decoded.materialType != null) console.log(`  Material Type:  ${decoded.materialType} (enum ${decoded.materialTypeRaw})`);
           if (decoded.materialName) console.log(`  Material Name:  ${decoded.materialName}`);
@@ -272,7 +263,6 @@ async function main() {
           if (decoded.brandName) console.log(`  Brand:          ${decoded.brandName}`);
           if (decoded.countryOfOrigin) console.log(`  Country:        ${decoded.countryOfOrigin}`);
 
-          // Physical properties
           console.log("\n  ── Physical Properties ──");
           if (decoded.density != null) console.log(`  Density:        ${decoded.density} g/cm³`);
           if (decoded.diameter != null) console.log(`  Diameter:       ${decoded.diameter} mm`);
@@ -280,18 +270,15 @@ async function main() {
           if (decoded.shoreHardnessD != null) console.log(`  Shore D:        ${decoded.shoreHardnessD}`);
           if (decoded.transmissionDistance != null) console.log(`  TD (HueForge):  ${decoded.transmissionDistance}`);
 
-          // Color
           if (decoded.color) {
             console.log(`  Color:          ${decoded.color}`);
           }
 
-          // Weight
           console.log("\n  ── Weight ──");
           if (decoded.weightGrams != null) console.log(`  Nominal Weight: ${decoded.weightGrams}g`);
           if (decoded.actualWeightGrams != null) console.log(`  Actual Weight:  ${decoded.actualWeightGrams}g`);
           if (decoded.emptySpoolWeight != null) console.log(`  Spool Weight:   ${decoded.emptySpoolWeight}g`);
 
-          // Temperatures
           console.log("\n  ── Temperatures ──");
           if (decoded.nozzleTempMin != null) console.log(`  Nozzle Min:     ${decoded.nozzleTempMin}°C`);
           if (decoded.nozzleTemp != null) console.log(`  Nozzle Max:     ${decoded.nozzleTemp}°C`);
@@ -302,14 +289,12 @@ async function main() {
           if (decoded.dryingTemperature != null) console.log(`  Drying Temp:    ${decoded.dryingTemperature}°C`);
           if (decoded.dryingTime != null) console.log(`  Drying Time:    ${decoded.dryingTime} min`);
 
-          // Tags
           if (decoded.tags && decoded.tags.length > 0) {
             const tagStrs = decoded.tags.map((t: number) => OPT_TAG_TO_NAME[t] ?? `tag_${t}`);
             console.log(`\n  ── Tags ──`);
             console.log(`  Tags:           ${tagStrs.join(", ")}`);
           }
 
-          // Identity
           if (decoded.spoolUid) {
             console.log("\n  ── Identity ──");
             console.log(`  Instance ID:    ${decoded.spoolUid}`);

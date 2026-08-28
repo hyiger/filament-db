@@ -49,13 +49,11 @@ export async function GET(
       );
     }
 
-    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try
-    // it FIRST, name lookup only when that _id misses (a preset legitimately
-    // NAMED with 24 hex chars). Name-first let such a name shadow another
-    // filament's real _id, so a slicer addressing this endpoint by id read the
-    // WRONG row's calibration — inconsistent with the id-first sync/export
-    // routes. `params.id` is ALREADY URL-decoded — do NOT re-decode (a literal
-    // `%` like "ABS 100%" throws URIError and 500s the request, #671).
+    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE —
+    // try it FIRST, name lookup only when that _id misses (name-first let a
+    // 24-hex preset name shadow another filament's real _id). `params.id` is
+    // ALREADY URL-decoded — do NOT re-decode (a literal `%` throws URIError,
+    // #671).
     const decodedName = id;
     let filament = /^[a-f0-9]{24}$/i.test(id)
       ? await Filament.findOne({ _id: id, _deletedAt: null })
@@ -67,10 +65,9 @@ export async function GET(
 
     if (!filament) {
       // name-lookup-ok: read-only; a miss is a 404
-      // GH #1116 (Codex P1, same class as the sync routes): the EXACT stored
-      // spelling wins. The setter casts this query, so with both "X" and "X "
-      // active a request addressed as "X " would return the CANONICAL row's
-      // data — the wrong filament's calibration / spool state.
+      // GH #1116: the EXACT stored spelling wins — the setter casts this
+      // query, so with both "X" and "X " active a request addressed as "X "
+      // would return the CANONICAL row's calibration.
       const exactId = await findExactRawNameId(
         Filament.collection as unknown as MinimalNameCollection,
         decodedName,
@@ -136,11 +133,9 @@ export async function GET(
     const highFlowParam = searchParams.get("high_flow");
     const nozzleTypeParam = searchParams.get("nozzle_type");
     const bedTypeParam = searchParams.get("bed_type");
-    // GH #1047 Phase 0: the printer scope. `calibrations[].printer` has been
-    // populated since #107 but nothing could ASK for it, so a slicer on the
-    // XL got whichever same-nozzle entry happened to sort first — including
-    // one tuned for a different machine. Zero schema change; the full
-    // printer-scoped nozzle identity remains #1047's later phases.
+    // GH #1047 Phase 0: the printer scope — without it a slicer got
+    // whichever same-nozzle entry sorted first, including one tuned for a
+    // different machine.
     const printerParam = searchParams.get("printer");
 
     const diameterMatches = calibrations.filter((cal) => {
@@ -151,18 +146,13 @@ export async function GET(
       return true;
     });
 
-    // #872: disambiguate same-diameter nozzles of different TYPE (e.g. 0.4 Brass
-    // vs 0.4 Diamondback) — symmetric with the sync-back route's filamentdb_nozzle
-    // type hint. The fork sends nozzle_type when loading a suffixed per-nozzle
-    // preset so it gets THAT nozzle's pressure_advance (PA is printer-scoped, so it
-    // stays dynamic via this endpoint rather than baked into the flat preset).
-    // The type compare is case-insensitive, matching the sync route's anchored
-    // case-insensitive type query (route.ts). Soft filter: a type match wins, else
-    // fall back to the diameter matches so a type/data mismatch never regresses to
-    // a 404. NOTE this fallback intentionally DIVERGES from sync-back: on a type
-    // miss the read returns a same-diameter (possibly other-type) calibration as a
-    // best effort, whereas sync-back writes nothing per-nozzle (it has no nozzle to
-    // attach to) and lets max-vol/temps fall through to the top-level fields.
+    // #872: disambiguate same-diameter nozzles of different TYPE — symmetric
+    // with the sync-back route's filamentdb_nozzle hint; case-insensitive to
+    // match its anchored type query. Soft filter: a type match wins, else
+    // fall back to the diameter matches so a mismatch never regresses to a
+    // 404. NOTE this fallback intentionally DIVERGES from sync-back: on a
+    // type miss the read returns a same-diameter best-effort calibration,
+    // whereas sync-back writes nothing per-nozzle.
     let scopedMatches = diameterMatches;
     if (nozzleTypeParam) {
       const wanted = nozzleTypeParam.trim().toLowerCase();
@@ -172,32 +162,26 @@ export async function GET(
       if (typeMatches.length > 0) scopedMatches = typeMatches;
     }
 
-    // GH #1047 Phase 0: PRIORITIZE by printer — deliberately reordering
-    // rather than filtering (Codex P2). Dropping the non-matching entries
-    // discarded the printer-less BEDLESS default that the bed_type step
-    // below falls back to, so `printer=P&bed_type=Smooth` with (P,Textured)
-    // + (null,null) returned the Textured entry, breaking the documented
-    // "a bed-type miss falls back to a calibration without a bed type".
-    // Ordering keeps that promise while `scopedMatches[0]` still prefers
-    // the printer match. Soft throughout, like nozzle_type beside it: a
-    // printer/data mismatch never turns a working lookup into a 404.
+    // GH #1047: PRIORITIZE by printer — deliberately reordering rather than
+    // filtering. Dropping non-matching entries would discard the
+    // printer-less BEDLESS default the bed_type step below falls back to,
+    // breaking the documented "a bed-type miss falls back to a calibration
+    // without a bed type". Soft throughout: a printer/data mismatch never
+    // turns a working lookup into a 404.
     const genericEntries = scopedMatches.filter((cal) => !cal.printer);
     if (printerParam) {
       const raw = printerParam.trim();
       const wanted = raw.toLowerCase();
-      // A 24-hex input is an OBJECTID and wins outright (Codex P2), before
-      // any name matching: printer names are unrestricted, so one printer
-      // could be NAMED as another's id — and this endpoint documents
-      // ObjectId support, matching how the filament itself is resolved
-      // above. Ids are compared case-folded because a populated `_id`
-      // renders canonical lowercase.
+      // A 24-hex input is an OBJECTID and wins outright, before any name
+      // matching: printer names are unrestricted, so one printer could be
+      // NAMED as another's id. Ids compare case-folded (a populated `_id`
+      // renders canonical lowercase).
       const looksLikeId = /^[0-9a-fA-F]{24}$/.test(raw);
-      // Only a LIVE printer is addressable (Codex P2 round 4). `populate()`
-      // does not filter tombstones, so a calibration still pointing at a
-      // soft-deleted printer would satisfy an id match and outrank an ACTIVE
-      // printer named with that id — the impostor problem inverted. Applied to
-      // every rung below, so "exists" means the same thing here as it does in
-      // the existence queries and in the rest of the printer API.
+      // Only a LIVE printer is addressable — `populate()` does not filter
+      // tombstones, so a calibration pointing at a soft-deleted printer
+      // would satisfy an id match and outrank an ACTIVE printer named with
+      // that id. Applied to every rung below, so "exists" means the same
+      // thing here as in the rest of the printer API.
       const addressable = scopedMatches.filter((cal) => cal.printer && !cal.printer._deletedAt);
       const idMatches = looksLikeId
         ? addressable.filter(
@@ -205,58 +189,51 @@ export async function GET(
           )
         : [];
       // Whether that id names a REAL printer is a question about the Printer
-      // COLLECTION, not about the rows we happen to have filtered (Codex P2
-      // round 2). Inferring existence from `idMatches` conflates "no such
-      // printer" with "that printer has no row for this nozzle" — and only the
-      // first may fall back to name matching. Get the second wrong and the
-      // impostor wins again by the back door. Queried only when the populated
-      // rows didn't already prove existence, so the hit path adds nothing.
-      // `_deletedAt: null` because that is what the rest of the printer API
-      // means by "exists" (Codex P2 round 3). A soft-deleted row is not an
-      // identity a caller can address, so letting one suppress the name path
-      // would hide an ACTIVE printer that happens to be named with its id.
+      // COLLECTION, not about the filtered rows — inferring existence from
+      // `idMatches` conflates "no such printer" with "that printer has no
+      // row for this nozzle", and only the first may fall back to name
+      // matching. Queried only when the populated rows didn't already prove
+      // existence. `_deletedAt: null` because that is what the rest of the
+      // printer API means by "exists" — a soft-deleted row suppressing the
+      // name path would hide an ACTIVE printer named with its id.
       const idIsRealPrinter =
         idMatches.length > 0 ||
         (looksLikeId && (await Printer.exists({ _id: raw, _deletedAt: null })) !== null);
       // Then the name, in three rungs from strictest to loosest. The Printer
-      // name index is case-SENSITIVE, so "XL" and "xl" can both exist; and
-      // hybrid sync writes through the raw driver, which bypasses the schema's
-      // trim setter, so "X" and "X " can both exist too. Array order must not
-      // decide between them when the caller spelled one of them exactly.
+      // name index is case-SENSITIVE ("XL" and "xl" can both exist), and
+      // hybrid sync writes through the raw driver, bypassing the trim setter
+      // ("X" and "X " can both exist too) — array order must not decide
+      // between them when the caller spelled one exactly.
       //
-      // 1. VERBATIM — the caller's spelling against the stored spelling, no
-      //    normalization on either side (Codex P2 round 4). This is the only
-      //    rung that can tell "X" from "X ".
+      // 1. VERBATIM — no normalization on either side; the only rung that
+      //    can tell "X" from "X ".
       const verbatimName = addressable.filter((cal) => (cal.printer?.name ?? "") === printerParam);
-      // 2. Trimmed exact — tolerates stray whitespace around the caller's
-      //    input, which is the ordinary case since stored names are trimmed.
+      // 2. Trimmed exact — tolerates stray whitespace around the input.
       const exactName = addressable.filter((cal) => (cal.printer?.name ?? "").trim() === raw);
       // 3. Case-folded.
       const loose = addressable.filter(
         (cal) => (cal.printer?.name ?? "").trim().toLowerCase() === wanted,
       );
-      // Every rung gets the same existence question as the id, and for the
-      // same reason (Codex P2 rounds 3–5): an identity that EXISTS and simply
-      // has no calibration here must not be answered by a weaker match. That
-      // has to be asked PER RUNG — a live "X " with no row here was still
-      // answered by "X"'s row, because the trimmed rung had matches and the
-      // single combined check never fired.
+      // Every rung gets the same existence question as the id: an identity
+      // that EXISTS and simply has no calibration here must not be answered
+      // by a weaker match — and it has to be asked PER RUNG (a live "X "
+      // with no row here was answered by "X"'s row when the check ran only
+      // once).
       //
       // Asked through the RAW driver, not the model: the schema's `trim`
-      // setter applies to query VALUES too, so `Printer.exists({name: "X "})`
-      // casts to `"X"` and answers about the wrong row — the same trap GH
-      // #1116 documents. The native query compares the spelling as given, and
-      // `_deletedAt: null` there also matches rows predating the field.
+      // setter applies to query VALUES too, so `Printer.exists({name:
+      // "X "})` casts to `"X"` and answers about the wrong row (the GH #1116
+      // trap). `_deletedAt: null` there also matches rows predating the
+      // field.
       const liveNamed = async (name: string) =>
         (await Printer.collection.countDocuments(
           { name, _deletedAt: null },
           { limit: 1 },
         )) > 0;
 
-      // Strongest rung first; each `liveNamed` is reached — and therefore
-      // asked — only when the rung above found nothing and a weaker one would
-      // otherwise answer. The ordinary lookup (stored spelling, rows present)
-      // stops at `verbatimName` and issues no query at all.
+      // Strongest rung first; each `liveNamed` is asked only when the rung
+      // above found nothing and a weaker one would otherwise answer. The
+      // ordinary lookup stops at `verbatimName` with no query at all.
       let printerMatches: typeof scopedMatches = [];
       if (idMatches.length > 0) printerMatches = idMatches;
       else if (idIsRealPrinter) printerMatches = [];
@@ -268,19 +245,17 @@ export async function GET(
         printerMatches = [];
       else printerMatches = loose;
       if (printerMatches.length > 0) {
-        // Printer-scoped first, the shareable defaults retained behind them
-        // (disjoint sets: a generic entry has no printer to match).
+        // Printer-scoped first, shareable defaults retained behind them.
         scopedMatches = [...printerMatches, ...genericEntries];
       } else if (genericEntries.length > 0) {
-        // Unknown printer → the shareable defaults, which is what
-        // prusaSlicerBundle already prefers when baking a preset.
+        // Unknown printer → the shareable defaults (what prusaSlicerBundle
+        // prefers when baking a preset).
         scopedMatches = genericEntries;
       }
     } else if (genericEntries.length > 0) {
       // No printer asked for: prefer the shareable defaults, keeping the
       // machine-specific entries behind them so a filament with ONLY
-      // printer-scoped rows still answers. Deterministic where the old code
-      // took whatever sorted first — the small behavior change this adds.
+      // printer-scoped rows still answers.
       scopedMatches = [...genericEntries, ...scopedMatches.filter((cal) => cal.printer)];
     }
 

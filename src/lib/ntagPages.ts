@@ -21,9 +21,6 @@
  * spliced the head back into the TAIL of the NDEF image — silent corruption
  * rather than a clean error.
  *
- * The write side already had exactly this guard (`writeNtagPage`'s [3,255]
- * bound, added in #927); the read side never got its counterpart.
- *
  * THE OFF-BY-ONE IN THE OLD CEILING
  *
  * `NTAG_MAX_NDEF_BYTES` was 1024, commented as "a generous ceiling that bounds

@@ -5,41 +5,25 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 /**
- * GH #413 — Skip-to-content link.
+ * Skip-to-content link — visually hidden until focused, then a fixed-top
+ * banner that jumps to `#main-content` (every page sets that id on its
+ * outer <main>).
  *
- * The persistent AppHeader has 7+ nav links + status pills that
- * keyboard users would otherwise have to tab through on every page.
- * This component prepends a link that's visually hidden until it
- * receives focus, then surfaces as a fixed-top banner the user can
- * activate with Enter to jump straight to `#main-content`.
+ * The href is bound to `usePathname()` so the resolved URL the
+ * accessibility tree exposes mutates on every client-side route change.
+ * A bare `href="#main-content"` works at click time, but some
+ * assistive-tech layers cache the resolved URL on first paint, leaving
+ * the skip link pointing at the previous page after navigation; changing
+ * the attribute value forces the AX cache to refresh.
  *
- * Every page sets `id="main-content"` on its outer <main> element so
- * the anchor target is consistent.
+ * The current query string is included so URL-state pages (e.g.
+ * /compare's `?ids=...`) keep their state when the link is activated.
  *
- * #493: bind the href to `usePathname()` so the resolved URL the
- * accessibility tree exposes mutates on every client-side route
- * change. A bare `href="#main-content"` is semantically correct
- * (browsers resolve fragments against `document.location` at click
- * time, so the link works), but some assistive-tech layers cache
- * the resolved URL on first paint — users on /dashboard saw the
- * skip link still pointing at /settings#main-content after
- * navigation. Including pathname in the rendered href changes the
- * attribute value, which forces the AX cache to refresh.
- *
- * Codex round 1 on PR #496: also include the current query string
- * so URL-state pages keep their state when the skip link is
- * activated. /compare encodes selected ids in `?ids=...` (see
- * src/app/compare/page.tsx — useSearchParams + a router.replace
- * effect); rendering `/compare#main-content` would drop the
- * comparison.
- *
- * Codex round 2 on PR #496: the Suspense fallback must NOT be null
- * — `useSearchParams()` causes this subtree to client-render up to
- * the boundary, so a null fallback ships in the initial HTML and
- * keyboard / AT users with slow JS lose the skip link entirely
- * before hydration. The fallback now renders the pre-pathname
- * fragment-only version so the link is always present; the inner
- * component upgrades it once searchParams resolve.
+ * The Suspense fallback must NOT be null — `useSearchParams()` makes this
+ * subtree client-render up to the boundary, so a null fallback would drop
+ * the skip link from the initial HTML for keyboard / AT users with slow
+ * JS. The fallback renders the fragment-only version; the inner component
+ * upgrades it once searchParams resolve.
  */
 
 /** Shared anchor renderer so the suspense fallback and the live

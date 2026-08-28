@@ -51,7 +51,7 @@ describe("encodeLabel — wire format", () => {
     expect([bytes[119], bytes[120], bytes[121], bytes[122]]).toEqual([0x1b, 0x69, 0x4d, 0x40]);
     // ESC i K 0x08 — bit 3 set = no-chain mode (feed + cut after the
     // last label, which is what we want for a single-label print).
-    // Codex P1 round 17 on PR #487 caught this: with 0x00 the printer
+    // With 0x00 the printer
     // accepts the job but holds the label, breaking the one-click flow.
     expect([bytes[123], bytes[124], bytes[125], bytes[126]]).toEqual([0x1b, 0x69, 0x4b, 0x08]);
     // ESC i d 0x0E 0x00 (14 dots = 2mm margin)
@@ -82,7 +82,6 @@ describe("encodeLabel — wire format", () => {
     // autoCut: false is chain-mode intent — caller will issue more
     // labels later. The ESC i K byte (offset 126) must mirror that
     // so the printer holds the tape instead of feeding + cutting it.
-    // (Codex P2 round 18 on PR #487.)
     const bytes = encodeLabel({
       bitmap: makeBitmap(1),
       rasterLines: 1,

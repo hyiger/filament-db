@@ -16,7 +16,7 @@
  * (inventory — the physical roll being added, never inherited).
  * spoolWeight / netFilamentWeight ARE pruned when equal: they are shared
  * spec (#1048) that belongs on the template. Pruning only fires when BOTH
- * sides carry a value, so the Codex #706 r7/r8 zero-tare pin (spoolWeight 0
+ * sides carry a value, so the GH #706 zero-tare pin (spoolWeight 0
  * alongside an actual weight) survives unless the parent's tare is also 0 —
  * in which case inheritance yields the identical number anyway.
  */
@@ -60,14 +60,14 @@ const PRUNE_EQUAL_SCALARS = [
  *  side is judged on the snapped value the form would actually submit.
  *  The PARENT side stays EXACT: the form never snaps an inherited value,
  *  so an off-grid parent (an imported 1.244) really does differ from a
- *  tag's snapped 1.24 and the override must survive (Codex #1183 r3/r5). */
+ *  tag's snapped 1.24 and the override must survive. */
 const SNAP_BEFORE_COMPARE: ReadonlySet<string> = new Set(["density", "diameter"]);
 const SNAP_STEP = 0.01;
 
 /** The bag keys FilamentForm seeds through unwrapIniString (gcode/notes
  *  textareas): the wire holds `"Origin: CZ"` while an imported parent may
  *  hold the unquoted form — both DISPLAY identically, so equality must be
- *  judged on the unwrapped values (Codex P2 #1183 round 6). */
+ *  judged on the unwrapped values. */
 const INI_UNWRAPPED_SETTINGS: ReadonlySet<string> = new Set([
   "filament_notes",
   "start_filament_gcode",
@@ -84,7 +84,7 @@ function sameNumericSet(a: readonly number[], b: readonly number[]): boolean {
 /** POSITIONAL comparison, case-folded — secondary colors are ordered SLOTS
  *  (spec keys 20-24): gradients render in slot order and slot 0 is the
  *  representative slicer-export color, so the same colors in a different
- *  order are DIFFERENT data and must not be pruned (Codex P2 #1183). */
+ *  order are DIFFERENT data and must not be pruned. */
 function sameColorSlots(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   return a.every((v, i) => v.toLowerCase() === b[i].toLowerCase());
@@ -137,7 +137,7 @@ export function pruneParentEqualPrefill(
   // Settings-bag entries the NFC prefill seeds (chamber_temperature, the
   // origin filament_notes) are inherited through the bag like any other
   // value — a parent-equal copy would sever propagation exactly like a
-  // top-level scalar (Codex P2 #1183). String-compare per key; only prune
+  // top-level scalar. String-compare per key; only prune
   // when the parent carries the identical string.
   const ownSettings = out.settings;
   const parentSettings = parent.settings;
@@ -152,9 +152,9 @@ export function pruneParentEqualPrefill(
       const inherited = (parentSettings as Record<string, unknown>)[key];
       // Mirror FilamentForm's getSettingVal exactly: a Mixed-bag parent
       // value may be a multi-element ARRAY (#678, first element displayed)
-      // and may be a NUMBER (round-15 String-coercion) — the comparison
-      // must judge what the form would SHOW, or a "45" prefill under a
-      // parent [45] persists a parent-equal override (Codex #1183 r3/r4).
+      // and may be a NUMBER — the comparison must judge what the form
+      // would SHOW, or a "45" prefill under a parent [45] persists a
+      // parent-equal override.
       const first = Array.isArray(inherited) ? inherited[0] : inherited;
       const inheritedStr =
         first == null || typeof first === "object" ? null : String(first);

@@ -1,10 +1,8 @@
 /**
- * GH — user-selectable number formatting (sibling of src/lib/dateFormatPref.ts).
+ * User-selectable number formatting (sibling of src/lib/dateFormatPref.ts).
  *
- * Numbers across the app rendered with a hard-coded `.` decimal and no digit
- * grouping (or the browser's locale via `toLocaleString`). This module is the
- * pure, DB-free, React-free core of a preference that lets the user pick the
- * grouping + decimal separators: System (device locale), US/UK, European,
+ * The pure, DB-free, React-free core of a preference that lets the user pick
+ * the grouping + decimal separators: System (device locale), US/UK, European,
  * Space-separated, or a Custom pair.
  *
  * Mirrors the date-format core exactly: a small preference shape, defensive

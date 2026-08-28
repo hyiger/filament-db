@@ -336,7 +336,7 @@ temperature = 200
     expect(result).toHaveLength(0);
   });
 
-  // GH #951 (Codex R2-B): INI_TOP_LEVEL_SETTING_KEYS is the source of truth the
+  // GH #951: INI_TOP_LEVEL_SETTING_KEYS is the source of truth the
   // bulk importers use to strip settings-bag shadows of top-level fields. It
   // MUST list exactly the keys flushFilament lifts into a top-level FilamentData
   // field — otherwise a listed-but-not-extracted key would be lost on import, or
@@ -390,7 +390,7 @@ inherits = *PLA*
     ]);
   });
 
-  // GH #951 (Codex R3): spool weight + shrinkage are lifted to top-level so
+  // GH #951: spool weight + shrinkage are lifted to top-level so
   // their settings-bag shadow can be stripped without data loss.
   it("lifts filament_spool_weight and filament_shrinkage_* to top-level fields", () => {
     const ini = `[filament:Lift]

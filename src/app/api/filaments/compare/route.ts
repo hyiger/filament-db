@@ -10,19 +10,10 @@ import { MAX_COMPARE_FILAMENTS } from "@/lib/compareSelection";
 
 /**
  * GET /api/filaments/compare?ids=a,b,c — fetch multiple filaments for the
- * comparison view in one round trip.
- *
- * Variants are resolved against their parent so columns like cost, density,
- * temperatures, drying-time, and spoolWeight (the on-hand math reads it)
- * render the inherited values when the variant left those fields blank —
- * matching the detail page, list, and exports. Pre-fix Compare returned
- * the raw documents and showed `—` for any inheritable field the variant
- * didn't override (GH #184) and miscalculated the "On hand" row for
- * inherited spoolWeight (Codex P2 on PR #190). The single resolveFilament
- * pass handles both.
- *
- * Returns populated calibration refs so the UI can render printer/nozzle/
- * bedType names directly.
+ * comparison view in one round trip. Variants are resolved against their
+ * parent (GH #184) so inheritable columns — including the spoolWeight the
+ * on-hand math reads — render inherited values, matching the detail page,
+ * list, and exports. Calibration refs come back populated.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -31,9 +22,8 @@ export async function GET(request: NextRequest) {
     if (!idsParam) {
       return errorResponse("ids query parameter is required", 400);
     }
-    // Dedupe before counting: `?ids=a,a,b` is a 2-filament comparison, and
-    // duplicates used to emit repeated React keys and identical columns
-    // client-side (GH #1109).
+    // GH #1109: dedupe before counting — `?ids=a,a,b` is a 2-filament
+    // comparison (duplicates emitted repeated React keys client-side).
     const ids = Array.from(
       new Set(
         idsParam
@@ -59,10 +49,8 @@ export async function GET(request: NextRequest) {
       .populate("calibrations.bedType")
       .lean();
 
-    // Fetch parents for any variant in the result so resolveFilament can
-    // merge inherited fields (cost, density, temperatures, drying info,
-    // spoolWeight, etc.). One batched query for all parent ids; the
-    // common case (no variants) hits zero extra queries.
+    // One batched parent query for all variants; the common case (no
+    // variants) hits zero extra queries.
     const parentIds = Array.from(
       new Set(
         filaments

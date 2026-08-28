@@ -160,7 +160,7 @@ describe("upsertImportRows", () => {
     expect(updated!.cost).toBe(29.99);
   });
 
-  // GH #649 (Codex P2): a parent + an existing variant in the same import,
+  // GH #649: a parent + an existing variant in the same import,
   // where the parent's value changes. Pass 1 bumps the parent; pass 2 must
   // compare the variant's incoming (flattened-export) value against the
   // NEW parent value, not the stale one loaded before processing — else
@@ -668,7 +668,7 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
     expect(result.skippedRows[0].reason).toContain("self");
   });
 
-  // ── GH #605 (codex round 3 sweep): the first-variant inventory gate ─────
+  // ── GH #605: the first-variant inventory gate ─────
 
   it("skips a first-variant row whose parent still holds spools (bulk can't confirm a promotion)", async () => {
     const parent = await Filament.create({
@@ -787,7 +787,7 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
     expect(fresh._deletedAt).not.toBeNull();
   });
 
-  // ── round 7 P2: orphaned lowStockThreshold on the ungated import path ───
+  // ── orphaned lowStockThreshold on the ungated import path ───
 
   it("an ungated first-variant row clears a threshold-ONLY parent's dead threshold (after the write)", async () => {
     const parent = await Filament.create({
@@ -899,10 +899,10 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
   });
 
   it("purge-race fallback creating a STANDALONE never clears the threshold (no variant surfaced)", async () => {
-    // Same shape as the Codex P2 purge-race test below: a soft-deleted
+    // Same shape as the purge-race test below: a soft-deleted
     // VARIANT row with no Parent column whose resurrect updateOne matches 0
     // (tombstone purged mid-import) falls through to creating a STANDALONE.
-    // The threshold-only parent gained NO variant, so the round 7 P2 clear
+    // The threshold-only parent gained NO variant, so the threshold clear
     // must not fire — the post-write hasVariants re-check guards it.
     const parent = await Filament.create({
       name: "Threshold Race Parent",
@@ -1368,7 +1368,7 @@ describe("splitInheritedImportSet (GH #628)", () => {
     // Required fields can't be unset (validation) and never inherit at read
     // time — resolveFilament always uses the variant's own value. So when
     // the incoming (new parent) value differs from the variant's stale
-    // stored value, it must be $set, not skipped (Codex P2 on #649: a
+    // stored value, it must be $set, not skipped (#649: a
     // parent+variant import where the parent's vendor/type changed used to
     // leave the variant showing the old value).
     const variant = { vendor: "OldVendor", type: "PETG" };
@@ -1518,7 +1518,7 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(unset).toEqual([]);
   });
 
-  // GH #951 (Codex F2): `inherits` is now an inheritable scalar.
+  // GH #951 F2: `inherits` is now an inheritable scalar.
   it("skips $set for `inherits` when it matches the parent, keeps a genuine override", () => {
     const p = { ...parent, inherits: "*PLA*" };
     const skip = splitInheritedImportSet({ name: "V", inherits: "*PLA*" }, { inherits: null }, p);
@@ -1527,7 +1527,7 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(keep.set).toEqual({ name: "V", inherits: "*PLA-CF*" });
   });
 
-  // GH #951 (Codex F1): `settings` inherits by shallow per-key merge.
+  // GH #951 F1: `settings` inherits by shallow per-key merge.
   it("filters `settings` per-key against the parent (parent-equal keys keep inheriting)", () => {
     const p = { ...parent, settings: { fan_speed: "60", z_hop: "0.2", nozzle: "hot" } };
     const { set } = splitInheritedImportSet(
@@ -1886,7 +1886,7 @@ describe("upsertImportRows — create/resurrect preserve inheritance (GH #951)",
   });
 
   it("CREATE does not pin inherited RANGE temps (nozzleRangeMin/Max/standby) on a variant", async () => {
-    // Regression for GH #951 Codex finding 3: the dotted `temperatures.*` keys
+    // Regression for GH #951 finding 3: the dotted `temperatures.*` keys
     // added alongside the nested `temperatures` object overrode the null that
     // `pruneInheritedCreateDoc` writes, re-pinning inherited range temps.
     const RANGE_COLS = [
@@ -1933,7 +1933,7 @@ describe("upsertImportRows — create/resurrect preserve inheritance (GH #951)",
   });
 
   it("RESURRECT of a trashed variant with RANGE temps succeeds (no dotted/nested conflict)", async () => {
-    // Regression for GH #951 Codex finding 3: on resurrect the dotted
+    // Regression for GH #951 finding 3: on resurrect the dotted
     // `temperatures.nozzleRangeMin` key + the nested `temperatures` object
     // collided in a single updateOne (MongoServerError code 40), so the row
     // was caught and SKIPPED — the trashed variant never came back.

@@ -7,7 +7,7 @@ import {
 } from "./legacyNozzleConditions";
 
 /**
- * GH #1021 (Codex P1 r10) — the INGESTION half of the legacy nozzle-condition
+ * GH #1021 — the INGESTION half of the legacy nozzle-condition
  * fix. The one-shot DB cleanup (src/lib/legacyNozzleConditions.ts) runs once,
  * but a PRE-UPGRADE PrusaSlicer-fork preset or exported INI still carries the
  * machine-derived `nozzle_diameter[0]==D [or ...]` condition the old export

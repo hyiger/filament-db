@@ -10,8 +10,7 @@ import { Bonjour, type Service } from "bonjour-service";
  * embedded server is loopback-only otherwise, so there'd be nothing for a phone
  * to reach (see syncMdnsAdvertisement in electron/main.ts).
  *
- * Uses `bonjour-service` (pure JS, no native dependency — consistent with the
- * post-#588 "no native modules beyond pcsclite" stance).
+ * Uses `bonjour-service` (pure JS, no native dependency).
  */
 const SERVICE_TYPE = "filamentdb"; // → `_filamentdb._tcp`
 const SERVICE_NAME = "Filament DB";
@@ -22,9 +21,8 @@ let service: Service | null = null;
 /**
  * A per-machine instance name. mDNS instance names must be unique on a LAN —
  * two desktops publishing the bare "Filament DB" would collide and bonjour-
- * service would suppress the second on probe, hiding it from discovery
- * (Codex #723). Suffix the hostname so each host is distinct and recognisable
- * in the mobile picker.
+ * service would suppress the second on probe, hiding it from discovery (#723).
+ * Suffix the hostname so each host is distinct.
  */
 function instanceName(): string {
   let host = "";
@@ -41,11 +39,10 @@ function instanceName(): string {
 export function startMdnsAdvertisement(port: number, version: string): void {
   stopMdnsAdvertisement();
   try {
-    // Pass an errorCallback so the underlying responder routes async multicast
-    // send/respond errors here instead of its default (which THROWS when no
-    // callback is given) — a transient socket error must not crash the main
-    // process for a best-effort advertiser (Codex #723). service.on("error")
-    // below only covers publish errors, not responder-level ones.
+    // The responder's default errorCallback THROWS — a transient multicast
+    // socket error must not crash the main process for a best-effort
+    // advertiser (#723). service.on("error") below only covers publish
+    // errors, not responder-level ones.
     bonjour = new Bonjour(undefined, (err: unknown) => {
       console.error("mDNS responder error:", err);
     });

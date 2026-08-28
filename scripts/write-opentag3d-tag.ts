@@ -156,7 +156,7 @@ async function writeTag(reader: CardReader, protocol: number): Promise<void> {
     await writePage(reader, protocol, 3, Buffer.from(cc));
     // Patch the in-memory head so the verification read below sees the NEW CC,
     // not the stale pre-format zero bytes (a false "Blank or unformatted"
-    // verification failure otherwise) — Codex P2.
+    // verification failure otherwise).
     Buffer.from(cc).copy(head, 12);
   } else {
     console.log(`  Existing CC: E1 10 ${ccSizeByte.toString(16).padStart(2, "0")} 00 (${ccSizeByte * 8} NDEF bytes)`);

@@ -35,12 +35,10 @@ export async function GET(request: NextRequest) {
       .sort({ vendor: 1, name: 1 })
       .lean();
 
-    // Annotate each parent option with whether it currently has any
-    // non-deleted variants. The form parent picker uses this to render the
-    // multi-color cross-hatch swatch on parents-with-variants (and a solid
-    // swatch on parents-that-could-become-parents-but-aren't-yet) — matches
-    // the rule that a filament is only a parent when ≥1 variant points at
-    // it. One `distinct` is cheaper than per-row `countDocuments`.
+    // Annotate each option with whether it currently has non-deleted
+    // variants (a filament is only a parent when ≥1 variant points at it) —
+    // drives the picker's cross-hatch vs solid swatch. One `distinct` is
+    // cheaper than per-row `countDocuments`.
     const parentIdsWithVariants = await Filament.distinct("parentId", {
       _deletedAt: null,
       parentId: { $in: parents.map((p) => p._id) },

@@ -36,10 +36,10 @@ export default function SetupPage() {
           return;
         }
 
-        // GH #1006 F2 (Codex P2 on #1015): a failed server respawn RESOLVES
-        // with { success: false } (no rejection) and skips the redirect — check
-        // the result or setup just clears the spinner with no error while the
-        // app has no embedded server.
+        // GH #1006 F2: a failed server respawn RESOLVES with
+        // { success: false } (no rejection) and skips the redirect — check
+        // the result or setup just clears the spinner with no error while
+        // the app has no embedded server.
         const saveRes = await window.electronAPI.saveConfig({
           connectionMode: mode === "hybrid" ? "hybrid" : "atlas",
           atlasUri: mongoUri,
@@ -76,12 +76,9 @@ export default function SetupPage() {
         // Issue #362: the web/Docker setup flow only TESTS the URI; it
         // does not persist it. `dbConnect()` reads `process.env.MONGODB_URI`
         // at boot, which can only be set via `.env.local` (local dev) or
-        // `-e MONGODB_URI=...` (Docker). Previously this branch showed
-        // "Connected!" and redirected to `/`, which then immediately
-        // hit the same missing-connection failure (GH #287's fix had
-        // a real side-effect bug). Now the success message tells the
-        // user that this was just a connection test and explains how
-        // to actually configure the app.
+        // `-e MONGODB_URI=...` (Docker). The success message tells the user
+        // this was just a connection test and how to actually configure the
+        // app.
         setSuccess(t("setup.webConnectionTestSuccess"));
       }
     } catch (err) {
@@ -101,7 +98,7 @@ export default function SetupPage() {
     setError("");
 
     try {
-      // GH #1006 F2 (Codex P2 on #1015): same result check as the Atlas path.
+      // GH #1006 F2: same result check as the Atlas path.
       const saveRes = await window.electronAPI.saveConfig({
         connectionMode: "offline",
       });

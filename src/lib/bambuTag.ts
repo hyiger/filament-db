@@ -73,12 +73,10 @@ function readString(buf: Buffer, start: number, length: number): string {
  */
 export function parseBambuBlocks(blocks: (Buffer | undefined)[]): BambuTagData {
   // GH #314: every block is normalised to exactly 16 bytes before the
-  // fixed-offset readUInt16LE / readFloatLE calls below. A
-  // successful-but-short MIFARE read (a malformed-but-authenticated
-  // response) is stored as-is; without this, an offset read past the
-  // end of a short buffer throws an unhandled RangeError out of the
-  // parser. A missing block → all-zero; a short block → zero-padded;
-  // an over-long block → truncated.
+  // fixed-offset readUInt16LE / readFloatLE calls below — a
+  // successful-but-short MIFARE read would otherwise throw an unhandled
+  // RangeError out of the parser. Missing block → all-zero; short →
+  // zero-padded; over-long → truncated.
   const block = (n: number): Buffer => {
     const b = blocks[n];
     if (!b) return Buffer.alloc(16);
@@ -115,19 +113,12 @@ export function parseBambuBlocks(blocks: (Buffer | undefined)[]): BambuTagData {
   const maxHotendTemp = b6.readUInt16LE(8);
   const minHotendTemp = b6.readUInt16LE(10);
 
-  // Block 9: Tray UID (16 bytes).
-  // GH #583: this is 16 raw BINARY bytes, not an ASCII string. Decoding it
-  // as ASCII (the old behaviour) surfaced unprintable/garbled characters in
-  // the "Instance ID" field of the read dialog. Render it as uppercase hex
-  // — a stable, copyable identifier, matching how the community Bambu RFID
-  // tooling displays the tray UID.
-  //
-  // Codex P2 on PR #584: a missing block or a failed per-block MIFARE read
-  // is normalised to an all-zero buffer (here and in readBambuTag). The old
-  // null-trimmed ASCII path turned that into "" (→ omitted downstream via
-  // `trayUid || undefined`); naive hex would turn it into a real-looking
-  // "0000…0000" and persist a bogus Instance ID. Treat an all-zero block as
-  // empty so a partial/malformed read omits the UID rather than inventing one.
+  // Block 9: Tray UID — 16 raw BINARY bytes, not ASCII (GH #583). Render as
+  // uppercase hex, matching the community Bambu RFID tooling. A missing block
+  // or failed per-block read is normalised to all-zero (here and in
+  // readBambuTag); naive hex would turn that into a real-looking "0000…0000"
+  // and persist a bogus Instance ID, so treat an all-zero block as empty and
+  // omit the UID rather than inventing one.
   const b9 = block(9);
   const trayUid = b9.every((byte) => byte === 0) ? "" : b9.toString("hex").toUpperCase();
 
@@ -207,13 +198,8 @@ export function bambuToDecodedTag(bambu: BambuTagData): DecodedOpenPrintTag {
     materialType,
     materialAbbreviation: bambu.materialVariantId || undefined,
     color: rgbaToHex(bambu.colorRGBA),
-    // GH #501: surface the second color that parseBambuBlocks already
-    // extracts when `formatId === 0x0002 && colorCount >= 2`. The OPT
-    // decoder downstream of this consumes `secondaryColors[]` to render
-    // multi-color swatches (Galaxy line etc.) so the form prefill picks
-    // it up automatically — pre-fix the second color was extracted into
-    // BambuTagData but never wired through, leaving these spools to
-    // scan as single-color.
+    // GH #501: downstream consumers read `secondaryColors[]` for multi-color
+    // swatches and the form prefill, so wire the second color through.
     secondaryColors: bambu.secondColorRGBA
       ? [rgbaToHex(bambu.secondColorRGBA)]
       : undefined,

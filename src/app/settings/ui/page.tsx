@@ -41,7 +41,7 @@ export default function UiSettingsPage() {
       return;
     }
     // `addCustom` auto-selects the new currency; calling setCurrency here too
-    // would race React batching and reject the new code (Codex P2 on #142).
+    // would race React batching and reject the new code.
     setNewCurrError(null);
     setNewCurrCode("");
     setNewCurrSymbol("");

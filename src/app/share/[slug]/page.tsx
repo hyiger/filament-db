@@ -141,9 +141,8 @@ export default function SharedCatalogPage() {
       // Helper: POST one reference record; if it 409s (existing record
       // with the same unique key), GET the destination's matching record
       // by name and use that _id instead. Falls back to the source _id
-      // only if both the POST and the duplicate-resolution lookup fail
-      // — in which case the resulting filament calibration ref will still
-      // dangle, but that's no worse than before this fix.
+      // only if both the POST and the duplicate-resolution lookup fail —
+      // in which case the resulting filament calibration ref will dangle.
       async function rehydrate(
         endpoint: string,
         records: SharedRef[],
@@ -285,9 +284,9 @@ export default function SharedCatalogPage() {
         );
       }
     } catch (err) {
-      // GH #290: a thrown network error used to escape the try/finally
-      // as an unhandled rejection with no user feedback. Swallow the
-      // unmount-abort case; toast everything else.
+      // GH #290: a thrown network error must not escape as an unhandled
+      // rejection with no user feedback. Swallow the unmount-abort case;
+      // toast everything else.
       if (
         ac.signal.aborted ||
         (err instanceof DOMException && err.name === "AbortError")

@@ -208,7 +208,6 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteFilament?.spools[0].locationId).toBeNull();
   });
 
-  // Codex P1 follow-up to PR #118.
   it("reconciles same-name locations across DBs without tripping the unique-name index", async () => {
     const localDb = localClient.db("filament-db");
     const remoteDb = remoteClient.db("filament-db");
@@ -279,7 +278,6 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(await remoteDb.collection("locations").countDocuments({ name: "Top shelf" })).toBe(1);
   });
 
-  // Codex P2 follow-up to PR #118.
   it("repairs filaments left with stale spool.locationId by pre-#116 syncs (equal updatedAt)", async () => {
     const localDb = localClient.db("filament-db");
     const remoteDb = remoteClient.db("filament-db");
@@ -352,7 +350,7 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteFilament?.spools[0].locationId).toBeNull();
   });
 
-  // Codex P1 follow-up to PR #119 — guards against data loss in the repair pass.
+  // PR #119 — guards against data loss in the repair pass.
   it("repair pass preserves updatedAt so subsequent filament sync respects real edit recency", async () => {
     const localDb = localClient.db("filament-db");
     const remoteDb = remoteClient.db("filament-db");
@@ -526,7 +524,7 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteVariant!.parentId.toString()).toBe(remoteParentBFresh!._id.toString());
   });
 
-  // Codex P2 follow-up to PR #129 / #130. The repair pass used to fire on
+  // PR #129 / #130. The repair pass used to fire on
   // EVERY null-parentId-with-non-null-counterpart combination, which would
   // silently undo a legitimate "detach this variant" edit. The PR-#130 fix
   // gated on equal updatedAt; the PR-#131 fix narrowed it further to
@@ -588,7 +586,7 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteV?.parentId).toBeNull();
   });
 
-  // Codex P1 follow-up to PR #131. v1.12.3's freshly-inserted-only guard
+  // PR #131. v1.12.3's freshly-inserted-only guard
   // missed a real shape: pre-existing local variant pulls a NEWER copy
   // from remote, syncCollection updates it before the parent (which only
   // exists on remote) gets inserted, and the in-line transform's stale
@@ -648,7 +646,7 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(localVariant!.parentId.toString()).toBe(localParent!._id.toString());
   });
 
-  // Same Codex P2 — but the meaner shape: local detached, remote still
+  // Same PR #129 / #130 — but the meaner shape: local detached, remote still
   // attached, equal updatedAt (e.g. a manual DB edit that didn't bump the
   // timestamp, or two devices that happened to write at the same ms).
   // The v1.12.2 timestamp guard would still re-attach this; v1.12.3's

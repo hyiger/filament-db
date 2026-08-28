@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { GET as compareFilaments } from "@/app/api/filaments/compare/route";
 
 /**
- * Codex P2 on PR #190: the GH #182 fix (subtract empty-spool mass from
+ * The GH #182 fix (subtract empty-spool mass from
  * inventory totals) used the variant's own `spoolWeight` only. Variants
  * commonly store `spoolWeight: null` and inherit it from the parent (see
  * src/lib/resolveFilament.ts), so the original over-reporting bug stayed

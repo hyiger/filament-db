@@ -41,17 +41,12 @@ export interface ExportRow {
   tdsUrl: string | null;
   instanceId: string;
   /**
-   * Parent/variant relationship surfaced for round-trip clarity (Codex /
-   * user feedback on the v1.30 export): `parentName` is the name of the
-   * parent filament when this row is a variant (empty for roots/parents),
-   * and `variantCount` is how many variants this row has (>0 only for
-   * parents). The export already inherits-flattens variant values via
-   * resolveFilament, so without these two columns the relationship is
-   * invisible in CSV/XLSX even though the app uses it heavily.
-   *
-   * Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu) intentionally
-   * don't include these — slicers have no concept of variants and need
-   * every row to stand alone.
+   * Parent/variant relationship: `parentName` is the parent filament's name
+   * when this row is a variant (empty for roots/parents); `variantCount` is
+   * how many variants this row has (>0 only for parents). The export
+   * inherits-flattens variant values via resolveFilament, so without these
+   * columns the relationship is invisible in CSV/XLSX. Slicer-bound exports
+   * intentionally don't include these — slicers have no concept of variants.
    */
   parentName: string | null;
   variantCount: number;
@@ -116,7 +111,6 @@ export async function getExportRows(): Promise<ExportRow[]> {
     .sort({ name: 1 })
     .lean();
 
-  // Build parent lookup for variant resolution
   const parentMap = new Map<string, (typeof filaments)[number]>();
   for (const f of filaments) {
     if (!f.parentId) {
@@ -124,9 +118,6 @@ export async function getExportRows(): Promise<ExportRow[]> {
     }
   }
 
-  // Count variants per parent for the Variant Count column. A separate map
-  // because parentMap above only indexes roots/parents; we need to count
-  // how many filaments reference each id as their parentId.
   const variantCountByParent = new Map<string, number>();
   for (const f of filaments) {
     if (f.parentId) {

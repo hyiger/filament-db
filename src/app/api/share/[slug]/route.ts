@@ -18,16 +18,11 @@ export async function GET(
     await dbConnect();
     const { slug } = await params;
 
-    // GH #272: increment viewCount only for a valid, non-expired hit.
-    // The pre-fix handler `$inc`'d on every GET *before* the expiry
-    // check, so expired catalogs kept accruing views.
-    //
-    // A single atomic findOneAndUpdate carries the validity predicates
-    // (_deletedAt + non-expired) into the WRITE itself — so a catalog
-    // that expires or is unpublished between read and write is not
-    // incremented (Codex review) — and `returnDocument: "after"` gives
-    // back the freshly-incremented count, accurate under concurrent
-    // viewers (no read-modify-write skew).
+    // GH #272: increment viewCount only for a valid, non-expired hit. A
+    // single atomic findOneAndUpdate carries the validity predicates into
+    // the WRITE itself — a catalog that expires or is unpublished between
+    // read and write is not incremented — and `returnDocument: "after"`
+    // returns the fresh count with no read-modify-write skew.
     const now = new Date();
     const catalog = await SharedCatalog.findOneAndUpdate(
       {
@@ -37,24 +32,19 @@ export async function GET(
       },
       { $inc: { viewCount: 1 } },
       // GH #1004 F5: timestamps:false so this read-path counter does NOT
-      // advance `updatedAt`. The schema has timestamps:true, which otherwise
-      // auto-$sets updatedAt on every view — and the hybrid sync engine
-      // resurrects a locally-unpublished catalog whenever the remote copy's
-      // updatedAt out-runs the local _deletedAt (sync-service.ts). So a mere
-      // GET on a still-live peer could revive a revoked share, defeating the
-      // DELETE handler's "unpublish sticks across peers" promise. viewCount
-      // divergence across peers is cosmetic; the timestamp bump is not.
+      // advance `updatedAt` — the hybrid sync engine resurrects a
+      // locally-unpublished catalog whenever the remote copy's updatedAt
+      // out-runs the local _deletedAt, so a mere GET on a still-live peer
+      // could revive a revoked share. viewCount divergence across peers is
+      // cosmetic; the timestamp bump is not.
       { returnDocument: "after", timestamps: false },
     );
 
     if (!catalog) {
-      // No valid hit. Distinguish an expired catalog (410) from a
-      // genuinely missing/unpublished one (404) with a read-only
-      // lookup — this path does NOT increment anything. The expiry
-      // test is `<= now` to match the increment query's `$gt: now`
-      // exactly: a catalog whose expiresAt is precisely `now` is
-      // excluded from the valid-hit query, so it must report 410 here
-      // (Codex review — consistent boundary semantics).
+      // Distinguish expired (410) from missing/unpublished (404) with a
+      // read-only lookup — this path does NOT increment. The `<= now` test
+      // matches the increment query's `$gt: now` exactly, so an expiresAt
+      // of precisely `now` reports 410 (consistent boundary semantics).
       const existing = await SharedCatalog.findOne({ slug, _deletedAt: null })
         .select("expiresAt")
         .lean();
@@ -111,11 +101,9 @@ export async function DELETE(
       return NextResponse.json({ message: "Permanently deleted" });
     }
 
-    // Soft-delete instead of hard `deleteOne` so the unpublish actually
-    // sticks across peers. syncCollection treats a missing row as
-    // "pull/push back" rather than "propagate the delete" — without a
-    // _deletedAt tombstone the next sync from the other peer would
-    // resurrect the catalog and re-expose the link the user took down.
+    // Soft-delete so the unpublish sticks across peers — syncCollection
+    // treats a missing row as "pull/push back", so without the tombstone
+    // the next sync would resurrect the catalog and re-expose the link.
     const res = await SharedCatalog.updateOne(
       { slug, _deletedAt: null },
       { $set: { _deletedAt: new Date() } },

@@ -19,20 +19,13 @@ interface Props {
 }
 
 /**
- * Sticky sidebar table of contents for the FilamentForm. Each entry jumps to
- * the matching CollapsibleSection (uncollapsing it if needed) and the entry
- * for whichever section is currently in view gets highlighted via a small
- * IntersectionObserver-driven scroll-spy.
+ * Sticky sidebar table of contents. Each entry jumps to the matching
+ * CollapsibleSection (uncollapsing it if needed); the in-view section is
+ * highlighted via an IntersectionObserver scroll-spy.
  *
- * Why a separate component:
- * - Keeps the form file readable — the form doesn't need to know about
- *   IntersectionObserver, scrolling, or persisted UI state.
- * - The same TOC shape can be reused later for other long forms (Printer
- *   profile expansion, the dashboard config screen we keep talking about).
- *
- * Why no react-router/href anchors:
- * - Anchor links would re-scroll on hash change but wouldn't open a
- *   collapsed section. The buttons let us coordinate "open + scroll".
+ * Buttons, not href anchors: anchor links would re-scroll on hash change
+ * but wouldn't open a collapsed section — the buttons coordinate
+ * "open + scroll".
  */
 export default function FormToc({ entries, hideOnMobile = true }: Props) {
   const { t } = useTranslation();
@@ -43,15 +36,10 @@ export default function FormToc({ entries, hideOnMobile = true }: Props) {
     if (typeof window === "undefined") return;
     if (!("IntersectionObserver" in window)) return;
 
-    // The observer fires whenever a section header crosses the rootMargin
-    // band near the top of the viewport. We pick the most recently
-    // intersecting one as "active" — simpler than maintaining a sorted set
-    // of candidate ratios across all sections.
     const observer = new IntersectionObserver(
       (records) => {
-        // Prefer entries that are intersecting; among those, pick the
-        // top-most (smallest boundingClientRect.top). That matches the
-        // intuition "the section near the top of my viewport is active".
+        // Among intersecting entries, pick the top-most — "the section
+        // near the top of my viewport is active".
         const intersecting = records.filter((r) => r.isIntersecting);
         if (intersecting.length === 0) return;
         intersecting.sort(
@@ -60,9 +48,8 @@ export default function FormToc({ entries, hideOnMobile = true }: Props) {
         setActiveId(intersecting[0].target.id);
       },
       {
-        // Trigger when the section header is within the top quarter of the
-        // viewport — feels right for a long form with plenty of content
-        // below the title.
+        // Trigger when the section header is within the top quarter of
+        // the viewport.
         rootMargin: "0px 0px -75% 0px",
         threshold: 0,
       },
@@ -120,7 +107,6 @@ export function FormTocMobileButton({ entries }: { entries: TocEntry[] }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
-  // Close the popover whenever the user picks an entry.
   const handleClick = (id: string) => {
     expandAndScrollToSection(id);
     setOpen(false);

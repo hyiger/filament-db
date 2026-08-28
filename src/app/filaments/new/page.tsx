@@ -22,20 +22,19 @@ interface FilamentOption {
 
 /** GH #1177: the from_nfc query-param → form-initialData mapping, extracted
  *  so BOTH the standalone create effect and the ?parentId= parent-loader can
- *  build it — the loader used to replace initialData wholesale and every tag
- *  field was discarded on the create-variant path. */
+ *  build it — a loader that replaces initialData wholesale would discard
+ *  every tag field on the create-variant path. */
 function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unknown> {
   const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
   const nozzleMin = searchParams.get("nozzleMin") ? Number(searchParams.get("nozzleMin")) : null;
   const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
-  // OpenTag3D recommended temps (Codex P2 #1183 r9) — preferred for the
-  // everyday fields, with the range max as fallback, matching
-  // decodedTagToFilamentPayload.
+  // OpenTag3D recommended temps — preferred for the everyday fields, with
+  // the range max as fallback, matching decodedTagToFilamentPayload.
   const nozzleRec = searchParams.get("nozzleRec") ? Number(searchParams.get("nozzleRec")) : null;
   const bedRec = searchParams.get("bedRec") ? Number(searchParams.get("bedRec")) : null;
   const preheat = searchParams.get("preheat") ? Number(searchParams.get("preheat")) : null;
   const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
-  // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
+  // Nominal net (weight) vs actual remaining net + tare.
   const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
   const emptySpool = searchParams.get("emptySpool") ? Number(searchParams.get("emptySpool")) : null;
 
@@ -44,10 +43,8 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
     vendor: searchParams.get("vendor") || "",
     type: searchParams.get("type") || "PLA",
     color: searchParams.get("color") || "#808080",
-    // GH #477: NFC tag's secondary slots arrive comma-separated;
-    // FilamentForm reads `initialData.secondaryColors` and surfaces
-    // them in the multi-color editor. Empty/blank entries filtered
-    // out so a tag with sparse slots doesn't produce empty strings
+    // NFC tag's secondary slots arrive comma-separated. Empty/blank entries
+    // filtered out so a tag with sparse slots doesn't produce empty strings
     // that fail the hex validator at save time.
     ...(searchParams.get("secondaryColors")
       ? {
@@ -60,12 +57,10 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
       : {}),
     density: searchParams.get("density") ? Number(searchParams.get("density")) : null,
     diameter: searchParams.get("diameter") ? Number(searchParams.get("diameter")) : 1.75,
-    // Align with decodedTagToFilamentPayload (Codex P2 #1183 r8): the tag's
-    // min/max are the print RANGE, not first-layer temps — a 225-245 °C tag
-    // used to persist a spurious 225 °C first-layer override and lose the
-    // range. First-layer stays null; the range lands on its own fields
-    // (bed has no range fields in the schema, so its min is dropped like
-    // the canonical mapper does).
+    // Align with decodedTagToFilamentPayload: the tag's min/max are the
+    // print RANGE, not first-layer temps. First-layer stays null; the range
+    // lands on its own fields (bed has no range fields in the schema, so
+    // its min is dropped like the canonical mapper does).
     temperatures: {
       nozzle: nozzleRec ?? nozzleMax,
       nozzleFirstLayer: null,
@@ -87,7 +82,7 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
     ...(weight != null ? { netFilamentWeight: weight } : {}),
     // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
     // carries no emptySpool — else the derived spool reads as untracked
-    // (null spoolWeight) and hides the entered remaining (Codex P2 r7/r8).
+    // (null spoolWeight) and hides the entered remaining.
     ...(emptySpool != null
       ? { spoolWeight: emptySpool }
       : actualWeight != null
@@ -139,11 +134,10 @@ function NewFilamentContent() {
   // Declared up here (used by the focus-trap effect below + guardPopulate).
   const [showPopulateDialog, setShowPopulateDialog] = useState(false);
 
-  // #682: focus-trap the INI profile picker like the app's other dialogs —
-  // move focus in on open, cycle Tab/Shift+Tab within it, Escape to close, and
-  // restore focus to the trigger on close. Suspended while the unsaved-changes
-  // confirmation is open (guardPopulate keeps the picker mounted underneath it)
-  // so the trap doesn't steal Tab back from that nested dialog (Codex on #688).
+  // Focus-trap the INI profile picker like the app's other dialogs.
+  // Suspended while the unsaved-changes confirmation is open (guardPopulate
+  // keeps the picker mounted underneath it) so the trap doesn't steal Tab
+  // back from that nested dialog.
   useEffect(() => {
     if (!iniFilaments || showPopulateDialog) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -232,10 +226,10 @@ function NewFilamentContent() {
 
       // A variant leaves Net / Empty Spool blank to inherit them — FilamentForm
       // keeps parent placeholders out of submitted state, so data.netFilament-
-      // Weight / spoolWeight are null even when the parent has values. Fetch the
-      // SELECTED parent (by current data.parentId — the picker can swap it after
-      // a ?parentId= open, so a cached doc may be stale; Codex P2 rounds 2/4/5)
-      // and fill in whichever of net/tare the variant left blank.
+      // Weight / spoolWeight are null even when the parent has values. Fetch
+      // the SELECTED parent by current data.parentId — the picker can swap it
+      // after a ?parentId= open, so a cached doc may be stale — and fill in
+      // whichever of net/tare the variant left blank.
       let effNet = ownNet;
       let effTare = ownTare;
       if (isVariant && (effNet == null || effTare == null)) {
@@ -273,8 +267,7 @@ function NewFilamentContent() {
       // "untracked", hiding the weight). When the user ENTERED the gross
       // (Initial Weight) with an unknown tare, the gross includes the spool
       // mass — pinning 0 would overstate remaining by the tare, so leave it
-      // null and let it stay untracked until the tare is known (Codex P2 r6).
-      // effTare == null already implies ownTare == null (effTare ?? own).
+      // null and let it stay untracked until the tare is known.
       if (derivedFromNet && effTare == null) {
         data.spoolWeight = 0;
       }
@@ -292,12 +285,10 @@ function NewFilamentContent() {
 
     let res = await post(data);
 
-    // GH #605 (Phase 2b): creating the FIRST variant of a parent that still
-    // carries its own color/spools turns that parent into a template — the
-    // server moves the color + spools onto a new sibling variant, and 409s
-    // until the client explicitly opts in. Show the consequences (the 409
-    // names the would-be variant + spool count), then retry with the
-    // promoteParent flag on confirm.
+    // GH #605: creating the FIRST variant of a parent that still carries its
+    // own color/spools turns that parent into a template — the server 409s
+    // until the client explicitly opts in. Show the consequences, then retry
+    // with the promoteParent flag on confirm.
     if (res.status === 409) {
       const conflict = await res.json().catch(() => null);
       if (conflict?.error !== "parent_promotion_required") {
@@ -342,21 +333,13 @@ function NewFilamentContent() {
     }
   }, [searchParams, parentId]);
 
-  // Initialize from ?parentId= query param
-  //
-  // Two things happen here:
-  //   1. We pre-fill `vendor` + `type` because those are almost always
-  //      shared between a parent and its variants — typing them again is
-  //      a papercut, not an inheritance violation (they're trivially
-  //      re-derivable, and the form already does this when the user picks
-  //      a parent manually via the dropdown).
-  //   2. We attach the full parent doc as `_parent` so FilamentForm can
-  //      render the parent's values as faded placeholders on every
-  //      inheritable input. The form must NOT copy these into form state
-  //      on save — placeholders are display-only. That preserves the
-  //      GH #106 dynamic-inheritance design: a blank input on the variant
-  //      stays blank in the database and resolves to the parent's current
-  //      value at read time via resolveFilament().
+  // Initialize from ?parentId=: pre-fill `vendor` + `type` (shared family
+  // identity, same as picking a parent via the dropdown) and attach the full
+  // parent doc as `_parent` so FilamentForm can render the parent's values
+  // as faded placeholders. The form must NOT copy those into form state on
+  // save — placeholders are display-only, preserving the GH #106
+  // dynamic-inheritance design: a blank input on the variant stays blank in
+  // the database and resolves to the parent's current value at read time.
   useEffect(() => {
     if (parentId) {
       const ac = new AbortController();
@@ -377,9 +360,9 @@ function NewFilamentContent() {
               if (!searchParams.get("diameter")) delete nfc.diameter;
               // No color param: a tag WITH secondary colors deliberately has
               // a null primary (the coextruded spec shape) — deleting would
-              // make seedFormColorHex(undefined) stamp a phantom gray
-              // primary onto the color sequence (Codex P2 #1183 r7). A tag
-              // with no colors at all keeps the fresh-form default instead.
+              // make seedFormColorHex(undefined) stamp a phantom gray primary
+              // onto the color sequence. A tag with no colors at all keeps
+              // the fresh-form default instead.
               if (!searchParams.get("color")) {
                 if (Array.isArray(nfc.secondaryColors) && nfc.secondaryColors.length > 0) {
                   nfc.color = null;
@@ -388,11 +371,11 @@ function NewFilamentContent() {
                 }
               }
               if (!searchParams.get("type")) delete nfc.type;
-              // Codex P1 (#1183): a tag carrying a NET actualWeight but no
-              // tare gets the standalone 0-tare pin (net = gross). With a
-              // parent whose tare IS known, that pin is a false 0 override
-              // AND the derived spool's gross understates by the tare —
-              // drop the pin (the tare inherits) and gross up the total.
+              // A tag carrying a NET actualWeight but no tare gets the
+              // standalone 0-tare pin (net = gross). With a parent whose
+              // tare IS known, that pin is a false 0 override AND the
+              // derived spool's gross understates by the tare — drop the pin
+              // (the tare inherits) and gross up the total.
               const actualWeightParam = searchParams.get("actualWeight");
               if (
                 actualWeightParam &&
@@ -501,27 +484,19 @@ function NewFilamentContent() {
 
   // Handle NFC tag read while on this page.
   //
-  // NfcProvider intentionally keeps `tagReadResult` alive after the tag
-  // is lifted off the reader — the scan-match dialog's action buttons
-  // (View Filament / Create New / candidates) need to remain usable
-  // after the user dismisses the modal. That design is fine for the
-  // dialog; it's wrong for this page, which has no concept of "stale
-  // result vs. fresh scan." Without the `tagPresent` gate, clicking
-  // "+ Add Filament" any time after a scan-and-lift sequence would
-  // pre-fill the form with whatever was last scanned — even when the
-  // user has clearly moved on.
+  // NfcProvider intentionally keeps `tagReadResult` alive after the tag is
+  // lifted off the reader (the scan-match dialog needs it). Without the
+  // `tagPresent` gate, opening "+ Add Filament" any time after a
+  // scan-and-lift would pre-fill the form with whatever was last scanned.
   //
-  // `tagPresent` is read through a ref rather than the deps array
-  // (codex round-1 P1 on PR #354). The naive form — listing
-  // `nfcStatus.tagPresent` as a dep — re-runs this effect on every
-  // present↔absent transition with whatever `tagReadResult` is
-  // currently in scope. `electron/main.ts` emits `nfc-status-changed`
-  // immediately when a tag is detected, BEFORE the async tag read
-  // completes; during that window the effect would re-fire with
-  // `tagPresent=true` and the PREVIOUS tag's `tagReadResult`, prefilling
-  // the form from stale data. Routing the read through a ref means the
-  // prefill effect only runs when `tagReadResult` itself changes, but
-  // can still consult the latest tag-presence state at that moment.
+  // `tagPresent` is read through a ref rather than the deps array: listing
+  // `nfcStatus.tagPresent` as a dep re-runs this effect on every
+  // present↔absent transition with whatever `tagReadResult` is in scope —
+  // and `electron/main.ts` emits `nfc-status-changed` BEFORE the async tag
+  // read completes, so the effect would re-fire with `tagPresent=true` and
+  // the PREVIOUS tag's `tagReadResult`, prefilling from stale data. The ref
+  // means the prefill effect only runs when `tagReadResult` itself changes,
+  // but can still consult the latest tag-presence state at that moment.
   const tagPresentRef = useRef(nfcStatus.tagPresent);
   useEffect(() => {
     tagPresentRef.current = nfcStatus.tagPresent;
@@ -544,15 +519,15 @@ function NewFilamentContent() {
         bed: data.bedTemp ?? null,
         bedFirstLayer: data.bedTempMin ?? data.bedTemp ?? null,
       },
-      // weightGrams is the tag's NOMINAL net capacity; actualWeightGrams is the
-      // current remaining net. Carry the tare (emptySpoolWeight) and, when the
-      // tag reports actual remaining, prefill Initial Weight with the on-scale
-      // gross (actual + tare) so the auto-created spool reflects a partially
-      // used roll instead of a full one (Codex P2 r7 on #706).
+      // weightGrams is the tag's NOMINAL net capacity; actualWeightGrams is
+      // the current remaining net. Carry the tare and, when the tag reports
+      // actual remaining, prefill Initial Weight with the on-scale gross
+      // (actual + tare) so the auto-created spool reflects a partially used
+      // roll instead of a full one.
       ...(data.weightGrams != null ? { netFilamentWeight: data.weightGrams } : {}),
-      // actualWeightGrams is NET remaining, so pin a 0 tare when the tag carries
-      // no emptySpoolWeight — else the spool reads as untracked (null
-      // spoolWeight) and hides the remaining (Codex P2 r7/r8).
+      // actualWeightGrams is NET remaining, so pin a 0 tare when the tag
+      // carries no emptySpoolWeight — else the spool reads as untracked
+      // (null spoolWeight) and hides the remaining.
       ...(data.emptySpoolWeight != null
         ? { spoolWeight: data.emptySpoolWeight }
         : data.actualWeightGrams != null
@@ -582,8 +557,8 @@ function NewFilamentContent() {
 
     const formData = new FormData();
     formData.append("file", file);
-    // GH #640: a dropped connection used to reject silently — no toast,
-    // unhandled rejection. Same toast as the non-2xx path.
+    // GH #640: a dropped connection must not reject silently — same toast
+    // as the non-2xx path.
     try {
       const res = await fetch("/api/filaments/parse-ini", {
         method: "POST",
@@ -688,13 +663,9 @@ function NewFilamentContent() {
         nozzleRangeMin: d.temperatures?.nozzleRangeMin ?? null,
         nozzleRangeMax: d.temperatures?.nozzleRangeMax ?? null,
         bed: d.temperatures?.bed ?? null,
-        // GH #518: the AI used to be prompted for bedRangeMin (since
-        // dropped — the schema doesn't store bed ranges). The fallback
-        // here was also semantically wrong: the AI's "minimum
-        // operating bed temp" was being routed to "first-layer bed
-        // temp", but first-layer is typically the HIGHER value (better
-        // adhesion), not the lower. Fall back to the recommended bed
-        // temp only.
+        // GH #518: fall back to the recommended bed temp only — routing a
+        // "minimum operating bed temp" to first-layer is wrong, since
+        // first-layer is typically the HIGHER value (better adhesion).
         bedFirstLayer: d.temperatures?.bed ?? null,
       },
       dryingTemperature: d.dryingTemperature ?? null,
@@ -821,7 +792,7 @@ function NewFilamentContent() {
   };
 
   const handleCloneFetch = async (id: string) => {
-    // GH #640: network failure used to reject silently with no toast.
+    // GH #640: a network failure must not reject silently with no toast.
     let filament;
     try {
       const res = await fetch(`/api/filaments/${id}`);
@@ -1167,9 +1138,6 @@ function NewFilamentContent() {
 }
 
 export default function NewFilament() {
-  // GH #638: the Suspense fallback was hardcoded English. The provider
-  // mounts above this component (ClientProviders in the root layout), so
-  // t() is available here.
   const { t } = useTranslation();
   return (
     <Suspense fallback={<p className="p-8 text-gray-500">{t("common.loading")}</p>}>

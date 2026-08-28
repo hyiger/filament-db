@@ -45,7 +45,7 @@ npm run dev                   # opens http://localhost:3456
 
 ## Step 2: Understand the App Shell
 
-A persistent top bar runs along every page with the app name on the left and quick links to **Filaments**, **Dashboard**, **Inventory**, **Compare**, **Analytics**, **Share**, and **Settings**. On narrow screens (phones) the links collapse into a hamburger menu. The active page is highlighted.
+A persistent top bar runs along every page with the app name on the left and quick links to **Filaments**, **Dashboard**, **Inventory**, **Compare**, **Analytics**, **History**, **Share**, and **Settings**. On narrow screens (phones) the links collapse into a hamburger menu. The active page is highlighted.
 
 Beside the **Filament DB** title on the home page is a small **connection status pill** that shows your current connection state at a glance:
 
@@ -587,7 +587,7 @@ The dashboard surfaces every filament under its threshold in the **Low stock** l
 
 ## Step 21: Log Print Jobs, Watch Analytics *(v1.11)*
 
-Each time you run a print, log it either from your slicer (via `/api/print-history`) or manually on the spool detail page (**Log usage** → enter grams). The app:
+Each time you run a print, log it from your slicer (via `/api/print-history`), with the dashboard's **Log print job** dialog *(v1.79 — job label, printer, date, and one or more filament/spool/grams rows)*, or manually on the spool detail page (**Log usage** → enter grams). The app:
 
 - Decrements the spool's weight
 - Appends a `usageHistory` entry
