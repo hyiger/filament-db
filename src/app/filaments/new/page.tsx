@@ -28,6 +28,11 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
   const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
   const nozzleMin = searchParams.get("nozzleMin") ? Number(searchParams.get("nozzleMin")) : null;
   const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
+  // OpenTag3D recommended temps (Codex P2 #1183 r9) — preferred for the
+  // everyday fields, with the range max as fallback, matching
+  // decodedTagToFilamentPayload.
+  const nozzleRec = searchParams.get("nozzleRec") ? Number(searchParams.get("nozzleRec")) : null;
+  const bedRec = searchParams.get("bedRec") ? Number(searchParams.get("bedRec")) : null;
   const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
   // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
   const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
@@ -61,11 +66,11 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
     // (bed has no range fields in the schema, so its min is dropped like
     // the canonical mapper does).
     temperatures: {
-      nozzle: nozzleMax,
+      nozzle: nozzleRec ?? nozzleMax,
       nozzleFirstLayer: null,
       nozzleRangeMin: nozzleMin,
       nozzleRangeMax: nozzleMax,
-      bed: bedMax,
+      bed: bedRec ?? bedMax,
       bedFirstLayer: null,
     },
     ...(weight != null ? { netFilamentWeight: weight } : {}),

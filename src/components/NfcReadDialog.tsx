@@ -130,6 +130,18 @@ export default function NfcReadDialog() {
     if (data.nozzleTempMin != null) params.set("nozzleMin", String(data.nozzleTempMin));
     if (data.bedTemp != null) params.set("bed", String(data.bedTemp));
     if (data.bedTempMin != null) params.set("bedMin", String(data.bedTempMin));
+    // OpenTag3D keeps the RECOMMENDED temps in aux while nozzleTemp/bedTemp
+    // carry the range maxima — the canonical decodedTagToFilamentPayload
+    // prefers the recommended values for the everyday temps, so the URL
+    // flow must carry them too (Codex P2 #1183 r9).
+    const auxRec = (key: string): number | null => {
+      const v = Number(data.aux?.[key]);
+      return Number.isFinite(v) ? v : null;
+    };
+    const nozzleRec = auxRec("opentag3d_recommended_print_temp_c");
+    const bedRec = auxRec("opentag3d_recommended_bed_temp_c");
+    if (nozzleRec != null) params.set("nozzleRec", String(nozzleRec));
+    if (bedRec != null) params.set("bedRec", String(bedRec));
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
     // Actual remaining net + tare so the new-filament form can seed a spool
