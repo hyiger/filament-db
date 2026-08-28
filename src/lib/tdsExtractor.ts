@@ -331,15 +331,27 @@ export function isGeminiModelGoneError(status: number, body: string): boolean {
   );
 }
 
-/** Ask ListModels for a replacement model; null on any failure. */
+/** Ask ListModels for a replacement model; null on any failure. Follows
+ *  nextPageToken (Codex P2 #1185 r4 — a usable flash model can sit on a
+ *  later page), bounded to a handful of pages as a runaway guard. */
+const MAX_LIST_MODELS_PAGES = 5;
 async function discoverGeminiModel(apiKey: string): Promise<string | null> {
   try {
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
-    );
-    if (!res.ok) return null;
-    const body = await res.json().catch(() => null);
-    return pickGeminiModel(body?.models ?? []);
+    const models: GeminiModelInfo[] = [];
+    let pageToken = "";
+    for (let page = 0; page < MAX_LIST_MODELS_PAGES; page++) {
+      const url =
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}` +
+        (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+      const res = await fetch(url);
+      if (!res.ok) break;
+      const body = await res.json().catch(() => null);
+      if (!body) break;
+      models.push(...(body.models ?? []));
+      if (typeof body.nextPageToken !== "string" || body.nextPageToken === "") break;
+      pageToken = body.nextPageToken;
+    }
+    return pickGeminiModel(models);
   } catch {
     return null;
   }

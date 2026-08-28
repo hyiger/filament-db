@@ -1516,6 +1516,59 @@ describe("callGemini self-healing (GH #1179)", () => {
     expect(result.error).toMatch(/no replacement/i);
   });
 
+  it("follows ListModels pagination to find a later-page flash model (Codex #1185 r4)", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("gemini-3.1-flash:generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (u.includes("/models?key=") && !u.includes("pageToken=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-3.0-pro", supportedGenerationMethods: ["generateContent"] },
+              ],
+              nextPageToken: "page-2",
+            }),
+        });
+      }
+      if (u.includes("pageToken=page-2")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key");
+    expect(result.success).toBe(true);
+    // The flash model on page 2 wins over page 1's pro model.
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("gemini-9.9-flash:generateContent"))).toBe(true);
+    mod.resetDiscoveredGeminiModel();
+  });
+
   it("treats a ListModels network failure as no-replacement", async () => {
     const mod = await import("@/lib/tdsExtractor");
     mod.resetDiscoveredGeminiModel();
