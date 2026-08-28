@@ -12,6 +12,13 @@ describe("pruneParentEqualPrefill", () => {
       { density: 1.24, diameter: 1.75, maxVolumetricSpeed: 15 },
     );
     expect(out).toEqual({ name: "Galaxy Black" });
+    // r10: drying + TD ride the same rule now that the URL flow carries them.
+    expect(
+      pruneParentEqualPrefill(
+        { dryingTemperature: 55, dryingTime: 240, transmissionDistance: 4.2 },
+        { dryingTemperature: 55, dryingTime: 240, transmissionDistance: 6 },
+      ),
+    ).toEqual({ transmissionDistance: 4.2 });
   });
 
   it("keeps scalars that differ from the parent as genuine overrides", () => {

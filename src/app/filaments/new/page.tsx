@@ -33,6 +33,7 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
   // decodedTagToFilamentPayload.
   const nozzleRec = searchParams.get("nozzleRec") ? Number(searchParams.get("nozzleRec")) : null;
   const bedRec = searchParams.get("bedRec") ? Number(searchParams.get("bedRec")) : null;
+  const preheat = searchParams.get("preheat") ? Number(searchParams.get("preheat")) : null;
   const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
   // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
   const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
@@ -72,7 +73,17 @@ function nfcPrefillFromParams(searchParams: URLSearchParams): Record<string, unk
       nozzleRangeMax: nozzleMax,
       bed: bedRec ?? bedMax,
       bedFirstLayer: null,
+      standby: preheat,
     },
+    ...(searchParams.get("dryingTemp")
+      ? { dryingTemperature: Number(searchParams.get("dryingTemp")) }
+      : {}),
+    ...(searchParams.get("dryingTime")
+      ? { dryingTime: Number(searchParams.get("dryingTime")) }
+      : {}),
+    ...(searchParams.get("td")
+      ? { transmissionDistance: Number(searchParams.get("td")) }
+      : {}),
     ...(weight != null ? { netFilamentWeight: weight } : {}),
     // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
     // carries no emptySpool — else the derived spool reads as untracked

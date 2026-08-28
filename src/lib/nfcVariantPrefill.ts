@@ -27,6 +27,9 @@ import { unwrapIniString } from "@/lib/parseIni";
 /** The raw parent doc fields the prune compares against (from ?raw=true). */
 export interface VariantPrefillParent {
   density?: number | null;
+  dryingTemperature?: number | null;
+  dryingTime?: number | null;
+  transmissionDistance?: number | null;
   settings?: Record<string, unknown> | null;
   diameter?: number | null;
   maxVolumetricSpeed?: number | null;
@@ -47,6 +50,9 @@ const PRUNE_EQUAL_SCALARS = [
   "shoreHardnessD",
   "netFilamentWeight",
   "spoolWeight",
+  "dryingTemperature",
+  "dryingTime",
+  "transmissionDistance",
 ] as const;
 
 /** density + diameter are seeded through the form's GH #570 snapToStep

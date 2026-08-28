@@ -142,6 +142,12 @@ export default function NfcReadDialog() {
     const bedRec = auxRec("opentag3d_recommended_bed_temp_c");
     if (nozzleRec != null) params.set("nozzleRec", String(nozzleRec));
     if (bedRec != null) params.set("bedRec", String(bedRec));
+    // Codex P2 #1183 r10: the canonical decodedTagToFilamentPayload also
+    // preserves preheat (temperatures.standby), drying, and HueForge TD.
+    if (data.preheatTemp != null) params.set("preheat", String(data.preheatTemp));
+    if (data.dryingTemperature != null) params.set("dryingTemp", String(data.dryingTemperature));
+    if (data.dryingTime != null) params.set("dryingTime", String(data.dryingTime));
+    if (data.transmissionDistance != null) params.set("td", String(data.transmissionDistance));
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
     // Actual remaining net + tare so the new-filament form can seed a spool
