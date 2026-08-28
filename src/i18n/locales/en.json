@@ -1862,7 +1862,7 @@
   "history.delete.button": "Delete",
   "history.delete.done": "Print job deleted — its debit was returned to the remaining spools, up to each spool's capacity",
   "history.delete.failed": "Failed to delete print job",
-  "history.delete.refundNote": "Deleting a job refunds its grams to the spools it debited, where those spools still exist.",
+  "history.delete.refundNote": "Deleting a job returns its grams to the spools it debited — where those spools still exist, up to each spool's capacity.",
   "history.filamentGone": "filament removed",
   "history.searchLedger": "Search usage labels…",
   "history.filterSource": "Filter by source",
