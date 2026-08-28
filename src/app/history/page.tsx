@@ -175,12 +175,22 @@ export default function HistoryPage() {
    *  A row with NO spool deliberately debited nothing (GH #305: all spools
    *  retired → spoolId null, no debitedGrams) and refunds nothing; the
    *  grams fallback applies only to legacy pre-#1074 rows that DID debit
-   *  a spool (Codex P2 #1184 r7). */
+   *  a spool (Codex r7). Validity mirrors the DELETE handler's own rule
+   *  (Codex r13): a bypassed-write debitedGrams that is negative /
+   *  non-finite / larger than the row's grams is IGNORED there and the
+   *  refund falls back to the requested grams — quoting safeGrams(-x)=0
+   *  would understate what the delete actually restores. */
   const jobRefundableGrams = (job: PrintJob): number =>
-    job.usage.reduce(
-      (sum, u) => sum + safeGrams(u.debitedGrams ?? (u.spoolId ? u.grams : 0)),
-      0,
-    );
+    job.usage.reduce((sum, u) => {
+      if (!u.spoolId && u.debitedGrams == null) return sum;
+      const entryGrams = safeGrams(u.grams);
+      const validDebit =
+        typeof u.debitedGrams === "number" &&
+        Number.isFinite(u.debitedGrams) &&
+        u.debitedGrams >= 0 &&
+        u.debitedGrams <= entryGrams;
+      return sum + (validDebit ? (u.debitedGrams as number) : entryGrams);
+    }, 0);
 
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
