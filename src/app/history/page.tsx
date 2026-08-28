@@ -182,7 +182,10 @@ export default function HistoryPage() {
    *  would understate what the delete actually restores. */
   const jobRefundableGrams = (job: PrintJob): number =>
     job.usage.reduce((sum, u) => {
-      if (!u.spoolId && u.debitedGrams == null) return sum;
+      // The DELETE handler resolves a null spoolId to "no spool" and never
+      // refunds the row — even when a bypassed write left a debitedGrams on
+      // it (Codex r14), so every spool-less row quotes zero.
+      if (!u.spoolId) return sum;
       const entryGrams = safeGrams(u.grams);
       const validDebit =
         typeof u.debitedGrams === "number" &&
