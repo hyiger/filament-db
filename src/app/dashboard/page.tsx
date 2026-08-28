@@ -305,15 +305,23 @@ export default function DashboardPage() {
 
       {/* Recent print history */}
       <section>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-3">
           <h2 className="text-lg font-semibold">{t("dashboard.recentPrints")}</h2>
-          <button
-            type="button"
-            onClick={() => setShowLogJob(true)}
-            className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
-          >
-            {t("printJob.open")}
-          </button>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/history"
+              className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
+            >
+              {t("history.viewAll")}
+            </Link>
+            <button
+              type="button"
+              onClick={() => setShowLogJob(true)}
+              className="px-2.5 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+            >
+              {t("printJob.open")}
+            </button>
+          </div>
         </div>
         {showLogJob && (
           <LogPrintJobDialog

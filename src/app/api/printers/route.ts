@@ -28,7 +28,12 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const manufacturer = searchParams.get("manufacturer");
 
-    const filter: Record<string, unknown> = { _deletedAt: null };
+    // GH #1168 (Codex r12): ?includeTrashed=1 also returns soft-deleted
+    // printers (with their _deletedAt, so callers can label them) — the
+    // /history printer filter needs them because their PrintHistory rows
+    // remain queryable while the default active-only list can't name them.
+    const includeTrashed = searchParams.get("includeTrashed") === "1";
+    const filter: Record<string, unknown> = includeTrashed ? {} : { _deletedAt: null };
     if (manufacturer) filter.manufacturer = manufacturer;
 
     const printers = await Printer.find(filter)
