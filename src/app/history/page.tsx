@@ -174,31 +174,6 @@ export default function HistoryPage() {
   // whose raw sum overflows, and formatGrams(Infinity) renders empty.
   const jobGrams = (job: PrintJob): number => sumUsageGrams(job.usage);
 
-  /** What a DELETE would actually restore — debitedGrams where recorded
-   *  (a 100 g job against a 50 g spool debited, and refunds, only 50 g).
-   *  A row with NO spool deliberately debited nothing (GH #305: all spools
-   *  retired → spoolId null, no debitedGrams) and refunds nothing; the
-   *  grams fallback applies only to legacy pre-#1074 rows that DID debit
-   *  a spool (Codex r7). Validity mirrors the DELETE handler's own rule
-   *  (Codex r13): a bypassed-write debitedGrams that is negative /
-   *  non-finite / larger than the row's grams is IGNORED there and the
-   *  refund falls back to the requested grams — quoting safeGrams(-x)=0
-   *  would understate what the delete actually restores. */
-  const jobRefundableGrams = (job: PrintJob): number =>
-    job.usage.reduce((sum, u) => {
-      // The DELETE handler resolves a null spoolId to "no spool" and never
-      // refunds the row — even when a bypassed write left a debitedGrams on
-      // it (Codex r14), so every spool-less row quotes zero.
-      if (!u.spoolId) return sum;
-      const entryGrams = safeGrams(u.grams);
-      const validDebit =
-        typeof u.debitedGrams === "number" &&
-        Number.isFinite(u.debitedGrams) &&
-        u.debitedGrams >= 0 &&
-        u.debitedGrams <= entryGrams;
-      return sum + (validDebit ? (u.debitedGrams as number) : entryGrams);
-    }, 0);
-
   const toggleExpanded = (id: string) => {
     setExpanded((prev) => {
       const next = new Set(prev);
@@ -211,10 +186,11 @@ export default function HistoryPage() {
   const handleDelete = async (job: PrintJob) => {
     const ok = await confirm({
       title: t("history.delete.title"),
-      message: t("history.delete.message", {
-        label: job.jobLabel,
-        grams: formatGrams(jobRefundableGrams(job)),
-      }),
+      // No numeric refund quote (Codex r13/r14/r17): the client-visible
+      // PrintHistory debit copy can diverge from the spool-ledger copy the
+      // DELETE actually refunds from, so any number here is unverifiable —
+      // the wording states the semantics, not an amount.
+      message: t("history.delete.message", { label: job.jobLabel }),
       confirmLabel: t("history.delete.confirm"),
     });
     if (!ok) return;

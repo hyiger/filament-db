@@ -1857,7 +1857,7 @@
   "history.jobs.empty": "No print jobs match. Jobs appear here once logged — use “Log print job” on the Dashboard or POST /api/print-history.",
   "history.jobs.limitNote": "Showing the most recent {limit} jobs.",
   "history.delete.title": "Undo print job?",
-  "history.delete.message": "Delete “{label}”? Up to {grams} g are restored to its spools — capped at each spool's capacity, and grams debited from a since-deleted filament or spool stay deducted.",
+  "history.delete.message": "Delete “{label}”? Any weight it debited is returned to its remaining spools, up to each spool's capacity — grams debited from a since-deleted filament or spool stay deducted.",
   "history.delete.confirm": "Delete and refund",
   "history.delete.button": "Delete",
   "history.delete.done": "Print job deleted",
