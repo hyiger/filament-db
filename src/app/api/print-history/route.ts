@@ -78,7 +78,7 @@ export async function GET(request: NextRequest) {
       .sort({ startedAt: -1 })
       .limit(limit)
       .populate("printerId", "name")
-      .populate("usage.filamentId", "name vendor type color _deletedAt")
+      .populate("usage.filamentId", "name vendor type color _deletedAt _purged")
       .lean();
     return NextResponse.json(entries);
   } catch (err) {

@@ -40,6 +40,10 @@ interface JobUsageRow {
     /** Populated refs resolve even for trashed filaments — the GET selects
      *  _deletedAt so the UI can render a non-link (Codex P2 #1184). */
     _deletedAt?: string | null;
+    /** A permanent-delete tombstone (also carries _deletedAt) — not in the
+     *  trash view and not restorable, so it renders through the removed
+     *  fallback rather than the "in trash" label (Codex r16). */
+    _purged?: boolean;
   } | null;
   spoolId: string | null;
   grams: number;
@@ -376,7 +380,7 @@ export default function HistoryPage() {
                       <div className="mt-2 ml-5 space-y-1">
                         {job.usage.map((u, i) => (
                           <p key={i} className="text-xs text-gray-600 dark:text-gray-300">
-                            {u.filamentId && u.filamentId._deletedAt == null ? (
+                            {u.filamentId && !u.filamentId._purged && u.filamentId._deletedAt == null ? (
                               <Link
                                 href={`/filaments/${u.filamentId._id}${u.spoolId ? `?spool=${u.spoolId}` : ""}`}
                                 className="text-blue-600 dark:text-blue-400 hover:underline"
@@ -384,7 +388,7 @@ export default function HistoryPage() {
                                 {u.filamentId.name}
                                 {u.filamentId.vendor ? ` — ${u.filamentId.vendor}` : ""}
                               </Link>
-                            ) : u.filamentId ? (
+                            ) : u.filamentId && !u.filamentId._purged ? (
                               // Trashed: populate still resolves the ref, but the
                               // active-only detail API would 404 — name, no link
                               // (Codex P2 #1184).
