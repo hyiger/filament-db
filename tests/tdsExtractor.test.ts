@@ -1228,3 +1228,402 @@ describe("tdsExtractor", () => {
     });
   });
 });
+
+// ── GH #1179: self-healing Gemini model selection ──────────────────────
+// The hardcoded model has been retired twice (gemini-2.0-flash in #916,
+// gemini-2.5-flash in #1179). These pin the discovery machinery.
+
+describe("pickGeminiModel (GH #1179)", () => {
+  it("picks the highest-version stable flash model, stripping the models/ prefix", async () => {
+    const { pickGeminiModel } = await import("@/lib/tdsExtractor");
+    expect(
+      pickGeminiModel([
+        { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-pro", supportedGenerationMethods: ["generateContent"] },
+      ]),
+    ).toBe("gemini-3.1-flash");
+  });
+
+  it("prefers stable over preview/exp and plain flash over -lite", async () => {
+    const { pickGeminiModel } = await import("@/lib/tdsExtractor");
+    expect(
+      pickGeminiModel([
+        { name: "models/gemini-4.0-flash-preview", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash", supportedGenerationMethods: ["generateContent"] },
+      ]),
+    ).toBe("gemini-3.1-flash");
+    expect(
+      pickGeminiModel([
+        { name: "models/gemini-3.1-flash-lite", supportedGenerationMethods: ["generateContent"] },
+      ]),
+    ).toBe("gemini-3.1-flash-lite");
+  });
+
+  it("falls back to a non-flash gemini model when no flash is served", async () => {
+    const { pickGeminiModel } = await import("@/lib/tdsExtractor");
+    expect(
+      pickGeminiModel([
+        { name: "models/gemini-3.1-pro", supportedGenerationMethods: ["generateContent"] },
+      ]),
+    ).toBe("gemini-3.1-pro");
+  });
+
+  it("skips non-generateContent, non-gemini, and modality-specific models", async () => {
+    const { pickGeminiModel } = await import("@/lib/tdsExtractor");
+    expect(
+      pickGeminiModel([
+        { name: "models/gemini-3.1-flash", supportedGenerationMethods: ["embedContent"] },
+        { name: "models/text-embedding-004", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash-image", supportedGenerationMethods: ["generateContent"] },
+        { name: "models/gemini-3.1-flash-tts", supportedGenerationMethods: ["generateContent"] },
+      ]),
+    ).toBeNull();
+    expect(pickGeminiModel([])).toBeNull();
+    // Missing methods array counts as capable (older API shapes).
+    expect(pickGeminiModel([{ name: "models/gemini-3.1-flash" }])).toBe("gemini-3.1-flash");
+  });
+});
+
+describe("isGeminiModelGoneError (GH #1179)", () => {
+  it("classifies model-gone shapes and excludes rate limits / key errors", async () => {
+    const { isGeminiModelGoneError } = await import("@/lib/tdsExtractor");
+    expect(isGeminiModelGoneError(404, "")).toBe(true);
+    expect(isGeminiModelGoneError(400, "model gemini-2.5-flash is not found")).toBe(true);
+    expect(isGeminiModelGoneError(400, "This model has been deprecated; update your code to use a current model")).toBe(true);
+    expect(isGeminiModelGoneError(400, "model gemini-2.5-flash is retired")).toBe(true);
+    expect(isGeminiModelGoneError(400, "model is no longer available")).toBe(true);
+    expect(isGeminiModelGoneError(400, "model X is not supported for generateContent")).toBe(true);
+    expect(isGeminiModelGoneError(429, "model quota exceeded")).toBe(false);
+    // The #916 retirement surfaced as HTTP 429 — an explicit marker wins
+    // over the status (Codex P2 #1185).
+    expect(isGeminiModelGoneError(429, "model gemini-2.0-flash has been retired")).toBe(true);
+    expect(isGeminiModelGoneError(400, "API_KEY invalid")).toBe(false);
+    expect(isGeminiModelGoneError(500, "internal error")).toBe(false);
+  });
+});
+
+describe("callGemini self-healing (GH #1179)", () => {
+  const SUCCESS_JSON = {
+    candidates: [
+      { content: { parts: [{ text: '{"vendor":"Prusa","type":"PLA"}' }] } },
+    ],
+  };
+
+  it("discovers a served model on the model-gone shape, retries, and caches it", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const urls: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      urls.push(String(url));
+      if (String(url).includes(":generateContent") && String(url).includes("gemini-3.1-flash")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (String(url).includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(true);
+    expect(result.data?.vendor).toBe("Prusa");
+    expect(urls.some((u) => u.includes("gemini-9.9-flash:generateContent"))).toBe(true);
+
+    // Cached: the next extraction goes straight to the discovered model.
+    urls.length = 0;
+    const again = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(again.success).toBe(true);
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain("gemini-9.9-flash:generateContent");
+    mod.resetDiscoveredGeminiModel();
+  });
+
+  it("scopes the discovered model to the API key (Codex #1185 r3)", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const byKey: Record<string, string[]> = {};
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      const key = /key=([^&]+)/.exec(u)?.[1] ?? "?";
+      (byKey[key] ??= []).push(u);
+      if (u.includes("gemini-3.1-flash:generateContent") && key === "key-a") {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (u.includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Key A heals onto the discovered model…
+    await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key-a");
+    expect(byKey["key-a"].some((u) => u.includes("gemini-9.9-flash:generateContent"))).toBe(true);
+    // …but key B starts from the DEFAULT, not key A's discovery.
+    await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key-b");
+    expect(byKey["key-b"][0]).toContain("gemini-3.1-flash:generateContent");
+    expect(byKey["key-b"].some((u) => u.includes("/models?"))).toBe(false);
+    mod.resetDiscoveredGeminiModel();
+  });
+
+  it("heals a retirement that masquerades as HTTP 429 (the #916 shape)", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("gemini-3.1-flash:generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers(),
+          text: () => Promise.resolve("model gemini-3.1-flash has been retired; update your code"),
+        });
+      }
+      if (String(url).includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(true);
+    mod.resetDiscoveredGeminiModel();
+  });
+
+  it("caches the replacement at discovery time so a rate-limited retry re-enters through it", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    let nineNineCalls = 0;
+    const urls: string[] = [];
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      urls.push(String(url));
+      if (String(url).includes("gemini-3.1-flash:generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (String(url).includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      // The replacement's FIRST call is rate-limited; the withRetry re-entry
+      // must go straight to it (no second default attempt, no re-discovery).
+      nineNineCalls++;
+      if (nineNineCalls === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers(),
+          text: () => Promise.resolve("quota exceeded"),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(true);
+    // Exactly one doomed default attempt and one discovery — the backoff
+    // re-entry used the cached replacement directly.
+    expect(urls.filter((u) => u.includes("gemini-3.1-flash:generateContent"))).toHaveLength(1);
+    expect(urls.filter((u) => u.includes("/models?key="))).toHaveLength(1);
+    expect(nineNineCalls).toBe(2);
+    mod.resetDiscoveredGeminiModel();
+  }, 30_000);
+
+  it("reports a clear error when no replacement model can be discovered", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes(":generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model is not found"),
+        });
+      }
+      return Promise.resolve({ ok: false, status: 403, json: () => Promise.resolve({}) });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no longer available/i);
+    expect(result.error).toMatch(/no replacement/i);
+  });
+
+  it("follows ListModels pagination to find a later-page flash model (Codex #1185 r4)", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.includes("gemini-3.1-flash:generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (u.includes("/models?key=") && !u.includes("pageToken=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-3.0-pro", supportedGenerationMethods: ["generateContent"] },
+              ],
+              nextPageToken: "page-2",
+            }),
+        });
+      }
+      if (u.includes("pageToken=page-2")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key");
+    expect(result.success).toBe(true);
+    // The flash model on page 2 wins over page 1's pro model.
+    const urls = fetchMock.mock.calls.map((c) => String(c[0]));
+    expect(urls.some((u) => u.includes("gemini-9.9-flash:generateContent"))).toBe(true);
+    mod.resetDiscoveredGeminiModel();
+  });
+
+  it("treats a ListModels network failure as no-replacement", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes(":generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model is not found"),
+        });
+      }
+      return Promise.reject(new Error("network down"));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/no replacement/i);
+  });
+
+  it("keeps a non-model failure on the discovered retry as the surfaced error", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (String(url).includes("gemini-3.1-flash:generateContent")) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (String(url).includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        text: () => Promise.resolve("backend exploded"),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await mod.extractFromTdsContent(Buffer.from("TDS text"), "text/plain", "key");
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/HTTP 500/);
+    expect(result.error).toMatch(/backend exploded/);
+    mod.resetDiscoveredGeminiModel();
+  });
+});
