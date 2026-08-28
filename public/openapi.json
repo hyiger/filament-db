@@ -2488,6 +2488,18 @@
               "type": "string"
             },
             "description": "Filter by manufacturer name"
+          },
+          {
+            "name": "includeTrashed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "1"
+              ]
+            },
+            "description": "When \"1\", soft-deleted (trashed) printers are included, each carrying its _deletedAt so callers can label them. The /history page's printer filter uses this: a trashed printer's print-history rows remain queryable, but the default active-only list cannot name it."
           }
         ],
         "responses": {

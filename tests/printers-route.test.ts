@@ -92,6 +92,26 @@ describe("/api/printers", () => {
       expect(body.map((p: { name: string }) => p.name)).toEqual(["Live"]);
     });
 
+    it("?includeTrashed=1 returns trashed printers with their _deletedAt (GH #1168)", async () => {
+      await Printer.create({ name: "Live", manufacturer: "X", printerModel: "L" });
+      await Printer.create({
+        name: "Trashed",
+        manufacturer: "X",
+        printerModel: "T",
+        _deletedAt: new Date(),
+      });
+
+      const res = await listPrinters(
+        jsonReq("http://localhost/api/printers?includeTrashed=1"),
+      );
+      const body = await res.json();
+      expect(body.map((p: { name: string }) => p.name).sort()).toEqual(["Live", "Trashed"]);
+      const trashed = body.find((p: { name: string }) => p.name === "Trashed");
+      expect(trashed._deletedAt).not.toBeNull();
+      const live = body.find((p: { name: string }) => p.name === "Live");
+      expect(live._deletedAt ?? null).toBeNull();
+    });
+
     it("populates only non-deleted nozzles in installedNozzles", async () => {
       const live = await Nozzle.create({ name: "Live nozzle", diameter: 0.4, type: "Brass" });
       const dead = await Nozzle.create({

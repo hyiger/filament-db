@@ -72,6 +72,10 @@ interface LedgerEntry {
 interface PickerPrinter {
   _id: string;
   name: string;
+  /** Present (non-null) when the printer is in the trash — the filter
+   *  fetches ?includeTrashed=1 so retained history stays reachable even
+   *  when every one of its jobs is older than the fetched window. */
+  _deletedAt?: string | null;
 }
 
 const JOBS_LIMIT = 200;
@@ -111,10 +115,6 @@ export default function HistoryPage() {
   // even though the mutable array now holds fewer than the limit.
   const [jobsTruncated, setJobsTruncated] = useState(false);
   const [printers, setPrinters] = useState<PickerPrinter[]>([]);
-  // "Trashed" is an inference from absence in /api/printers — valid only
-  // once that lookup actually SUCCEEDED, or a race / failed fetch would
-  // mislabel every active printer (Codex P2 #1184 r9).
-  const [printersLoaded, setPrintersLoaded] = useState(false);
   const [printerFilter, setPrinterFilter] = useState("");
   const [jobSearch, setJobSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -122,12 +122,9 @@ export default function HistoryPage() {
 
   useEffect(() => {
     const ac = new AbortController();
-    fetch("/api/printers", { signal: ac.signal })
+    fetch("/api/printers?includeTrashed=1", { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((list) => {
-        setPrinters(list);
-        setPrintersLoaded(true);
-      })
+      .then(setPrinters)
       .catch(() => {});
     return () => ac.abort();
   }, []);
@@ -152,19 +149,14 @@ export default function HistoryPage() {
     return () => ac.abort();
   }, [printerFilter]);
 
-  // /api/printers filters trashed printers out, but their history rows
-  // remain (and GET /api/print-history?printerId= still resolves them) —
-  // union in any printer referenced by the fetched jobs so those rows stay
-  // filterable (Codex P2 #1184 r8).
-  const printerOptions = useMemo(() => {
-    const byId = new Map(printers.map((p) => [p._id, { ...p, trashed: false }]));
-    for (const job of jobs ?? []) {
-      if (job.printerId && !byId.has(job.printerId._id)) {
-        byId.set(job.printerId._id, { ...job.printerId, trashed: printersLoaded });
-      }
-    }
-    return [...byId.values()];
-  }, [printers, printersLoaded, jobs]);
+  // ?includeTrashed=1 carries trashed printers explicitly (Codex #1184
+  // r8/r9/r12): their history rows remain queryable, and deriving them from
+  // the fetched jobs both raced the lookup and missed printers whose every
+  // job is older than the fetched window.
+  const printerOptions = useMemo(
+    () => printers.map((p) => ({ ...p, trashed: p._deletedAt != null })),
+    [printers],
+  );
 
   const visibleJobs = useMemo(() => {
     if (!jobs) return [];
