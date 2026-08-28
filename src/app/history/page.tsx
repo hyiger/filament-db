@@ -111,6 +111,10 @@ export default function HistoryPage() {
   // even though the mutable array now holds fewer than the limit.
   const [jobsTruncated, setJobsTruncated] = useState(false);
   const [printers, setPrinters] = useState<PickerPrinter[]>([]);
+  // "Trashed" is an inference from absence in /api/printers — valid only
+  // once that lookup actually SUCCEEDED, or a race / failed fetch would
+  // mislabel every active printer (Codex P2 #1184 r9).
+  const [printersLoaded, setPrintersLoaded] = useState(false);
   const [printerFilter, setPrinterFilter] = useState("");
   const [jobSearch, setJobSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -119,8 +123,11 @@ export default function HistoryPage() {
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/printers", { signal: ac.signal })
-      .then((r) => (r.ok ? r.json() : []))
-      .then(setPrinters)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
+      .then((list) => {
+        setPrinters(list);
+        setPrintersLoaded(true);
+      })
       .catch(() => {});
     return () => ac.abort();
   }, []);
@@ -153,11 +160,11 @@ export default function HistoryPage() {
     const byId = new Map(printers.map((p) => [p._id, { ...p, trashed: false }]));
     for (const job of jobs ?? []) {
       if (job.printerId && !byId.has(job.printerId._id)) {
-        byId.set(job.printerId._id, { ...job.printerId, trashed: true });
+        byId.set(job.printerId._id, { ...job.printerId, trashed: printersLoaded });
       }
     }
     return [...byId.values()];
-  }, [printers, jobs]);
+  }, [printers, printersLoaded, jobs]);
 
   const visibleJobs = useMemo(() => {
     if (!jobs) return [];

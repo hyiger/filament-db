@@ -1857,7 +1857,7 @@
   "history.jobs.empty": "Keine passenden Druckaufträge. Aufträge erscheinen hier nach dem Erfassen — über „Druckauftrag erfassen“ auf dem Dashboard oder POST /api/print-history.",
   "history.jobs.limitNote": "Es werden die letzten {limit} Aufträge angezeigt.",
   "history.delete.title": "Druckauftrag rückgängig machen?",
-  "history.delete.message": "„{label}“ löschen und {grams} g den Spulen gutschreiben? Das abgebuchte Gewicht wird auf jeder noch vorhandenen Spule wiederhergestellt — Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen.",
+  "history.delete.message": "„{label}“ löschen? Bis zu {grams} g werden den Spulen gutgeschrieben — begrenzt auf die Kapazität jeder Spule; Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen.",
   "history.delete.confirm": "Löschen und gutschreiben",
   "history.delete.button": "Löschen",
   "history.delete.done": "Druckauftrag gelöscht — abgebuchtes Gewicht den verbliebenen Spulen gutgeschrieben",
