@@ -350,16 +350,20 @@ export function isGeminiModelGoneError(status: number, body: string): boolean {
 }
 
 /** Ask ListModels for a replacement model; null on any failure. Follows
- *  nextPageToken (Codex P2 #1185 r4 — a usable flash model can sit on a
- *  later page), bounded to a handful of pages as a runaway guard. */
-const MAX_LIST_MODELS_PAGES = 5;
+ *  nextPageToken to the end (Codex P2 #1185 r4/r6): pageSize=1000 (the
+ *  API's maximum, default 50) makes one page virtually always sufficient,
+ *  and the generous page cap exists ONLY as a runaway guard against a
+ *  buggy/hostile server that returns a token forever — 50 pages x 1000
+ *  models is far beyond any real roster, so it never truncates a valid
+ *  catalog. */
+const MAX_LIST_MODELS_PAGES = 50;
 async function discoverGeminiModel(apiKey: string): Promise<string | null> {
   try {
     const models: GeminiModelInfo[] = [];
     let pageToken = "";
     for (let page = 0; page < MAX_LIST_MODELS_PAGES; page++) {
       const url =
-        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}` +
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=1000` +
         (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
       const res = await fetch(url);
       if (!res.ok) {
