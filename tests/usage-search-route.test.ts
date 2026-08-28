@@ -150,6 +150,30 @@ describe("GET /api/spools/usage-search (GH #1168)", () => {
     expect(body.limit).toBe(2);
   });
 
+  it("sanitizes pathological grams at the boundary (GH #1030/#1078 posture)", async () => {
+    await seed();
+    // Bypass route validation the way hybrid sync / snapshot restore can:
+    // a raw driver write straight into the ledger.
+    await Filament.collection.updateOne(
+      { name: "Ledger PLA" },
+      {
+        $push: {
+          "spools.0.usageHistory": {
+            date: new Date("2026-01-09T00:00:00Z"),
+            grams: Infinity,
+            jobLabel: "poison",
+            source: "manual",
+          },
+        },
+      },
+    );
+    const { body } = await run("?label=poison");
+    expect(body.entries).toHaveLength(1);
+    // Unsanitized, Infinity serializes to null and violates the documented
+    // numeric shape; safeGrams clamps it to 0.
+    expect(body.entries[0].grams).toBe(0);
+  });
+
   it("never leaks photoDataUrl bytes into the response (#1005 posture)", async () => {
     await seed();
     const { body } = await run();
