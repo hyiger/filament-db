@@ -240,16 +240,105 @@ const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
 
 /**
- * Gemini model used for TDS extraction (GH #916). The previous hard-coded
- * `gemini-2.0-flash` was permanently retired by Google on 2026-06-01, so every
- * extraction failed with a 429 that surfaced as a misleading "rate limit
- * exceeded". `gemini-2.5-flash` is the conservative, broadly-available
- * replacement. Google's guidance is to migrate to a 3.x model
- * (`gemini-3.1-flash` / `gemini-3.1-flash-lite`); this single constant makes
- * that a one-line bump once the target model is confirmed on the deployment's
- * API tier. Keep the docs model table (docs/usage.md) in sync when changing it.
+ * Default Gemini model for TDS extraction. This constant has now been
+ * retired out from under a shipped release TWICE — `gemini-2.0-flash` on
+ * 2026-06-01 (GH #916, surfaced as a misleading 429) and `gemini-2.5-flash`
+ * by 2026-08 (GH #1179, an explicit update-your-code error) — so the bump to
+ * Google's stated migration target (`gemini-3.1-flash`) comes with a
+ * SELF-HEALING fallback: when a call fails with the model-gone shape,
+ * `callGemini` asks the ListModels endpoint (already used for key
+ * validation) for a currently-served flash model, retries once, and caches
+ * the discovery for the process lifetime. A future retirement degrades to
+ * one extra round-trip instead of a broken feature. Keep the docs model
+ * table (docs/usage.md) in sync when changing the default.
  */
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-3.1-flash";
+
+/** Model discovered via ListModels after the default failed; process-lifetime
+ *  cache so healing costs one extra round-trip once, not per extraction. */
+let discoveredGeminiModel: string | null = null;
+
+/** Test hook: clear the process-lifetime discovery cache. */
+export function resetDiscoveredGeminiModel(): void {
+  discoveredGeminiModel = null;
+}
+
+export interface GeminiModelInfo {
+  name?: string;
+  supportedGenerationMethods?: string[];
+}
+
+/**
+ * Pick the best currently-served Gemini model for TDS extraction from a
+ * ListModels response: a text `generateContent` model, preferring the flash
+ * tier (the feature's free-tier cost posture), stable over preview/exp,
+ * higher version over lower, and plain flash over -lite/-8b variants.
+ * Returns null when nothing usable is listed.
+ */
+export function pickGeminiModel(models: GeminiModelInfo[]): string | null {
+  const candidates = models
+    .map((m) => ({
+      name: (m.name ?? "").replace(/^models\//, ""),
+      methods: m.supportedGenerationMethods,
+    }))
+    .filter(
+      (m) =>
+        m.name.startsWith("gemini-") &&
+        !/embed|tts|audio|image|live|veo/.test(m.name) &&
+        (m.methods === undefined || m.methods.includes("generateContent")),
+    )
+    .map((m) => {
+      const version = Number(/^gemini-(\d+(?:\.\d+)?)/.exec(m.name)?.[1] ?? 0);
+      return {
+        name: m.name,
+        version,
+        flash: m.name.includes("flash") ? 1 : 0,
+        stable: /preview|exp/.test(m.name) ? 0 : 1,
+      };
+    });
+  candidates.sort(
+    (a, b) =>
+      b.flash - a.flash ||
+      b.stable - a.stable ||
+      b.version - a.version ||
+      a.name.length - b.name.length ||
+      a.name.localeCompare(b.name),
+  );
+  return candidates[0]?.name ?? null;
+}
+
+/**
+ * Does this generateContent failure mean the MODEL is gone (retired /
+ * renamed / not served to this key) rather than a key, quota, or transient
+ * problem? 429 is explicitly excluded — rate limits retry elsewhere.
+ */
+export function isGeminiModelGoneError(status: number, body: string): boolean {
+  if (status === 404) return true;
+  if (status === 429) return false;
+  const b = body.toLowerCase();
+  return (
+    b.includes("model") &&
+    (b.includes("not found") ||
+      b.includes("deprecated") ||
+      b.includes("retired") ||
+      b.includes("no longer") ||
+      b.includes("not supported"))
+  );
+}
+
+/** Ask ListModels for a replacement model; null on any failure. */
+async function discoverGeminiModel(apiKey: string): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
+    );
+    if (!res.ok) return null;
+    const body = await res.json().catch(() => null);
+    return pickGeminiModel(body?.models ?? []);
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Retry a provider call with exponential backoff on rate-limit errors.
@@ -300,20 +389,45 @@ async function callGemini(
     });
   }
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts }],
-        generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
-      }),
-    },
-  );
+  const attempt = (model: string) =>
+    fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 2048 },
+        }),
+      },
+    );
+
+  let model = discoveredGeminiModel ?? GEMINI_MODEL;
+  let res = await attempt(model);
+  let errorBody = "";
+  if (!res.ok) {
+    errorBody = await res.text().catch(() => "");
+    // GH #1179: the hardcoded model has been retired twice (#916 first) —
+    // on the model-gone shape, discover a served flash model and retry once.
+    if (isGeminiModelGoneError(res.status, errorBody)) {
+      const replacement = await discoverGeminiModel(apiKey);
+      if (replacement && replacement !== model) {
+        model = replacement;
+        res = await attempt(model);
+        if (res.ok) {
+          discoveredGeminiModel = replacement;
+        } else {
+          errorBody = await res.text().catch(() => "");
+        }
+      } else if (!replacement) {
+        throw new Error(
+          `Gemini model "${model}" is no longer available for this API key, and no replacement Gemini flash model could be discovered. Update Filament DB, or check your key in Settings.`,
+        );
+      }
+    }
+  }
 
   if (!res.ok) {
-    const errorBody = await res.text().catch(() => "");
     if (res.status === 400 && errorBody.includes("API_KEY")) {
       throw new Error("Invalid Gemini API key. Check your key in Settings.");
     }
