@@ -254,13 +254,16 @@ const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
  */
 const GEMINI_MODEL = "gemini-3.1-flash";
 
-/** Model discovered via ListModels after the default failed; process-lifetime
- *  cache so healing costs one extra round-trip once, not per extraction. */
-let discoveredGeminiModel: string | null = null;
+/** Models discovered via ListModels after the default failed, keyed by API
+ *  key — discovery is key-dependent (each key sees its own model roster and
+ *  billing tier), and the POST route accepts a different key per request, so
+ *  a process-wide cache would hand key B whatever key A discovered
+ *  (Codex P2 #1185 r3). Module-private, in-memory only, never serialized. */
+const discoveredGeminiModels = new Map<string, string>();
 
 /** Test hook: clear the process-lifetime discovery cache. */
 export function resetDiscoveredGeminiModel(): void {
-  discoveredGeminiModel = null;
+  discoveredGeminiModels.clear();
 }
 
 export interface GeminiModelInfo {
@@ -404,7 +407,7 @@ async function callGemini(
       },
     );
 
-  let model = discoveredGeminiModel ?? GEMINI_MODEL;
+  let model = discoveredGeminiModels.get(apiKey) ?? GEMINI_MODEL;
   let res = await attempt(model);
   let errorBody = "";
   if (!res.ok) {
@@ -420,7 +423,7 @@ async function callGemini(
         // doomed default + discovery every backoff round (Codex P2 #1185).
         // A wrong cache self-corrects: a cached-but-gone model re-triggers
         // this same discovery on the next entry.
-        discoveredGeminiModel = replacement;
+        discoveredGeminiModels.set(apiKey, replacement);
         model = replacement;
         res = await attempt(model);
         if (!res.ok) {

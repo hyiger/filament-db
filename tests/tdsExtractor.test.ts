@@ -1358,6 +1358,51 @@ describe("callGemini self-healing (GH #1179)", () => {
     mod.resetDiscoveredGeminiModel();
   });
 
+  it("scopes the discovered model to the API key (Codex #1185 r3)", async () => {
+    const mod = await import("@/lib/tdsExtractor");
+    mod.resetDiscoveredGeminiModel();
+    const byKey: Record<string, string[]> = {};
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const u = String(url);
+      const key = /key=([^&]+)/.exec(u)?.[1] ?? "?";
+      (byKey[key] ??= []).push(u);
+      if (u.includes("gemini-3.1-flash:generateContent") && key === "key-a") {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          text: () => Promise.resolve("model gemini-3.1-flash is not found"),
+        });
+      }
+      if (u.includes("/models?key=")) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () =>
+            Promise.resolve({
+              models: [
+                { name: "models/gemini-9.9-flash", supportedGenerationMethods: ["generateContent"] },
+              ],
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve(SUCCESS_JSON),
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Key A heals onto the discovered model…
+    await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key-a");
+    expect(byKey["key-a"].some((u) => u.includes("gemini-9.9-flash:generateContent"))).toBe(true);
+    // …but key B starts from the DEFAULT, not key A's discovery.
+    await mod.extractFromTdsContent(Buffer.from("TDS"), "text/plain", "key-b");
+    expect(byKey["key-b"][0]).toContain("gemini-3.1-flash:generateContent");
+    expect(byKey["key-b"].some((u) => u.includes("/models?"))).toBe(false);
+    mod.resetDiscoveredGeminiModel();
+  });
+
   it("heals a retirement that masquerades as HTTP 429 (the #916 shape)", async () => {
     const mod = await import("@/lib/tdsExtractor");
     mod.resetDiscoveredGeminiModel();
