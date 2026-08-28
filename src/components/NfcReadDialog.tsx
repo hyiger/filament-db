@@ -97,10 +97,17 @@ export default function NfcReadDialog() {
     router.push(`/filaments/${id}`);
   };
 
-  const handleCreateNew = () => {
-    if (!data) return;
+  /** GH #1177: ONE param builder for both create paths — Create New and
+   *  Create-as-variant forward the SAME full tag field set. The variant
+   *  path used to send only name/color/secondaryColors because the
+   *  /filaments/new parent-loader replaced initialData wholesale and
+   *  discarded everything anyway (Codex #706 r9); that loader now composes
+   *  the tag prefill with the parent (and prunes parent-equal values so
+   *  GH #106 inheritance survives), so the full set is worth carrying. */
+  const buildTagParams = () => {
     const params = new URLSearchParams();
     params.set("from_nfc", "1");
+    if (!data) return params;
     if (data.materialName) params.set("name", data.materialName);
     if (data.brandName) params.set("vendor", data.brandName);
     if (data.materialType) params.set("type", data.materialType);
@@ -123,6 +130,24 @@ export default function NfcReadDialog() {
     if (data.nozzleTempMin != null) params.set("nozzleMin", String(data.nozzleTempMin));
     if (data.bedTemp != null) params.set("bed", String(data.bedTemp));
     if (data.bedTempMin != null) params.set("bedMin", String(data.bedTempMin));
+    // OpenTag3D keeps the RECOMMENDED temps in aux while nozzleTemp/bedTemp
+    // carry the range maxima — the canonical decodedTagToFilamentPayload
+    // prefers the recommended values for the everyday temps, so the URL
+    // flow must carry them too (Codex P2 #1183 r9).
+    const auxRec = (key: string): number | null => {
+      const v = Number(data.aux?.[key]);
+      return Number.isFinite(v) ? v : null;
+    };
+    const nozzleRec = auxRec("opentag3d_recommended_print_temp_c");
+    const bedRec = auxRec("opentag3d_recommended_bed_temp_c");
+    if (nozzleRec != null) params.set("nozzleRec", String(nozzleRec));
+    if (bedRec != null) params.set("bedRec", String(bedRec));
+    // Codex P2 #1183 r10: the canonical decodedTagToFilamentPayload also
+    // preserves preheat (temperatures.standby), drying, and HueForge TD.
+    if (data.preheatTemp != null) params.set("preheat", String(data.preheatTemp));
+    if (data.dryingTemperature != null) params.set("dryingTemp", String(data.dryingTemperature));
+    if (data.dryingTime != null) params.set("dryingTime", String(data.dryingTime));
+    if (data.transmissionDistance != null) params.set("td", String(data.transmissionDistance));
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
     // Actual remaining net + tare so the new-filament form can seed a spool
@@ -133,31 +158,20 @@ export default function NfcReadDialog() {
     if (data.shoreHardnessA != null) params.set("shoreA", String(data.shoreHardnessA));
     if (data.shoreHardnessD != null) params.set("shoreD", String(data.shoreHardnessD));
     if (data.tags && data.tags.length > 0) params.set("optTags", data.tags.join(","));
+    return params;
+  };
+
+  const handleCreateNew = () => {
+    if (!data) return;
+    const params = buildTagParams();
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };
 
   const handleCreateAsVariant = (parentId: string) => {
     if (!data) return;
-    const params = new URLSearchParams();
-    params.set("from_nfc", "1");
+    const params = buildTagParams();
     params.set("parentId", parentId);
-    if (data.materialName) params.set("name", data.materialName);
-    if (data.color) params.set("color", data.color);
-    // GH #477: multi-color tags carry up to 5 additional colors in spec
-    // keys 20–24. Join them comma-separated; FilamentForm parses the
-    // param on mount and pre-populates the secondary-color slots.
-    if (data.secondaryColors && data.secondaryColors.length > 0) {
-      params.set("secondaryColors", data.secondaryColors.join(","));
-    }
-    // NOTE: the tag's actual remaining weight + tare are deliberately NOT
-    // carried here. A variant-from-tag goes through both the from_nfc effect
-    // AND the ?parentId= parent-loader on /filaments/new, and the latter
-    // currently replaces initialData wholesale — so any weights set here are
-    // discarded before the form renders (the same pre-existing race already
-    // drops the name/color above). Wiring spool weights through that path
-    // correctly is tracked as a separate follow-up; until then we don't pass
-    // values that would be silently lost (Codex #706 r9).
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };
