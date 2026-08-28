@@ -1860,7 +1860,7 @@
   "history.delete.message": "„{label}“ löschen? Bis zu {grams} g werden den Spulen gutgeschrieben — begrenzt auf die Kapazität jeder Spule; Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen.",
   "history.delete.confirm": "Löschen und gutschreiben",
   "history.delete.button": "Löschen",
-  "history.delete.done": "Druckauftrag gelöscht — die Abbuchung wurde den verbliebenen Spulen gutgeschrieben, bis zur Kapazität jeder Spule",
+  "history.delete.done": "Druckauftrag gelöscht",
   "history.delete.failed": "Druckauftrag konnte nicht gelöscht werden",
   "history.delete.refundNote": "Beim Löschen eines Auftrags werden die Gramm den belasteten Spulen gutgeschrieben — sofern diese noch vorhanden sind, bis zur Kapazität jeder Spule.",
   "history.filamentGone": "Filament entfernt",
