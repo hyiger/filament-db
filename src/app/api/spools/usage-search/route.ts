@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { escapeRegex } from "@/lib/matchFilament";
+import { safeGrams } from "@/lib/capUsageHistory";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
@@ -114,7 +115,12 @@ export async function GET(request: NextRequest) {
       },
     ]);
 
-    return NextResponse.json({ entries: rows, limit });
+    // Sanitize at the boundary (the GH #1030/#1078 posture): a snapshot-
+    // restored or raw-driver-synced ledger can hold Infinity (which JSON
+    // serializes to null, breaking the documented numeric shape), negative,
+    // or oversized values — clamp through safeGrams like Analytics does.
+    const entries = rows.map((row) => ({ ...row, grams: safeGrams(row.grams) }));
+    return NextResponse.json({ entries, limit });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to search spool usage");
   }
