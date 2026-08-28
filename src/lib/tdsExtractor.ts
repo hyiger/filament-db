@@ -310,11 +310,13 @@ export function pickGeminiModel(models: GeminiModelInfo[]): string | null {
 /**
  * Does this generateContent failure mean the MODEL is gone (retired /
  * renamed / not served to this key) rather than a key, quota, or transient
- * problem? 429 is explicitly excluded — rate limits retry elsewhere.
+ * problem? Deliberately NOT status-gated beyond 404: the #916 retirement
+ * surfaced as HTTP 429, so even a "rate limit" counts as model-gone when
+ * its body carries an explicit marker — a plain quota 429 has none and
+ * keeps its own retry/backoff path.
  */
 export function isGeminiModelGoneError(status: number, body: string): boolean {
   if (status === 404) return true;
-  if (status === 429) return false;
   const b = body.toLowerCase();
   return (
     b.includes("model") &&
@@ -412,11 +414,16 @@ async function callGemini(
     if (isGeminiModelGoneError(res.status, errorBody)) {
       const replacement = await discoverGeminiModel(apiKey);
       if (replacement && replacement !== model) {
+        // Cache at DISCOVERY time, not first success: if the replacement's
+        // first call is rate-limited, withRetry re-enters callGemini — which
+        // must go straight to the replacement rather than repeating the
+        // doomed default + discovery every backoff round (Codex P2 #1185).
+        // A wrong cache self-corrects: a cached-but-gone model re-triggers
+        // this same discovery on the next entry.
+        discoveredGeminiModel = replacement;
         model = replacement;
         res = await attempt(model);
-        if (res.ok) {
-          discoveredGeminiModel = replacement;
-        } else {
+        if (!res.ok) {
           errorBody = await res.text().catch(() => "");
         }
       } else if (!replacement) {
