@@ -8,6 +8,7 @@
  */
 
 import { assertExternalUrl, ssrfDispatcher, readBodyCapped } from "@/lib/externalUrlGuard";
+import { createHash } from "node:crypto";
 
 export type AiProvider = "gemini" | "claude" | "openai";
 
@@ -254,12 +255,29 @@ const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
  */
 const GEMINI_MODEL = "gemini-3.1-flash";
 
-/** Models discovered via ListModels after the default failed, keyed by API
- *  key — discovery is key-dependent (each key sees its own model roster and
- *  billing tier), and the POST route accepts a different key per request, so
- *  a process-wide cache would hand key B whatever key A discovered
- *  (Codex P2 #1185 r3). Module-private, in-memory only, never serialized. */
+/** Models discovered via ListModels after the default failed, keyed by the
+ *  SHA-256 of the API key — discovery is key-dependent (each key sees its
+ *  own model roster and billing tier) and the POST route accepts a
+ *  different key per request, so a process-wide cache would hand key B
+ *  whatever key A discovered (Codex P2 #1185 r3). Digest-keyed and
+ *  size-bounded (r5) so a long-lived multi-user deployment neither retains
+ *  caller secrets in plaintext for heap dumps nor grows without bound;
+ *  insertion-order eviction (Map preserves it) drops the oldest entry.
+ *  Module-private, in-memory only, never serialized. */
 const discoveredGeminiModels = new Map<string, string>();
+const MAX_DISCOVERY_CACHE_ENTRIES = 32;
+
+function apiKeyDigest(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+function cacheDiscoveredModel(digest: string, model: string): void {
+  if (!discoveredGeminiModels.has(digest) && discoveredGeminiModels.size >= MAX_DISCOVERY_CACHE_ENTRIES) {
+    const oldest = discoveredGeminiModels.keys().next().value;
+    if (oldest !== undefined) discoveredGeminiModels.delete(oldest);
+  }
+  discoveredGeminiModels.set(digest, model);
+}
 
 /** Test hook: clear the process-lifetime discovery cache. */
 export function resetDiscoveredGeminiModel(): void {
@@ -344,7 +362,12 @@ async function discoverGeminiModel(apiKey: string): Promise<string | null> {
         `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}` +
         (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
       const res = await fetch(url);
-      if (!res.ok) break;
+      if (!res.ok) {
+        // GH #955 class: drain the error body so the undici connection is
+        // released — repeated discovery failures must not exhaust the pool.
+        await res.text().catch(() => "");
+        break;
+      }
       const body = await res.json().catch(() => null);
       if (!body) break;
       models.push(...(body.models ?? []));
@@ -419,7 +442,8 @@ async function callGemini(
       },
     );
 
-  let model = discoveredGeminiModels.get(apiKey) ?? GEMINI_MODEL;
+  const keyDigest = apiKeyDigest(apiKey);
+  let model = discoveredGeminiModels.get(keyDigest) ?? GEMINI_MODEL;
   let res = await attempt(model);
   let errorBody = "";
   if (!res.ok) {
@@ -435,7 +459,7 @@ async function callGemini(
         // doomed default + discovery every backoff round (Codex P2 #1185).
         // A wrong cache self-corrects: a cached-but-gone model re-triggers
         // this same discovery on the next entry.
-        discoveredGeminiModels.set(apiKey, replacement);
+        cacheDiscoveredModel(keyDigest, replacement);
         model = replacement;
         res = await attempt(model);
         if (!res.ok) {
