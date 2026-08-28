@@ -51,6 +51,7 @@
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Remove a spool from a filament |
 | `GET` | `/api/spools/:spoolId` | Resolve a spool subdoc id to its (inheritance-resolved) owning filament + the spool — powers the mobile scanner's `?spool=<id>` deep links (v1.43) |
 | `GET` | `/api/spools/next-label` | Suggest the next numeric roll number for a spool label (`{ next, max }`) |
+| `GET` | `/api/spools/usage-search` | Search every spool's usage ledger by entry label / source — powers the `/history` page's ledger tab (#1168) |
 
 `POST /api/filaments/:id/spools`, `PUT /api/filaments/:id/spools/:spoolId` and `DELETE /api/filaments/:id/spools/:spoolId` — plus `POST /api/filaments/:id/spools/:spoolId/usage` and `POST .../dry-cycles` — accept an optional `?shape=spool` query parameter that slims the response down to the affected spool. See *Spool mutation response shape* below.
 
@@ -614,6 +615,33 @@ Returns the next numeric roll number to suggest for a spool label — what the A
 The scan deliberately filters **nothing**: trashed filaments, purged tombstones and retired spools all contribute. Roll numbers are physical and permanent — a number written on a retired spool is still on the shelf, and handing out a trashed filament's number would collide the moment it's restored. Skipping past a number the user thinks is free is the safe direction.
 
 Suggestion-only semantics: nothing is reserved or assigned, the field stays editable, and two concurrent readers can receive the same value.
+
+### GET /api/spools/usage-search
+
+Cross-spool usage-ledger search (v1.79, #1168) — unwinds every active filament's `spools[].usageHistory` into flat rows, newest first. Manual usage entries (`source: "manual"`, `jobId: null`) exist **only** inside spool subdocuments, so this is the one surface where a manual entry's `jobLabel` can be recalled across spools; it powers the `/history` page's "Spool usage ledger" tab.
+
+Query parameters:
+
+- `label` — case-insensitive substring of the entry's `jobLabel`. Regex metacharacters are treated literally; capped at 128 characters (the GH #513 bound — this is a regex-compiling GET reachable without the CSRF guard).
+- `source` — `manual | slicer | job | nfc`. The UI defaults to `manual`: `job`/`slicer` entries are projections of PrintHistory rows (see the jobs-vs-manual counting separation below), so a merged default would double-show every job next to the Print jobs tab.
+- `limit` — 1..1000, default 100, applied after date-desc ordering.
+
+```json
+{
+  "entries": [
+    {
+      "filamentId": "…", "filamentName": "Prusament PLA", "vendor": "Prusa Research",
+      "type": "PLA", "color": "#ff0000",
+      "spoolId": "…", "spoolLabel": "42",
+      "date": "2026-01-07T00:00:00.000Z", "grams": 30,
+      "jobLabel": "Calibration cube", "source": "job"
+    }
+  ],
+  "limit": 100
+}
+```
+
+Soft-deleted filaments are excluded, and the aggregation's projection never carries `photoDataUrl`/`dryCycles` (the #1005 posture). Completeness caveat: each spool's ledger is capped at 1,000 entries with manual/nfc entries evicted first (`src/lib/capUsageHistory.ts`), so very old entries may be absent — the UI footnotes this.
 
 ---
 
