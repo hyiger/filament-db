@@ -14,17 +14,23 @@
 # avoid the required-check + path-filter "pending forever" deadlock.
 name: Mobile
 
+# scripts/audit-gate.mjs is in BOTH filters because the audit step below runs
+# it: the root gate calls the same script with NO flags, so nothing else in CI
+# exercises the --dir/--omit-dev path this job depends on. Without it, a PR that
+# broke that path would merge with this job never running.
 on:
   push:
     branches: [main]
     paths:
       - "packages/mobile/**"
       - ".github/workflows/mobile.yml"
+      - "scripts/audit-gate.mjs"
   pull_request:
     branches: [main]
     paths:
       - "packages/mobile/**"
       - ".github/workflows/mobile.yml"
+      - "scripts/audit-gate.mjs"
 
 jobs:
   mobile:
@@ -53,9 +59,14 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      # Production-dependency audit. Blocking: the uuid<11.1.1 advisories (GH
-      # #764) are resolved by the `overrides` block in packages/mobile/package.json
-      # shipped in the same PR, so this passes today. If a future Expo bump
-      # re-introduces a transitive advisory, this fails the PR — the intended gate.
+      # Production-dependency audit. Blocking: a new transitive advisory fails
+      # the PR — the intended gate. Runs through the shared wrapper (the same
+      # one the root gate uses) rather than a bare `npm audit`, because npm
+      # audit has no exception mechanism and an advisory with NO PATCHED
+      # RELEASE would otherwise red every run forever with no way to record
+      # that it was reviewed. Exceptions live in packages/mobile's OWN
+      # .audit-allowlist.json — its dependency tree and its exposure analysis
+      # are its own — and each still requires a justification + reviewBy.
       - name: Security audit (production deps)
-        run: npm audit --audit-level=moderate --omit=dev
+        working-directory: .
+        run: node scripts/audit-gate.mjs --dir packages/mobile --omit-dev

@@ -1,0 +1,19 @@
+{
+  "$comment": "Advisories the mobile CI audit gate (scripts/audit-gate.mjs --dir packages/mobile --omit-dev, run from .github/workflows/mobile.yml) tolerates. Same rules as the root .audit-allowlist.json: each entry MUST carry a justification and a reviewBy date; the gate warns (does not fail) past reviewBy so releases can't be broken by a calendar. Remove an entry the moment a fix ships. This file is separate from the root one because packages/mobile vendors its own package-lock.json and its exposure analysis is its own.",
+  "allow": [
+    {
+      "id": "GHSA-w3rx-r6r6-pgpr",
+      "package": "image-size",
+      "title": "image-size ICNS parser allows denial of service through an infinite loop",
+      "justification": "NO PATCHED RELEASE EXISTS: the advisory range is <=2.0.2 with first_patched_version null, and 2.0.2 is the newest published version (dist-tags.latest), so neither a bump nor an override can resolve it. The vulnerable copy is image-size@1.2.1, pinned transitively by react-native@0.85.3 -> @react-native/community-cli-plugin -> metro@0.84.4; it is reachable only through that chain, never imported by app code (no reference anywhere in packages/mobile/src). Exposure: NIL at runtime. metro is the React Native BUNDLER — it runs on a developer machine or the EAS builder, not on device; the shipped app executes a pre-built JS bundle that contains no metro and no image-size. It appears under --omit=dev only because react-native declares community-cli-plugin as a production dependency, a packaging artifact rather than shipped runtime code. The DoS requires parsing a malformed ICNS image, and the only images metro reads are the first-party assets committed in this repo, so the worst case is a hung local or EAS build triggered by an asset we authored. Re-check when metro drops image-size or image-size ships a fixed release.",
+      "reviewBy": "2026-11-01"
+    },
+    {
+      "id": "GHSA-5p2g-fcmc-qvqq",
+      "package": "image-size",
+      "title": "image-size JXL and HEIF parsers allow denial of service through infinite loops",
+      "justification": "Same unpatched image-size@1.2.1 via react-native -> @react-native/community-cli-plugin -> metro, and the same build-time-only exposure as GHSA-w3rx-r6r6-pgpr (no patched release below or above 2.0.2; metro never ships to the device; only first-party committed assets are parsed). The affected parsers are JXL and HEIF, neither of which is an asset format used by this app.",
+      "reviewBy": "2026-11-01"
+    }
+  ]
+}

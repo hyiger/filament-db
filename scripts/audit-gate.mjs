@@ -10,14 +10,18 @@
  * a calendar).
  *
  * Used by BOTH .github/workflows/test.yml and ci-gate.yml (the two copies of
- * the gate that must stay in sync — see the cross-reference comments there).
- * Run locally: `node scripts/audit-gate.mjs`.
+ * the gate that must stay in sync — see the cross-reference comments there),
+ * and by mobile.yml for packages/mobile, which vendors its own lockfile and
+ * therefore its own allowlist:
+ *
+ *   node scripts/audit-gate.mjs                                # repo root
+ *   node scripts/audit-gate.mjs --dir packages/mobile --omit-dev
  *
  * The pure helpers are exported for tests (tests/auditGate.test.ts).
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SEVERITIES = ["moderate", "high", "critical"];
@@ -49,13 +53,15 @@ export function allowlistKey(id, pkg) {
  * genuinely redundant double entry fails closed with a message naming it,
  * consistent with the rest of this validation.
  *
- * Returns the list of validation errors (empty = valid).
+ * Returns the list of validation errors (empty = valid). `label` names the
+ * file in each message — the audited package's own path when --dir is used,
+ * so a mobile failure doesn't point at the root allowlist.
  */
-export function validateAllowlistEntries(allowlist) {
+export function validateAllowlistEntries(allowlist, label = ".audit-allowlist.json") {
   const entryErrors = [];
   const seenPairs = new Set();
   for (const [i, a] of (Array.isArray(allowlist.allow) ? allowlist.allow : []).entries()) {
-    const where = `.audit-allowlist.json allow[${i}]`;
+    const where = `${label} allow[${i}]`;
     if (typeof a.id !== "string" || !/^GHSA-[a-z0-9-]+$/.test(a.id))
       entryErrors.push(`${where}: missing/invalid GHSA id`);
     if (typeof a.package !== "string" || a.package.trim() === "")
@@ -74,8 +80,40 @@ export function validateAllowlistEntries(allowlist) {
     }
   }
   if (!Array.isArray(allowlist.allow))
-    entryErrors.push(".audit-allowlist.json: `allow` must be an array");
+    entryErrors.push(`${label}: \`allow\` must be an array`);
   return entryErrors;
+}
+
+/**
+ * Parse the CLI flags.
+ *
+ *   --dir <path>  audit this package directory instead of the repo root,
+ *                 reading ITS .audit-allowlist.json (resolved against cwd)
+ *   --omit-dev    pass --omit=dev to npm audit (production deps only)
+ *
+ * Defaults reproduce the historical invocation exactly — no flags audits the
+ * repo root against the root allowlist, independent of cwd — so the two
+ * root-gate copies are unaffected.
+ *
+ * Anything unrecognized or malformed THROWS instead of being ignored: a gate
+ * that silently audited the wrong tree (or the whole dev tree) because a flag
+ * was typo'd would still exit 0 while proving nothing.
+ */
+export function parseAuditGateArgs(argv) {
+  const opts = { dir: null, omitDev: false };
+  const setDir = (value) => {
+    if (typeof value !== "string" || value === "" || value.startsWith("--"))
+      throw new Error("--dir requires a directory path");
+    opts.dir = value;
+  };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--omit-dev") opts.omitDev = true;
+    else if (arg === "--dir") setDir(argv[++i]);
+    else if (arg.startsWith("--dir=")) setDir(arg.slice("--dir=".length));
+    else throw new Error(`unknown argument: ${arg}`);
+  }
+  return opts;
 }
 
 /** Build the exception lookup, keyed on the (GHSA id, package) pair. */
@@ -120,11 +158,36 @@ export function classifyAdvisories(vulnerabilities, allowed) {
 function main() {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
-  const allowlist = JSON.parse(readFileSync(join(root, ".audit-allowlist.json"), "utf8"));
+  let args;
+  try {
+    args = parseAuditGateArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(`audit-gate: ${err.message}`);
+    console.error("usage: node scripts/audit-gate.mjs [--dir <package-dir>] [--omit-dev]");
+    process.exit(1);
+  }
 
-  const entryErrors = validateAllowlistEntries(allowlist);
+  // The audited tree and its allowlist travel together: a package that vendors
+  // its own lockfile owns its own exceptions, and its justifications describe
+  // ITS exposure. Never let one tree be audited against another's allowlist.
+  const target = args.dir ? resolve(process.cwd(), args.dir) : root;
+  const allowlistPath = join(target, ".audit-allowlist.json");
+  // Repo-relative when it is inside the repo, absolute otherwise — a label
+  // like "../../../../tmp/.audit-allowlist.json" helps nobody.
+  const relLabel = relative(root, allowlistPath);
+  const allowlistLabel = relLabel && !relLabel.startsWith("..") ? relLabel : allowlistPath;
+
+  let allowlist;
+  try {
+    allowlist = JSON.parse(readFileSync(allowlistPath, "utf8"));
+  } catch (err) {
+    console.error(`Could not read ${allowlistLabel} — failing closed: ${err.message}`);
+    process.exit(1);
+  }
+
+  const entryErrors = validateAllowlistEntries(allowlist, allowlistLabel);
   if (entryErrors.length > 0) {
-    console.error("Audit allowlist is malformed — failing closed:");
+    console.error(`${allowlistLabel} is malformed — failing closed:`);
     for (const e of entryErrors) console.error("  " + e);
     process.exit(1);
   }
@@ -133,8 +196,10 @@ function main() {
   // npm audit exits non-zero when it finds anything — capture stdout regardless.
   let raw;
   try {
-    raw = execFileSync("npm", ["audit", "--json", "--audit-level=moderate"], {
-      cwd: root,
+    const npmArgs = ["audit", "--json", "--audit-level=moderate"];
+    if (args.omitDev) npmArgs.push("--omit=dev");
+    raw = execFileSync("npm", npmArgs, {
+      cwd: target,
       encoding: "utf8",
       maxBuffer: 64 * 1024 * 1024,
     });
@@ -181,13 +246,13 @@ function main() {
     console.warn(`ALLOWLISTED: ${label}`);
     if (entry.reviewBy && new Date(entry.reviewBy) < new Date()) {
       console.warn(
-        `  ⚠ past its reviewBy (${entry.reviewBy}) — re-check upstream for a fix and update .audit-allowlist.json`,
+        `  ⚠ past its reviewBy (${entry.reviewBy}) — re-check upstream for a fix and update ${allowlistLabel}`,
       );
     }
   }
 
   if (offenders.length > 0) {
-    console.error("\nAudit gate FAILED — advisories not in .audit-allowlist.json:");
+    console.error(`\nAudit gate FAILED — advisories not in ${allowlistLabel}:`);
     for (const o of offenders) console.error("  " + o);
     process.exit(1);
   }

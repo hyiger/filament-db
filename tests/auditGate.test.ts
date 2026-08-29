@@ -1,11 +1,14 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-// The audit gate ships as a CLI used by ci-gate.yml + test.yml; import the
-// pure helpers directly (the .mjs guards its CLI entry behind an import.meta
-// check, mirroring scripts/merge-mac-latest-yml.mjs).
+// The audit gate ships as a CLI used by ci-gate.yml + test.yml (root) and
+// mobile.yml (packages/mobile); import the pure helpers directly (the .mjs
+// guards its CLI entry behind an import.meta check, mirroring
+// scripts/merge-mac-latest-yml.mjs).
 import {
   allowlistKey,
   buildAllowlistMap,
   classifyAdvisories,
+  parseAuditGateArgs,
   validateAllowlistEntries,
 } from "../scripts/audit-gate.mjs";
 
@@ -184,5 +187,48 @@ describe("audit-gate allowlistKey", () => {
     expect(allowlistKey(GHSA_A, "pkg with spaces")).toBe(`${GHSA_A} pkg with spaces`);
     expect(allowlistKey(GHSA_A, "pkg-a")).not.toBe(allowlistKey(GHSA_A, "pkg-b"));
     expect(allowlistKey(GHSA_A, "pkg-a")).not.toBe(allowlistKey(GHSA_B, "pkg-a"));
+  });
+});
+
+describe("audit-gate parseAuditGateArgs", () => {
+  it("defaults to the repo root and the full dependency tree", () => {
+    expect(parseAuditGateArgs([])).toEqual({ dir: null, omitDev: false });
+  });
+
+  it("accepts --dir in both spellings, plus --omit-dev", () => {
+    expect(parseAuditGateArgs(["--dir", "packages/mobile", "--omit-dev"])).toEqual({
+      dir: "packages/mobile",
+      omitDev: true,
+    });
+    expect(parseAuditGateArgs(["--dir=packages/mobile"])).toEqual({
+      dir: "packages/mobile",
+      omitDev: false,
+    });
+  });
+
+  // A gate that shrugged off a typo'd flag would audit the WRONG tree (or the
+  // whole dev tree) and still exit 0 — proving nothing while looking green.
+  it("throws on an unknown flag rather than ignoring it", () => {
+    expect(() => parseAuditGateArgs(["--omit-dev-typo"])).toThrow(/unknown argument/);
+    expect(() => parseAuditGateArgs(["packages/mobile"])).toThrow(/unknown argument/);
+  });
+
+  it("throws when --dir has no value, including when the next token is a flag", () => {
+    expect(() => parseAuditGateArgs(["--dir"])).toThrow(/--dir requires/);
+    expect(() => parseAuditGateArgs(["--dir", "--omit-dev"])).toThrow(/--dir requires/);
+    expect(() => parseAuditGateArgs(["--dir="])).toThrow(/--dir requires/);
+  });
+});
+
+describe("the committed allowlists", () => {
+  // Both files are validated at gate time, but the mobile gate is path-filtered
+  // and does NOT run on most PRs — so a malformed mobile allowlist would sit
+  // undetected until someone touched packages/mobile. This suite always runs.
+  it.each([
+    [".audit-allowlist.json"],
+    ["packages/mobile/.audit-allowlist.json"],
+  ])("%s passes the gate's own validation", (path) => {
+    const allowlist = JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"));
+    expect(validateAllowlistEntries(allowlist, path)).toEqual([]);
   });
 });
