@@ -14,17 +14,23 @@
 # avoid the required-check + path-filter "pending forever" deadlock.
 name: Mobile
 
+# scripts/audit-gate.mjs is in BOTH filters because the audit step below runs
+# it: the root gate calls the same script with NO flags, so nothing else in CI
+# exercises the --dir/--omit-dev path this job depends on. Without it, a PR that
+# broke that path would merge with this job never running.
 on:
   push:
     branches: [main]
     paths:
       - "packages/mobile/**"
       - ".github/workflows/mobile.yml"
+      - "scripts/audit-gate.mjs"
   pull_request:
     branches: [main]
     paths:
       - "packages/mobile/**"
       - ".github/workflows/mobile.yml"
+      - "scripts/audit-gate.mjs"
 
 jobs:
   mobile:
