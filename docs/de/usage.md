@@ -804,10 +804,13 @@ Diese Schreibvorgänge laufen in einer MongoDB-Transaktion, wo das Deployment es
 
 Die **Verlauf**-Seite unter `/history` (in der Top-Navigation zwischen Analytics und Share) durchstöbert alles, was die obigen Ledger aufzeichnen, in zwei bewusst getrennten Tabs:
 
-- **Druckaufträge** — die `PrintHistory`-Datensätze: Suche nach Auftragsbezeichnung, Filter nach Drucker (auch Drucker im Papierkorb, deren Aufträge erhalten bleiben), ein Auftrag lässt sich zu seiner Pro-Filament-Aufschlüsselung mit Deep-Links zu jedem Filament aufklappen, und **Löschen** macht den Auftrag mit Gutschrift rückgängig — die abgebuchten Gramm werden den belasteten Spulen gutgeschrieben, bis zur Kapazität jeder Spule (Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen).
+- **Druckaufträge** — die `PrintHistory`-Datensätze: Suche nach Auftragsbezeichnung *innerhalb des geladenen Ausschnitts* (siehe Hinweis unten), Filter nach Drucker (auch Drucker im Papierkorb, deren Aufträge erhalten bleiben), ein Auftrag lässt sich zu seiner Pro-Filament-Aufschlüsselung mit Deep-Links zu jedem Filament aufklappen, und **Löschen** macht den Auftrag mit Gutschrift rückgängig — die abgebuchten Gramm werden den belasteten Spulen gutgeschrieben, bis zur Kapazität jeder Spule (Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen).
 - **Spulennutzungs-Journal** — eine spulenübergreifende Suche über die `usageHistory`-Einträge aller Spulen (getragen von `GET /api/spools/usage-search`): Suche nach Eintrags-Bezeichnung, Filter nach Quelle (`manual`, `slicer`, `job`, `nfc`). Standard ist **manual** — die Einträge, die nirgendwo sonst existieren —, denn auftrags- und slicer-getaggte Einträge sind Projektionen der bereits im Druckaufträge-Tab gezeigten PrintHistory-Zeilen; eine zusammengelegte Liste würde jeden Druck doppelt zeigen. Das ist die erste Oberfläche, auf der sich die Auftragsbezeichnung eines *manuellen* Eintrags spulenübergreifend wiederfinden lässt.
 
-Vollständigkeits-Hinweis (als Fußnote auf der Seite): Jede Spule behält höchstens 1.000 Nutzungseinträge, wobei die ältesten manuellen Einträge zuerst entfernt werden — sehr alte Einträge können im Journal-Tab daher fehlen.
+Vollständigkeits-Hinweise, beide auch auf der Seite selbst ausgewiesen:
+
+- **Druckaufträge** lädt nur die neuesten 200 Aufträge („Es werden die letzten 200 Aufträge angezeigt." erscheint, sobald dieses Limit erreicht ist), und die Suche nach Bezeichnung filtert *diesen* Ausschnitt, statt den Server abzufragen — ein passender älterer Auftrag taucht daher nicht auf. Der Drucker-Filter läuft dagegen serverseitig: Die Einschränkung auf den Drucker, der den Auftrag ausgeführt hat, fragt neu ab und holt dessen neueste 200 in Reichweite.
+- **Spulennutzungs-Journal** ist durch die Speicherung begrenzt: Jede Spule behält höchstens 1.000 Nutzungseinträge, wobei die ältesten manuellen Einträge zuerst entfernt werden — sehr alte Einträge können daher fehlen.
 
 ## Verbrauchsanalyse *(v1.11)*
 

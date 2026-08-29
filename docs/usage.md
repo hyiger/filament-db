@@ -789,10 +789,13 @@ These writes run inside a MongoDB transaction when the deployment supports it (A
 
 The **History** page at `/history` (in the top nav, between Analytics and Share) browses everything the ledgers above record, in two deliberately separate tabs:
 
-- **Print jobs** — the `PrintHistory` records: search by job label, filter by printer (including trashed printers whose jobs remain), expand a job for its per-filament breakdown with deep links to each filament, and **Delete** a job with refund — the debited grams are returned to the spools the job drew from, up to each spool's capacity (grams debited from a since-deleted filament or spool stay deducted).
+- **Print jobs** — the `PrintHistory` records: search by job label *within the loaded window* (see the caveat below), filter by printer (including trashed printers whose jobs remain), expand a job for its per-filament breakdown with deep links to each filament, and **Delete** a job with refund — the debited grams are returned to the spools the job drew from, up to each spool's capacity (grams debited from a since-deleted filament or spool stay deducted).
 - **Spool usage ledger** — a cross-spool search over every spool's `usageHistory` entries (backed by `GET /api/spools/usage-search`): search by entry label, filter by source (`manual`, `slicer`, `job`, `nfc`). It defaults to **manual** entries — the ones that exist nowhere else — because job- and slicer-tagged entries are projections of PrintHistory rows already shown on the Print jobs tab; a merged list would double-show every print. This is the first surface where a *manual* entry's job label can be recalled across spools.
 
-Completeness caveat (footnoted on the page): each spool keeps at most 1,000 usage entries, with the oldest manual entries dropped first, so very old entries may be absent from the ledger tab.
+Completeness caveats, both surfaced on the page itself:
+
+- **Print jobs** loads only the newest 200 jobs ("Showing the most recent 200 jobs." appears once that limit is hit), and the label search filters *that* window rather than querying the server — so a matching older job won't appear. The printer filter *is* server-side, so narrowing to the printer that ran the job re-queries and brings its newest 200 into reach.
+- **Spool usage ledger** is bounded by storage: each spool keeps at most 1,000 usage entries, with the oldest manual entries dropped first, so very old entries may be absent.
 
 ## Usage Analytics *(v1.11)*
 
