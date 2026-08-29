@@ -114,7 +114,9 @@ git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
-Pushing the tag is the only manual step — the workflow itself creates the GitHub release (as a draft that auto-publishes when the asset uploads finish), so don't run `gh release create` first: that would publish an asset-less release ahead of the builds. To attach release notes afterwards:
+Pushing the tag is the only manual step — the workflow itself creates the GitHub release, so don't run `gh release create` first: that would publish an asset-less release ahead of the builds.
+
+**The release is public from the first upload, not when the last one lands.** The upload steps use `softprops/action-gh-release@v2` without `draft: true` and nothing publishes it later, so whichever matrix job finishes first creates the release and the remaining platforms' installers appear as their jobs complete. During that window the release is visible with only some assets — and on macOS the multi-arch `latest-mac.yml` arrives later still, from the separate `merge-mac-metadata` job. So treat the **workflow run**, not the release-created notification, as the signal that a release is done. To attach release notes afterwards:
 
 ```bash
 gh release edit v1.0.0 --notes-file release-notes.md
