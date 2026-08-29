@@ -78,8 +78,14 @@ the second colour arrives.
 ### 3. Gather the values, in strict source order
 
 **Vendor first.** The manufacturer's own published figures beat everything else. Several
-vendors publish exact hex codes and full spec — see `references/sources.md` for the ones
-already known to work and how to extract them.
+vendors publish exact hex codes, and usually a HueForge TD value beside them worth taking for
+`transmissionDistance`. See `references/sources.md` for the ones already known to work and how
+to extract them.
+
+Do not conclude a vendor publishes nothing just because the product page is bare — the tables
+are often a blog post or a linked spreadsheet away, and a mention of HueForge anywhere on the
+site is a strong signal one exists. That search is worth the minute it costs: for one line it
+corrected nine of ten colours that had come from OpenPrintTag.
 
 **OpenPrintTag second**, and treat it as community data rather than truth. It is genuinely
 useful for colour, and it is the linkage that lets the record pull future updates. But it is

@@ -49,10 +49,54 @@ headers are indented product names. Take care attributing values: plain `PLA` an
 PROFESSIONAL` both appear as blocks beginning "PLA", and they carry different values for the
 same colour name.
 
+### 3D-Fuel — and the reason to keep digging
+
+Hex **and** TD for every colour, per material line:
+
+<https://docs.google.com/spreadsheets/d/15hLIEGU3xl0QXJnoWtb-UiYsOSPAiOtg83_sv3qbKpc/>
+
+Any Google Sheet exports as CSV, and the tab you want is rarely the first one:
+
+```bash
+# list the tabs
+curl -sL "https://docs.google.com/spreadsheets/d/<ID>/htmlview" | grep -o 'gid=[0-9]*' | sort -u
+# then fetch one
+curl -sL "https://docs.google.com/spreadsheets/d/<ID>/export?format=csv&gid=<GID>"
+```
+
+This one is worth generalising from, because the data was three hops from where it should
+have been. The product page carried no specification at all. A search turned up a **blog
+post** announcing hex codes and a HueForge colour library, and that post linked the sheet,
+which had a separate tab per material line — `gid=0` was Standard PLA+, not the PCTG line
+being looked for.
+
+So: a product page with no figures does not mean the vendor publishes none. Search their blog
+and support pages too, and treat **any mention of HueForge as a strong signal** that a hex and
+TD table exists somewhere, because supplying one is the whole point of a HueForge library.
+
+Finding it mattered. The values in that sheet corrected nine of ten colours that had been
+taken from OpenPrintTag, several of them badly — OPT rendered two blacks as `#000000` where
+the vendor publishes `#383737` and `#434443`. It also settled a product's identity: a colour
+that looked like a rebadged spool from another brand turned out to be in the maker's own
+catalogue all along.
+
 ### Vendors confirmed to publish nothing
 
-SUNLU and Kexcelled have no public hex list. Fall back to OpenPrintTag for those and say
-that's what you did — the sourcing is weaker and the user should know which values rest on it.
+SUNLU and Kexcelled have no public hex list, and CHCKX appears in neither a vendor table nor
+OpenPrintTag. Fall back to OpenPrintTag where it has the product, say that's what you did, and
+where nothing exists at all leave the colour for the user rather than inventing one.
+
+## Transmission distance is usually free alongside the hex
+
+The Prusa, Polymaker and 3D-Fuel tables all carry a HueForge **TD** value next to each hex,
+and it populates `transmissionDistance` directly. It is worth taking whenever you are already
+reading the table — it is almost never populated otherwise, and HueForge work is unusable
+without it.
+
+TD runs 0 (opaque) to 100 (completely clear), which also makes it good evidence about a
+colour's nature: 3D-Fuel's Pro PCTG Natural reads 100, confirming a genuinely clear filament
+rather than a tinted one. A high TD is a reason to set the transparent or translucent finish
+tag (`optTags` 2 and 3) so the swatch renders see-through.
 
 ## When the vendor lists no hex at all
 
