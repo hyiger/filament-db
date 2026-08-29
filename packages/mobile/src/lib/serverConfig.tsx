@@ -61,7 +61,7 @@ export function ServerConfigProvider({ children }: { children: ReactNode }) {
     const key = cfg.apiKey?.trim() || null;
     // If the server address changes, drop any queued offline writes — they were
     // made against the previous server and must not replay to a different
-    // Filament DB instance (Codex P2 on #709). Validation above has passed, so
+    // Filament DB instance (GH #709). Validation above has passed, so
     // we only clear on a genuine, accepted change of address.
     if (url !== baseUrl) {
       await clearQueue();

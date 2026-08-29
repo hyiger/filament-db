@@ -16,13 +16,9 @@ export interface INozzle extends Document {
 const NozzleSchema = new Schema<INozzle>(
   {
     // GH #1116: `trim: true` makes the stored name the identity key every
-    // lookup already assumes it is. Nothing normalized a name on write, so
-    // `Drybox #1 ` and `Drybox #1` were two distinct rows that render
-    // identically — and a CSV round-trip silently created the second one.
-    // Mongoose applies this setter on create/save, updateOne,
-    // findOneAndUpdate and insertMany, but NOT on raw driver writes, so the
-    // hybrid-sync engine (which copies whole documents through the driver)
-    // bypasses it: the invariant is per-instance, not global.
+    // lookup already assumes it is. Applied on create/save, updateOne,
+    // findOneAndUpdate and insertMany, but NOT on raw driver writes, so
+    // the hybrid-sync engine bypasses it: per-instance, not global.
     name: { type: String, required: true, trim: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
     // GH #337: positive diameters only — a 0 or negative nozzle diameter is

@@ -27,7 +27,7 @@ import PrinterDevicePicker from "@/components/PrinterDevicePicker";
 /** Badges KNAON Y813BT devices in the picker. Client-side on purpose: the
  *  transport's PRINTER_PATTERN is Brother-only, because ITS consumer saves
  *  the selection for Brother raster jobs — badging a KNAON there would
- *  invite printing raster bytes at a TSPL printer (PR #1042 round 4). */
+ *  invite printing raster bytes at a TSPL printer. */
 const TSPL_PRINTER_PATTERN = /knaon|y-?813/i;
 
 export default function TsplPrinterSettings() {

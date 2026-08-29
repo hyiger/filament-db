@@ -30,12 +30,10 @@ import {
 } from "@/lib/createVariantGated";
 
 /**
- * GH #519: collect every cross-collection ref carried by a filament body and
- * verify each id resolves to an active doc. Mirrors the printer-route shape
- * (`assertActiveRefs(model, ids, label)`). Calibration refs are pulled out
- * per-collection so the error message names the right field; null/missing
- * refs in calibration entries are passed through (the schema marks
- * `nozzle` required and handles it at validation time).
+ * GH #519: verify every cross-collection ref carried by a filament body
+ * resolves to an active doc. Calibration refs are pulled out per-collection
+ * so the error names the right field; null/missing refs pass through (the
+ * schema handles required-ness at validation time).
  */
 async function assertFilamentBodyRefs(
   body: Record<string, unknown>,
@@ -84,44 +82,23 @@ export async function GET(request: NextRequest) {
     if (vendor) filter.vendor = vendor;
     if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
-    // GH #1108: a type/vendor filter that matches a TEMPLATE must bring its
-    // variants with it.
+    // GH #1108: a type/vendor filter that matches a TEMPLATE brings its
+    // variants with it. `vendor`/`type` are `required: true` and stamped by
+    // every creation path, so despite being listed as inheritable they never
+    // actually inherit — filtering per ROW returned the template alone as a
+    // memberless group header with its variants unreachable.
     //
-    // `vendor` and `type` are `required: true` and stamped by every creation
-    // path, so despite being listed as inheritable they never actually
-    // inherit — a family whose template and variants disagree (a typo on one
-    // of them, which the app happily accepts) is filtered per ROW. Filtering
-    // by the template's vendor therefore returned the template alone: the list
-    // rendered it as a group header with no members, its four colours had no
-    // expander and no "N colors" chip and were simply unreachable, and the
-    // summary line read "0 filament(s)" because template rows are excluded
-    // from the count (they are grouping headers, not rolls).
+    // Widening is scoped to type/vendor (a product line = a family); search
+    // is left alone — and the name predicate must ride the family arm too,
+    // or `?search=X&vendor=V` would quietly be broader than `?search=X`
+    // (every child of a search-matched template regardless of name).
     //
-    // Widening to the family fixes both halves. Scoped to type/vendor — those
-    // describe a PRODUCT LINE, which is exactly what a family is. Search is
-    // left alone: it matches on name, and a name search pulling in
-    // differently-named rows would be surprising.
-    //
-    // That last rule has to hold for a COMBINED query too (Codex P2): the
-    // list page sends search + type + vendor together, and a widening arm
-    // that carried only `parentId` would hand back every child of a
-    // search-matched template regardless of its name — quietly making
-    // `?search=X&vendor=V` broader than `?search=X`. So the name predicate
-    // rides the family arm as well. The residue is that a family whose
-    // variants share no name prefix with their template still renders as a
-    // memberless group header under a search, exactly as it already does for
-    // a search with no filter — the same trade-off, applied consistently
-    // rather than only where widening happens to be active.
-    //
-    // OPT-IN via `?family=1`, NOT the default (Codex P2 round 2). `type` and
-    // `vendor` are documented as exact row filters (docs/api.md), and other
-    // callers depend on that literally: FilamentForm derives vendor-keyed TDS
-    // suggestions from `?vendor=`, and PrusamentImportDialog treats `?type=`
-    // results as material matches and may auto-select one by name. Widening
-    // by default would offer another vendor's TDS, or attach an imported
-    // spool to a filament whose stored material type doesn't match — the very
-    // mismatched-child data shape this feature exists to surface. The
-    // grouping list asks for it explicitly; everyone else keeps exact rows.
+    // OPT-IN via `?family=1`, NOT the default: `type`/`vendor` are
+    // documented exact row filters, and callers depend on that literally —
+    // FilamentForm derives vendor-keyed TDS suggestions from `?vendor=`, and
+    // PrusamentImportDialog treats `?type=` results as material matches and
+    // may auto-select one by name. Widening by default would offer another
+    // vendor's TDS or attach a spool to a mismatched material.
     const wantFamily = searchParams.get("family") === "1";
     let matchStage: Record<string, unknown> = filter;
     if (wantFamily && (type || vendor)) {
@@ -137,46 +114,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Project to FilamentSummary shape: drop heavy spool subfields
-    // (photoDataUrl, usageHistory, dryCycles), keep only the temperatures
-    // the list renders, and surface `hasCalibrations` so the noCalibration
-    // quick filter has a signal it can act on without fetching every doc.
-    // The full document is still available via /api/filaments/{id}.
+    // (photoDataUrl, usageHistory, dryCycles) and surface `hasCalibrations`
+    // for the noCalibration quick filter.
     //
-    // tdsUrl is included on top of FilamentSummary because FilamentForm
-    // (src/app/filaments/FilamentForm.tsx) calls this endpoint with
-    // ?vendor=... to derive vendor-keyed TDS suggestions and reads
-    // f.tdsUrl off each result. Dropping the field silently empties the
-    // suggestion list on create/edit.
+    // tdsUrl is included because FilamentForm calls this endpoint with
+    // ?vendor=... and reads f.tdsUrl off each result for TDS suggestions —
+    // dropping the field silently empties that list.
     const filaments = await Filament.aggregate([
       { $match: matchStage },
       { $sort: { name: 1 } },
-      // Look up parent's calibrations so hasCalibrations reflects the
-      // *effective* state rather than the variant's own array. Variants
-      // with empty calibrations inherit from their parent (see
-      // resolveFilament in src/lib/resolveFilament.ts), so projecting
-      // only the variant's own array would falsely flag inheriting
-      // variants under the noCalibration filter.
+      // Look up the parent so hasCalibrations and the effective-array /
+      // scalar projections below reflect variant INHERITANCE (a variant with
+      // an empty array/null inherits — resolveFilament's rule); projecting
+      // only the variant's own values would falsely flag inheriting variants
+      // and blank inherited fields. GH #553: the scalars matter because a
+      // name search returns only the matching variant (its parent is
+      // filtered out by `$match`), while `$lookup` runs against the full
+      // collection so the parent is always available here.
       {
         $lookup: {
           from: "filaments",
           localField: "parentId",
           foreignField: "_id",
           as: "_parent",
-          // GH #477: include `secondaryColors` so the effective projection
-          // below can merge a variant's empty array with the parent's full
-          // array — same array-fallback inheritance pattern resolveFilament
-          // uses at read time. Without this the list drops inherited
-          // multi-color data and the list-row swatch can't render it.
-          // (Codex P2 on PR #482.)
-          //
-          // GH #553: also carry the inheritable scalar fields (temperatures,
-          // cost, density, spoolWeight, netFilamentWeight) so the projection
-          // can resolve them server-side. The list page used to merge these
-          // client-side from the parent row, but a name search returns only
-          // the matching variant (its parent is filtered out by `$match`),
-          // so the variant rendered `—` for inherited Nozzle/Bed in search
-          // results. `$lookup` runs against the full collection regardless of
-          // the search filter, so the parent is always available here.
           pipeline: [
             {
               $project: {
@@ -193,13 +153,9 @@ export async function GET(request: NextRequest) {
           ],
         },
       },
-      // Look up whether any non-deleted filament references this row as
-      // parent. A single match is enough — we only need a boolean — so the
-      // sub-pipeline caps at one document. Drives the cross-hatch "multi
-      // color" swatch on the inventory list (rendered by FilamentSwatch
-      // whenever isParent is true). Per project agreement: a filament is
-      // a parent ONLY when it currently has ≥1 variant — there is no
-      // explicit flag.
+      // Probe whether any non-deleted filament references this row as parent
+      // (capped at 1 doc — only a boolean is needed). A filament is a parent
+      // ONLY when it currently has ≥1 variant — there is no explicit flag.
       {
         $lookup: {
           from: "filaments",
@@ -211,15 +167,11 @@ export async function GET(request: NextRequest) {
                   $and: [
                     { $eq: ["$parentId", "$$fid"] },
                     // GH #625: `{ $eq: ["$_deletedAt", null] }` is FALSE
-                    // when the field is missing entirely — in aggregation,
-                    // missing is its own BSON type and `$eq` does NOT
-                    // collapse it into null (the v1.32.2 quirk; see
-                    // /api/spools/by-location for the same pattern).
-                    // Legacy variants created before the soft-delete field
-                    // existed (pre-v1.15) and never re-saved lack
+                    // when the field is MISSING — aggregation `$eq` does NOT
+                    // collapse missing into null (see /api/spools/by-location
+                    // for the same pattern). Legacy pre-v1.15 variants lack
                     // `_deletedAt` entirely, so without the `$ifNull` wrap
-                    // their parent reported hasVariants:false and lost the
-                    // composite parent swatch (#597 / #605 reports).
+                    // their parent reports hasVariants:false.
                     { $eq: [{ $ifNull: ["$_deletedAt", null] }, null] },
                   ],
                 },
@@ -237,16 +189,8 @@ export async function GET(request: NextRequest) {
           vendor: 1,
           type: 1,
           color: 1,
-          // GH #477: secondaryColors rides the list so a multi-color
-          // filament renders its full swatch in the list view without a
-          // follow-up fetch. Same effective-array merge as `optTags`
-          // below — variants with an empty secondaryColors inherit the
-          // parent's array per resolveFilament's array-fallback rule.
-          // Without this merge, a variant whose parent is a tri-color
-          // coextruded but whose own secondaryColors is `[]` would
-          // render single-color on the list / parent's color-variant
-          // chips despite the detail page showing the full set.
-          // (Codex P2 on PR #482.)
+          // GH #477: effective secondaryColors — same array-fallback merge
+          // as `optTags` below (empty own array inherits the parent's).
           secondaryColors: {
             $cond: [
               { $gt: [{ $size: { $ifNull: ["$secondaryColors", []] } }, 0] },
@@ -254,13 +198,10 @@ export async function GET(request: NextRequest) {
               { $ifNull: [{ $arrayElemAt: ["$_parent.secondaryColors", 0] }, []] },
             ],
           },
-          // GH #553: resolve inheritable scalars against the parent so a
-          // variant surfaced as a standalone search-result row still shows
-          // its effective cost/density/spool weights (the parent row is
-          // filtered out of search results). `$ifNull` collapses null +
-          // missing, matching resolveFilament's scalar-inheritance rule.
-          // `$_parent` holds 0-or-1 docs; `$arrayElemAt(…, 0)` is null when
-          // there's no parent, so standalones/parents are unaffected.
+          // GH #553: resolve inheritable scalars against the parent.
+          // `$ifNull` collapses null + missing, matching resolveFilament's
+          // scalar rule; `$arrayElemAt(…, 0)` is null with no parent, so
+          // standalones/parents are unaffected.
           cost: { $ifNull: ["$cost", { $arrayElemAt: ["$_parent.cost", 0] }] },
           density: {
             $ifNull: ["$density", { $arrayElemAt: ["$_parent.density", 0] }],
@@ -281,19 +222,10 @@ export async function GET(request: NextRequest) {
           totalWeight: 1,
           lowStockThreshold: 1,
           tdsUrl: 1,
-          // optTags rides the list payload so the inventory row can
-          // render the finish-derived swatch texture + chip beside the
-          // name without hitting /api/filaments/{id} for every row.
-          //
-          // We project the *effective* optTags rather than the variant's
-          // own array — variants with an empty optTags inherit from the
-          // parent per resolveFilament's array-field rule. Without this
-          // merge, a variant whose parent is matte but whose own optTags
-          // is `[]` would render plain on the list and on the parent's
-          // color-variants chips, even though clicking through to the
-          // variant's detail page shows it as matte (because that path
-          // does go through resolveFilament). Codex round-1 P2 on PR
-          // #353.
+          // Effective optTags (finish swatch/chip) — empty own array
+          // inherits the parent's, per resolveFilament's array-field rule;
+          // without the merge an inheriting variant renders plain here while
+          // its detail page shows the finish.
           optTags: {
             $cond: [
               { $gt: [{ $size: { $ifNull: ["$optTags", []] } }, 0] },
@@ -301,11 +233,10 @@ export async function GET(request: NextRequest) {
               { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
             ],
           },
-          // GH #553: same parent-fallback as the scalars above. Built as a
-          // single computed object (not two `temperatures.x: 1` paths) both
-          // because mixing a computed field with dotted sub-paths of the
-          // same root is a projection-path collision, and so the variant
-          // inherits the parent's nozzle/bed temps in search-result rows.
+          // Same parent-fallback as the scalars. Built as a single computed
+          // object (not two `temperatures.x: 1` paths) — mixing a computed
+          // field with dotted sub-paths of the same root is a
+          // projection-path collision.
           temperatures: {
             nozzle: {
               $ifNull: [
@@ -391,42 +322,31 @@ export async function POST(request: NextRequest) {
     return errorResponse("Invalid JSON in request body", 400);
   }
 
-  // Create-from-decoded-tag (mobile Phase 2, plan §4.4): the scanner POSTs the
-  // tag exactly as POST /api/nfc/decode returned it (`tagData`) plus the user's
-  // confirmed edits (`overrides`). Map it to a filament payload server-side —
-  // the phone never reproduces this mapping (design rule #1) — then flow it
-  // through the normal create path below, so it inherits the same field
-  // stripping, ref validation, nozzle-range check, unique-name handling, and
-  // spool allowlist. `overrides` win over the tag (the user edits name / vendor
-  // / type on the confirm screen, which are required fields).
+  // Create-from-decoded-tag (mobile): the scanner POSTs the tag exactly as
+  // POST /api/nfc/decode returned it (`tagData`) plus the user's confirmed
+  // edits (`overrides`). Map it server-side — the phone never reproduces
+  // this mapping — then flow it through the normal create path below so it
+  // inherits the same stripping/validation. `overrides` win over the tag.
   //
-  // Unlike the PUT handler ([id]/route.ts), this path deliberately needs no
-  // $-operator-key rejection: the merged body flows to Filament.create() — a
-  // document under schema strict mode, which silently drops unknown
-  // $-prefixed paths — not to findOneAndUpdate, so an `overrides` such as
-  // { "$set": … } can never act as an update operator. instanceId is NOT taken
-  // from the tag — it stays system-assigned (the strip below removes any
-  // client value, including a forged tagData.spool_uid); see
-  // decodedTagToFilament for why.
+  // Unlike the PUT handler, this path deliberately needs no $-operator-key
+  // rejection: the merged body flows to Filament.create() — schema strict
+  // mode silently drops unknown $-prefixed paths — not to findOneAndUpdate.
+  // instanceId is NOT taken from the tag — it stays system-assigned (the
+  // strip below removes any client value, including a forged
+  // tagData.spool_uid); see decodedTagToFilament for why.
   if (body && typeof body === "object" && body.tagData && typeof body.tagData === "object") {
     const overrides =
       body.overrides && typeof body.overrides === "object" && !Array.isArray(body.overrides)
         ? body.overrides
         : {};
     const mapped = decodedTagToFilamentPayload(body.tagData);
-    // Spool-on-create: a scanner owns the roll it just scanned, so it sends the
-    // remaining grams (defaulting to the tag's nominal net weight) and the
-    // server creates ONE spool from it. We convert remaining → the gross
-    // `totalWeight` the auto-spool logic below consumes by adding the tag tare
-    // (the mapped spoolWeight) — the phone never does this math (design rule #1).
-    // Omitting `spoolRemainingGrams` (e.g. a catalog-only or API caller) creates
-    // no spool, so the field is the opt-in the scanner defaults on.
-    // GH #1072 (item 1): `Number.isFinite` joins the guard — the value becomes
-    // the auto-created spool's gross totalWeight below, and
+    // Spool-on-create: the scanner sends remaining grams; the server
+    // converts remaining → gross `totalWeight` by adding the tag tare (the
+    // phone never does this math). Omitting `spoolRemainingGrams` creates no
+    // spool. GH #1072: `Number.isFinite` joins the guard —
     // `JSON.parse("1e309") === Infinity` satisfies both the typeof check and
-    // `>= 0`. A non-finite value follows the same shipped posture as a
-    // negative one ("no spool rather than a bad one"); the finite-check on
-    // the auto-create path below is the belt-and-braces backstop.
+    // `>= 0`; a non-finite value takes the "no spool rather than a bad one"
+    // posture.
     const spoolRemaining =
       typeof body.spoolRemainingGrams === "number" &&
       Number.isFinite(body.spoolRemainingGrams) &&
@@ -435,50 +355,40 @@ export async function POST(request: NextRequest) {
         : null;
     body = { ...mapped, ...overrides };
     if (spoolRemaining != null) {
-      // Use the FINAL stored tare (after overrides, which may correct it), and
-      // persist a 0 fallback when the tag carried none (e.g. a Bambu tag) so the
-      // spool's gross weight and the filament's spoolWeight agree — otherwise
+      // Use the FINAL stored tare (after overrides), and persist a 0
+      // fallback when the tag carried none, so the spool's gross weight and
+      // the filament's spoolWeight agree — otherwise
       // `remaining = totalWeight - storedTare` wouldn't equal the entered grams.
       if (typeof body.spoolWeight !== "number") body.spoolWeight = 0;
       body.totalWeight = spoolRemaining + body.spoolWeight;
     }
   }
 
-  // GH #605 (Phase 2b): `promoteParent` is a control flag, never a schema
-  // field — capture it, then strip it so it can't ride into Filament.create
-  // (captured after the tagData merge above so an `overrides` copy of it is
+  // GH #605: `promoteParent` is a control flag, never a schema field —
+  // capture then strip (after the tagData merge, so an `overrides` copy is
   // honoured/stripped the same way).
   const promoteParent = body?.promoteParent === true;
   delete body.promoteParent;
 
-  // GH #222 / #619 / #605 / #1072: one generalized pass dropping every
-  // SERVER-OWNED field — the exact key AND any dotted subpath
-  // (`spools.0.usageHistory`, `openprinttagSnapshot.color`,
-  // `promotionInFlight.token`, …). Mongoose treats dotted keys as live
-  // nested paths in Filament.create too, so the old exact-key deletes were
-  // bypassable via the dotted form (GH #1072 item 3 — the pre-fix sweep
-  // covered only the promotion-marker pair). The shared field list + the
-  // per-field rationale live in SERVER_OWNED_FILAMENT_FIELDS
+  // GH #222 / #1072: drop every SERVER-OWNED field — exact keys AND dotted
+  // subpaths (Mongoose treats dotted keys as live nested paths in
+  // Filament.create too, so exact-key deletes alone are bypassable). The
+  // shared field list lives in SERVER_OWNED_FILAMENT_FIELDS
   // (src/lib/requestGuard.ts) so this strip and the PUT handler's can't
   // drift. `spools` stays allowed as an EXACT key on the create path — the
   // embedded-spool allowlist + validation loop below is the create-path
   // spool contract (GH #431) — but its dotted subpaths are still swept.
   stripServerOwnedFields(body, { allowExact: ["spools"] });
 
-  // GH #1072 (item 2): the GH #266 settings-bag caps were only reachable
-  // through mergeSlicerSettings (the slicer sync routes); the generic create
-  // path forwarded `body.settings` — a Schema.Types.Mixed field, so
-  // Filament.create validates nothing about it — unbounded. Enforce the same
-  // caps here, on both the whole-object form and the dotted `settings.<key>`
-  // form (a live Mongoose path in document construction as well). A create
-  // has no stored bag, but the dotted check is seeded with the WHOLE-object
-  // form's keys (Codex P1 round 2, #1089): Filament.create applies dotted
-  // assignments INTO the object bag, so a body carrying an at-cap `settings`
-  // object plus dotted `settings.<key>` extras would otherwise store a
-  // merged bag past MAX_SETTINGS_KEYS with each helper passing in isolation.
-  // GH #1070 (Codex P2 r7 on PR #1086): wire-normalize raw multi-line
-  // settings strings BEFORE the caps, so the length check applies to the
-  // wrapped value — see normalizeSettingsToWire's docblock.
+  // GH #1072: enforce the GH #266 settings-bag caps here too — `settings` is
+  // Schema.Types.Mixed, so Filament.create validates nothing about it. Both
+  // the whole-object and dotted `settings.<key>` forms are covered; the
+  // dotted check is seeded with the WHOLE-object form's keys, because
+  // Filament.create applies dotted assignments INTO the object bag — an
+  // at-cap `settings` object plus dotted extras would otherwise store a
+  // merged bag past MAX_SETTINGS_KEYS with each helper passing in isolation
+  // (#1089). GH #1070: wire-normalize raw multi-line settings strings BEFORE
+  // the caps, so the length check applies to the wrapped value.
   normalizeSettingsToWire(body);
   const wholeBagKeys =
     body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)
@@ -489,14 +399,10 @@ export async function POST(request: NextRequest) {
     validateDottedSettingsPaths(body, wholeBagKeys);
   if (settingsError) return errorResponse(settingsError, 400);
 
-  // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
-  // bulk rewrite of a spool's `usageHistory` ledger. The POST handler
-  // didn't filter spool subdocs at all — a fresh filament could be
-  // created with client-supplied `usageHistory` / `dryCycles` (and faked
-  // `createdAt`), which the analytics aggregator + spool-check refund
-  // would then count as real history. Allowlist only the legitimate
-  // "this is what the user is registering on the new spool" fields and
-  // drop everything else, matching the PUT handler's posture.
+  // GH #431: allowlist embedded spool fields — without it a fresh filament
+  // could be created with client-supplied `usageHistory` / `dryCycles`
+  // (faked history the analytics aggregator + spool-check refund would count
+  // as real). Matches the PUT handler's posture (which strips `spools`).
   if (Array.isArray(body.spools)) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     body.spools = body.spools.map((s: any) => ({
@@ -509,27 +415,19 @@ export async function POST(request: NextRequest) {
       photoDataUrl: s?.photoDataUrl,
       retired: s?.retired,
     }));
-    // The dedicated spool routes enforce a set of per-field contracts via
-    // validateSpoolBody / assertActiveSpoolLocation; the #431 allowlist above
-    // keeps the fields but historically validated only their names, so an
-    // embedded spool on filament create bypassed those checks. Enforce the same
-    // contracts here so create matches POST/PUT /spools:
-    //   - GH #626: photoDataUrl raster-only MIME allow-list + 5MB cap (SVG is
-    //     rejected — inline <script> can execute in some rendering contexts).
-    //   - GH #953 (finding 3): purchaseDate/openedDate must name a real ISO
-    //     date. Without this, Mongoose silently normalises "2025-02-29" → Mar 1
-    //     on cast (the GH #372 bug), and locale strings / epoch numbers persist
-    //     while every other spool write path 400s them.
-    //   - GH #953 (finding 2): locationId must reference an active Location, so
-    //     a dangling ref can't persist and produce a phantom "no location" group.
-    //   - GH #1072 (item 1): totalWeight must be a finite non-negative number
-    //     or null — the schema's only guard is `min: 0`, which Infinity
-    //     satisfies (`JSON.parse("1e309") === Infinity`), and a non-finite
-    //     gross weight then blanks the /api/spools/by-location $sum (and the
-    //     /inventory active-grams header) because JSON.stringify renders
-    //     Infinity as null. Same rules + messages as validateSpoolBody.
-    //   (label/lotNumber length is backstopped by the schema maxlength, which
-    //    Filament.create validates — a >200-char value 400s as a ValidationError.)
+    // Enforce the dedicated spool routes' per-field contracts here too, so
+    // an embedded spool on create can't bypass them:
+    //   - GH #626: photoDataUrl raster-only MIME allow-list + 5MB cap (SVG
+    //     rejected — inline <script> can execute in some contexts).
+    //   - GH #953: purchaseDate/openedDate must name a real ISO date —
+    //     Mongoose silently normalises "2025-02-29" → Mar 1 on cast (the
+    //     GH #372 bug).
+    //   - GH #953: locationId must reference an active Location (a dangling
+    //     ref produces a phantom "no location" group).
+    //   - GH #1072: totalWeight must be finite non-negative or null — the
+    //     schema's `min: 0` accepts Infinity, which then blanks the
+    //     by-location $sum (JSON.stringify renders Infinity as null).
+    //   (label/lotNumber length is backstopped by the schema maxlength.)
     for (let i = 0; i < body.spools.length; i++) {
       const spool = body.spools[i];
 
@@ -571,12 +469,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // GH #1072 (item 1): finite-check the top-level totalWeight BEFORE it can
-  // become a spool below (or persist as the legacy top-level inventory
-  // field). Same validateSpoolBody contract as the embedded-spool loop —
-  // the schema's `min: 0` is the only model-level guard and Infinity
-  // satisfies it. This also backstops the create-from-tag path above, whose
-  // computed `spoolRemaining + tare` sum lands here.
+  // GH #1072: finite-check the top-level totalWeight BEFORE it can become a
+  // spool below. Same validateSpoolBody contract as the embedded-spool loop;
+  // also backstops the create-from-tag path's computed sum.
   if (body.totalWeight !== undefined && body.totalWeight !== null) {
     if (typeof body.totalWeight !== "number" || !Number.isFinite(body.totalWeight)) {
       return errorResponse("totalWeight must be a finite number or null", 400);
@@ -593,35 +488,27 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    // GH #605: when this request creates the FIRST variant of a parent that
-    // still carries variant state (a real color, a color name, its own
-    // spools, or a legacy inventory totalWeight — see parentPromotionState),
-    // the parent must be PROMOTED to a template (that state moves to a new
-    // sibling variant; the spoolWeight/netFilamentWeight SPEC pair stays).
-    // The parent doc captured here serves the PRE-LOCK validation only
+    // GH #605: the parent doc captured here serves PRE-LOCK validation only
     // (exists / not nested / diameter default); the gate + promotion run
-    // right before the create, AFTER every other guard — so an
-    // otherwise-invalid request gets its 400 (not a promotion 409 it would
-    // only re-hit), and a rejected request can never leave a half-promoted
-    // parent — and they re-fetch the parent FRESH inside a per-parent lock
-    // (review P1-a; see the gate below).
+    // right before the create, AFTER every other guard — an
+    // otherwise-invalid request gets its 400 (not a promotion 409), a
+    // rejected request can never leave a half-promoted parent — and they
+    // re-fetch the parent FRESH inside a per-parent lock (see the gate
+    // below).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let variantParent: Record<string, any> | null = null;
 
-    // Validate parentId if provided
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
       if (!parent) {
         return errorResponse("Parent filament not found", 400);
       }
-      // Prevent nested inheritance (parent cannot itself be a variant)
       if (parent.parentId) {
         return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
       }
-      // Variants should inherit diameter from the parent unless the client
-      // explicitly provides one. Without this, Mongoose's schema default of
-      // 1.75 materialises on the new variant and silently overrides a
-      // parent's non-1.75 diameter (e.g. 2.85mm). GH #106.
+      // GH #106: variants inherit diameter unless the client provides one —
+      // otherwise Mongoose's schema default of 1.75 materialises and
+      // silently overrides a parent's non-1.75 diameter.
       if (body.diameter === undefined || body.diameter === null || body.diameter === "") {
         body.diameter = null;
       }
@@ -631,14 +518,11 @@ export async function POST(request: NextRequest) {
     const refGuard = await assertFilamentBodyRefs(body);
     if (refGuard) return refGuard;
 
-    // #574: reject an inverted nozzle temperature range (min > max). The
-    // per-field 0–600 bounds don't catch a min above the max.
-    //
-    // Codex P2 r3 on #577: validate the EFFECTIVE range. A variant inherits
-    // each missing endpoint from its parent (resolveFilament: own ?? parent),
-    // so a variant that sets only `nozzleRangeMin: 300` while its parent has
-    // `nozzleRangeMax: 200` renders an inverted 300/200 range. Resolve the
-    // parent's endpoints into the variant's own before checking.
+    // #574: reject an inverted nozzle temperature range (min > max) — the
+    // per-field bounds don't catch it. Validate the EFFECTIVE range: a
+    // variant inherits each missing endpoint from its parent, so a lone
+    // `nozzleRangeMin: 300` against a parent `nozzleRangeMax: 200` is
+    // inverted.
     let createRange = effectiveNozzleRangeForUpdate(body, null);
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null })
@@ -653,14 +537,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // GH #1021 (Codex P1 r18): a full-document create can carry BOTH the
-    // ticks and a pre-upgrade stamped machine condition — the shared-catalog
-    // import flow (buildFilamentImportBody) sends exactly that shape — and
-    // with the one-shot marker completed no migration is left to catch it.
-    // Same provenance-matched strip as the other ingestion boundaries; the
-    // body IS the incoming payload on a create, so it is incoming-only by
-    // construction. Mongoose casts the body's string refs in the helper's
-    // lookups. A non-matching pure nozzle condition persists as a user pin.
+    // GH #1021: a full-document create can carry BOTH the ticks and a
+    // pre-upgrade stamped machine condition (the shared-catalog import sends
+    // exactly that shape) — and with the one-shot marker completed no
+    // migration is left to catch it. Same provenance-matched strip as the
+    // other ingestion boundaries; a non-matching pure nozzle condition
+    // persists as a user pin.
     if (body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)) {
       await stripLegacyMachineCondition(body.settings as Record<string, unknown>, {
         compatibleNozzles: body.compatibleNozzles,
@@ -668,36 +550,24 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // GH #605 (Phase 2b): promotion gate — FIRST variant only (from the
-    // second variant on the parent is already a template and carries
-    // nothing to move). Runs LAST, after every other guard, so the 409
-    // means "this request would succeed, but it has a side effect on the
-    // parent you must opt into". Without the explicit `promoteParent: true`
-    // flag, the structured 409 tells the caller exactly what the promotion
-    // would do, so the UI can raise its confirmation dialog and a bare API
-    // client isn't surprised by a mutation of a second document.
+    // GH #605: promotion gate — FIRST variant only (from the second on, the
+    // parent is already a template with nothing to move). Runs LAST, after
+    // every other guard, so the 409 means "this request would succeed, but
+    // it has a side effect on the parent you must opt into" (retry with
+    // `promoteParent: true`). The gate→promote→create sequence lives in
+    // createVariantGated: SERIALIZED per parent id, deciding off a snapshot
+    // RE-FETCHED inside the lock — never the `variantParent` doc above — and
+    // SHARED with the OpenPrintTag variant import so no secondary entry
+    // point can mint the first variant without this confirmation contract.
     //
-    // The gate→promote→create sequence lives in createVariantGated (codex
-    // round 3, Finding A): it is SERIALIZED per parent id (runExclusive)
-    // and decides off a snapshot RE-FETCHED inside the lock — never the
-    // `variantParent` doc loaded above (review P1-a) — and it is SHARED
-    // with the OpenPrintTag variant import so no secondary entry point can
-    // mint the first variant of a carrying parent without this exact
-    // confirmation contract. See src/lib/createVariantGated.ts.
-    // GH #1116 (Codex P1): BEFORE the gated variant path, not after it.
-    //
-    // The partial unique index compares RAW stored strings, so a submitted
-    // "PLA" and a surviving untrimmed "PLA " are different keys and the create
-    // succeeds — producing the indistinguishable pair this change exists to
-    // remove. `createVariantGated` has the same blind spot: its own duplicate
-    // probe is a cast Mongoose query.
-    //
-    // Placed here it covers BOTH exits. Below the gate it covered only the
-    // standalone create, and worse: the gate RETURNS from the variant path, so
-    // a variant named onto a survivor was inserted without ever reaching the
-    // check — and for a confirmed carrying parent the promotion (which moves
-    // the parent's color and spools) would already have happened. Fail-fast
-    // before the irreversible bit, the same ordering the PUT needed.
+    // GH #1116: the survivor check sits BEFORE the gated variant path. The
+    // partial unique index compares RAW stored strings, so "PLA" beside a
+    // surviving "PLA " creates without tripping it — and createVariantGated
+    // has the same blind spot (its duplicate probe is a cast Mongoose
+    // query). Below the gate the check covered only the standalone create
+    // (the gate RETURNS from the variant path), and for a confirmed carrying
+    // parent the promotion would already have happened. Fail-fast before the
+    // irreversible bit.
     const nameConflict = await survivorNameConflict(
       Filament.collection as unknown as MinimalNameCollection,
       body.name,
@@ -713,13 +583,12 @@ export async function POST(request: NextRequest) {
       const result = await createVariantGated(Filament, variantParent._id, body, promoteParent);
       switch (result.outcome) {
         case "parent_not_found":
-          // The parent was validated above but vanished (soft-deleted)
-          // before the lock — same 400 the pre-lock check would have given.
+          // Validated above but vanished (soft-deleted) before the lock —
+          // same 400 the pre-lock check would have given.
           return errorResponse("Parent filament not found", 400);
         case "parent_is_variant":
           // Validated above as a root, but a concurrent PUT re-parented it
-          // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
-          // 400 the pre-lock check produces.
+          // before the gate's in-lock re-fetch — same no-nesting 400.
           return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
         case "promotion_required":
           return NextResponse.json(promotionRequired409Body(result), { status: 409 });

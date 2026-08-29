@@ -43,7 +43,7 @@ function isPrivateIpv4(ip: string): boolean {
  *
  * A desktop with several non-loopback interfaces (Wi-Fi + Docker/VM/VPN) is
  * advertised with multiple IPv4 addresses, and only some are reachable from the
- * phone. Rather than guess one (Codex #723), return EVERY usable IPv4 as its own
+ * phone. Rather than guess one (GH #723), return EVERY usable IPv4 as its own
  * entry — RFC1918 private addresses first — so the user can pick the one that
  * connects. Falls back to the `.local` hostname only when no IPv4 is offered.
  * Returns [] when the service has no usable address/port. Pure + unit-testable.
@@ -103,7 +103,7 @@ export interface ServerDiscovery {
  *  so neither the resolved handler nor the error handler would ever clear
  *  `scanning`, stranding the UI on "Scanning…". A hard timeout guarantees the
  *  Scan button re-enables; servers found during the window stay listed and the
- *  user can Rescan. (Codex #723.) */
+ *  user can Rescan. (GH #723.) */
 const SCAN_TIMEOUT_MS = 15_000;
 
 export function useServerDiscovery(): ServerDiscovery {
@@ -160,7 +160,7 @@ export function useServerDiscovery(): ServerDiscovery {
       console.warn('zeroconf error', err);
       // Tear down so `scanning` clears and the Scan button re-enables — an async
       // error (denied iOS Local Network permission, Android NSD failure) would
-      // otherwise strand the UI in a permanent "Scanning…" state (Codex #723).
+      // otherwise strand the UI in a permanent "Scanning…" state (GH #723).
       stop();
     });
     try {

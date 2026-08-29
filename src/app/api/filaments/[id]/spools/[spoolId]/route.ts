@@ -36,9 +36,8 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Reject non-numeric totalWeight and non-string label up front so we
-  // never persist bad types via the positional `$` operator (which
-  // bypasses Mongoose subdocument validation).
+  // Validate up front — the positional `$` operator bypasses Mongoose
+  // subdocument validation.
   const validation = validateSpoolBody(body, { partial: true });
   if (!validation.ok) {
     return NextResponse.json({ error: validation.error }, { status: 400 });
@@ -54,12 +53,8 @@ export async function PUT(
     await dbConnect();
     const { id, spoolId } = await params;
 
-    // GH #425: validate ObjectIds up front. Without this, a garbage id
-    // throws CastError on the findOneAndUpdate which fell through to a
-    // 500 with "Failed to update spool" — the client got no usable
-    // signal that the request was malformed rather than the server
-    // being broken. The print-history route does the same up-front
-    // check.
+    // GH #425: validate ObjectIds up front — a garbage id would CastError
+    // into a 500 instead of a 400.
     if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(spoolId)) {
       return errorResponse("Invalid filament or spool id", 400);
     }
@@ -70,45 +65,37 @@ export async function PUT(
     const locGuard = await assertActiveSpoolLocation(Location, validation.locationId);
     if (locGuard) return locGuard;
 
-    // GH #605 round 11 (F1): the whole read-decide-write section — tare
-    // lookup, positional $set, retire slot-clear — runs under the same
-    // per-filament mutex the promotion paths hold (createVariantGated /
-    // gateFirstVariantAdoption / /promote all lock this id when this doc is
-    // the parent being promoted). Unserialized, the positional write could
-    // land BETWEEN a promotion's snapshot and its clearing write: the copy
-    // is minted from the pre-edit snapshot, the parent's spools are then
-    // cleared, and the 200-acknowledged edit is silently lost. In-lock,
+    // GH #605: the whole read-decide-write section runs under the same
+    // per-filament mutex the promotion paths hold. Unserialized, the
+    // positional write could land BETWEEN a promotion's snapshot and its
+    // clearing write — the copy minted from the pre-edit snapshot, the
+    // parent cleared, the 200-acknowledged edit silently lost. In-lock,
     // either this PUT runs first (the promotion's fresh snapshot carries
     // the edit onto the variant) or the promotion runs first and the
-    // filters below no longer match — post-promotion staleness already 404s
-    // (round 4); the lock adds mid-promotion atomicity. Single key, no
-    // nested locks (isSpoolInstanceIdTaken / assignSpoolToSlot are plain DB
-    // calls).
+    // filters below no longer match (post-promotion staleness already
+    // 404s). Single key, no nested locks.
     return await runExclusive(filamentLockKey(id), async () => {
-      // #732 Phase 4: edit or regenerate the spool's instanceId. `regenerate`
-      // wins and mints a fresh id; a user-entered id (charset/length already
-      // validated) is checked for uniqueness vs OTHER spools so the match path
-      // stays unambiguous — a spool keeps its own id (excludeSpoolId = spoolId).
+      // #732 Phase 4: edit or regenerate the spool's instanceId.
+      // `regenerate` wins and mints a fresh id; a user-entered id is
+      // uniqueness-checked vs OTHER spools (excludeSpoolId = spoolId).
       let finalInstanceId: string | undefined;
       if (validation.regenerate === true) {
         finalInstanceId = generateInstanceId();
       } else if (validation.instanceId !== undefined) {
-        // Best-effort uniqueness (read-then-write, not a DB unique constraint —
-        // see the POST route + the spools.instanceId index comment). A concurrent
-        // identical manual entry could slip through; the matcher tolerates that
-        // (ambiguous candidates, never an arbitrary pick).
+        // Best-effort uniqueness (read-then-write, not a DB unique
+        // constraint). A concurrent identical manual entry could slip
+        // through; the matcher tolerates that (ambiguous candidates, never
+        // an arbitrary pick).
         if (await isSpoolInstanceIdTaken(validation.instanceId, spoolId, id)) {
           return errorResponse("That spool ID is already used by another spool", 409);
         }
         finalInstanceId = validation.instanceId;
       }
 
-      // Convert a remainingWeight input to an absolute totalWeight by adding the
-      // spool's tare — the filament's own spoolWeight, inherited from the parent
-      // when a variant doesn't set its own. The 0g fallback (neither set, legacy
-      // data) matches the inventory aggregations in /api/locations and
-      // /api/spools/by-location so totals reconcile. remainingWeight === null
-      // clears the weight (totalWeight = null), mirroring totalWeight semantics.
+      // Convert a remainingWeight input to an absolute totalWeight by
+      // adding the spool's tare (own spoolWeight, else the parent's; 0g
+      // fallback matches the inventory aggregations so totals reconcile).
+      // remainingWeight === null clears the weight.
       let computedTotalWeight: number | null | undefined;
       if (validation.remainingWeight !== undefined) {
         const filamentDoc = await Filament.findOne(
@@ -164,21 +151,18 @@ export async function PUT(
         return NextResponse.json({ error: "Not found" }, { status: 404 });
       }
 
-      // GH #268: a retired spool must not stay loaded in a printer AMS slot (the
-      // assignment route already refuses to *assign* a retired spool). Clear AFTER
-      // the write — the $set filter (`spools._id`) already proved the spool belongs
-      // to THIS filament, so we never clear a spool that belongs to another one
-      // (Codex P2 on #886 — `assignSpoolToSlot` clears globally by spoolId, so a
-      // pre-clear before the ownership check could strip another filament's slot).
-      // PUT doesn't need clear-before for retryability: unlike DELETE the spool
-      // stays findable, so a retry re-runs the $set + re-clears.
+      // GH #268: a retired spool must not stay loaded in an AMS slot. Clear
+      // AFTER the write — the $set filter already proved the spool belongs
+      // to THIS filament (`assignSpoolToSlot` clears globally by spoolId,
+      // so a pre-clear before the ownership check could strip another
+      // filament's slot). PUT doesn't need clear-before for retryability:
+      // unlike DELETE the spool stays findable, so a retry re-runs both.
       if (validation.retired === true) {
         await assignSpoolToSlot(Printer, spoolId, null);
       }
 
-      // GH #1027: the $set filter matched `spools._id`, so the spool is
-      // guaranteed present in the post-write doc; the null guard is
-      // unreachable-in-practice defensiveness.
+      // GH #1027: the $set filter matched `spools._id`, so the null guard
+      // is unreachable-in-practice defensiveness.
       if (shape === "spool") {
         const spool = findSpoolById(filament.spools, spoolId);
         if (!spool) {
@@ -211,31 +195,24 @@ export async function DELETE(
     await dbConnect();
     const { id, spoolId } = await params;
 
-    // GH #425: same ObjectId guard as PUT — garbage id used to surface as
-    // 500 "Failed to delete spool" rather than 400 "Invalid id".
+    // GH #425: same ObjectId guard as PUT.
     if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(spoolId)) {
       return errorResponse("Invalid filament or spool id", 400);
     }
 
-    // GH #605 round 11 (F1): the exists-precheck → slot-clear → $pull sequence
-    // runs under the per-filament mutex — the same key every promotion path
-    // locks. Unserialized, the precheck could pass, a promotion's snapshot
-    // then copy the spool onto the promoted variant, and the $pull remove it
-    // from the parent AFTER the copy was minted: a 200-acknowledged delete
-    // whose spool RESURRECTS on the variant. In-lock, either the delete runs
-    // first (the promotion snapshot never sees the spool) or the promotion
-    // runs first and the filters below no longer match — post-promotion
-    // staleness already 404s (round 4); the lock adds mid-promotion
-    // atomicity. Single key, no nested locks (assignSpoolToSlot is a plain
-    // updateMany).
+    // GH #605: the exists-precheck → slot-clear → $pull sequence runs under
+    // the per-filament mutex — unserialized, a promotion's snapshot could
+    // copy the spool onto the promoted variant after the precheck and the
+    // $pull would then remove it from the parent AFTER the copy was minted:
+    // a 200-acknowledged delete whose spool RESURRECTS on the variant.
+    // Single key, no nested locks.
     return await runExclusive(filamentLockKey(id), async () => {
-      // GH #886: clear the spool from AMS slots BEFORE removing it, mirroring the
-      // filament-level clear-BEFORE-delete ordering (#261/#333). If the slot-clear
-      // threw AFTER the $pull, the spool would be gone but Printer.amsSlots[] would
-      // still reference it — and every retry 404s before reaching the clear (the
-      // `spools._id` filter no longer matches), leaving a dangling, uncleanable
-      // ref. A precondition read keeps the 404 contract for a genuinely missing
-      // spool without clearing slots for one that doesn't exist.
+      // GH #886: clear the spool from AMS slots BEFORE removing it (the
+      // #261/#333 ordering). If the slot-clear threw AFTER the $pull, every
+      // retry would 404 before reaching the clear (the `spools._id` filter
+      // no longer matches), leaving a dangling, uncleanable ref. The
+      // precondition read keeps the 404 contract without clearing slots for
+      // a spool that doesn't exist.
       const exists = await Filament.exists({
         _id: id,
         _deletedAt: null,
@@ -248,8 +225,8 @@ export async function DELETE(
         );
       }
       // GH #242 — a deleted spool must not linger in a printer AMS slot.
-      // assignSpoolToSlot(..., null) is an idempotent, no-match-safe updateMany,
-      // so a failure here leaves the spool present and the whole op retryable.
+      // Idempotent updateMany, so a failure leaves the spool present and
+      // the whole op retryable.
       await assignSpoolToSlot(Printer, spoolId, null);
 
       const filament = await Filament.findOneAndUpdate(
@@ -259,20 +236,17 @@ export async function DELETE(
       ).lean();
 
       if (!filament) {
-        // A concurrent delete removed the spool between the precondition read and
-        // the $pull. The slot is already cleared; just report not-found.
+        // A concurrent delete won the race; the slot is already cleared.
         return NextResponse.json(
           { error: "Filament or spool not found" },
           { status: 404 },
         );
       }
 
-      // GH #886 (Codex P2): best-effort clear AGAIN after the $pull. The pre-clear
-      // above gives retryability (a clear failure leaves the spool present), but a
-      // concurrent assignment could slot this spool in the window between the
-      // pre-clear and the $pull — leaving Printer.amsSlots[] pointing at a
-      // now-deleted spool. A second clear after the delete closes that window. The
-      // spool is already gone, so a failure here is harmless (no retry path needed).
+      // GH #886: best-effort clear AGAIN after the $pull — a concurrent
+      // assignment could slot this spool in the pre-clear→$pull window,
+      // leaving Printer.amsSlots[] pointing at a now-deleted spool. The
+      // spool is already gone, so a failure here is harmless.
       await assignSpoolToSlot(Printer, spoolId, null).catch(() => {});
 
       if (shape === "spool") {

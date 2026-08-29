@@ -31,17 +31,12 @@ const encoder = new TextEncoder();
 
 /**
  * GH #428 — concurrent-subscriber cap. The bus uses
- * `EventEmitter.setMaxListeners(0)` to suppress Node's leak warning,
- * which means there's no upper bound on how many sub-processes can
- * attach. A misbehaving / hostile client on the LAN could open
- * thousands of long-lived SSE connections, each holding open a heart-
- * beat interval and a scan listener for the process lifetime.
- *
- * 100 concurrent is generously above any real workload — a typical
- * PrusaSlicer + Bambu Studio + browser-tab setup hits 3-5. Beyond
- * that we 429 the new connections; the existing ones keep working.
- * Cap is per-process (module-level counter), so this is local-only
- * mitigation; a multi-process deployment would need a shared limit.
+ * `EventEmitter.setMaxListeners(0)`, so nothing else bounds how many
+ * long-lived SSE connections (each holding a heartbeat interval + scan
+ * listener) a hostile LAN client can open. 100 is generously above any
+ * real workload (~3-5); beyond it new connections 429 while existing ones
+ * keep working. Per-process counter — a multi-process deployment would
+ * need a shared limit.
  */
 const MAX_CONCURRENT_SUBSCRIBERS = 100;
 let activeSubscribers = 0;
@@ -53,10 +48,8 @@ function formatEvent(eventType: string, data: ScanEvent): Uint8Array {
 }
 
 export async function GET(request: NextRequest) {
-  // GH #428: enforce the concurrent-subscriber cap before allocating
-  // any per-connection resources (listener, interval, ReadableStream).
-  // 429 with a Retry-After signals the standard "back off, try again"
-  // shape to EventSource consumers.
+  // GH #428: enforce the cap before allocating any per-connection
+  // resources; 429 + Retry-After is the standard back-off signal.
   if (activeSubscribers >= MAX_CONCURRENT_SUBSCRIBERS) {
     console.warn(
       `[scan/stream] Rejected SSE connection: ${activeSubscribers} active subscribers (cap=${MAX_CONCURRENT_SUBSCRIBERS})`,

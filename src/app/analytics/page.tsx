@@ -46,9 +46,8 @@ export default function AnalyticsPage() {
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
-  // GH #288: a failed fetch used to leave `data` null + `loading` false
-  // and render a blank page indistinguishable from "no data". Track an
-  // explicit error so the user gets a message + retry, like the dashboard.
+  // GH #288: an explicit error state — a failed fetch would otherwise
+  // render a blank page indistinguishable from "no data".
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // GH #934: opt-in stacked-by-filament render mode for the Usage-by-day
@@ -342,26 +341,17 @@ export default function AnalyticsPage() {
                     <div className="absolute inset-0 flex items-end gap-0.5">
                       {data.usageByDay.map((d) => {
                         const pct = dayScale.max > 0 ? (d.grams / dayScale.max) * 100 : 0;
-                        // GH #934 / Codex P3: route the YYYY-MM-DD prefix
-                        // through the memoised formatter map (built with
-                        // `timeZone: "UTC"` so the calendar day matches
-                        // the server key) rather than allocating a fresh
-                        // Intl instance per day per render.
+                        // Route the YYYY-MM-DD prefix through the memoised
+                        // UTC formatter map (see dayDateByKey above).
                         const dayDate = dayDateByKey.get(d.date) ?? d.date;
                         const dayLabel = `${dayDate}: ${formatGrams(d.grams)} g`;
                         // GH #934: in Detailed mode, render the bar as a
-                        // vertical stack of segments — one per filament,
-                        // height proportional to its share of the day,
-                        // colored by the filament's hex. The wrapper
-                        // carries the per-day aria-label on BOTH branches
-                        // so toggling Detailed doesn't silently change
-                        // the SR announcement. Segments are decorative —
-                        // no `role` / no `tabIndex` — so the chart
-                        // doesn't blow out keyboard navigation, and the
-                        // 1px contrast stroke is an INSET `box-shadow`
-                        // (not an outer `border`) so it doesn't consume
-                        // layout pixels on thin slices under
-                        // `box-sizing: border-box` (Tailwind preflight).
+                        // vertical stack of segments — one per filament.
+                        // The wrapper carries the per-day aria-label on
+                        // BOTH branches so toggling Detailed doesn't
+                        // silently change the SR announcement. Segments
+                        // are decorative — no `role` / no `tabIndex` — so
+                        // the chart doesn't blow out keyboard navigation.
                         if (detailed && d.grams > 0 && d.byFilament.length > 0) {
                           return (
                             <div
@@ -392,17 +382,13 @@ export default function AnalyticsPage() {
                                       style={{
                                         height: `${segPct}%`,
                                         backgroundColor: seg.color,
-                                        // Inset stroke: doesn't
-                                        // participate in the box model,
-                                        // so a 5% slice on a 60px bar
-                                        // (3px total) keeps 3px of
-                                        // seg.color visible instead of
-                                        // losing 2px to a border. Two
-                                        // rings (semi-transparent black
-                                        // + white) so the rim reads
-                                        // against both bright and dark
-                                        // segment fills without a
-                                        // separate dark-mode variant.
+                                        // INSET stroke, not a border: it
+                                        // doesn't participate in the box
+                                        // model, so a thin slice keeps its
+                                        // fill visible. Two rings (black +
+                                        // white) so the rim reads against
+                                        // both bright and dark fills
+                                        // without a dark-mode variant.
                                         boxShadow:
                                           "inset 0 0 0 1px rgba(0,0,0,0.20), inset 0 0 0 2px rgba(255,255,255,0.08)",
                                       }}

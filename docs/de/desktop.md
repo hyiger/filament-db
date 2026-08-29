@@ -116,10 +116,12 @@ git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
-Anschließend ein GitHub-Release erstellen:
+Das Pushen des Tags ist der einzige manuelle Schritt — der Workflow legt das GitHub-Release selbst an. Führe also **nicht** vorher `gh release create` aus: Das würde ein Release ohne Assets veröffentlichen, noch bevor die Builds laufen.
+
+**Das Release ist ab dem ersten Upload öffentlich, nicht erst wenn der letzte landet.** Die Upload-Schritte nutzen `softprops/action-gh-release@v2` ohne `draft: true`, und nichts veröffentlicht es später — der zuerst fertige Matrix-Job legt das Release also an, und die Installer der übrigen Plattformen erscheinen nach und nach. In diesem Zeitfenster ist das Release mit nur einem Teil der Assets sichtbar; unter macOS trifft die Multi-Arch-`latest-mac.yml` sogar noch später ein, aus dem separaten `merge-mac-metadata`-Job. Maßgeblich für „Release fertig" ist daher der **Workflow-Lauf**, nicht die Release-Benachrichtigung. Release Notes anschließend anhängen:
 
 ```bash
-gh release create v1.0.0 --title "v1.0.0" --generate-notes
+gh release edit v1.0.0 --notes-file release-notes.md
 ```
 
 Der Workflow läuft parallel auf macOS-, Windows- und Ubuntu-Runnern — insgesamt sechs Jobs, da macOS (arm64 + x64), Windows (x64 + arm64) und Linux (x64 + arm64) jeweils beide Architekturen bauen (die zweite Architektur per Cross-Compilation). Die Installer jeder Plattform werden automatisch auf das GitHub-Release hochgeladen.

@@ -1,44 +1,26 @@
 /**
  * Bambu Studio filament-preset (.json) → Filament DB import.
  *
- * Bambu Studio forked OrcaSlicer (which forked PrusaSlicer), and the
- * filament-preset JSON schema is identical to OrcaSlicer's: every value is
- * a single-element array (multi-extruder convention), and the keys match.
- * The single Bambu-specific tweak is `from: "User"`. So this parser inverts
- * `filamentToOrcaSlicerKeys` (see `src/lib/orcaSlicerBundle.ts`) and works
- * for both Bambu Studio and OrcaSlicer filament JSONs.
+ * Bambu Studio forked OrcaSlicer, and the filament-preset JSON schema is
+ * identical to OrcaSlicer's: every value is a single-element array
+ * (multi-extruder convention); the one Bambu-specific tweak is `from:
+ * "User"`. This parser inverts `filamentToOrcaSlicerKeys` (see
+ * `src/lib/orcaSlicerBundle.ts`) and works for both slicers' JSONs.
  *
- * What it does NOT touch:
- *   - Mongo writes — pure parser/mapper. Routes own the upsert.
- *   - Variant resolution — exporter calls `resolveFilamentForExport`; on
- *     import we just produce a flat update payload and let the route apply
- *     it to whichever filament (by name or by id) it targets.
- *   - Spool data, dryCycles, usageHistory — Bambu profiles don't carry
- *     these, so the importer never overwrites them.
+ * Pure parser/mapper — no Mongo writes, no variant resolution (routes own
+ * both). Spool data, dryCycles, and usageHistory are never touched: Bambu
+ * profiles don't carry them, so the importer never overwrites them.
+ * Calibration values live IN the preset; they're extracted into
+ * `calibrationHints` for the route/applier to place.
  *
- * Calibration handling (the meaningful design decision):
- *   - Bambu calibration values (`filament_flow_ratio`,
- *     `pressure_advance`, `filament_retract_length`, etc.) live IN the
- *     filament preset itself rather than a separate file. We extract
- *     them into `calibrationHints` so the route can decide whether to:
- *       a) match a Printer by `printer_settings_id` and write a
- *          calibrations[] row tagged with the printer + the matched
- *          nozzle, OR
- *       b) fall back to a top-level update (extrusionMultiplier,
- *          maxVolumetricSpeed) when no printer/nozzle context resolves.
- *
- * Round-trip guarantee:
- *   - Every key the exporter writes maps back to the same DB field, OR
- *     ends up in `settings` for passthrough. So export → import → export
- *     produces (modulo array-wrapping whitespace) the same JSON.
+ * Round-trip guarantee: every key the exporter writes maps back to the same
+ * DB field, OR ends up in `settings` for passthrough.
  */
 
 import { wrapIniString } from "./parseIni";
 
-// ── Inverse of the BED_TYPE_KEY_MAP in orcaSlicerBundle.ts ────────────
-// Bambu/Orca use per-plate keys (cool_plate_temp, hot_plate_temp, …)
-// rather than a single bed_temperature. Invert so each plate key tells
-// us which `bedTypeTemps[]` entry it belongs in.
+// Inverse of the BED_TYPE_KEY_MAP in orcaSlicerBundle.ts (keep in sync).
+// Bambu/Orca use per-plate keys rather than a single bed_temperature.
 const BED_PLATE_KEYS: Record<string, { bedType: string; field: "temperature" | "firstLayerTemperature" }> = {
   cool_plate_temp: { bedType: "Cool Plate", field: "temperature" },
   cool_plate_temp_initial_layer: { bedType: "Cool Plate", field: "firstLayerTemperature" },
@@ -73,17 +55,10 @@ const STRUCTURED_KEYS = new Set<string>([
   "filament_density",
   "filament_cost",
   "filament_max_volumetric_speed",
-  // `filament_soluble` deliberately NOT here — the Filament model has no
-  // `soluble` column, so even if the parser extracted it Mongoose strict
-  // mode would silently drop the value on the update. Letting it fall
-  // through to the settings bag preserves the round-trip exactly the way
-  // we handle other model-less Bambu keys (Codex P1 on PR #387 round 2).
-  // `filament_notes` is NOT here either, for the same reason (GH #620):
-  // the model has no top-level `notes` column (the form stores notes in
-  // the settings bag as `filament_notes`), so listing it as structured
-  // destroyed the value — strict mode stripped the write AND the key was
-  // excluded from the settings bag. Riding the bag keeps it lossless and
-  // makes imported notes show up in the form's Notes field.
+  // `filament_soluble` and `filament_notes` (GH #620) are deliberately NOT
+  // here — the model has no matching column, so listing them as structured
+  // destroys the value (strict mode strips the write AND the key is excluded
+  // from the settings bag). Riding the bag keeps them lossless.
   "filament_shrink",
   "filament_shrinkage_compensation_z",
   // temperatures
@@ -101,39 +76,23 @@ const STRUCTURED_KEYS = new Set<string>([
 ]);
 
 /**
- * Calibration-relevant keys we lift out for the route to apply. The
- * exact set mirrors `calibrationToOrcaSlicerKeys` on the export side.
+ * Calibration-relevant keys lifted into `calibrationHints` for the route to
+ * apply — the exact set mirrors `calibrationToOrcaSlicerKeys` on the export
+ * side (keep in sync). Keys here are EXCLUDED from the settings bag, so a key
+ * in this set that isn't also extracted into a hint is silently dropped on
+ * import. A key only belongs here when:
+ *   1. The parser extracts it into a `CalibrationHints` field, AND
+ *   2. The applier writes that field to the calibrations[] row.
  *
- * Listed here AND in STRUCTURED_KEYS — the route consumes them via
- * `calibrationHints` and the parser does NOT also store them in the
- * settings bag (otherwise the calibration row's values would race the
- * top-level passthrough on round-trip).
+ * The exporter's Bambu/Orca-canonical names:
+ *   calibration.fanMinSpeed     → overhang_fan_speed
+ *   calibration.fanMaxSpeed     → additional_cooling_fan_speed
+ *   calibration.retractLength   → filament_retraction_length
+ *   calibration.retractSpeed    → filament_retraction_speed
+ *   calibration.retractLift     → filament_z_hop
+ * Older aliases (`fan_min_speed`, `filament_retract_*`) stay listed as
+ * fallbacks so hand-edited / older profiles still work.
  */
-// Codex P1 on PR #387: keys listed here are pulled into `calibrationHints`
-// and EXCLUDED from the settings bag. Any key in this set that isn't also
-// extracted into a hint would be silently dropped on import — round-trip
-// breaks. So a key only belongs here when:
-//   1. The parser extracts it into a `CalibrationHints` field, AND
-//   2. The applier writes that field to the calibrations[] row.
-//
-// Round 3 (Codex P1 #387): the previous round let
-// `additional_cooling_fan_speed` and `overhang_fan_speed` fall through
-// to settings because the parser had no matching hint. But the repo's
-// exporter (`calibrationToOrcaSlicerKeys` in
-// `src/lib/orcaSlicerBundle.ts`) actually emits the fan/retraction
-// values under THESE Bambu/Orca-canonical names:
-//
-//   calibration.fanMinSpeed     → overhang_fan_speed
-//   calibration.fanMaxSpeed     → additional_cooling_fan_speed
-//   calibration.retractLength   → filament_retraction_length
-//   calibration.retractSpeed    → filament_retraction_speed
-//   calibration.retractLift     → filament_z_hop
-//
-// So the round-trip export → import was silently dropping these — the
-// values landed in settings rather than the calibrations[] row. Pull
-// each through CALIBRATION_KEYS + extract into the right hint field
-// below. Older aliases (`fan_min_speed`, `filament_retract_*`) stay
-// listed as fallbacks so hand-edited / older profiles still work.
 const CALIBRATION_KEYS = new Set<string>([
   "filament_flow_ratio",
   "filament_extrusion_multiplier",
@@ -237,7 +196,7 @@ export interface CalibrationHints {
   /** GH #950: chamber temperature → calibrations[].chamberTemp. The export
    * emits it (orcaSlicerBundle), so parse it back for a lossless round-trip. */
   chamberTemp?: number;
-  /** GH #950 (Codex r5): the profile EXPLICITLY disabled chamber heating
+  /** GH #950: the profile EXPLICITLY disabled chamber heating
    * (activate_chamber_temp_control="0"). Distinct from chamberTemp being absent —
    * a disable must CLEAR a pre-existing calibrations[].chamberTemp on the resolved
    * path, else /calibration re-enables chamber heat on the next round-trip. */
@@ -334,54 +293,35 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     extrusionMultiplier:
       num(json.filament_flow_ratio) ?? num(json.filament_extrusion_multiplier),
     pressureAdvance: num(json.pressure_advance),
-    // Canonical Bambu/Orca key names (`filament_retraction_*`,
-    // `filament_z_hop`) come first; the shorter aliases stay as a
-    // fallback so hand-edited or older profiles still parse. Round-trip
-    // through the repo's own export → import path now works again
-    // (Codex P1 on PR #387 round 3).
+    // Canonical Bambu/Orca key names first; shorter aliases as fallback
+    // (see the CALIBRATION_KEYS docblock).
     retractLength:
       num(json.filament_retraction_length) ?? num(json.filament_retract_length),
     retractSpeed:
       num(json.filament_retraction_speed) ?? num(json.filament_retract_speed),
     retractLift: num(json.filament_z_hop) ?? num(json.filament_retract_lift),
     maxVolumetricSpeed: num(json.filament_max_volumetric_speed),
-    // Same canonical-first pattern: the exporter writes
-    // `overhang_fan_speed` for fanMinSpeed and
-    // `additional_cooling_fan_speed` for fanMaxSpeed; the old
-    // `fan_min_speed`/`fan_max_speed` names stay as fallback aliases.
     fanMinSpeed: num(json.overhang_fan_speed) ?? num(json.fan_min_speed),
     fanMaxSpeed:
       num(json.additional_cooling_fan_speed) ?? num(json.fan_max_speed),
     fanBridgeSpeed: num(json.bridge_fan_speed),
-    // GH #950: honor the enable flag — activate_chamber_temp_control="0" means
-    // chamber heating is OFF, so don't import the temperature (matches the
-    // exporter, which only emits chamber_temperature when chamberTemp != null).
+    // GH #950: activate_chamber_temp_control="0" means chamber heating is
+    // OFF, so don't import the temperature (matches the exporter).
     chamberTemp:
       unwrap(json.activate_chamber_temp_control) === "0"
         ? undefined
         : num(json.chamber_temperature),
-    // GH #950 (Codex r5): record an explicit disable so the applier can CLEAR a
-    // pre-existing calibrations[].chamberTemp (a bare absence must not clear).
+    // Record an explicit disable so the applier can CLEAR a pre-existing
+    // calibrations[].chamberTemp (a bare absence must not clear).
     chamberDisabled: unwrap(json.activate_chamber_temp_control) === "0",
     hasAnyHint: false,
   };
-  // Codex P3 on PR #387 round 6: `maxVolumetricSpeed` is the ONE
-  // calibration-relevant value that ALSO lands on the top-level filament
-  // field (`buildStructuredUpdate` writes it). When it's the only hint
-  // present and we can't resolve a printer/nozzle context, nothing is
-  // actually lost — the top-level update carries the value. Flagging
-  // `calibrationUnresolved: true` in that case drove a misleading
-  // warning toast on successful imports. Exclude it from `hasAnyHint`
-  // so we only enter the unresolved path when there's per-nozzle data
-  // that would actually be dropped.
-  //
-  // GH #950 (Codex P2 on PR #968): `chamberTemp` is EXCLUDED for the same
-  // reason. Its structured home (calibrations[].chamberTemp) needs a resolved
-  // printer/nozzle, but when that can't be resolved `prepareBambuUpdate` falls
-  // back to preserving the raw chamber keys in the settings passthrough bag
-  // (the "misfiled but survives" state #950 rates acceptable) — so a
-  // chamber-only standalone profile loses nothing and must NOT trip the
-  // unresolved warning.
+  // `maxVolumetricSpeed` is deliberately EXCLUDED from hasAnyHint: it also
+  // lands on the top-level filament field, so an unresolved printer/nozzle
+  // context loses nothing and must not trip the misleading "calibration
+  // unresolved" warning. `chamberTemp` is excluded for the same reason —
+  // when unresolved, `prepareBambuUpdate` preserves the raw chamber keys in
+  // the settings bag, so nothing is dropped.
   calibrationHints.hasAnyHint =
     calibrationHints.extrusionMultiplier != null ||
     calibrationHints.pressureAdvance != null ||
@@ -393,67 +333,54 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     calibrationHints.fanBridgeSpeed != null;
 
   // ── Settings bag passthrough ────────────────────────────────────────
-  // Anything we didn't pluck into a structured field OR a calibration
-  // hint gets stashed for the next export round-trip. mergeSlicerSettings
-  // (in the route) applies size caps; here we just stringify.
+  // Anything not plucked into a structured field or calibration hint is
+  // stashed for the next export round-trip; mergeSlicerSettings (in the
+  // route) applies size caps.
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
     if (CALIBRATION_KEYS.has(key)) {
-      // GH #950 (Codex P1 on PR #968 r2): the chamber keys are normally excluded
-      // here and routed structurally (calibrations[].chamberTemp) or via the
-      // applier's settings-bag fallback — but BOTH require an EFFECTIVE chamberTemp.
-      // When the chamber is DISABLED (activate_chamber_temp_control="0"), the parse
-      // above clears chamberTemp, so neither path carries the value and the settings
-      // bag is its ONLY home. Keep the raw chamber keys in the bag in that case so a
-      // disabled-chamber profile still round-trips (they rode the bag pre-#950.3).
+      // The chamber keys are normally routed structurally or via the
+      // applier's settings-bag fallback — but BOTH require an EFFECTIVE
+      // chamberTemp. When the chamber is DISABLED, the parse above clears
+      // chamberTemp, so the settings bag is the value's ONLY home; keep the
+      // raw chamber keys there so a disabled-chamber profile still round-trips.
       const isChamberKey =
         key === "chamber_temperature" || key === "activate_chamber_temp_control";
       if (!isChamberKey || calibrationHints.chamberTemp != null) continue;
       // else: disabled/ineffective chamber → fall through and store the raw key.
     }
-    // GH #678: a genuinely multi-valued key (compatible_printers with
-    // several printer/nozzle combos is the concrete case) is stored AS an
-    // array — every consumer is array-aware now: the PrusaSlicer exporter
-    // emits the coStrings form via serializeIniValueList, the Orca/Bambu
-    // exporter passes arrays through natively, the edit form displays a
-    // `;`-join and splits it back, and splitInheritedImportSet compares
-    // arrays element-wise. Each element gets the same wire-canonical
-    // newline wrap a scalar gets. Single- and zero-element arrays keep the
-    // scalar collapse below BYTE-IDENTICAL — the Orca/Bambu one-element
-    // convention is the overwhelmingly common case and every existing
-    // round-trip and string-equality path depends on it.
-    // GH #678 round 5 (Codex P1): `compatible_printers_condition` is a
-    // single EXPRESSION, not a list — the multi-value preservation exists
-    // for genuine lists like compatible_printers. Preserving an array here
-    // would bypass the #1021 legacy-condition ingestion strip entirely
-    // (stripLegacyMachineCondition's grammar is string-only, by design), so
-    // a pre-upgrade multi-extruder profile could re-persist the
-    // machine-derived restriction and hide the preset again. First-element
-    // collapse keeps the pre-#678 semantics and keeps the guard sound.
+    // GH #678: a genuinely multi-valued key (e.g. compatible_printers with
+    // several combos) is stored AS an array — every consumer is array-aware
+    // (PrusaSlicer exporter via serializeIniValueList, Orca/Bambu exporter
+    // natively, the edit form's `;`-join, splitInheritedImportSet's
+    // element-wise compare). Single- and zero-element arrays keep the scalar
+    // collapse below BYTE-IDENTICAL — the Orca/Bambu one-element convention
+    // is the common case and every round-trip/string-equality path depends
+    // on it.
+    // `compatible_printers_condition` is a single EXPRESSION, not a list —
+    // preserving an array would bypass the GH #1021 legacy-condition
+    // ingestion strip entirely (stripLegacyMachineCondition's grammar is
+    // string-only, by design), so a pre-upgrade multi-extruder profile could
+    // re-persist the machine-derived restriction and hide the preset again.
+    // First-element collapse keeps the guard sound.
     const isScalarOnlyKey = key === "compatible_printers_condition";
     if (Array.isArray(value) && value.length > 1 && !isScalarOnlyKey) {
-      // Elements are stored RAW (round 2, Codex P2): arrays never ride the
-      // scalar `key = value` INI path — the PrusaSlicer emitter runs them
-      // through serializeIniValueList, which quotes/escapes newlines itself,
-      // and the Orca/Bambu exporter passes raw arrays natively. Wrapping
-      // elements here double-encoded them on the Prusa side and exported
-      // escape text as CONTENT on the Orca side. The scalar wire-canonical
-      // rule below is unchanged.
+      // Elements are stored RAW: arrays never ride the scalar `key = value`
+      // INI path — the PrusaSlicer emitter quotes/escapes via
+      // serializeIniValueList and the Orca/Bambu exporter passes raw arrays
+      // natively. Wrapping elements here double-encoded them on the Prusa
+      // side and exported escape text as CONTENT on the Orca side.
       filament.settings[key] = value.map((el) => String(el));
       continue;
     }
     const s = unwrap(value);
     if (s == null) continue;
-    // GH #1070 / Codex P2 round 2 on PR #1086: the settings bag is
-    // WIRE-CANONICAL (see src/lib/parseIni.ts's codec docblock) — a raw
-    // multi-line string stored here (Orca/Bambu JSON carries real newlines
-    // in e.g. filament_notes) would hit serializeIniValue's legacy-wrapper
-    // heuristic on the next PrusaSlicer export, which strips boundary
-    // quotes that are genuine CONTENT in this profile's note. Escaping at
-    // ingestion removes the ambiguity: with this writer wire-canonical,
-    // that heuristic only ever fires on pre-#1070 form-wrapped DB rows.
-    // Single-line values stay byte-identical so Orca round-trips are
-    // unchanged for the common case.
+    // GH #1070: the settings bag is WIRE-CANONICAL (see src/lib/parseIni.ts's
+    // codec docblock) — a raw multi-line string stored here (Orca/Bambu JSON
+    // carries real newlines in e.g. filament_notes) would hit
+    // serializeIniValue's legacy-wrapper heuristic on the next PrusaSlicer
+    // export, stripping boundary quotes that are genuine CONTENT. Escaping at
+    // ingestion removes the ambiguity; single-line values stay byte-identical.
     filament.settings[key] = /[\r\n]/.test(s) ? wrapIniString(s) : s;
   }
 

@@ -122,7 +122,7 @@ describe("filamentToOrcaSlicerKeys", () => {
     // Reachable state: user picked "coextruded" in the form (clears
     // primary to null) and saved before adding any secondary slots.
     // We must NOT fall back to displayColor()'s gray sentinel — that
-    // would force a #808080 the user never picked. (Codex P2 on PR #485.)
+    // would force a #808080 the user never picked.
     const filament = {
       name: "Coextruded Empty",
       vendor: "Test",
@@ -374,7 +374,7 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // GH #1008 F1 + Codex P2: 0-based 0 = no shrink = Orca's "100%". Emit it
+    // GH #1008 F1: 0-based 0 = no shrink = Orca's "100%". Emit it
     // EXPLICITLY — the Bambu importer only writes shrinkageXY when the key is
     // present, so an omitted key on a no-shrink export would leave a stale
     // non-zero value in place on re-import (zero would be un-round-trippable
@@ -765,7 +765,7 @@ describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
     expect(
       droppedCalibrationCount({ calibrations: [{ nozzle: { diameter: 0.4, type: "Brass" } }] }),
     ).toBe(0);
-    // GH #969 (Codex r3): two calibrations on the SAME nozzle but different bed
+    // GH #969: two calibrations on the SAME nozzle but different bed
     // types must count as a drop — the old distinct-nozzle count collapsed these
     // to 1 and under-warned. Only one is baked, so one is dropped.
     expect(

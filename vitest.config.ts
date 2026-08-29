@@ -30,9 +30,9 @@ export default defineConfig({
         // knows the trade-off.
         "src/lib/labelBitmap.ts",
       ],
-      // Raised from 80/90/75/80 after the v1.61 coverage sweep drove
-      // src/lib + src/models to ~99% lines / ~99% statements / ~97% functions
-      // / ~98% branches. The residual uncovered branches are provably
+      // The v1.61 coverage sweep drove src/lib + src/models to ~99% lines /
+      // ~99% statements / ~97% functions / ~98% branches. The residual
+      // uncovered branches are provably
       // unreachable defensive guards (Mongoose always materialises array
       // schema fields as [] and rejects invalid Dates at cast; the WHATWG URL
       // parser mandates a host for http(s); regexes that only capture finite
@@ -46,10 +46,6 @@ export default defineConfig({
         statements: 98,
       },
     },
-    // Bumped from the 15s prior cap. The v1.32.0 release build (run
-    // 26624712937) hit three consecutive Windows x64 failures with
-    // different tests timing out at 15s each time; every failure was a
-    // route-level test running queries against mongodb-memory-server.
     // Same root cause as `hookTimeout` below (cold-import + ESM-resolve
     // is slow on Windows runners) — the slowness manifests inside the
     // test body too, not just the hook, because the first
@@ -64,9 +60,7 @@ export default defineConfig({
     // re-registers them on the connection (setup.ts wipes
     // mongoose.models between tests). On Windows the cold-import +
     // ESM-resolution path can blow past 10s on the first iteration of a
-    // file, which used to fail the Windows release build (e.g.
-    // tests/locations-route.test.ts beforeEach timed out in CI but
-    // passed locally on macOS / Linux).
+    // file.
     hookTimeout: 30000,
     setupFiles: ["./tests/setup.ts"],
   },

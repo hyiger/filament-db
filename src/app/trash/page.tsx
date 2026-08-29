@@ -69,21 +69,13 @@ export default function TrashPage() {
   };
 
   /**
-   * GH #605 (codex round 4, F6) / GH #1103: restoring a trashed VARIANT under
-   * a parent that still carries its own color/spools would mint the parent's
-   * first live variant, and the server 409s.
-   *
-   * It used to 409 with `parent_promotion_required` and this page answered
-   * with a confirm-and-retry — which, on "Restore all", meant one modal PER
-   * VARIANT whose only "yes" rewrote the family (a new `— Original` variant,
-   * the parent stripped) and whose "no" left that variant permanently
-   * unrestorable and re-prompted on the next attempt. Restoring a family you
-   * merely deleted and changed your mind about should not restructure it.
-   *
-   * The server now refuses outright with `parent_must_be_template_first` and
-   * a message naming "Convert to template" on the parent — one action that
-   * unblocks the whole family, taken with the parent in front of you. So
-   * there is nothing to confirm here any more; the message is simply shown.
+   * GH #605 / GH #1103: restoring a trashed VARIANT under a parent that
+   * still carries its own color/spools would mint the parent's first live
+   * variant, and the server refuses outright with
+   * `parent_must_be_template_first` and a message naming "Convert to
+   * template" on the parent — one action that unblocks the whole family.
+   * Restoring a family you merely deleted should not restructure it, so
+   * there is nothing to confirm here; the message is simply shown.
    */
   const restoreFilament = (item: TrashedFilament) =>
     fetch(`/api/filaments/${item._id}/restore`, { method: "POST" });
@@ -91,10 +83,9 @@ export default function TrashPage() {
   /** The sentence to show for a refusal.
    *
    *  The GH #1103 template refusal is TRANSLATED here rather than displayed
-   *  verbatim (Codex P2): the server composes its `message` in English, and
-   *  this is the main recovery guidance a user gets — showing it raw would
-   *  regress a German user to English for the one instruction that matters.
-   *  It carries `parentName`, which is all the localized string needs.
+   *  verbatim: the server composes its `message` in English, and this is the
+   *  main recovery guidance a user gets. It carries `parentName`, which is
+   *  all the localized string needs.
    *
    *  Everything else falls back to the server's own text, then the machine
    *  code, then the row's name: the structured 409s put their explanation in
@@ -171,9 +162,9 @@ export default function TrashPage() {
       return 0;
     });
     for (const item of ordered) {
-      // GH #640: a network failure mid-loop used to throw out of the
-      // handler, silently abandoning the remaining items with no toast
-      // and no refresh. Record the failure and keep going.
+      // GH #640: a mid-loop network failure must not throw out of the
+      // handler and silently abandon the remaining items. Record the
+      // failure and keep going.
       try {
         const res = await fetch(`/api/filaments/${item._id}?permanent=true`, {
           method: "DELETE",
@@ -202,21 +193,15 @@ export default function TrashPage() {
   };
 
   /**
-   * GH #419: Bulk "Restore all" counterpart to "Empty trash". When a
-   * user soft-deletes a large set by accident, one-by-one restore is
-   * painful. Mirrors the empty-trash flow:
-   *   - confirmation modal (non-destructive here, but still gated)
-   *   - variants restored BEFORE parents to avoid the name-conflict
-   *     409 against an already-restored sibling
-   *   - per-item failure is collected, surfaced via toast, and doesn't
-   *     halt the loop
-   * Wait — actually we want PARENTS first here, opposite of empty-
-   * trash: a variant restore requires the parent to be present
-   * (active), and the partial-unique-on-non-deleted name index
-   * checks against currently-active rows. Restoring a variant whose
-   * parent is still trashed would either dangle or 409 against a
-   * stale-active sibling on a name collision. Parent-first is safe
-   * because variant names are typically distinct from parent names.
+   * GH #419: Bulk "Restore all" counterpart to "Empty trash". Confirmation
+   * modal (non-destructive here, but still gated); per-item failure is
+   * collected, surfaced via toast, and doesn't halt the loop.
+   *
+   * PARENTS restored first — the opposite of empty-trash's variants-first:
+   * a variant restore requires the parent to be present (active), and the
+   * partial-unique-on-non-deleted name index checks against
+   * currently-active rows, so restoring a variant whose parent is still
+   * trashed would either dangle or 409 on a name collision.
    */
   const handleRestoreAll = async () => {
     if (items.length === 0) return;
@@ -243,8 +228,8 @@ export default function TrashPage() {
       try {
         // GH #1103: a variant whose parent still carries color/inventory is
         // refused here, and the refusal SENTENCE is what the user needs (it
-        // names the parent and the action) — the old code pushed `body.error`,
-        // which is a machine code like `parent_must_be_template_first`.
+        // names the parent and the action) — not the machine `body.error`
+        // code.
         const res = await restoreFilament(item);
         if (res.ok) {
           ok++;

@@ -345,7 +345,7 @@ describe("GH #232 — nozzle physical-instance enforcement", () => {
   });
 
   // ---------------------------------------------------------------------
-  // Migration atomicity — Codex P1 review on PR #233
+  // Migration atomicity — PR #233
   // ---------------------------------------------------------------------
 
   describe("dbConnect migration nozzle-swap atomicity", () => {

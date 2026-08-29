@@ -2,34 +2,18 @@
  * Scope key handling + reachability for the FilamentForm calibration grid
  * (GH #1101 / #1102).
  *
- * ## The bug
- *
- * The form rebuilt `calibrations` from form state on every save and dropped
- * any row whose nozzle wasn't in `form.compatibleNozzles`. `[].includes(x)` is
- * always false, so a filament with an EMPTY tick list had every calibration
- * deleted — and empty is exactly the state the slicer sync-back produces: the
- * GH #859 fallback resolves a nozzle from the global catalog and never writes
- * `compatibleNozzles`. The rows were loaded into form state, never rendered
- * (the section itself was gated on the tick list), and destroyed on the next
- * save of any field. Editing a TEMPLATE was worst: every inheriting variant
- * lost the calibration at once.
- *
- * ## Why the old prune existed, and what replaces it
- *
- * The nozzle filter dates to v1.1.0, when this form was the only writer of
- * calibrations, so "nozzle not ticked" reliably meant "the user just unticked
- * it". Slicer sync-back broke that premise. A second filter (PR #358) dropped
- * printer-scoped rows whose printer no longer owns the nozzle, with an
- * explicit and still-valid goal: a row the UI can't show "would persist
- * forever as an orphan… the data becomes undeletable".
- *
- * That goal is real, but auto-delete is the wrong remedy — it destroys data to
- * avoid hiding it. The remedy here is to make the row VISIBLE: the save keeps
- * everything that still carries data, and the form surfaces any row the normal
- * grid can't reach so it can be inspected and removed deliberately.
- *
- * Deleting is still possible and still explicit: blank every field in a card
- * (unchanged), or use the Remove action on an unreachable row.
+ * Do NOT reintroduce scope-based pruning on save. The form used to drop any
+ * row whose nozzle wasn't in `form.compatibleNozzles` — but an EMPTY tick list
+ * is exactly what the slicer sync-back produces (the GH #859 fallback resolves
+ * a nozzle from the global catalog and never writes `compatibleNozzles`), so
+ * every calibration was silently destroyed on the next save. A second filter
+ * (PR #358) auto-deleted printer-scoped rows whose printer no longer owns the
+ * nozzle, to avoid a row the UI can't show persisting as an undeletable
+ * orphan. That goal is real, but auto-delete destroys data to avoid hiding
+ * it — the remedy here is VISIBILITY: the save keeps everything that still
+ * carries data, and the form surfaces any row the normal grid can't reach so
+ * it can be inspected and removed deliberately. Deleting stays explicit:
+ * blank every field in a card, or use the Remove action on an unreachable row.
  */
 
 /** Sentinel for "applies to any printer" in a scope key. */
@@ -90,13 +74,11 @@ export interface CalibrationGridContext {
   /** Bed type ids that get a tab (the "any" tab is always present). */
   bedTypeIds: readonly string[];
   /**
-   * Whether each catalog has finished loading.
-   *
-   * These MUST be explicit rather than inferred from an empty array: a user
-   * can legitimately own zero printers, in which case a printer-scoped row
-   * really is orphaned — indistinguishable from "the fetch hasn't landed yet"
-   * if you only look at the length. The three fetches are independent, so
-   * /api/nozzles routinely resolves first (Codex P2 on PR #1130).
+   * Whether each catalog has finished loading. These MUST be explicit rather
+   * than inferred from an empty array: a user can legitimately own zero
+   * printers, indistinguishable from "the fetch hasn't landed yet" by length
+   * alone. The three fetches are independent, so /api/nozzles routinely
+   * resolves first.
    */
   nozzlesLoaded: boolean;
   printersLoaded: boolean;
@@ -114,11 +96,11 @@ export interface CalibrationGridContext {
  *    own the nozzle (the tab's own filter);
  *  - a bed-scoped row needs a tab for that bed type.
  *
- * Fail-open while a catalog is still loading is deliberate and load-bearing
- * (PR #358 round 2, extended per Codex P2 on PR #1130): all three catalogs are
- * fetched async and independently. Judging a row against one that hasn't
- * landed would dump valid rows into the orphan list — where they carry an
- * active Remove button — so each clause is skipped until ITS catalog is ready.
+ * Fail-open while a catalog is still loading is deliberate and load-bearing:
+ * all three catalogs are fetched async and independently, and judging a row
+ * against one that hasn't landed would dump valid rows into the orphan list —
+ * where they carry an active Remove button — so each clause is skipped until
+ * ITS catalog is ready.
  */
 export function isCalibrationRowReachable(
   key: string,
@@ -141,11 +123,9 @@ export function isCalibrationRowReachable(
   }
   // Needs the printer catalog AND the nozzle catalog: the caller derives
   // `relevantPrinterIds` by asking which printers own a compatible nozzle, so
-  // with /api/nozzles down that list is empty for reasons that have nothing to
-  // do with the printers. Judging against it there would orphan every
-  // printer-scoped row — with an active Remove button — on the strength of a
-  // list that only looks authoritative. (The unit tests can construct the two
-  // independently; the form cannot.)
+  // with /api/nozzles down that list is empty for reasons unrelated to the
+  // printers — judging against it would orphan every printer-scoped row on
+  // the strength of a list that only looks authoritative.
   if (
     printerId !== null &&
     ctx.printersLoaded &&

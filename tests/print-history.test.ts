@@ -575,7 +575,7 @@ describe("print-history DELETE (undo)", () => {
   });
 
   it("is idempotent — a repeat DELETE on a tombstoned entry returns 404 and doesn't double-refund", async () => {
-    // Codex round-2 P1: switching to soft-delete left the door open for
+    // Switching to soft-delete left the door open for
     // a retry / double-click / client retry after timeout to re-run the
     // refund loop. Each repeat would add u.grams back to the spool,
     // inflating inventory. The handler now filters findOne on
@@ -670,7 +670,7 @@ describe("print-history DELETE (undo)", () => {
     expect(again.status).toBe(404);
   });
 
-  // GH #228 + Codex P1 review on PR #229: refund clamps at the spool's
+  // GH #228: refund clamps at the spool's
   // GROSS full weight (spoolWeight + netFilamentWeight), not at
   // netFilamentWeight alone. spool.totalWeight is the on-scale gross
   // reading; clamping in net-only units would permanently under-refund
@@ -874,7 +874,7 @@ describe("print-history DELETE (undo)", () => {
       spools: [{ label: "", totalWeight: 500 }],
     });
     const job = await postJob(f, "corrupt-debit-job", 100);
-    // The refund reads the LEDGER entry (round-2 fix), so corrupt that copy;
+    // The refund reads the LEDGER entry, so corrupt that copy;
     // the PrintHistory copy is corrupted too for completeness.
     await PrintHistory.collection.updateOne(
       { _id: new mongoose.Types.ObjectId(String(job._id)) },
@@ -1518,7 +1518,7 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
    * nonzero, and the route waits on the SAME key, so the count never moves.
    * Sleeping is worse — on a slow runner the mutation lands before pass 1
    * reads, the route takes an unrelated branch, and the "deterministic"
-   * regression test passes for the wrong reason (Codex P2 ×2).
+   * regression test passes for the wrong reason.
    *
    * So we hold the key and wrap the route's FIRST `Filament.find` — pass 1 —
    * resolving a promise when its query actually executes. `await query` runs

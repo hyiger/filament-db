@@ -45,7 +45,7 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
   let res: Response;
   // Fail fast on an unreachable/wrong host instead of hanging the UI forever —
   // RN's fetch has no default timeout. clearTimeout in finally avoids a late
-  // abort firing on a slow-but-successful response. (GH #693 review.)
+  // abort firing on a slow-but-successful response. (GH #693.)
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 15000);
   try {

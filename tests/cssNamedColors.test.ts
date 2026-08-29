@@ -181,7 +181,7 @@ describe("isIncompleteColorHex (GH #794 Codex P2 — sentinel-exclusive)", () =>
 
   it("is FALSE for any complete #RRGGBB — INCLUDING the gray sentinel, so a user CAN deliberately pick gray", () => {
     expect(isIncompleteColorHex("#FA6E1C")).toBe(false);
-    // The crux of the Codex P2 fix: #808080 is a real, complete hex. Unlike
+    // The crux of the fix: #808080 is a real, complete hex. Unlike
     // isBlankColorHex, this predicate does NOT treat it as fillable — a user who
     // picks gray owns it (the form tracks that intent separately).
     expect(isIncompleteColorHex(BLANK_COLOR_HEX)).toBe(false);

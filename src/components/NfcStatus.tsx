@@ -24,10 +24,8 @@ export default function NfcStatus() {
   if (!mounted || !isElectron) return null;
 
   // GH #450: classify the reader's lastError into a human-readable hint
-  // so a macOS user denied Smart Card access (or whose reader is busy
-  // with another app) sees an actionable message instead of the generic
-  // "No reader connected" pill. `status.lastError` is null on healthy
-  // readers — render the normal three-state pill in that case.
+  // (e.g. macOS Smart Card access denied, reader busy). `status.lastError`
+  // is null on healthy readers — render the normal three-state pill then.
   const errorHint = status.lastError
     ? (() => {
         const code = status.lastError.code;
@@ -41,12 +39,9 @@ export default function NfcStatus() {
 
   let dotColor: string;
   let label: string;
-  // Optional plain-language hint appended to the tooltip for states whose
-  // short pill label can read as over-promising. GH #575 item 7: "Ready —
-  // place tag" implies a tag resting on the reader will be picked up, but a
-  // read only fires on a fresh placement (the arrival edge) — detection of an
-  // already-resting tag is tracked separately in #572. The hint sets accurate
-  // expectations without bloating the space-constrained pill.
+  // Optional plain-language hint appended to the tooltip: "Ready — place
+  // tag" implies a tag resting on the reader will be picked up, but a
+  // read only fires on a fresh placement (the arrival edge).
   let hint: string | null = null;
 
   if (errorHint) {
@@ -75,9 +70,8 @@ export default function NfcStatus() {
     }
   }
 
-  // Tooltip surfaces the raw error message when we have one (PR-Q #476)
-  // — useful for diagnostics even if the classified hint already
-  // explains what to do.
+  // Tooltip surfaces the raw error message when we have one — useful for
+  // diagnostics even when the classified hint already explains what to do.
   const baseTooltip = status.lastError
     ? `${label}\n\n${status.lastError.message}`
     : hint
@@ -91,12 +85,10 @@ export default function NfcStatus() {
       ? `${baseTooltip}\n\n${t("nfc.status.readerNameTooltip", { name: status.readerName })}`
       : baseTooltip;
 
-  // GH #451 follow-up (Codex P2 on PR #475): when an NFC scan has
-  // landed but the dialog is currently dismissed (either auto-suppressed
-  // because the user was typing, or manually closed), make the pill
-  // clickable so the user can pull the scan dialog back up. Without
-  // this, a typing-suppressed scan was unreachable until the next
-  // physical tag-rescan.
+  // When an NFC scan has landed but the dialog is dismissed
+  // (typing-suppressed or manually closed), the pill becomes clickable so
+  // the user can pull the scan dialog back up — otherwise a
+  // typing-suppressed scan is unreachable until the next physical rescan.
   const canReopen = tagReadResult != null && !dialogOpen;
   const sharedClasses =
     "inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-300 max-w-[260px]";
@@ -109,21 +101,15 @@ export default function NfcStatus() {
   );
 
   if (canReopen) {
-    // Codex P2 on PR #475 round 2: don't drop the live region when the
-    // pill becomes a button — a SR user would lose announcements while
-    // the dialog is dismissed (which is the very state this branch
-    // exists to support). `aria-live` + `aria-atomic` work on any
-    // element, so they go on the button directly; `role="status"` is
-    // omitted because it would override the implicit button role and
-    // strip the click affordance. The live-region behaviour matches
-    // the <div> branch below.
+    // Don't drop the live region when the pill becomes a button — a SR
+    // user would lose announcements while the dialog is dismissed.
+    // `aria-live` + `aria-atomic` go on the button directly;
+    // `role="status"` is omitted because it would override the implicit
+    // button role and strip the click affordance.
     //
-    // Codex P2 on PR #475 round 3: also DON'T clobber the visible pill
-    // text with a static "Reopen NFC scan details" aria-label — that
-    // hides the actual NFC status (the very thing the user needs to
-    // discover via this pill). Fold the visible status into the
-    // accessible name so a SR user hears "<status> — Reopen scan
-    // details", preserving both the state and the action affordance.
+    // Also DON'T clobber the visible pill text with a static aria-label —
+    // fold the visible status into the accessible name so a SR user hears
+    // "<status> — Reopen scan details", preserving state and affordance.
     return (
       <button
         type="button"

@@ -38,12 +38,9 @@ export async function GET() {
 
     const iniContent = generatePrusaSlicerBundle(resolved);
 
-    // GH #341: this endpoint is a legacy alias for /api/filaments/prusaslicer
-    // (same INI bundle output, kept for backward compatibility with the
-    // "Export INI (PrusaSlicer)" link on the Import/Export page). Charset
-    // is aligned with that route so HTTP clients don't see a Content-Type
-    // mismatch between the two surface area endpoints serving the same
-    // bytes.
+    // GH #341: legacy alias for /api/filaments/prusaslicer (same INI bundle
+    // output, kept for backward compatibility); charset aligned with that
+    // route so the two endpoints serving the same bytes agree.
     return new NextResponse(iniContent, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",

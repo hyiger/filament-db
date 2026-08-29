@@ -154,12 +154,10 @@ function resolveBaseType(type: string): string {
 function computeTags(name: string, type: string): number[] {
   const tags = new Set<number>();
 
-  // Material-inherent tags
   const base = resolveBaseType(type);
   const inherent = MATERIAL_INHERENT_TAGS[base];
   if (inherent) inherent.forEach((t) => tags.add(t));
 
-  // Type-derived tags for composites
   const typeKey = type.toUpperCase().replace(/\s+/g, "");
   if (typeKey.includes("CF") || typeKey.includes("CARBON")) {
     tags.add(OPT_TAG.CONTAINS_CARBON_FIBER);
@@ -170,7 +168,6 @@ function computeTags(name: string, type: string): number[] {
     tags.add(OPT_TAG.ABRASIVE);
   }
 
-  // Name-keyword tags
   for (const [regex, tag] of KEYWORD_TAGS) {
     if (regex.test(name)) tags.add(tag);
   }
@@ -183,13 +180,11 @@ function computeTags(name: string, type: string): number[] {
 function extractColorName(name: string, vendor: string, type: string): string | null {
   let colorName = name;
 
-  // Remove vendor name
   const vendorWords = vendor.split(/\s+/);
   for (const word of vendorWords) {
     colorName = colorName.replace(new RegExp(`\\b${escapeRegex(word)}\\b`, "gi"), "");
   }
 
-  // Remove known brand names
   const brands = [
     "Prusament", "Prusa", "Overture", "Polymaker", "SirayaTech", "Siraya Tech",
     "3D-Fuel", "3DFuel", "Sunlu", "SunLu", "Yousu", "Gizmo Dorks", "GizmoDorks",
@@ -199,7 +194,6 @@ function extractColorName(name: string, vendor: string, type: string): string | 
     colorName = colorName.replace(new RegExp(`\\b${escapeRegex(brand)}\\b`, "gi"), "");
   }
 
-  // Remove material type and variants
   const materialTypes = [
     type,
     ...type.split("-"),
@@ -225,7 +219,6 @@ function extractColorName(name: string, vendor: string, type: string): string | 
   colorName = colorName.replace(/\bi\d+\b/gi, "");
   colorName = colorName.replace(/\bCF\d+\b/gi, "");
 
-  // Clean up
   colorName = colorName.replace(/[®™]/g, "");
   colorName = colorName.replace(/\s*[-–—]\s*/g, " ");
   colorName = colorName.trim().replace(/\s+/g, " ");

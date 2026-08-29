@@ -5,8 +5,7 @@ import { upsertImportRows } from "@/lib/importFilaments";
 import { POST as importCsv } from "@/app/api/filaments/import-csv/route";
 
 /**
- * GH #605 (codex P2, importer sweep — residual gaps after the slicer-sync
- * round) — the TEMPLATE strip on the two remaining importer write paths that
+ * GH #605 — the TEMPLATE strip on the two remaining importer write paths that
  * could still $set per-variant fields onto an EXISTING template:
  *
  *  1. CSV/XLSX importer (`upsertImportRows`, existing-active-row updates):

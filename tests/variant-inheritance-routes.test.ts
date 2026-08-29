@@ -9,7 +9,7 @@ import { DELETE as deleteFilament } from "@/app/api/filaments/[id]/route";
 /**
  * GH #223 — three routes that read variant-only fields directly without
  * resolving the parent fallback. PR #190 fixed the same class of bug in
- * the compare route after Codex flagged it (variants commonly inherit
+ * the compare route (variants commonly inherit
  * `spoolWeight`, `cost`, etc. via `src/lib/resolveFilament.ts`).
  *
  * This file locks down the parallel fix in:
@@ -315,7 +315,7 @@ describe("GH #223 — variant inheritance in slicer + analytics + restore routes
 });
 
 /**
- * Codex round-1 P2 on PR #353 — same class of bug as the cases above.
+ * PR #353 — same class of bug as the cases above.
  * The detail endpoint's color-variants subquery used to project the
  * variant's own optTags only, so a variant with an empty optTags array
  * whose parent is matte rendered plain on the parent's color-variants

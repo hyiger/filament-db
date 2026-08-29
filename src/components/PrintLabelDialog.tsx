@@ -17,26 +17,16 @@ import { buildFilamentDeepLink } from "@/lib/labelDeepLink";
 /**
  * Print-label dialog for the filament detail page.
  *
- * Two QR payload modes the user can pick between per print:
- *   - "instanceId" — the 5-byte hex spool / filament identifier.
- *     Tiny payload (≤ 16 chars), produces a compact dense QR.
- *   - "url" — a deep link to the filament's detail page on the user's
- *     own instance. ~55 chars; needs a larger QR.
+ * Two QR payload modes, persisted in localStorage: "instanceId" (5-byte
+ * hex spool/filament id, compact QR) and "url" (deep link to the detail
+ * page, needs a larger QR).
  *
- * The choice persists in localStorage so the same mode is the default
- * next time the user opens the dialog.
+ * Print delivery: web downloads the encoded .bin; Electron sends bytes
+ * over IPC to electron/label-printer.ts, which hands them to the OS print
+ * system over USB (GH #588).
  *
- * Print delivery:
- *   - **Web (no Electron)**: downloads the encoded .bin file. Useful
- *     for "I want to inspect what would be sent" + a forward-compat
- *     escape hatch for non-Electron deployments.
- *   - **Electron**: sends the bytes over IPC to the print transport in the
- *     main process (electron/label-printer.ts), which hands them to the OS
- *     print system over USB (CUPS `lp -o raw` / Windows spooler). (GH #588)
- *
- * The label layout (QR placement, text fields, font, orientation, invert)
- * comes from the global LabelFormat (Settings → Label format); this dialog
- * only chooses the QR *payload* (instanceId vs URL). (GH #592)
+ * The label layout comes from the global LabelFormat (Settings → Label
+ * format); this dialog only chooses the QR *payload* (GH #592).
  */
 
 const LAST_QR_MODE_KEY = "filamentdb.printLabel.qrMode";
@@ -50,13 +40,12 @@ interface PrintLabelDialogProps {
     _id: string;
     name: string;
     instanceId?: string | null;
-    // GH #592: fields the configurable label layout can display.
+    // Fields the configurable label layout can display.
     vendor?: string | null;
     type?: string | null;
     colorName?: string | null;
-    // GH #595: the filament's spools, so a multi-spool filament can deep-link
-    // the URL-mode QR to a specific spool. #732: `instanceId` lets the
-    // instance-ID QR mode encode the SELECTED spool's id (not the filament's).
+    // Spools, so URL mode can deep-link to a specific spool and
+    // instance-ID mode can encode the SELECTED spool's id.
     spools?: Array<{ _id: string; label?: string | null; instanceId?: string | null; retired?: boolean | null }>;
   };
 }
@@ -82,28 +71,27 @@ export default function PrintLabelDialog({
     [filament.name, filament.vendor, filament.type, filament.colorName],
   );
 
-  // GH #595: which spool the URL-mode QR deep-links to. `spoolChoice` is the
-  // *raw* control state: null = no explicit choice yet (fall back to the first
-  // spool), "" = the user explicitly picked "filament only", otherwise a spool
-  // id. Deriving the default from the live `spools` (rather than a once-run
-  // initializer) keeps the single-spool case linked even when the spool is
-  // added after the dialog mounts, and self-heals a stale/removed id — Codex P2.
+  // `spoolChoice` is the *raw* control state: null = no explicit choice
+  // yet (fall back to the first spool), "" = the user explicitly picked
+  // "filament only", otherwise a spool id. Deriving the default from the
+  // live `spools` (rather than a once-run initializer) keeps the
+  // single-spool case linked even when the spool is added after the
+  // dialog mounts, and self-heals a stale/removed id.
   const spools = useMemo(() => filament.spools ?? [], [filament.spools]);
   const [spoolChoice, setSpoolChoice] = useState<string | null>(null);
   const effectiveSpoolId = useMemo(() => {
     if (spoolChoice === "") return null; // explicit "filament only"
     if (spoolChoice && spools.some((s) => s._id === spoolChoice)) return spoolChoice;
-    // #732: default to the first NON-retired spool, mirroring
-    // selectSpoolForWrite so the label QR's no-interaction default targets the
-    // SAME spool as the .bin route and the detail-page NFC writers (a filament
-    // whose first spool is retired must not default-encode the retired one).
+    // Default to the first NON-retired spool, mirroring selectSpoolForWrite
+    // so the label QR's no-interaction default targets the SAME spool as
+    // the .bin route and the detail-page NFC writers.
     const def = spools.find((s) => !s.retired) ?? spools[0];
     return def?._id ?? null;
   }, [spoolChoice, spools]);
 
-  // #732: the id the instance-ID QR encodes — the SELECTED spool's instanceId
-  // when a spool is chosen, else the filament-level id ("filament only" / a
-  // spool-less filament). Mirrors selectSpoolForWrite's intent on the client.
+  // The id the instance-ID QR encodes — the SELECTED spool's instanceId
+  // when a spool is chosen, else the filament-level id. Mirrors
+  // selectSpoolForWrite's intent on the client.
   const effectiveInstanceId = useMemo(() => {
     if (effectiveSpoolId) {
       const s = spools.find((sp) => sp._id === effectiveSpoolId);
@@ -163,15 +151,10 @@ export default function PrintLabelDialog({
   /* --- QR payload derivation --- */
   // The deep link's base URL needs to be REACHABLE by whoever scans
   // the printed label. Two sources, in priority order:
-  //
   //   1. Settings → Label Printer → "Public URL" (electron-store key
-  //      labelPrinterPublicUrl). User sets this when they expose
-  //      Filament DB on the LAN or a public domain. (Codex P2 on
-  //      PR #487.)
-  //   2. window.location.origin — only useful when it's NOT localhost.
-  //      Packaged Electron always serves on localhost so this branch
-  //      only helps web users with a real domain.
-  //
+  //      labelPrinterPublicUrl).
+  //   2. window.location.origin — only useful when it's NOT localhost
+  //      (packaged Electron always serves on localhost).
   // If neither yields a non-localhost URL, the deep-link mode is
   // gated off — the radio renders disabled with a pointer to Settings.
   const [publicUrl, setPublicUrl] = useState<string | null>(null);
@@ -201,13 +184,10 @@ export default function PrintLabelDialog({
         deepLinkAvailable: true,
       };
     }
-    // Web case: window.location.origin is usually a real URL. Fall
-    // back when it's not localhost. We share the same helper the
-    // main-process validator uses (src/lib/loopbackHost.ts) so the
-    // UX gate and the security boundary can't drift — Codex P2 round
-    // 11 caught a previous regex here that missed `localhost.`,
-    // `[::]`, IPv4-mapped IPv6, etc. that the main-process check
-    // already rejects.
+    // Shares the same helper the main-process validator uses
+    // (src/lib/loopbackHost.ts) so the UX gate and the security boundary
+    // can't drift — an ad-hoc regex here missed hostname shapes the
+    // main-process check already rejects.
     const origin = window.location.origin;
     if (!isLoopbackUrl(origin)) {
       return {
@@ -231,10 +211,9 @@ export default function PrintLabelDialog({
 
   const qrPayload = fallbackQrMode === "instanceId" ? effectiveInstanceId : deepLinkUrl;
 
-  // GH #592: a label is printable when it has SOMETHING on it — a QR (format
-  // enables it AND a payload resolved) or at least one non-empty text line.
-  // This both unblocks "QR off" text-only labels (Codex P2) and blocks a
-  // blank label when QR is off and every selected field is empty (Codex P3).
+  // A label is printable when it has SOMETHING on it — a QR (format
+  // enables it AND a payload resolved) or at least one non-empty text
+  // line. Unblocks "QR off" text-only labels while blocking a blank label.
   const hasQr = format.qr.enabled && !!qrPayload;
   const hasText = useMemo(
     () => composeLabelLines(labelFilament, format).length > 0,
@@ -288,16 +267,10 @@ export default function PrintLabelDialog({
   }, [open, qrPayload, canPrint, labelFilament, format]);
 
   /* --- print / download handler ---
-   *
-   * Electron path: render bitmap → encode → send bytes over IPC to the
-   * print transport in the main process, which hands them to the OS print
-   * system (CUPS `lp -o raw` / Windows spooler RAW). The renderer never
-   * shells out or opens the USB device directly. (GH #588)
-   *
-   * Web path: render → encode → download .bin file so the simulator
-   * script can decode it. Useful for development without a printer and
-   * as a forward-compat escape hatch for users who run filament-db
-   * web-only and want to inspect the byte stream. */
+   * Electron: render → encode → bytes over IPC to the main-process print
+   * transport; the renderer never shells out or opens the USB device
+   * directly. Web: render → encode → download .bin the simulator script
+   * can decode. */
   const [printing, setPrinting] = useState(false);
   const handlePrint = useCallback(async () => {
     setPrinting(true);
@@ -316,27 +289,23 @@ export default function PrintLabelDialog({
 
       if (isElectron && window.electronAPI?.labelPrinterPrint) {
         // Uint8Array doesn't structured-clone cleanly across the IPC
-        // boundary in all Electron versions; passing as a plain number[]
-        // sidesteps any serialization quirks at the cost of a single
-        // O(n) marshal (the encoder caps total bytes at ~270 KB so this
-        // is cheap in absolute terms).
+        // boundary in all Electron versions; a plain number[] sidesteps
+        // the quirks (encoder caps total bytes at ~270 KB, so cheap).
         try {
           await window.electronAPI.labelPrinterPrint(Array.from(bytes));
           toast(t("printLabel.printedSuccess"), "success");
           onClose();
           return;
         } catch (err) {
-          // Surface the failure but stay in the dialog so the user can
-          // open Settings and reconfigure the device path without losing
-          // their QR-mode selection.
+          // Stay in the dialog so the user can reconfigure the device
+          // path without losing their QR-mode selection.
           const msg = err instanceof Error ? err.message : String(err);
           toast(t("printLabel.printFailed", { error: msg }), "error");
           return;
         }
       }
 
-      // Web fallback (or Electron with no electronAPI surface — unlikely
-      // but defensive). Downloads the .bin file for offline inspection.
+      // Web fallback (or Electron with no electronAPI surface — defensive).
       const filename = `${filament.name.replace(/[^a-z0-9]+/gi, "_")}_label.bin`;
       const blob = new Blob([bytes as BlobPart], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
@@ -504,10 +473,10 @@ export default function PrintLabelDialog({
             </div>
           </fieldset>
 
-          {/* GH #595 + #732: spool picker for multi-spool filaments — chooses
-              which spool BOTH QR modes target. URL mode deep-links `?spool=`;
-              instance-ID mode encodes that spool's instanceId. "Filament only"
-              (the empty option) encodes the filament-level id (legacy). */}
+          {/* Spool picker — chooses which spool BOTH QR modes target.
+              URL mode deep-links `?spool=`; instance-ID mode encodes that
+              spool's instanceId. "Filament only" (the empty option)
+              encodes the filament-level id (legacy). */}
           {spools.length > 1 && (
             <div>
               <label
@@ -572,11 +541,8 @@ export default function PrintLabelDialog({
                 </p>
               )}
             </div>
-            {/* Mode-aware notice. Web: tell users they're getting a
-                .bin download and how to inspect it. Electron with a
-                configured device: explain the IPC path + how to change
-                it. Electron without a configured device: tell users
-                they need to pair the printer and pick it in Settings. */}
+            {/* Mode-aware notice: web .bin download / configured device /
+                unconfigured device. */}
             {!isElectron ? (
               <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                 {t("printLabel.webOnlyNotice")}

@@ -181,7 +181,6 @@ export default function PrusamentImportDialog({
 
       setSpool(data);
 
-      // Find matching filaments by material type
       const filRes = await fetch(
         `/api/filaments?type=${encodeURIComponent(data.material)}`,
         { signal: ac.signal },
@@ -191,12 +190,10 @@ export default function PrusamentImportDialog({
         const filaments = await filRes.json();
         setMatches(filaments);
 
-        // Auto-select if target provided
         if (targetFilamentId) {
           setAction("add-spool");
           setSelectedFilamentId(targetFilamentId);
         } else {
-          // Check for exact name match
           const exactName = `Prusament ${data.material} ${data.colorName}`;
           const exact = filaments.find(
             (f: MatchingFilament) => f.name === exactName,

@@ -9,7 +9,7 @@ import { POST as prusaBulk } from "@/app/api/filaments/prusaslicer/route";
 import { POST as iniImport } from "@/app/api/filaments/import/route";
 
 /**
- * GH #605 (codex P2, slicer-sync sweep) — the TEMPLATE strip on slicer
+ * GH #605 — the TEMPLATE strip on slicer
  * sync-back writes.
  *
  * A filament with ≥1 live variant is a TEMPLATE and must not carry
@@ -386,7 +386,7 @@ describe("GH #605 — slicer sync template strip", () => {
 });
 
 /**
- * GH #1116 (Codex P1, round 28) — a name-addressed sync must reach the row the
+ * GH #1116 — a name-addressed sync must reach the row the
  * slicer actually named.
  *
  * `name` carries `trim: true`, and a Mongoose String setter casts QUERY values.

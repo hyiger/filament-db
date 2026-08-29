@@ -47,10 +47,9 @@ function localTodayInput(): string {
 
 /** True when the stored value is exactly UTC midnight — the shape a
  *  date-only usage entry takes (the picker sends a bare `YYYY-MM-DD`,
- *  stored as `00:00:00.000Z`). Real "now" timestamps (job/slicer
- *  entries, mobile logs, manual logs from before the picker) are
- *  effectively never exactly midnight UTC, so this cleanly separates
- *  calendar-day values from instants (#941 / Codex review). */
+ *  stored as `00:00:00.000Z`). Real "now" timestamps are effectively
+ *  never exactly midnight UTC, so this cleanly separates calendar-day
+ *  values from instants (#941). */
 function isUtcMidnight(value: string | Date): boolean {
   const d = value instanceof Date ? value : new Date(value);
   return (
@@ -88,13 +87,10 @@ function computeRemaining(filament: Filament, overrideTotalWeight?: number | nul
 
 /**
  * GH #402: same-route navigation (`/filaments/A` → `/filaments/B`)
- * triggers a params change without an unmount, so all the inner
- * component's state would otherwise leak into the next filament
- * (typed Add-Spool form, stale 404, NFC-write banner, etc.). Wrap
- * the inner component with `key={params.id}` so React unmounts and
- * remounts it on every id change — the whole state graph resets
- * naturally without any per-field reset boilerplate inside the
- * fetch effect.
+ * triggers a params change without an unmount, so the inner
+ * component's state would otherwise leak into the next filament.
+ * `key={params.id}` unmounts/remounts on every id change so the whole
+ * state graph resets without per-field reset boilerplate.
  */
 export default function FilamentDetailPage() {
   const params = useParams();
@@ -109,15 +105,13 @@ function FilamentDetail() {
   const params = useParams();
   const router = useRouter();
   const [filament, setFilament] = useState<Filament | null>(null);
-  // GH #607: "Check for OpenPrintTag updates" dialog.
+  // "Check for OpenPrintTag updates" dialog.
   const [resyncOpen, setResyncOpen] = useState(false);
-  // Issue #753 (approach C): "Link to OpenPrintTag" dialog.
+  // "Link to OpenPrintTag" dialog.
   const [linkOpen, setLinkOpen] = useState(false);
   /**
    * Both `previewOpenFor` and `embedCheck` are keyed to the tdsUrl they
-   * apply to. Navigating between filaments (same route, different params)
-   * keeps the component mounted and therefore preserves state — keying on
-   * tdsUrl means the *derived* `showTdsPreview` and `tdsEmbedState` below
+   * apply to, so the *derived* `showTdsPreview` and `tdsEmbedState` below
    * naturally reset when the loaded filament changes, instead of leaking a
    * previous filament's "allowed"/"blocked" verdict to the new one.
    *
@@ -138,9 +132,7 @@ function FilamentDetail() {
       ? embedCheck.state
       : "idle";
   /** Lookup result for the current filament's `inherits` PrusaSlicer-style
-   *  parent name. Stamped with the inheritsName the lookup was for so a
-   *  filament-prop change can't expose a stale (wrong) target id while the
-   *  next fetch is still in flight — same pattern as embedCheck above. */
+   *  parent name — see the stamp rationale on the lookup effect below. */
   const [inheritsLookup, setInheritsLookup] = useState<
     { inheritsName: string; targetId: string | null } | null
   >(null);
@@ -148,27 +140,16 @@ function FilamentDetail() {
     filament?.inherits && inheritsLookup?.inheritsName === filament.inherits
       ? inheritsLookup.targetId
       : null;
-  /**
-   * AbortController for the in-flight embed-check fetch. Lets a new toggle
-   * (e.g. user navigates A→B and opens B's preview before A's probe has
-   * resolved) cancel the previous request and ignore its eventual reply,
-   * so a late-arriving response can't overwrite a newer in-flight or
-   * already-resolved verdict.
-   */
+  /** AbortController for the in-flight embed-check fetch. */
   const embedCheckAbortRef = useRef<AbortController | null>(null);
   /** Inline "+ Add Spool" form state — used for both the regular and the
-   * first-spool entry points. Was previously a one-click create with no
-   * confirmation; users would land on a blank spool with no idea what
-   * had just happened. */
+   * first-spool entry points. */
   const [addSpoolForm, setAddSpoolForm] = useState<
     { open: boolean; label: string; totalWeight: string }
   >({ open: false, label: "", totalWeight: "" });
   // GH #440: double-submit guard for the Add Spool Create button.
-  // Pre-fix both inline Add Spool buttons `await`-ed handleAddSpool
-  // without disabling, so a second click during the POST created a
-  // duplicate spool. Lifts to component-level state because BOTH
-  // create buttons (the regular flow and the empty-state fallback)
-  // need to share the same in-flight flag.
+  // Component-level state because BOTH create buttons (the regular flow
+  // and the empty-state fallback) share the same in-flight flag.
   const [addSpoolSubmitting, setAddSpoolSubmitting] = useState(false);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag, notifyTagWritten } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
@@ -178,10 +159,9 @@ function FilamentDetail() {
 
   // GH #973: NTAG size picker — a promise-based modal used when a reader can't
   // auto-detect the chip size (GET_VERSION rejected). Resolves to the chosen size
-  // + whether to remember it as the default, or null when cancelled. Kept local
-  // to this page (the only consumer). The pending resolver lives in a ref (not
-  // state) so an unmount mid-prompt can settle the awaiting write chain with null
-  // instead of leaking a hung promise.
+  // + whether to remember it as the default, or null when cancelled. The pending
+  // resolver lives in a ref (not state) so an unmount mid-prompt can settle the
+  // awaiting write chain with null instead of leaking a hung promise.
   type NtagPickResult = { size: NtagSizeName; remember: boolean };
   const { defaultSize: ntagDefaultSize, setDefaultSize: setNtagDefaultSize } = useNtagDefaultSize();
   const [ntagSizePromptOpen, setNtagSizePromptOpen] = useState(false);
@@ -225,12 +205,11 @@ function FilamentDetail() {
   const [weightInput, setWeightInput] = useState("");
   const [weightSaving, setWeightSaving] = useState(false);
 
-  // GH #405 follow-up (Codex on PR #460): store the error TYPE rather
-  // than the translated string. With `t` removed from the fetch
-  // effect's dep array (intentional — see the comment there),
-  // capturing the translated string at fetch time would freeze the
-  // message in whichever locale was active when the request failed.
-  // Render-time translation via the JSX path picks up the current
+  // GH #405: store the error TYPE rather than the translated string.
+  // With `t` removed from the fetch effect's dep array (intentional —
+  // see the comment there), capturing the translated string at fetch
+  // time would freeze the message in whichever locale was active when
+  // the request failed. Render-time translation picks up the current
   // locale on every re-render.
   type FetchErrorKey = "loadFailed" | "connectionFailed" | null;
   const [fetchError, setFetchError] = useState<FetchErrorKey>(null);
@@ -238,17 +217,13 @@ function FilamentDetail() {
   const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
   const [printers, setPrinters] = useState<PrinterLite[]>([]);
 
-  // Three action-menu dropdowns (Export / Sync / Variants). Each one is
-  // a native <details> with a custom <summary> trigger; refs let us close
-  // them after a click and on an outside click — a bare <details>
+  // Three action-menu dropdowns (Export / Sync / Variants). Refs let us
+  // close them after a click and on an outside click — a bare <details>
   // doesn't collapse on outside click on its own.
   const exportMenuRef = useRef<HTMLDetailsElement>(null);
   const syncMenuRef = useRef<HTMLDetailsElement>(null);
   const variantsMenuRef = useRef<HTMLDetailsElement>(null);
 
-  // PrintLabelDialog open state. Controlled here so the dialog mounts
-  // alongside the rest of the filament detail tree and can read the
-  // resolved filament directly.
   const [printLabelOpen, setPrintLabelOpen] = useState(false);
 
   // GH #595: when arrived via a spool deep-link QR (`?spool=<id>`), scroll to
@@ -259,9 +234,8 @@ function FilamentDetail() {
   const deepLinkHandledRef = useRef(false);
 
   // "Sync from Bambu Studio" file input + in-flight flag. Pinned to this
-  // filament's id (POST /api/filaments/{id}/bambustudio) so the user is
-  // updating exactly the record they're looking at, regardless of the
-  // file's filament_settings_id.
+  // filament's id so the user updates exactly the record they're looking
+  // at, regardless of the file's filament_settings_id.
   const bambuSyncRef = useRef<HTMLInputElement>(null);
   const [bambuSyncing, setBambuSyncing] = useState(false);
 
@@ -294,7 +268,6 @@ function FilamentDetail() {
         } else if (data.calibrationUnresolved) {
           toast(t("bambuImport.calibrationUnresolved"), "info");
         }
-        // Re-fetch so the page reflects the new values.
         const refreshed = await fetch(`/api/filaments/${filament._id}`);
         if (refreshed.ok) setFilament(await refreshed.json());
       } catch {
@@ -307,15 +280,12 @@ function FilamentDetail() {
     [filament, t, toast],
   );
 
-  // Clear NFC write timeout on unmount
   useEffect(() => {
     return () => { if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current); };
   }, []);
 
-  // Collapse any open action-menu dropdown when the user clicks elsewhere.
-  // Single listener covers all three menus so they also auto-close each
-  // other on outside-click (clicking on a different menu's summary closes
-  // any other that's already open).
+  // Single outside-click listener covers all three menus so they also
+  // auto-close each other.
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       for (const ref of [exportMenuRef, syncMenuRef, variantsMenuRef]) {
@@ -331,18 +301,11 @@ function FilamentDetail() {
 
   useEffect(() => {
     const controller = new AbortController();
-    // GH #405: fetch the filament without `t` in the dep array. The
-    // payload is locale-independent and re-fetching on every
-    // `setLocale` was wasted bandwidth plus a flicker. Errors are
-    // stored as TYPE KEYS (`loadFailed` / `connectionFailed`) and
-    // resolved through `t(...)` at render time, so a locale switch
-    // mid-error retranslates without any new round-trip.
-    //
-    // Same-route navigation (`/filaments/A` → `/filaments/B`) state-
-    // reset is handled by the `key={params.id}` on the wrapper below
-    // (GH #402) — React unmounts/remounts the inner component on id
-    // change, so the entire local state graph resets without any
-    // per-field clearing here.
+    // GH #405: `t` is intentionally NOT in the dep array — the payload is
+    // locale-independent, so re-fetching on every `setLocale` is wasted.
+    // Errors are stored as TYPE KEYS and resolved through `t(...)` at
+    // render time. Same-route state reset is handled by `key={params.id}`
+    // on the wrapper (GH #402), so no per-field clearing here.
     fetch(`/api/filaments/${params.id}`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
@@ -354,10 +317,9 @@ function FilamentDetail() {
     return () => controller.abort();
   }, [params.id]);
 
-  // GH #607: re-pull the filament after an OpenPrintTag re-sync applied
-  // changes, so the detail view reflects the adopted values. GH #640:
-  // never throws — a failed refresh keeps the current data rather than
-  // surfacing an unhandled rejection from fire-and-forget callers.
+  // GH #640: never throws — a failed refresh keeps the current data
+  // rather than surfacing an unhandled rejection from fire-and-forget
+  // callers.
   const refetchFilament = useCallback(async () => {
     try {
       const r = await fetch(`/api/filaments/${params.id}`);
@@ -367,23 +329,20 @@ function FilamentDetail() {
     }
   }, [params.id]);
 
-  // GH #595: spool deep-link — once the filament (with its spools) has loaded,
-  // if `?spool=<id>` is in the URL and matches a spool, scroll to it and
-  // highlight it briefly. The ref makes this fire once (not on every later
-  // spool edit that re-sets `filament`).
+  // GH #595: spool deep-link — once the filament has loaded, if `?spool=<id>`
+  // matches a spool, scroll to it and highlight it briefly. The ref makes
+  // this fire once (not on every later spool edit that re-sets `filament`).
   //
-  // Round 7 P2 — SELF-HEALING stale labels: a printed QR encodes
+  // SELF-HEALING stale labels: a printed QR encodes
   // `/filaments/<id>?spool=<spoolId>` permanently, but a spool can move to a
-  // different document while its subdoc id stays valid (a GH #605 parent
-  // promotion preserves spool _ids verbatim today; any future move would
-  // too). Printed history can't be reprinted, so when the addressed filament
-  // doesn't carry the spool we resolve the TRUE owner globally by spool id
-  // (GET /api/spools/{spoolId}) and router.replace to the owner's page with
-  // the full query string intact — the keyed remount then runs this effect
-  // again on the owner and highlights the spool. This heals ALL stale
-  // labels, not just promotion-moved ones. A spool that exists nowhere keeps
-  // the pre-existing quiet posture (stay on the addressed page). Decision
-  // logic is pure + unit-tested in src/lib/spoolDeepLink.ts.
+  // different document while its subdoc id stays valid (e.g. a GH #605
+  // parent promotion preserves spool _ids verbatim). When the addressed
+  // filament doesn't carry the spool, resolve the TRUE owner globally by
+  // spool id and router.replace to the owner's page with the full query
+  // string intact — the keyed remount then runs this effect again on the
+  // owner and highlights the spool. A spool that exists nowhere keeps the
+  // quiet posture (stay on the addressed page). Decision logic is pure +
+  // unit-tested in src/lib/spoolDeepLink.ts.
   useEffect(() => {
     if (deepLinkHandledRef.current || !filament || typeof window === "undefined") return;
     deepLinkHandledRef.current = true;
@@ -421,7 +380,7 @@ function FilamentDetail() {
   }, [filament, params.id, router]);
 
   // Load locations once so the spool cards can show a picker without each
-  // spool re-fetching. Small list — OK to keep in state.
+  // spool re-fetching.
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/locations", { signal: ac.signal })
@@ -431,9 +390,8 @@ function FilamentDetail() {
     return () => ac.abort();
   }, []);
 
-  // Load printers once so each spool card can show its AMS-slot picker.
-  // The response carries every amsSlots[].spoolId, so a spool's current
-  // slot is derived client-side — no per-spool round trip (GH #242).
+  // Load printers once — the response carries every amsSlots[].spoolId,
+  // so a spool's current slot is derived client-side (GH #242).
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/printers", { signal: ac.signal })
@@ -443,9 +401,8 @@ function FilamentDetail() {
     return () => ac.abort();
   }, []);
 
-  // If this filament has an `inherits` PrusaSlicer-style parent name, look up
-  // whether any filament in the DB matches it exactly. The result is stored
-  // stamped with the inheritsName it was for, and the derived
+  // Resolve the `inherits` PrusaSlicer-style parent name to a filament id.
+  // The result is stamped with the inheritsName it was for, and the derived
   // `inheritsTargetId` above only returns it when the stamp matches the
   // *current* filament's inherits — so a same-route navigation can't render
   // a stale link to the previous filament's parent.
@@ -467,9 +424,7 @@ function FilamentDetail() {
   // handler (not an effect) because the "set state to 'checking' then
   // fetch" pattern in an effect would re-fire the effect on the very
   // state change it just made, aborting its own request.
-  // Plain function (no useCallback) so React Compiler can memoize it
-  // — the manual deps would have to spell out `filament` to match the
-  // compiler's inference, which leaks more than we read.
+  // Plain function (no useCallback) so React Compiler can memoize it.
   const handleToggleTdsPreview = async () => {
     if (!filament?.tdsUrl) return;
     const tdsUrl = filament.tdsUrl;
@@ -482,8 +437,7 @@ function FilamentDetail() {
     if (embedCheck?.tdsUrl === tdsUrl) return;
 
     // Cancel any in-flight probe so a late response from the *previous*
-    // toggle (different filament, different tdsUrl) can't overwrite this
-    // one's verdict and snap the open preview back to "idle".
+    // toggle (different tdsUrl) can't overwrite this one's verdict.
     embedCheckAbortRef.current?.abort();
     const ac = new AbortController();
     embedCheckAbortRef.current = ac;
@@ -509,16 +463,14 @@ function FilamentDetail() {
 
   // GH #583: probe the tag before any write entry point clobbers it. Shared
   // by the explicit "Write NFC" button and the "Update NFC" weight path so a
-  // Bambu (read-only) tag is refused consistently — Codex P2 on PR #584.
-  //  • Bambu Lab tag → read-only, refuse with a friendly toast (writing would
-  //    otherwise fail with a raw MIFARE error)
-  //  • non-blank tag + confirmOverwrite → confirm before clobbering existing data
-  //  • genuinely blank/unformatted tag (read throws a known blank signal) →
-  //    allow, write straight through
+  // Bambu (read-only) tag is refused consistently.
+  //  • Bambu Lab tag → read-only, refuse with a friendly toast
+  //  • non-blank tag + confirmOverwrite → confirm before clobbering
+  //  • genuinely blank/unformatted tag → allow, write straight through
   //  • unknown read error (transient PC/SC, decode failure on a non-blank tag)
-  //    → fail CLOSED: don't silently overwrite a tag we couldn't read
-  //    (Codex P2 on PR #584). Mirrors the blank-tag signals raised in
-  //    electron/ndef.ts + the auto-read classifier in electron/main.ts.
+  //    → fail CLOSED: don't silently overwrite a tag we couldn't read.
+  //    Mirrors the blank-tag signals raised in electron/ndef.ts + the
+  //    auto-read classifier in electron/main.ts.
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
     async ({ confirmOverwrite = false, targetInstanceId }: { confirmOverwrite?: boolean; targetInstanceId?: string } = {}): Promise<boolean> => {
@@ -528,8 +480,6 @@ function FilamentDetail() {
         brandName?: string;
         spoolUid?: string;
         readOnly?: boolean;
-        // #864 OpenTag3D: the spool serial rides aux.opentag3d_serial (no
-        // first-class spoolUid slot), so the own-tag match falls back to it.
         aux?: { opentag3d_serial?: string } | null;
       };
       let existing: ProbedTag | null | undefined;
@@ -544,7 +494,7 @@ function FilamentDetail() {
         // Only a GENUINELY blank/erased tag (no NDEF data at all) bypasses the
         // overwrite prompt. "No NDEF record" is NOT blank — it's also thrown by
         // electron/ndef.ts for a valid NDEF message that simply isn't an
-        // OpenPrintTag, so it must NOT fail open (Codex P2 round 4 on PR #584).
+        // OpenPrintTag, so it must NOT fail open.
         if (msg.includes("Blank or unformatted") || msg.includes("No NDEF TLV")) {
           return true;
         }
@@ -559,17 +509,15 @@ function FilamentDetail() {
       }
 
       // Bambu Lab tags are read-only — refuse on every write path. (An
-      // OpenTag3D tag in the field is writable on the NTAG path, so it is NOT
-      // refused here — it flows through the own-tag / overwrite logic below
-      // exactly like an OpenPrintTag.)
+      // OpenTag3D tag is writable on the NTAG path, so it is NOT refused
+      // here — it flows through the own-tag / overwrite logic below.)
       if (existing?.tagSource === "bambu") {
         toast(t("detail.nfc.bambuReadOnly"), "error");
         return false;
       }
 
       // GH #583: honor a soft read-only OpenPrintTag — refuse the write and
-      // point the user at Erase / Make Writable. (Bambu is handled above with
-      // its own message since it can't be made writable.)
+      // point the user at Erase / Make Writable.
       if (existing?.readOnly) {
         toast(t("detail.nfc.readOnlyRefuse"), "error");
         return false;
@@ -585,9 +533,8 @@ function FilamentDetail() {
         // aux.opentag3d_serial (no spoolUid slot); fall back to it so an
         // own-OpenTag3D-tag weight update re-writes silently like an OPT tag.
         const tagInstance = norm(existing?.spoolUid ?? existing?.aux?.opentag3d_serial);
-        // #732 (Codex P2 r2/r3): the SILENT (weight-update) re-write may only
-        // accept a tag that positively identifies as THIS write's target spool
-        // — its spool_uid equals the target spool's instanceId. The
+        // #732: the SILENT (weight-update) re-write may only accept a tag that
+        // positively identifies as THIS write's target spool. The
         // filament-level id is NOT a blanket pass: backfillSpoolInstanceIds
         // carries the filament id onto the FIRST spool, so accepting any tag
         // bearing the filament id would let spool[0]'s tag be silently
@@ -612,9 +559,9 @@ function FilamentDetail() {
         const isOwnTag = !foreignNdef && !!existing && (sameInstance || sameNameVendor);
 
         // Weight-update path silently re-writes THIS filament's own tag (the
-        // common case). Any OTHER tag must not be clobbered silently (Codex P2
-        // round 5 on PR #584): a foreign NDEF tag fails closed; a different
-        // filament's OpenPrintTag falls through to the confirm below.
+        // common case). Any OTHER tag must not be clobbered silently: a
+        // foreign NDEF tag fails closed; a different filament's OpenPrintTag
+        // falls through to the confirm below.
         if (!confirmOverwrite && isOwnTag) {
           return true;
         }
@@ -640,10 +587,10 @@ function FilamentDetail() {
     [toast, t, confirm, filament],
   );
 
-  // #864 OpenTag3D write: build the standard's native binary for the loaded
-  // chip. Probes via nfcDetectTag — an NTAG ⇒ OpenTag3D fixed-binary image, a
-  // SLIX2/blank tag ⇒ OpenPrintTag CBOR. Returns null (with a toast already
-  // shown) when the write should be aborted — e.g. a Bambu tag (read-only).
+  // #864: build the standard's native binary for the loaded chip. Probes via
+  // nfcDetectTag — NTAG ⇒ OpenTag3D fixed-binary image, SLIX2/blank ⇒
+  // OpenPrintTag CBOR. Returns null (with a toast already shown) when the
+  // write should be aborted — e.g. a Bambu tag (read-only).
   const buildTagWritePayload = useCallback(
     async ({
       spoolInstanceId,
@@ -655,7 +602,7 @@ function FilamentDetail() {
       /** When true, refuse (rather than silently succeed) if the chip can't hold
        * the OpenTag3D Extended image — the weight-update path's remaining weight
        * (`measured_filament_weight`) + spool id (`serial`) are Extended-only, so
-       * a Core-only fallback on a tiny NTAG213 would drop them (Codex #927). */
+       * a Core-only fallback on a tiny NTAG213 would drop them (#927). */
       requireExtended?: boolean;
     }): Promise<
       | {
@@ -686,7 +633,6 @@ function FilamentDetail() {
       }
 
       if (detected?.family === "ntag") {
-        // OpenTag3D fixed-binary image.
         const { fields, notices } = filamentToOpenTag3DFields(
           {
             type: filament.type,
@@ -714,9 +660,9 @@ function FilamentDetail() {
           console.warn("[nfc] OpenTag3D lossy mapping:", notices);
           toast(t("detail.nfc.opentag3dNotice"), "info");
         }
-        // Codex #927: pick the Core (112B) vs Extended (187B) image by the
-        // detected NDEF capacity — the Extended TLV (~214B) overflows a small
-        // NTAG213 (144B), so fall back to Core-only there instead of letting the
+        // #927: pick the Core (112B) vs Extended (187B) image by the detected
+        // NDEF capacity — the Extended TLV (~214B) overflows a small NTAG213
+        // (144B), so fall back to Core-only there instead of letting the
         // write fail with TAG_TOO_SMALL.
         let effectiveCapacity =
           typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0
@@ -724,17 +670,16 @@ function FilamentDetail() {
             : null;
         // GH #973: an NTAG whose size GET_VERSION couldn't auto-detect reports a
         // null capacity (some readers — e.g. the ACR1552U — reject GET_VERSION
-        // outright, so this is the NORMAL case there, for blank AND formatted
-        // tags). Rather than silently downgrade to a 144-byte NTAG213 (dropping
-        // the spool id + weight and mislabelling the chip), ask the user which
-        // NTAG it is — the same posture as the dev CLI's --ntag. The chosen size
-        // is authoritative on the write side (it rewrites the CC), so this also
-        // corrects a tag an earlier failed write mis-formatted.
+        // outright, so this is the NORMAL case there). Rather than silently
+        // downgrade to a 144-byte NTAG213 (dropping the spool id + weight),
+        // ask the user which NTAG it is. The chosen size is authoritative on
+        // the write side (it rewrites the CC), so this also corrects a tag an
+        // earlier failed write mis-formatted.
         let ntagSize: NtagSizeName | undefined;
         if (effectiveCapacity == null) {
           if (ntagDefaultSize !== "ask") {
-            // A saved default (Settings, or a remembered pick) → skip the prompt
-            // so a batch of same-type tags writes without re-picking each time.
+            // A saved default → skip the prompt so a batch of same-type tags
+            // writes without re-picking each time.
             ntagSize = ntagDefaultSize;
           } else {
             const picked = await promptNtagSize();
@@ -750,30 +695,28 @@ function FilamentDetail() {
           if (ext.tlv.length > effectiveCapacity) includeExtended = false;
         }
         if (!includeExtended) {
-          // Codex #927: the weight-update path's remaining weight + spool id live
-          // in Extended-only fields — refuse rather than report a "successful"
-          // update that silently dropped them.
+          // Refuse rather than report a "successful" update that silently
+          // dropped the Extended-only fields (see requireExtended above).
           if (requireExtended) {
             toast(t("detail.nfc.opentag3dTooSmallForUpdate"), "error");
             return null;
           }
           // Write path: Core-only is allowed, but it drops the Extended-only
-          // fields (serial/spool id, remaining weight) — tell the user so a later
-          // scan that doesn't match the spool isn't a surprise (Codex #927 r5).
+          // fields (serial/spool id, remaining weight) — tell the user so a
+          // later scan that doesn't match the spool isn't a surprise.
           toast(t("detail.nfc.opentag3dCoreOnly"), "info");
         }
         return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d", ntagSize };
       }
 
-      // Default / SLIX2 / blank → OpenPrintTag CBOR (unchanged behaviour).
+      // Default / SLIX2 / blank → OpenPrintTag CBOR.
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,
         brandName: filament.vendor,
         materialType: filament.type,
         // GH #477: nullable color → omit key 19 from CBOR.
         color: filament.color ?? undefined,
-        // GH #477 Phase 3: surface secondaryColors on the tag too.
-        // The encoder caps at 5 to match the spec (keys 20–24).
+        // The encoder caps secondaryColors at 5 to match the spec (keys 20–24).
         secondaryColors: filament.secondaryColors,
         density: filament.density,
         diameter: filament.diameter,
@@ -816,9 +759,9 @@ function FilamentDetail() {
       // #732: encode the SELECTED spool's instanceId (default = first
       // non-retired spool; filament-level id only for a spool-less filament),
       // and read the remaining weight from that SAME spool so the tag's id and
-      // weight agree (Codex P2 — an all-retired filament selects a retired spool
-      // for the id, and its weight must come from that spool too, not be
-      // dropped). Filament-level fallback uses the legacy top-level weight.
+      // weight agree — an all-retired filament selects a retired spool for
+      // the id, and its weight must come from that spool too, not be dropped.
+      // Filament-level fallback uses the legacy top-level weight.
       const writeSel = selectSpoolForWrite(filament);
       const spools = filament.spools ?? [];
       const selectedSpool =
@@ -835,8 +778,6 @@ function FilamentDetail() {
         actualWeightGrams = Math.max(0, grossWeight - filament.spoolWeight);
       }
 
-      // #864 OpenTag3D write: pick the standard from the loaded chip. NTAG ⇒
-      // OpenTag3D fixed-binary image; SLIX2/blank ⇒ OpenPrintTag CBOR.
       const built = await buildTagWritePayload({
         spoolInstanceId: writeSel.ok ? writeSel.instanceId : null,
         actualWeightGrams,
@@ -868,20 +809,16 @@ function FilamentDetail() {
     // spool A's); the filament-level NFC-tools button passes none → the
     // active-roll default. Falls back to the filament id for a spool-less row.
     const writeSel = selectSpoolForWrite(filament, spoolId);
-    // Bambu (read-only) tags can't be written — refuse with the friendly
-    // message here too. #732 (Codex P2): pass the TARGET spool id so the silent
-    // re-write only accepts a tag for THIS spool (or a legacy filament-level
-    // tag); a sibling spool's tag falls through to the overwrite prompt instead
-    // of being silently relabeled. Codex P2 on PR #584.
+    // Pass the TARGET spool id so the silent re-write only accepts a tag for
+    // THIS spool (or a legacy filament-level tag); a sibling spool's tag falls
+    // through to the overwrite prompt instead of being silently relabeled.
     if (!(await ensureTagWritable({ targetInstanceId: writeSel.ok ? writeSel.instanceId : undefined }))) return;
     setNfcWriteSuccess(null);
     try {
-      // #864 OpenTag3D write: same chip-aware payload build as handleNfcWrite,
-      // but with the freshly-weighed remaining grams.
       const built = await buildTagWritePayload({
         spoolInstanceId: writeSel.ok ? writeSel.instanceId : null,
         actualWeightGrams: actualRemaining,
-        requireExtended: true, // Codex #927: remaining weight is Extended-only
+        requireExtended: true, // remaining weight is Extended-only
       });
       if (!built) return; // detection refused — toast already shown
       await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl, ntagSize: built.ntagSize });
@@ -934,9 +871,8 @@ function FilamentDetail() {
 
   // GH #1027: the spool-mutation endpoints are called with ?shape=spool, so
   // the response carries only the AFFECTED spool — merge it into local state
-  // instead of wholesale-replacing the spools array from a full filament doc.
-  // Keeps every sibling spool's photo blob + usage ledger off the wire for a
-  // one-field write (the response side of the #1005 projection sweep).
+  // instead of wholesale-replacing the spools array. Keeps every sibling
+  // spool's photo blob + usage ledger off the wire for a one-field write.
   const mergeSpoolIntoState = (spool: FilamentSpool) => {
     setFilament(prev =>
       prev
@@ -952,16 +888,14 @@ function FilamentDetail() {
 
   // GH #1060: "Next #" pre-fills the label with the next roll number —
   // max(numeric labels across ALL spools, incl. retired + trashed) + 1.
-  // Suggestion only: it writes a normal controlled-input value the user can
-  // freely edit; nothing is reserved. ONE handler shared by both duplicated
-  // Add Spool render sites so the behavior can't drift between them.
+  // Suggestion only: nothing is reserved. ONE handler shared by both
+  // duplicated Add Spool render sites so the behavior can't drift.
   const [nextLabelLoading, setNextLabelLoading] = useState(false);
   const handleSuggestNextLabel = useCallback(async () => {
     // Snapshot the label at click time: if the fetch is slow and the user
     // types or pastes meanwhile, the response must NOT clobber their newer
-    // input — the suggestion only fills what the click was aimed at
-    // (PR #1061 review). The field stays enabled during the fetch on
-    // purpose; disabling it would trade the race for input lockout.
+    // input. The field stays enabled during the fetch on purpose; disabling
+    // it would trade the race for input lockout.
     const labelAtClick = addSpoolForm.label;
     setNextLabelLoading(true);
     try {
@@ -1008,10 +942,8 @@ function FilamentDetail() {
   };
 
   // GH #1080: ONE submit handler shared by BOTH duplicated Add Spool render
-  // sites (the regular flow and the first-spool fallback) so the
-  // success-gated reset can't drift between them. On failure the form stays
-  // open with the typed input intact for a retry; the error toast already
-  // fired inside handleAddSpool.
+  // sites so the success-gated reset can't drift between them. On failure
+  // the form stays open with the typed input intact for a retry.
   const handleAddSpoolSubmit = async () => {
     if (addSpoolSubmitting) return;
     const weight = addSpoolForm.totalWeight
@@ -1027,13 +959,11 @@ function FilamentDetail() {
   };
 
   // Re-pull printers so every spool card's *derived* AMS-slot assignment
-  // (read off amsSlots[].spoolId, not stored on the spool) reflects the
-  // latest server state. Used after any write that the server may have
-  // reconciled slots for — slot assign/clear and spool retire (#558).
-  // GH #640: never throws — the write that triggered the refresh already
-  // succeeded, so a failed refresh keeps the (possibly stale) printers
-  // list rather than letting the callers' catch blocks mis-report the
-  // whole operation as failed. Same silent posture as the mount fetch.
+  // reflects server state after any write that may have reconciled slots
+  // (#558). GH #640: never throws — the write that triggered the refresh
+  // already succeeded, so a failed refresh keeps the stale printers list
+  // rather than letting the callers' catch blocks mis-report the whole
+  // operation as failed.
   const refreshPrinters = async () => {
     try {
       const pr = await fetch("/api/printers");
@@ -1051,14 +981,11 @@ function FilamentDetail() {
       locationId?: string | null;
       photoDataUrl?: string | null;
       retired?: boolean;
-      // GH #601: provenance fields. The PUT handler (and the validator
-      // in src/lib/validateSpoolBody.ts) already accepts these — the type
-      // here just needs to surface them so the SpoolCard's
-      // onUpdateMeta callback can route through this single helper.
+      // Provenance fields (accepted by the PUT handler + validateSpoolBody).
       lotNumber?: string | null;
       purchaseDate?: string | null;
       openedDate?: string | null;
-      // #732 Phase 4: edit the spool's id, or regenerate a fresh one.
+      // Edit the spool's id, or regenerate a fresh one.
       instanceId?: string;
       regenerate?: boolean;
     },
@@ -1066,11 +993,9 @@ function FilamentDetail() {
     if (!filament) return;
 
     // When the user zeroes the remaining weight on a non-retired spool,
-    // offer to retire it in the same write — that's the canonical "I
-    // finished this spool" moment, and retiring preserves the spool's
-    // history (purchase / opened dates, dry cycles, usage log) while
-    // excluding it from inventory totals (see inventoryStats.ts gates on
-    // `retired`). Skipped when:
+    // offer to retire it in the same write — retiring preserves the spool's
+    // history while excluding it from inventory totals (inventoryStats.ts
+    // gates on `retired`). Skipped when:
     //   - the caller already passed `retired` (don't clobber an explicit
     //     choice from the SpoolCard's own retire toggle);
     //   - the spool was already retired (the prompt would be a no-op);
@@ -1099,10 +1024,9 @@ function FilamentDetail() {
       if (res.ok) {
         const updated = await res.json();
         mergeSpoolIntoState(updated.spool);
-        // #558: retiring a loaded spool clears it from its printer AMS slot
-        // server-side (the PUT handler calls assignSpoolToSlot(..., null)).
-        // The card's slot text is derived from `printers`, so refresh it or
-        // the stale "Printer slot: <printer> · <slot>" lingers until reload.
+        // #558: retiring a loaded spool clears its printer AMS slot
+        // server-side. The card's slot text is derived from `printers`, so
+        // refresh it or the stale slot text lingers until reload.
         if (data.retired === true) {
           await refreshPrinters();
         }
@@ -1112,8 +1036,8 @@ function FilamentDetail() {
             : t("detail.spool.updated"),
         );
       } else if (data.instanceId !== undefined || data.regenerate) {
-        // #732 Phase 4: surface the specific id-edit failure (409 duplicate /
-        // 400 invalid charset) rather than the generic update error.
+        // Surface the specific id-edit failure (409 duplicate / 400 invalid
+        // charset) rather than the generic update error.
         toast(
           res.status === 409
             ? t("detail.spool.instanceIdDuplicate")
@@ -1132,8 +1056,8 @@ function FilamentDetail() {
 
   // GH #242 — assign or clear a spool's printer AMS slot. Writes only
   // Printer documents (never the spool's locationId), then re-fetches
-  // printers so every card's derived assignment stays consistent — moving
-  // a spool into a slot must visibly clear it from its previous slot.
+  // printers — moving a spool into a slot must visibly clear it from its
+  // previous slot.
   const handleAssignSlot = async (
     spoolId: string,
     target: { printerId: string; slotId: string } | null,
@@ -1242,18 +1166,11 @@ function FilamentDetail() {
   };
 
   /**
-   * Soft-delete this filament — moves it to the trash, where the user
-   * can either restore it or permanently purge it via `/trash`. Until
-   * this PR there was no UI affordance to do this from the detail page;
-   * variants in particular were hard to find since the inventory-list
-   * bulk-delete required first expanding the parent to surface the
-   * variant's checkbox. Now the action lives right next to Edit.
-   *
-   * Parents-with-live-variants are gated server-side (the API returns
-   * 400 with a clear message). We don't pre-check that here — the
-   * button is *enabled* even for parents so the user gets the API's
-   * specific error if they try, which is more helpful than silently
-   * disabling the button without saying why.
+   * Soft-delete this filament — moves it to the trash (`/trash` restores
+   * or purges). Parents-with-live-variants are gated server-side (400
+   * with a clear message); no pre-check here — the button stays enabled
+   * even for parents so the user gets the API's specific error, which is
+   * more helpful than silently disabling the button without saying why.
    */
   const handleDeleteFilament = async () => {
     if (!filament) return;
@@ -1280,24 +1197,20 @@ function FilamentDetail() {
   const handleMigrateToSpools = async () => {
     if (!filament || filament.totalWeight == null) return;
     try {
-      // Create a spool from the legacy totalWeight
       const addRes = await fetch(`/api/filaments/${filament._id}/spools?shape=spool`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: "", totalWeight: filament.totalWeight }),
       });
       if (!addRes.ok) { toast(t("detail.spool.migrateFailed"), "error"); return; }
-      // Clear the legacy totalWeight
       const clearRes = await fetch(`/api/filaments/${filament._id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ totalWeight: null }),
       });
       if (clearRes.ok) {
-        // Deliberately parsed only after the clear PUT succeeds (existing
-        // partial-failure posture). shape=spool: append the created spool —
-        // a legacy migratable filament has no real spools, so this matches
-        // the old wholesale replace.
+        // Deliberately parsed only after the clear PUT succeeds
+        // (partial-failure posture).
         const added = await addRes.json();
         setFilament(prev =>
           prev
@@ -1311,20 +1224,18 @@ function FilamentDetail() {
     }
   };
 
-  // GH #605 (Phase 2b): "Convert to template" — a legacy parent that still
-  // carries its own color/spools (from before the template guards) moves
-  // that state onto a NEW variant via POST /promote (server-side copy-first
-  // / clear-last), leaving the template colorless and inventory-free.
+  // GH #605: "Convert to template" — a legacy parent that still carries its
+  // own color/spools moves that state onto a NEW variant via POST /promote
+  // (server-side copy-first / clear-last), leaving the template colorless
+  // and inventory-free.
   const handleConvertToTemplate = async () => {
     if (!filament) return;
     const ok = await confirm({
       title: t("detail.template.convertTitle"),
-      // GH #1103 (Codex P2): the confirmation used to say only "color and N
-      // spools", which is wrong for a parent gated solely by its inventory
-      // weight or color name — and this is the ONE prompt before a family is
-      // restructured. It now names every field /promote actually moves, so
-      // it's accurate for every gating shape without composing i18n
-      // fragments client-side.
+      // GH #1103: this is the ONE prompt before a family is restructured —
+      // the message must name every field /promote actually moves, so it's
+      // accurate for every gating shape without composing i18n fragments
+      // client-side.
       message: t("detail.template.convertConfirm", {
         count: filament.spools?.length ?? 0,
       }),
@@ -1359,12 +1270,10 @@ function FilamentDetail() {
   const inherited = new Set(filament._inherited || []);
   const isVariant = !!filament.parentId;
   const isParent = (filament._variants?.length ?? 0) > 0;
-  // GH #950.4 / #969 (Codex round 3): the single Orca/Bambu .json export bakes
-  // only ONE representative calibration (the any-printer/any-bed default), so any
-  // other calibration is dropped — whether on a different nozzle OR the same
-  // nozzle with a different bed type / printer. Warn whenever ≥1 is dropped.
-  // Mirrors droppedCalibrationCount in src/lib/orcaSlicerBundle.ts (kept inline to
-  // avoid pulling the export lib into the client bundle).
+  // The single Orca/Bambu .json export bakes only ONE representative
+  // calibration (the any-printer/any-bed default); warn whenever ≥1 is
+  // dropped. Mirrors droppedCalibrationCount in src/lib/orcaSlicerBundle.ts
+  // (kept inline to avoid pulling the export lib into the client bundle).
   const droppedCalibrations = Math.max(0, (filament.calibrations?.length ?? 0) - 1);
   // GH #1102: the Calibrations section must appear whenever there are rows to
   // show, not only when the tick list is non-empty.
@@ -1376,9 +1285,7 @@ function FilamentDetail() {
   // so a variant only shows a finish when its own optTags include one
   // of the FINISH_TAG_IDS.
   const finish = !isParent ? deriveFinish(filament.optTags) : null;
-  // GH #477: drive multi-color rendering from the filament's own optTags.
-  // Parents render hatched regardless, so we compute this anyway for
-  // consistency — `<FilamentSwatch isParent>` ignores `arrangement`.
+  // `<FilamentSwatch isParent>` ignores `arrangement`.
   const arrangement = !isParent ? deriveArrangement(filament.optTags) : "solid";
 
   return (
@@ -1404,8 +1311,7 @@ function FilamentDetail() {
           className="border-2"
           // Parents: let FilamentSwatch compute the richer "Color group:
           // #… / #…" label from the composite colors so screen-reader users
-          // get the same color info sighted users see (Codex P3 #600). It
-          // still falls back to "Color group" when no colors are known.
+          // get the same color info sighted users see.
           ariaLabel={isParent ? undefined : t("swatch.colorSwatch", { color: filament.color ?? "#808080" })}
         />
         <div className="min-w-0">
@@ -1441,9 +1347,8 @@ function FilamentDetail() {
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
-          {/* NFC status pill removed — the global one in AppHeader already
-              shows reader/loaded state, no need to render a duplicate next
-              to the Write NFC button. */}
+          {/* No NFC status pill here — the global one in AppHeader already
+              shows reader/loaded state. */}
           {isElectron && nfcStatus.tagPresent && (
             <button
               onClick={handleNfcWrite}
@@ -1470,10 +1375,7 @@ function FilamentDetail() {
             </button>
           )}
           {/* Export ▾ — anything that emits filament data: label-printer
-              output, NFC tag binary, and slicer config files. The single
-              dropdown replaces three separate buttons (Export OPT,
-              Print Label, Export for slicer ▾) so the action row stays
-              short as more output formats land. */}
+              output, NFC tag binary, and slicer config files. */}
           <details ref={exportMenuRef} className="relative inline-block">
             <summary
               className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700 text-sm inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
@@ -1488,11 +1390,8 @@ function FilamentDetail() {
               </svg>
             </summary>
             <div className="absolute right-0 z-20 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
-              {/* Label printer — opens the PrintLabelDialog. On
-                  Electron, the dialog sends the encoded byte stream
-                  over IPC to the serial-port writer in
-                  electron/label-printer.ts. On web (no Electron) it
-                  falls back to downloading the .bin file so the
+              {/* Label printer — opens the PrintLabelDialog. On web (no
+                  Electron) it falls back to downloading the .bin file so the
                   simulator at scripts/print-label-sim.ts can decode it. */}
               <button
                 type="button"
@@ -1528,10 +1427,9 @@ function FilamentDetail() {
                 </span>
                 <span className="text-xs text-gray-400 font-mono">.bin</span>
               </button>
-              {/* Slicer-format exports below the divider. Multi-color
-                  warning still surfaces here (GH #477 Phase 4) — slicer
-                  presets only carry one color, secondary colors are
-                  dropped on export. */}
+              {/* Slicer-format exports below the divider. Multi-color warning
+                  surfaces here — slicer presets only carry one color,
+                  secondary colors are dropped on export (GH #477). */}
               <div className="my-1 border-t border-gray-200 dark:border-gray-700" />
               <p className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
                 {t("detail.exportMenu.slicerSection")}
@@ -1546,12 +1444,10 @@ function FilamentDetail() {
                   {t("detail.slicerExport.multiCalibrationNotice")}
                 </p>
               )}
-              {/* GH #1066: a settings-bag printer restriction (usually carried
-                  in from a preset duplicated under another printer's profile)
-                  exports verbatim and hides the preset on every non-matching
-                  printer. Surface it here so "my filament doesn't show up in
-                  PrusaSlicer" has a visible cause; it's editable on the
-                  form's Slicer tab. */}
+              {/* GH #1066: a settings-bag printer restriction exports verbatim
+                  and hides the preset on every non-matching printer. Surface
+                  it so "my filament doesn't show up in PrusaSlicer" has a
+                  visible cause; it's editable on the form's Slicer tab. */}
               {(() => {
                 const rawRestriction =
                   filament.settings?.compatible_printers_condition ||
@@ -1564,7 +1460,7 @@ function FilamentDetail() {
                 // On a VARIANT the detail doc's settings are parent-resolved,
                 // so the restriction may live in the PARENT's bag — the raw
                 // edit form then can't see or clear it. Point at the parent
-                // too (review P2).
+                // too.
                 return restriction ? (
                   <p className="px-3 py-2 my-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-y border-amber-200 dark:border-amber-800">
                     {t("detail.slicerExport.compatRestrictionNotice", {
@@ -1600,9 +1496,7 @@ function FilamentDetail() {
             </div>
           </details>
           {/* Sync ▾ — pulls calibration data INTO this filament from
-              external tools. Currently just Bambu Studio; PrusaSlicer
-              and OrcaSlicer per-filament sync will live alongside when
-              they land. Hidden file input stays out-of-flow next to the
+              external tools. Hidden file input stays out-of-flow next to the
               <details> so the keyboard tab order doesn't change. */}
           <details ref={syncMenuRef} className="relative inline-block">
             <summary
@@ -1640,12 +1534,11 @@ function FilamentDetail() {
             className="hidden"
             onChange={handleBambuSync}
           />
-          {/* Variants ▾ — actions that produce a NEW filament off this
-              one. Duplicate is available on every filament (clone path
-              at src/app/filaments/new/page.tsx:192 does `parentId || _id`,
-              so cloning a variant produces a sibling). Create variant is
-              gated on `!isVariant` because variants-of-variants aren't a
-              thing in this design. */}
+          {/* Variants ▾ — actions that produce a NEW filament off this one.
+              Duplicate is available on every filament (the clone path in
+              src/app/filaments/new/page.tsx does `parentId || _id`, so
+              cloning a variant produces a sibling). Create variant is gated
+              on `!isVariant` — no variants-of-variants. */}
           <details ref={variantsMenuRef} className="relative inline-block">
             <summary
               className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
@@ -1685,7 +1578,7 @@ function FilamentDetail() {
               the raw row). A variant inherits the parent's slug through
               resolveFilament's settings merge, so gating on the resolved
               `settings.openprinttag_slug` would show a dead button on every
-              variant (Codex P2 r4). Opens the check-for-updates dialog. */}
+              variant. Opens the check-for-updates dialog. */}
           {filament._hasOwnOptLink && (
               <button
                 type="button"
@@ -1699,11 +1592,10 @@ function FilamentDetail() {
                 {t("resync.button")}
               </button>
             )}
-          {/* Issue #753 (approach C): offer to LINK this filament to an
-              OpenPrintTag material when it isn't already linked (the inverse
-              of the re-sync button's gate). Linking writes only the slug +
-              provenance, never a field value, so a variant's inherited values
-              are never clobbered. */}
+          {/* Offer to LINK this filament to an OpenPrintTag material when it
+              isn't already linked (the inverse of the re-sync button's gate).
+              Linking writes only the slug + provenance, never a field value,
+              so a variant's inherited values are never clobbered. */}
           {!filament._hasOwnOptLink && (
               <button
                 type="button"
@@ -1807,30 +1699,23 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${formatCurrency(filament.cost)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${formatNumber(filament.density, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} g/cm³` : "—"} inherited={inherited.has("density")} />
         <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${formatNumber(filament.diameter, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} mm` : "—"} inherited={inherited.has("diameter")} />
-        {/* #872: Max Vol. Speed removed from the top tiles — it is nozzle-specific
-            and shown per-nozzle in the Calibrations table below. Min/Max print speed
-            + Min/Max fan speed shown here instead (fan values ride the settings bag). */}
+        {/* Max Vol. Speed is nozzle-specific and shown per-nozzle in the
+            Calibrations table below, not here (see fallback tile at the end).
+            Fan values ride the settings bag. */}
         <InfoCard label={t("detail.field.minPrintSpeed")} value={filament.minPrintSpeed != null ? `${filament.minPrintSpeed} mm/s` : "—"} inherited={inherited.has("minPrintSpeed")} />
         <InfoCard label={t("detail.field.maxPrintSpeed")} value={filament.maxPrintSpeed != null ? `${filament.maxPrintSpeed} mm/s` : "—"} inherited={inherited.has("maxPrintSpeed")} />
-        {/* #872: fan speeds live in the settings bag. Per-KEY settings-inheritance
-            provenance isn't plumbed to the detail page (only the coarse "settings"
-            marker + the parent's {_id,name}), so unlike the first-class print-speed
-            tiles these intentionally carry NO inherited badge — a coarse badge would
-            mis-mark (flag "—"/unrelated values, or miss a genuinely-inherited fan
-            value when the child has any other setting override) (Codex P3). */}
-        {/* #872 / Codex P2: a JSON sync path (e.g. OrcaSlicer update) can store a
-            valid fan speed as the NUMBER 0, which is falsy — check null/empty so a
-            real 0% renders as "0%", not "—". */}
+        {/* Per-KEY settings-inheritance provenance isn't plumbed to the detail
+            page, so the fan tiles intentionally carry NO inherited badge — a
+            coarse badge would mis-mark. */}
+        {/* A JSON sync path can store a valid fan speed as the NUMBER 0, which
+            is falsy — check null/empty so a real 0% renders as "0%", not "—". */}
         <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed != null && filament.settings.min_fan_speed !== "" ? `${filament.settings.min_fan_speed}%` : "—"} />
         <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed != null && filament.settings.max_fan_speed !== "" ? `${filament.settings.max_fan_speed}%` : "—"} />
-        {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
-            nozzle-specific (shown per-nozzle in the Calibrations table). But show it
-            here as a fallback whenever the value isn't ACTUALLY visible in that table
-            — i.e. unless the Calibrations section is rendered AND a calibration
-            carries a maxVol. GH #1102: that gate is now `calibrationSectionVisible`,
-            not `compatibleNozzles` — since the section renders whenever rows exist,
-            keying off the tick list would double-render the value in the tile AND
-            the table for exactly the filaments #1102 unhides. */}
+        {/* Max Vol. Speed fallback tile — shown whenever the value isn't
+            ACTUALLY visible in the Calibrations table. GH #1102: the gate is
+            `calibrationSectionVisible`, not `compatibleNozzles` — the section
+            renders whenever rows exist, so keying off the tick list would
+            double-render the value in the tile AND the table. */}
         {filament.maxVolumetricSpeed != null &&
           !(
             calibrationSectionVisible &&
@@ -1846,33 +1731,22 @@ function FilamentDetail() {
           )}
       </div>
 
-      {/* Spool Tracker — always rendered (for non-templates). Pre-fix the
-          outer gate hid the entire section (header + Add Spool button) when
-          the filament had neither spools nor any spool-weight metadata,
-          leaving users with no in-app affordance to add their first spool
-          (e.g. a freshly-imported Siraya Tech PPS-CF row with the
-          OpenPrintTag defaults). Empty state now surfaces an Add Spool CTA
-          via the fallback at the bottom of this block, gated on hasSpools +
-          totalWeight only. (Regression of #346 — that fix covered "no spools
-          but weights set"; the "no spools AND no weights" case still fell
-          through.) */}
+      {/* Spool Tracker — always rendered (for non-templates); the empty
+          state surfaces an Add Spool CTA via the fallback at the bottom of
+          this block. */}
       {(() => {
         // GH #605: templates (filaments with variants) hold no inventory —
         // spools live on the color variants, and the spools POST rejects a
         // template target (template_no_spools). Replace the whole tracker
         // (including the NFC/scale weight-update paths inside it) with a
         // short explanatory line. Legacy parent spools created before the
-        // guard keep counting on the home page (#552/#616) but aren't
-        // manageable here — the Phase-2 "Convert to template" action moves
-        // them onto a variant.
+        // guard aren't manageable here — "Convert to template" moves them
+        // onto a variant.
         if (isParent) {
-          // GH #605 (Phase 2b): a legacy parent that still carries its own
-          // variant state (predating the template guards) gets the explicit
-          // "Convert to template" action — enforce-forward only, at the
-          // user's initiative (decision 4). The predicate is the SAME one
-          // the server's promotion gate + /promote route use
-          // (parentPromotionState: real color OR colorName OR spools OR
-          // inventory totalWeight; the spoolWeight/netFilamentWeight SPEC
+          // A legacy parent that still carries its own variant state gets
+          // the explicit "Convert to template" action. The predicate is the
+          // SAME one the server's promotion gate + /promote route use
+          // (parentPromotionState; the spoolWeight/netFilamentWeight SPEC
           // pair never gates), so the button shows exactly when /promote
           // would do something rather than 400 nothing_to_convert.
           const carriesLegacyState = parentPromotionState(filament).needed;
@@ -1901,21 +1775,17 @@ function FilamentDetail() {
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 
         // GH #1103: a parent whose variants are ALL trashed is not a template
-        // (`isParent` is live-only, correctly — nothing inherits from it right
-        // now), so it keeps its normal spool tracker below. But it IS the one
-        // shape the restore route now refuses on, and its refusal tells the
-        // user to come here and convert. Without this the action doesn't
-        // exist, and every gated variant is unrestorable through the app.
+        // (`isParent` is live-only, correctly), so it keeps its normal spool
+        // tracker below. But it IS the one shape the restore route refuses
+        // on, and its refusal tells the user to come here and convert.
+        // Without this the action doesn't exist, and every gated variant is
+        // unrestorable through the app.
         const canConvertForTrashedVariants =
           !!filament._hasTrashedVariants && parentPromotionState(filament).needed;
 
-        // GH #1099: this used to hand-roll the aggregate, and the hand-rolled
-        // loop had no `if (spool.retired) continue`. So a filament whose only
-        // spool was retired still headlined "1 spools · 320g total (43%)" while
-        // the dashboard, the list, and /inventory all (correctly) treated it as
-        // out of stock — and retiring a spool here appeared to do nothing.
-        // The helpers in @/lib/inventoryStats are the single source of truth
-        // every other surface already uses; the math is otherwise identical.
+        // GH #1099: the helpers in @/lib/inventoryStats (which exclude
+        // retired spools) are the single source of truth every other
+        // surface already uses.
         const aggregateSpoolCount = getSpoolCount(filament);
         const aggregateRemaining = getRemainingGrams(filament);
         const aggregatePct = getRemainingPct(filament);
@@ -1940,8 +1810,6 @@ function FilamentDetail() {
               <h2 className="text-sm font-medium text-gray-500">{t("detail.section.spoolTracker")}</h2>
               {hasSpools && (
                 <span className="text-xs text-gray-400">
-                  {/* #1117(a): "1 spools" — the Inventory group header already
-                      picks a singular/plural key (GH #528); this one didn't. */}
                   {t(
                     aggregateSpoolCount === 1 ? "detail.spoolCount.one" : "detail.spoolCount.other",
                     { count: aggregateSpoolCount },
@@ -2010,9 +1878,6 @@ function FilamentDetail() {
                   <button
                     onClick={() => {
                       const val = parseFloat(weightInput);
-                      // handleNfcWeightUpdate reads a timeout ref internally, but
-                      // this arrow is an onClick handler so the ref is accessed
-                      // post-render — outside the render path the rule checks.
                       if (!isNaN(val) && val > 0) {
                         handleNfcWeightUpdate(val);
                       } else if (filament.totalWeight != null) {
@@ -2063,9 +1928,8 @@ function FilamentDetail() {
                     onRemove={() => handleRemoveSpool(spool._id)}
                     onUpdateInstanceId={(instanceId) => handleUpdateSpool(spool._id, { instanceId })}
                     onRegenerateInstanceId={async () => {
-                      // #732 Phase 4: regenerating is irreversible and orphans
-                      // any already-printed label / written tag for this spool —
-                      // confirm first.
+                      // Regenerating is irreversible and orphans any
+                      // already-printed label / written tag — confirm first.
                       if (
                         await confirm({
                           message: t("detail.spool.regenerateConfirm"),
@@ -2149,18 +2013,11 @@ function FilamentDetail() {
               </div>
             )}
 
-            {/* Add-first-spool fallback. Pre-fix this was gated on
-                `filament.spoolWeight != null` so the button only appeared
-                after the user had configured an empty-spool weight on the
-                filament. For freshly-created filaments with no weight
-                metadata, the section above this block also rendered
-                nothing — leaving the user with no in-app way to add their
-                first spool. Drop the spoolWeight gate so the CTA appears
-                whenever there are no spools and no legacy
-                totalWeight-based tracking in progress.
-                When NO weights are configured at all, also surface a
-                short hint above the button — otherwise the empty section
-                looks broken rather than awaiting input. */}
+            {/* Add-first-spool fallback — the CTA appears whenever there are
+                no spools and no legacy totalWeight-based tracking. When NO
+                weights are configured at all, also surface a short hint above
+                the button — otherwise the empty section looks broken rather
+                than awaiting input. */}
             {!hasSpools && filament.totalWeight == null && (
               <>
                 {filament.spoolWeight == null && filament.netFilamentWeight == null && !addSpoolForm.open && (
@@ -2230,9 +2087,7 @@ function FilamentDetail() {
       {/* GH #1102: also render when calibrations EXIST. Gating purely on
           compatibleNozzles hid the whole section in exactly the state a
           slicer sync-back produces (the #859 fallback resolves a nozzle from
-          the global catalog and never writes the tick list) — the page
-          toasted "Calibration applied" and then showed nothing, while
-          /api/filaments correctly reported hasCalibrations: true. */}
+          the global catalog and never writes the tick list). */}
       {calibrationSectionVisible && (
         <div className="mb-6">
           <h2 className="text-sm font-medium text-gray-500 mb-2">
@@ -2248,7 +2103,6 @@ function FilamentDetail() {
           {filament.calibrations?.length > 0 ? (
             <div className="overflow-x-auto space-y-4">
               {(() => {
-                // Group calibrations by printer
                 const groups = new Map<string, typeof filament.calibrations>();
                 for (const cal of filament.calibrations) {
                   const key = cal.printer?._id || "default";
@@ -2287,7 +2141,6 @@ function FilamentDetail() {
                       </thead>
                       <tbody>
                         {cals.map((cal, i) => {
-                          // Extended calibration fields added in bed-types feature
                           const ext = cal as FilamentCalibration;
                           return (
                           <tr
@@ -2312,13 +2165,9 @@ function FilamentDetail() {
                             </td>
                             <td className="py-2 px-2 text-right">
                               {/* `?? "—"`, not a truthiness check: a stored 0
-                                  is a real value (the schema and the form both
-                                  accept it), and rendering it as an em-dash
-                                  hid it — which now matters, because the tile
-                                  above suppresses itself on `!= null` and
-                                  would leave a 0 visible nowhere at all.
-                                  Matches extrusionMultiplier / pressureAdvance
-                                  in this same row. */}
+                                  is a real value, and the fallback tile above
+                                  suppresses itself on `!= null` — an em-dash
+                                  here would leave a 0 visible nowhere at all. */}
                               {cal.maxVolumetricSpeed ?? "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
@@ -2524,9 +2373,8 @@ function FilamentDetail() {
         </p>
       )}
 
-      {/* GH #614: the chapter of the FDM Polymers Technical Reference relevant
-          to this filament's type — replaces the old raw "Show all PrusaSlicer
-          settings" dump. Self-hides when the type maps to no chapter. */}
+      {/* The FDM Polymers Technical Reference chapter for this filament's
+          type. Self-hides when the type maps to no chapter. */}
       <TechnicalReferencePanel type={filament.type} />
 
       {showPrusamentImport && (
@@ -2535,11 +2383,8 @@ function FilamentDetail() {
           targetFilamentId={filament?._id}
           onImported={(message) => {
             toast(message, "success");
-            // Refresh filament data. GH #640: the previous inline chain
-            // had no `r.ok` gate, so a non-2xx response wrote the error
-            // JSON into `filament` state and the next render crashed
-            // dereferencing filament.temperatures.nozzle. refetchFilament
-            // gates on ok and swallows network errors.
+            // GH #640: refetchFilament gates on r.ok — writing a non-2xx
+            // error body into `filament` state crashes the next render.
             refetchFilament();
             setShowPrusamentImport(false);
           }}
@@ -2555,9 +2400,8 @@ function FilamentDetail() {
           vendor: filament.vendor ?? null,
           type: filament.type ?? null,
           colorName: filament.colorName ?? null,
-          // GH #595: pass spools so the URL-mode QR can deep-link to one.
-          // #732: include instanceId so the instance-ID QR can encode the
-          // selected spool's id.
+          // Spools so the URL-mode QR can deep-link to one (GH #595) and the
+          // instance-ID QR can encode the selected spool's id (#732).
           spools: (filament.spools ?? []).map((s) => ({
             _id: String(s._id),
             label: s.label ?? null,
@@ -2678,10 +2522,8 @@ interface SpoolCardProps {
     locationId?: string | null;
     photoDataUrl?: string | null;
     retired?: boolean;
-    // GH #601: provenance fields. The list-summary projection drops these
-    // (they're on the full filament fetch the detail page uses), so they
-    // come in as ISO strings from the JSON serializer. May be undefined
-    // if the spool subdoc predates the field.
+    // Provenance fields — ISO strings from the JSON serializer; may be
+    // undefined if the spool subdoc predates the field.
     lotNumber?: string | null;
     purchaseDate?: string | null;
     openedDate?: string | null;
@@ -2700,12 +2542,8 @@ interface SpoolCardProps {
   onLogDryCycle: (entry: { tempC?: number | null; durationMin?: number | null; notes?: string }) => void;
   onLogUsage: (entry: { grams: number; jobLabel?: string; date?: string }) => void;
   /**
-   * GH #601: provenance fields (lotNumber, purchaseDate, openedDate). All
-   * three already round-trip through the spool subdoc schema, the
-   * validator, the REST PUT handler, and the CSV import/export, but the
-   * UI never exposed them. One callback for the group so the user can
-   * save a partial patch (e.g. set the purchase date without touching
-   * the lot field).
+   * One callback for the provenance group so the user can save a partial
+   * patch (e.g. set the purchase date without touching the lot field).
    */
   onUpdateMeta: (patch: {
     lotNumber?: string | null;
@@ -2716,7 +2554,7 @@ interface SpoolCardProps {
   onNfcWeightUpdate?: (scaleWeight: number) => void;
   nfcAvailable?: boolean;
   nfcWriting?: boolean;
-  /** #732 Phase 4: set a custom spool id (e.g. a Prusa roll id), or regenerate. */
+  /** Set a custom spool id (e.g. a Prusa roll id), or regenerate. */
   onUpdateInstanceId: (instanceId: string) => void;
   onRegenerateInstanceId: () => void;
   /** GH #595: briefly ring this card when reached via a `?spool=` deep link. */
@@ -2752,7 +2590,7 @@ function SpoolCard({
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelInput, setLabelInput] = useState(spool.label);
-  // #732 Phase 4: inline spool-id editing (mirrors the label-edit pattern).
+  // Inline spool-id editing (mirrors the label-edit pattern).
   const [editingId, setEditingId] = useState(false);
   const [idInput, setIdInput] = useState(spool.instanceId ?? "");
   const [showMore, setShowMore] = useState(false);
@@ -2760,25 +2598,20 @@ function SpoolCard({
   const [dryDuration, setDryDuration] = useState("");
   const [usageGrams, setUsageGrams] = useState("");
   const [usageLabel, setUsageLabel] = useState("");
-  // #941: let the user record WHEN the usage happened (they may log a print
-  // days later), not just "now". Defaults to today in the user's LOCAL date so
-  // the native date picker opens on the expected day. Fed to the usage POST,
-  // which already accepts an optional `date`; Analytics buckets by this date.
-  // Seeded post-mount (not in the initializer) so the value derives from the
-  // BROWSER's timezone, never the server's — a server-side render around a UTC
-  // date boundary would otherwise bake in the server's "today" and mismatch
-  // the client's local day. `todayInput` also drives the picker's `max`.
-  // Mirrors the post-mount seeding pattern in src/app/inventory/page.tsx.
+  // #941: when the usage happened, defaulting to today in the user's LOCAL
+  // date. Seeded post-mount (not in the initializer) so the value derives
+  // from the BROWSER's timezone, never the server's — a server-side render
+  // around a UTC date boundary would otherwise bake in the server's "today"
+  // and mismatch the client's local day. `todayInput` also drives the
+  // picker's `max`. Mirrors the post-mount seeding in src/app/inventory/page.tsx.
   const [usageDate, setUsageDate] = useState("");
   const [todayInput, setTodayInput] = useState("");
   // Whether the user has actually edited the date field. An UNTOUCHED
   // default must always log as "now", never as a backdate — otherwise a
-  // page left open across local midnight (seeded default now reads as
-  // "yesterday") would silently backdate a plain "log now" click to
-  // yesterday (#941 / Codex review). Only an explicit edit counts as a
-  // backdate. `refreshDefaultDate` re-seeds the default + `max` from the
-  // CURRENT local day so an untouched field/picker stays current across a
-  // rollover.
+  // page left open across local midnight would silently backdate a plain
+  // "log now" click to yesterday (#941). `refreshDefaultDate` re-seeds the
+  // default + `max` from the CURRENT local day so an untouched field/picker
+  // stays current across a rollover.
   const [usageDateDirty, setUsageDateDirty] = useState(false);
   const refreshDefaultDate = () => {
     if (usageDateDirty) return;
@@ -2791,17 +2624,15 @@ function SpoolCard({
     setTodayInput(t); // eslint-disable-line react-hooks/set-state-in-effect -- local-date seed (avoids SSR/first-paint TZ mismatch)
     setUsageDate(t);
   }, []);
-  // #608: expandable view of the spool's logged usage entries.
   const [showUsageHistory, setShowUsageHistory] = useState(false);
-  // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
-  // for the native <input type="date">; null/undefined collapse to "".
-  // These keep their local state across re-renders (initialized once, only
-  // updated by their own onChange — there is NO reseed-from-props), so a
-  // sibling-spool update doesn't reset half-typed text. That's the opposite
-  // of the label field, which DOES reseed from the prop on edit-open; the
-  // disabled check below compares the draft against fresh props so a saved
-  // value naturally disables the button. (#833 corrected this comment, which
-  // previously claimed a reseed that doesn't exist.)
+  // Provenance edits. ISO-string fields are sliced to YYYY-MM-DD for the
+  // native <input type="date">; null/undefined collapse to "". These keep
+  // their local state across re-renders (initialized once, only updated by
+  // their own onChange — there is NO reseed-from-props), so a sibling-spool
+  // update doesn't reset half-typed text. That's the opposite of the label
+  // field, which DOES reseed from the prop on edit-open; the disabled check
+  // below compares the draft against fresh props so a saved value naturally
+  // disables the button.
   const isoToDateInput = (v?: string | null) =>
     v ? new Date(v).toISOString().slice(0, 10) : "";
   const [lotInput, setLotInput] = useState(spool.lotNumber ?? "");
@@ -2812,8 +2643,8 @@ function SpoolCard({
 
   const remaining = computeRemaining(filament, spool.totalWeight);
 
-  // GH #242 — the spool's current AMS slot, derived from the printers
-  // list (the reverse of Printer.amsSlots[].spoolId).
+  // The spool's current AMS slot, derived from the printers list (the
+  // reverse of Printer.amsSlots[].spoolId).
   const currentSlot = (() => {
     for (const p of printers) {
       for (const s of p.amsSlots ?? []) {
@@ -2840,10 +2671,9 @@ function SpoolCard({
     setSaving(false);
   };
 
-  // #575.3: the weight field is the GROSS on-scale weight (spool + filament),
-  // so a value below the empty-spool weight clamps Remaining to 0. Surface a
-  // warning so an obvious typo (e.g. entering 100 g when the empty spool is
-  // 250 g) isn't silently swallowed.
+  // The weight field is the GROSS on-scale weight (spool + filament), so a
+  // value below the empty-spool weight clamps Remaining to 0. Surface a
+  // warning so an obvious typo isn't silently swallowed.
   const enteredWeight = parseFloat(weightInput);
   const belowTare =
     !isNaN(enteredWeight) &&
@@ -2857,8 +2687,8 @@ function SpoolCard({
     setEditingLabel(false);
   };
 
-  // #732 Phase 4: commit an edited spool id. Submit only on a real change; the
-  // server validates charset/length (400) + uniqueness (409) and the parent
+  // Commit an edited spool id. Submit only on a real change; the server
+  // validates charset/length (400) + uniqueness (409) and the parent
   // surfaces those as toasts. Blank reverts (use Regenerate to mint a new one).
   const handleIdSave = () => {
     const next = idInput.trim();
@@ -2893,13 +2723,11 @@ function SpoolCard({
             />
           ) : (
             <button
-              // GH #263: re-seed labelInput from the current prop when
-              // the editor opens. `labelInput` is useState-initialised
-              // from `spool.label` only once; SpoolCard is keyed by a
-              // stable `spool._id`, so after any sibling spool mutation
-              // the parent re-renders this card with a fresh `spool`
-              // prop WITHOUT remounting — leaving `labelInput` stale.
-              // Editing then would write or show the old value.
+              // GH #263: re-seed labelInput from the current prop when the
+              // editor opens. `labelInput` is useState-initialised only once;
+              // after any sibling spool mutation the parent re-renders this
+              // card with a fresh `spool` prop WITHOUT remounting — leaving
+              // `labelInput` stale.
               onClick={() => { setLabelInput(spool.label); setEditingLabel(true); }}
               className="text-sm font-medium hover:text-blue-600 transition-colors"
               title={t("detail.spool.clickToRename")}
@@ -2907,9 +2735,8 @@ function SpoolCard({
               {spool.label || t("detail.spool.unnamed")}
             </button>
           )}
-          {/* #732 Phase 4: the durable per-spool id, always visible and
-              editable (click to enter a Prusa roll id / custom id; ⟳ to mint a
-              fresh one). Changing it won't rewrite already-printed labels/tags. */}
+          {/* The durable per-spool id, always visible and editable. Changing
+              it won't rewrite already-printed labels/tags. */}
           {editingId ? (
             <input
               type="text"
@@ -3074,7 +2901,7 @@ function SpoolCard({
       </div>
 
       {/* Printer slot — the spool's current loaded position, distinct
-          from its Location (home). GH #242. */}
+          from its Location (home). */}
       <div className="mt-2 flex items-center gap-2 text-xs flex-wrap">
         <label className="text-gray-500">{t("detail.spool.printerSlot")}:</label>
         {currentSlot ? (
@@ -3162,7 +2989,7 @@ function SpoolCard({
             </div>
           </div>
 
-          {/* GH #601: provenance — purchase + opened dates + lot/batch */}
+          {/* Provenance — purchase + opened dates + lot/batch */}
           <div>
             <p className="text-xs text-gray-500 mb-1">{t("detail.spool.provenance")}</p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -3290,12 +3117,10 @@ function SpoolCard({
               </button>
             </div>
             {spool.dryCycles && spool.dryCycles.length > 0 && (() => {
-              // GH #1119: pick the LATEST date, not the last array entry.
-              // Entries are appended chronologically by this page, but the
-              // mobile app, the API and a snapshot restore can all introduce a
-              // back-dated cycle — and then this line disagreed with
-              // /inventory and the dashboard, which both scan for the max.
-              // (exportSpools already does the max scan too.)
+              // GH #1119: pick the LATEST date, not the last array entry —
+              // the mobile app, the API and a snapshot restore can all
+              // introduce a back-dated cycle, and /inventory, the dashboard
+              // and exportSpools all scan for the max.
               let latest: Date | null = null;
               for (const c of spool.dryCycles) {
                 const d = new Date(c.date);
@@ -3313,18 +3138,13 @@ function SpoolCard({
 
           {/* Log usage */}
           <div>
-            {/* #608: the history line is a disclosure when there are entries —
-                expanding it lists each logged usage (date · grams · label ·
-                source) so the user can see the log, not just the count. */}
             {(spool.usageHistory?.length ?? 0) > 0 ? (
               <button
                 type="button"
                 onClick={() => setShowUsageHistory((s) => !s)}
                 aria-expanded={showUsageHistory}
-                // GH #1069: this used to render in the same muted gray as the
-                // surrounding metadata, so users did not see it WAS a
-                // disclosure — the one place manual usage entries (with
-                // their job labels) can be reviewed went unfound.
+                // GH #1069: styled as a link so it reads as a disclosure —
+                // the one place manual usage entries can be reviewed.
                 className="text-xs font-medium text-blue-600 dark:text-blue-400 hover:underline mb-1 flex items-center gap-1"
               >
                 <span aria-hidden="true">{showUsageHistory ? "▾" : "▸"}</span>
@@ -3351,10 +3171,8 @@ function SpoolCard({
                         {/* Date-only entries (stored UTC midnight) format in
                             UTC so the picked day shows for every time zone
                             and matches the UTC-bucketed Analytics chart. Real
-                            timestamps (job/slicer entries, mobile logs, older
-                            manual logs) format in LOCAL time so a print
-                            logged at 8 PM doesn't read as tomorrow west of
-                            UTC (#941 / Codex review). */}
+                            timestamps format in LOCAL time so a print logged
+                            at 8 PM doesn't read as tomorrow west of UTC (#941). */}
                         {formatDate(
                           u.date,
                           isUtcMidnight(u.date) ? { timeZone: "UTC" } : undefined,
@@ -3384,7 +3202,7 @@ function SpoolCard({
                 value={usageGrams}
                 onChange={(e) => setUsageGrams(e.target.value)}
               />
-              {/* #941: when the usage actually happened (defaults to today).
+              {/* When the usage actually happened (defaults to today).
                   Capped at today — usage can't be logged in the future. */}
               <input
                 type="date"
@@ -3412,16 +3230,11 @@ function SpoolCard({
               />
               <button
                 type="button"
-                // Disable until grams is a positive number. The earlier
-                // version validated inside onClick but kept the button
-                // active blue, so a user who logged 25g once could come
-                // back, see (apparently) cleared inputs, click again,
-                // and not know whether their click did nothing or
-                // re-posted the previous value.
-                // Also disable on a future date: the picker's `max` blocks
-                // selection but not typed/pasted input, and a future-dated
-                // log would decrement the spool yet be hidden from Analytics
-                // until that day (#936). The onClick clamps too, as defense.
+                // Disable until grams is a positive number. Also disable on a
+                // future date: the picker's `max` blocks selection but not
+                // typed/pasted input, and a future-dated log would decrement
+                // the spool yet be hidden from Analytics until that day
+                // (#936). The onClick clamps too, as defense.
                 disabled={
                   !(Number(usageGrams) > 0) ||
                   (!!usageDate && !!todayInput && usageDate > todayInput)
@@ -3429,7 +3242,7 @@ function SpoolCard({
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
-                  // Two storage shapes, one per case (#941 / Codex review):
+                  // Two storage shapes, one per case (#941):
                   // - BACKDATE: send the bare YYYY-MM-DD → stored as UTC
                   //   midnight of that day. The history list renders
                   //   date-only values in UTC and Analytics buckets in UTC,
@@ -3437,19 +3250,14 @@ function SpoolCard({
                   //   zone, and a past day's UTC midnight is never in the
                   //   future.
                   // - TODAY or FUTURE (the default / clamp): omit `date` so
-                  //   the server stamps the actual instant. The history list
-                  //   renders timestamps in LOCAL time, so it shows the
-                  //   picked day for every zone, and the entry is immediately
-                  //   visible in Analytics (bucketed by its UTC instant,
-                  //   exactly like job/slicer/mobile entries). Sending today's
-                  //   YYYY-MM-DD instead would store a UTC midnight that, east
-                  //   of UTC, hasn't happened yet — Analytics excludes future
-                  //   entries (#936), so a just-logged entry would vanish from
-                  //   totals until UTC catches up. Only a STRICTLY-PAST date
-                  //   is sent as a backdate; a typed/pasted future date (the
-                  //   picker's `max` doesn't block manual entry) is clamped to
-                  //   "now" rather than posted into the future. Only an
-                  //   EDITED field (`usageDateDirty`) is ever a backdate — an
+                  //   the server stamps the actual instant. Sending today's
+                  //   YYYY-MM-DD instead would store a UTC midnight that,
+                  //   east of UTC, hasn't happened yet — Analytics excludes
+                  //   future entries (#936), so a just-logged entry would
+                  //   vanish from totals until UTC catches up. Only a
+                  //   STRICTLY-PAST date is sent as a backdate; a typed/
+                  //   pasted future date is clamped to "now". Only an EDITED
+                  //   field (`usageDateDirty`) is ever a backdate — an
                   //   untouched default is always "now", even if it's gone
                   //   stale across a midnight rollover.
                   const today = localTodayInput();
@@ -3479,10 +3287,8 @@ function SpoolCard({
   );
 }
 
-/** Compact "inherited" marker for inline labels (e.g. the vendor/type
- *  subtitle) where a full InfoCard badge doesn't fit. Mirrors the blue
- *  treatment inherited InfoCards use so the signal reads consistently
- *  across the page (GH #773). */
+/** Compact "inherited" marker for inline labels where a full InfoCard
+ *  badge doesn't fit. Mirrors the blue treatment inherited InfoCards use. */
 function InheritedMark() {
   const { t } = useTranslation();
   return (

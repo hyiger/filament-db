@@ -53,8 +53,8 @@ export default function EditFilament() {
 
     let res = await put(data);
 
-    // GH #605 (codex round 4, F2): setting a parent on this filament can make
-    // it the FIRST variant of a parent that still carries its own color /
+    // GH #605: setting a parent on this filament can make it the FIRST
+    // variant of a parent that still carries its own color /
     // spools — the server promotes that parent to a template (moving the
     // state onto a new sibling variant) and 409s until the client opts in.
     // Same catch → confirm → retry-with-flag flow as the create page.

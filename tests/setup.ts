@@ -73,7 +73,7 @@ afterEach(async () => {
 // force-kills the worker (with a noisy SIGKILL warning) before mongod
 // has a chance to exit cleanly.
 //
-// Codex P2 on PR #479 r3: `stop({ force: true })` does NOT shorten
+// `stop({ force: true })` does NOT shorten
 // the kill phase. In mongodb-memory-server-core@11.0.1, `force` is
 // only consumed by `cleanup()` to allow removing non-temp data dirs;
 // `_instanceInfo.instance.stop()` (which actually kills mongod) still
@@ -92,8 +92,8 @@ const TEARDOWN_TIMEOUT_MS = 30_000;
 /** Reach into mongodb-memory-server's internals to find the mongod
  *  child pid. The field is `mongodProcess` on the MongoInstance — the
  *  short-lived `childProcess` alias was removed in
- *  mongodb-memory-server-core@11.0.0 (Codex P2 on PR #479 r4 caught
- *  the silent no-op from looking up the old name). The shape is
+ *  mongodb-memory-server-core@11.0.0 (the silent no-op from looking
+ *  up the old name). The shape is
  *  intentionally narrowed; if upstream renames the field again, the
  *  optional chain short-circuits to undefined and the teardown falls
  *  back to the slow stop() path rather than throwing. */
@@ -116,7 +116,7 @@ afterAll(async () => {
     // ignore
   }
   if (mongoServer) {
-    // GH #399 (Codex P2 PR #479 r3): kill mongod BEFORE calling stop()
+    // GH #399: kill mongod BEFORE calling stop()
     // so the stop()'s internal `killProcess` doesn't sit in its 10s
     // SIGINT wait. The kill is best-effort — if it fails or the child
     // is already gone, stop() handles cleanup as usual.

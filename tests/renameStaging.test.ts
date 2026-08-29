@@ -113,7 +113,7 @@ describe("planRenameStaging", () => {
   });
 
   /**
-   * GH #1142 (Codex P1): a one-level check is not enough. With A->B, B->C and
+   * GH #1142: a one-level check is not enough. With A->B, B->C and
    * C standing still, staging B for A lets A take B's name, but B can then
    * never take C — and settlement cannot restore B, because A owns its
    * original name. B would be stranded as a placeholder permanently.
@@ -164,7 +164,7 @@ describe("isStagingPlaceholder", () => {
 });
 
 /**
- * GH #1142 (Codex P1, fifth pass): a CONTESTED destination — two rows desiring
+ * GH #1142: a CONTESTED destination — two rows desiring
  * the same name — must poison the plan, not merely fail one of the writes.
  *
  * The state requires the SOURCE to hold duplicate active names, which the trim
@@ -212,7 +212,7 @@ describe("planRenameStaging with contested destinations", () => {
 });
 
 /**
- * GH #1142 (Codex P1, sixth pass): the runtime staging predicate, judged
+ * GH #1142: the runtime staging predicate, judged
  * against a FRESH read of the blocker's source row — the same document its
  * pending write will hydrate. The mid-pass mutation that makes this matter (a
  * user reverting a source name between the snapshot and the write) cannot be
@@ -248,7 +248,7 @@ describe("pendingRenameCanFreeName", () => {
 });
 
 /**
- * GH #1142 (Codex P2, twice). The rollback-failed path is a genuine race — a
+ * GH #1142. The rollback-failed path is a genuine race — a
  * third party has to claim the original name between staging and rollback — so
  * it cannot be induced from a sync test. What CAN be pinned is the structure
  * that carries it to the user, and the structure is the whole fix: the notice
@@ -361,7 +361,7 @@ describe("placeholderRestoreTarget", () => {
 });
 
 /**
- * GH #1153 (Codex P2): the backstop ACTS on recognition, so recognition must
+ * GH #1153: the backstop ACTS on recognition, so recognition must
  * be the complete generated grammar — names are free-form, and a prefix match
  * alone let a user's own `__sync-staging-custom` be silently renamed.
  */

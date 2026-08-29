@@ -12,23 +12,12 @@ import { SAMPLE_FILAMENT } from "@/lib/labelFormat";
 import PrinterDevicePicker from "@/components/PrinterDevicePicker";
 
 /**
- * Settings panel for the Brother PT-P710BT label printer. Electron
- * only — the picker calls into the main process's print transport
- * (the OS print system), which has no browser counterpart. (GH #588)
- *
- * Flow:
- *   1. User connects the printer via USB. On the desktop the PT-P710BT
- *      is a USB printer-class device (its Bluetooth is mobile-only).
- *   2. This panel lists the printers the OS print system can reach
- *      (CUPS queues + available usb:// devices on macOS/Linux; installed
- *      printers on Windows), badging the ones that look like a PT printer.
- *   3. User picks one; we persist the print target in electron-store via
- *      IPC. The PrintLabelDialog reads it before every print.
- *   4. "Test print" sends a small known-good label so the user verifies
- *      the connection + tape feed before the real workflow.
- *
- * Renders nothing in web mode (the hook returns false) so this can
- * sit unconditionally in the settings page.
+ * Settings panel for the Brother PT-P710BT label printer. Electron only —
+ * the picker calls into the main process's print transport (the OS print
+ * system), which has no browser counterpart. Lists reachable printers,
+ * persists the pick in electron-store via IPC (PrintLabelDialog reads it
+ * before every print), and offers a test print. Renders nothing in web
+ * mode so it can sit unconditionally in the settings page.
  */
 
 export default function LabelPrinterSettings() {
@@ -51,19 +40,16 @@ export default function LabelPrinterSettings() {
   // fix (keyed by device path so each BiDi-on row tracks its own busy state).
   const [fixingPath, setFixingPath] = useState<string | null>(null);
 
-  // Public base URL for URL-mode label QR payloads (Codex P2 on
-  // PR #487). Loaded on mount, persisted on blur with main-process
-  // validation. Empty string in the input means "not configured".
+  // Public base URL for URL-mode label QR payloads. Loaded on mount,
+  // persisted with main-process validation. Empty string in the input
+  // means "not configured".
   const [publicUrlDraft, setPublicUrlDraft] = useState<string>("");
   const [publicUrlSavedAs, setPublicUrlSavedAs] = useState<string | null>(null);
 
-  // Memoised loader so the Refresh button can reuse it without
-  // duplicating the IPC dance.
-  //
   // GH #771: `probeUsb` defaults to false. The mount-time load lists only
   // already-configured queues (a prompt-free read); scanning for raw USB
   // devices runs `lpinfo`, which on macOS pops the admin-password dialog —
-  // so that only happens when the user explicitly clicks Refresh.
+  // so that only happens on an explicit user click.
   const loadDevices = useCallback(async (probeUsb = false) => {
     if (!window.electronAPI?.labelPrinterListDevices) {
       setState({
@@ -90,18 +76,14 @@ export default function LabelPrinterSettings() {
   useEffect(() => {
     if (!isElectron) return;
     // Data-fetching effect, same pattern as the project's other
-    // settings-loaders (src/app/nozzles/page.tsx etc.); the rule fires
-    // on the indirect setState inside loadDevices.
+    // settings-loaders; the rule fires on the indirect setState inside
+    // loadDevices.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDevices();
-    // Public URL: load once alongside device list. Stored alongside
-    // because both surface in the same Settings panel.
     if (window.electronAPI?.labelPrinterGetPublicUrl) {
       window.electronAPI
         .labelPrinterGetPublicUrl()
         .then((url) => {
-          // setState inside an async then callback isn't flagged by
-          // the rule (only sync-in-effect-body is).
           setPublicUrlDraft(url ?? "");
           setPublicUrlSavedAs(url);
         })
@@ -127,8 +109,7 @@ export default function LabelPrinterSettings() {
       );
     } catch (err) {
       // Main-process validation surfaces here (bad scheme, loopback
-      // host, malformed URL). Show the message inline so the user can
-      // fix and retry without losing what they typed.
+      // host, malformed URL); the user keeps what they typed.
       toast(
         t("settings.labelPrinter.publicUrl.saveFailed", {
           error: err instanceof Error ? err.message : String(err),
@@ -179,9 +160,8 @@ export default function LabelPrinterSettings() {
     if (!window.electronAPI?.labelPrinterPrint) return;
     setTesting(true);
     try {
-      // A canonical label using the SAMPLE filament + the user's saved
-      // format, so the test print exercises their actual layout (QR + text +
-      // cutter) without wasting much tape.
+      // Uses the SAMPLE filament + the user's saved format, so the test
+      // print exercises their actual layout.
       const { grayscale, rasterLines } = await renderLabelBitmap({
         filament: SAMPLE_FILAMENT,
         qrPayload: "filament-db-test",
@@ -207,10 +187,10 @@ export default function LabelPrinterSettings() {
     }
   }, [t, toast, format]);
 
-  // Windows-only: disable bidirectional support on the printer's queue via the
-  // elevated helper (UAC), then re-list so the warning + button clear. The IPC
-  // call resolves a structured { ok, reason } so we map outcomes to localized
-  // toasts WITHOUT importing any main-process string (the renderer can't).
+  // Windows-only: disable bidirectional support on the printer's queue via
+  // the elevated helper (UAC), then re-list. The IPC call resolves a
+  // structured { ok, reason } so outcomes map to localized toasts WITHOUT
+  // importing any main-process string (the renderer can't).
   const handleFixBidi = useCallback(
     async (path: string) => {
       if (!window.electronAPI?.labelPrinterDisableBidi) return;
@@ -278,9 +258,8 @@ export default function LabelPrinterSettings() {
         </div>
       ) : (
         <>
-          {/* Same stale-selection escape hatch as the TSPL panel (PR #1043
-              round 7 — found there, fixed in BOTH; this feature has been
-              bitten four times by fixing one sibling and not the other). */}
+          {/* Same stale-selection escape hatch as the TSPL panel — keep the
+              two sibling panels in sync. */}
           {state.selectedPath &&
             !state.devices.some((d) => d.path === state.selectedPath) && (
               <div className="mb-2 border border-amber-300 dark:border-amber-700 rounded p-3 bg-amber-50 dark:bg-amber-950/40">
@@ -394,8 +373,7 @@ export default function LabelPrinterSettings() {
 
       {/* Public base URL for URL-mode QR codes. Without this the
           packaged Electron app would encode http://localhost:<port>
-          into the QR — unscannable from any other device. (Codex P2
-          on PR #487.) */}
+          into the QR — unscannable from any other device. */}
       <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
         <label htmlFor="label-printer-public-url" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
           {t("settings.labelPrinter.publicUrl")}

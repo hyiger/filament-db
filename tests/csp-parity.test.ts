@@ -28,7 +28,7 @@ import { resolve } from "node:path";
 const REPO_ROOT = resolve(__dirname, "..");
 
 /**
- * Codex feedback on PR #462: the earlier regex required the directive
+ * The earlier regex required the directive
  * name to follow `;` or start-of-file, which never matches the web CSP
  * where each directive lives in its own JS string literal like
  * `"default-src 'self'"`. The directive name there is right after a
@@ -67,8 +67,8 @@ const KNOWN_DIRECTIVES = [
 const CONNECT_SRC_ELECTRON_EXTRAS = ["http://localhost:*", "ws://localhost:*"];
 
 /**
- * Strip JS / TS comments before scanning for directives. Codex
- * follow-up on PR #462 round 2: the regex matches directive names
+ * Strip JS / TS comments before scanning for directives. The
+ * regex matches directive names
  * followed by a CSP value token, but the source file contains
  * COMMENTS that quote real CSP fragments verbatim (e.g.
  * `// 'base-uri 'self'' (prevents <base> injection)`). Those

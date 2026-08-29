@@ -30,13 +30,7 @@ export function useToast(): ToastContextValue {
 let nextId = 0;
 
 /**
- * Compute a readable auto-dismiss duration based on message length.
- *
- * Rationale: a 4-second fixed duration was too short for longer success
- * messages (import summaries, multi-action confirmations) but overkill for
- * short acknowledgments. Rough estimate: ~60 words per minute reading speed
- * ≈ 200 ms per character as a lower bound, clamped to a reasonable range.
- *
+ * Length-scaled auto-dismiss duration, clamped to a readable range.
  * Errors are held longer because the user typically needs to read and act.
  */
 export function computeToastDuration(
@@ -79,13 +73,9 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast }}>
       {children}
-      {/* GH #343 (#2): toast container was `max-w-sm` (~384px) with a
-       * single non-wrapping flex row, so long error strings like "Cannot
-       * delete this nozzle — it is referenced by 3 filaments. Remove it
-       * from those filaments first." truncated at the viewport edge. The
-       * message column now wraps and the container widens on roomy
-       * viewports. `items-start` keeps the dismiss × aligned to the first
-       * line of a multi-line message. */}
+      {/* The message column wraps (long error strings must not truncate);
+       * `items-start` keeps the dismiss × aligned to the first line of a
+       * multi-line message. */}
       <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-md md:max-w-lg">
         {toasts.map((toastEntry) => (
           <div

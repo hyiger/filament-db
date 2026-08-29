@@ -15,9 +15,8 @@ export async function GET(
   try {
     await dbConnect();
     const { id } = await params;
-    // A non-ObjectId id makes Mongoose throw a CastError that the generic
-    // catch maps to 500; reject it up front as a 400 like the sibling routes
-    // (check/sync/link). (#854, follow-up to #818)
+    // Reject a non-ObjectId id up front (400) instead of a CastError 500
+    // (#854).
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
     }
@@ -27,11 +26,10 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // #732 Phase 3: encode the SELECTED spool's instanceId (falling back to the
-    // filament-level id only for a spool-less filament). `?spool=<id>` targets a
-    // specific spool; an unknown id is a 400 (don't silently write the wrong
-    // spool). Spools are the filament's own (not inherited), so select off the
-    // raw doc rather than the variant-resolved view.
+    // #732: encode the SELECTED spool's instanceId (filament-level id only
+    // for a spool-less filament). `?spool=<id>` targets a specific spool;
+    // an unknown id is a 400 — don't silently write the wrong spool. Spools
+    // are the filament's own (not inherited), so select off the raw doc.
     const requestedSpool = request.nextUrl.searchParams.get("spool");
     const selection = selectSpoolForWrite(filament, requestedSpool);
     if (!selection.ok) {
@@ -54,13 +52,10 @@ export async function GET(
       resolved = resolveFilament(filament, parent);
     }
 
-    // Compute actual remaining weight from the SAME spool whose id we encode
-    // (#732, Codex P2): the tag must not identify one spool but carry another
-    // spool's remaining weight. `selection` already picked the target spool
-    // (the requested one, or the first non-retired by default). For the
-    // filament-level fallback (a spool-less filament) use the legacy top-level
-    // weight — which the create flow nulls once a spool exists, so spool-based
-    // filaments read their gross off the spool. Codex P1/P2 on PR #707.
+    // #732: compute actual remaining weight from the SAME spool whose id we
+    // encode — the tag must not identify one spool but carry another's
+    // weight. The filament-level fallback uses the legacy top-level weight
+    // (nulled by the create flow once a spool exists).
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const spools: any[] = resolved.spools ?? [];
     const selectedSpool =
@@ -84,11 +79,8 @@ export async function GET(
       // GH #477: nullable primary per OpenPrintTag spec key 19 →
       // `undefined` omits the CBOR key entirely (coextruded case).
       color: resolved.color ?? undefined,
-      // GH #477 (Codex P2 on PR #484): the Electron NFC write path
-      // surfaces secondaryColors but this browser-download route was
-      // missed in round 1 — so a `.bin` downloaded from the detail
-      // page only carried the primary. Surface here too so the
-      // downloaded tag binary is faithful to the multi-color filament.
+      // GH #477: surface secondaryColors like the Electron NFC write path,
+      // so the downloaded `.bin` is faithful to a multi-color filament.
       secondaryColors: resolved.secondaryColors,
       density: resolved.density,
       diameter: resolved.diameter,

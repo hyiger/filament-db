@@ -141,8 +141,7 @@ export function useNumberFormat() {
   // The locale to use for Intl-based (system-mode) number/currency grouping.
   // `undefined` pre-`ready` so callers keep their app-locale default and the
   // first render matches the server. Post-`ready` it's the device locale, so
-  // currency in system mode groups per device — matching weights/counts
-  // (Codex P2: otherwise system-mode prices stayed on the app locale).
+  // currency in system mode groups per device — matching weights/counts.
   const systemLocale = ready ? deviceLocale : undefined;
   const group = separators?.group;
   const decimal = separators?.decimal;

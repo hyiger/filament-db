@@ -1,16 +1,10 @@
 /**
- * CSS Color Module Level 4 named colors → 6-digit hex.
- *
- * Used by `FilamentForm`'s colorName typeahead so typing a recognised
- * color name auto-populates the hex picker. Stored as a flat literal
- * rather than a Map so it's static (no init cost, tree-shakes cleanly,
- * trivially type-checked).
- *
- * All names are lowercase here; lookups are case-insensitive via
- * `lookupCssNamedColor`. The list is the 148 named colors from
- * https://www.w3.org/TR/css-color-4/#named-colors plus the 9 system
- * shorthand synonyms (cyan/aqua, magenta/fuchsia, etc.) that the spec
- * lists as aliases.
+ * CSS Color Module Level 4 named colors → 6-digit hex, for `FilamentForm`'s
+ * colorName typeahead. All names are lowercase here; lookups are
+ * case-insensitive via `lookupCssNamedColor`. The list is the 148 named
+ * colors from https://www.w3.org/TR/css-color-4/#named-colors plus the
+ * shorthand synonyms (cyan/aqua, magenta/fuchsia, etc.) the spec lists as
+ * aliases.
  */
 
 /**
@@ -26,7 +20,7 @@ export const BLANK_COLOR_HEX = "#808080";
  * input stores when cleared), a partial `"#12"` while typing, or otherwise not a
  * full `#RRGGBB`? Such a value isn't a real color, so a color-name commit should
  * fill it rather than leave an invalid value that trips the `#RRGGBB` model
- * validator (Codex P2 on #794). NOTE: the gray sentinel `#808080` is a VALID
+ * validator. NOTE: the gray sentinel `#808080` is a VALID
  * hex and is NOT incomplete — distinguishing "the user picked gray" from "no
  * color chosen" needs intent tracking in the form, not this predicate.
  */
@@ -238,19 +232,11 @@ export interface ColorSuggestion {
  * CSS named-color list and substring-filter by a query string. Returns
  * a deduped, ordered list ready to render in the dropdown.
  *
- * Ordering:
- *   1. DB matches first (the user's own naming wins — same hex they
- *      reached for last time is the most relevant suggestion).
- *   2. CSS named colors second.
- * Within each source, entries preserve the order they came in
- * (suggestions arrive sorted alphabetically from the API; the CSS
- * list is sorted alphabetically at module load).
- *
- * Dedup key is `(lowercase name, uppercase hex)` — a DB row with the
- * exact same name+hex as a CSS entry is rendered once, with DB
- * winning. Different hexes under the same name are kept as separate
- * suggestions (intentional — different brands of "Galaxy Black"
- * legitimately have different shades).
+ * Ordering: DB matches first, CSS named colors second; within each source,
+ * input order is preserved. Dedup key is `(lowercase name, uppercase hex)` —
+ * a DB row identical to a CSS entry renders once, DB winning. Different
+ * hexes under the same name are kept as separate suggestions (intentional —
+ * different brands of "Galaxy Black" legitimately have different shades).
  */
 export function filterColorSuggestions(
   dbSuggestions: readonly ColorSuggestion[],

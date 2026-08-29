@@ -33,17 +33,12 @@ export default function AppHeader() {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // Drawer closes on link click (handler below) AND on every client-side
-  // route change. The pathname-driven close (GH #520) handles
-  // navigations that DON'T go through the drawer's own LINKS: browser
-  // Back/Forward, in-page <Link> clicks (filament row, dashboard tile,
-  // NFC dialog), and programmatic router.push from save-and-redirect
-  // handlers. Pre-fix the drawer panel kept occluding the next page
-  // until the user noticed and tapped X.
-  //
-  // Convergent on pathname → setting mobileOpen=false when already
-  // false is a no-op React bails on; same pattern PR #496 used for the
-  // route-aware skip link. eslint-disable matches how similar
-  // navigation-reactive effects are handled elsewhere in the codebase.
+  // route change — the pathname-driven close handles navigations that
+  // DON'T go through the drawer's own links (browser Back/Forward,
+  // in-page <Link> clicks, programmatic router.push), which would
+  // otherwise leave the drawer occluding the next page. Convergent on
+  // pathname: setting mobileOpen=false when already false is a no-op
+  // React bails on.
   useEffect(() => {
     setMobileOpen(false); // eslint-disable-line react-hooks/set-state-in-effect -- close on route change
   }, [pathname]);
@@ -70,31 +65,25 @@ export default function AppHeader() {
           className="flex items-baseline gap-2 whitespace-nowrap text-gray-900 dark:text-gray-100 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
         >
           <span className="font-semibold text-base sm:text-lg">{t("filaments.title")}</span>
-          {/* Version pill — moved out of /filaments header (GH #156) so the
-              user can see the running version on every page. APP_VERSION is
+          {/* Version pill — shown on every page (GH #156). APP_VERSION is
               injected by next.config at build time from package.json. */}
           <span className="hidden sm:inline text-[10px] font-mono text-gray-400 dark:text-gray-500">
             v{process.env.APP_VERSION}
           </span>
         </Link>
-        {/* Status pills: visible at every viewport so Sync state + NFC
-            reader/tag state stay surfaced on phones / iPad portrait /
-            narrow Electron windows (GH #520.2). Pre-fix this cluster
-            was gated `hidden md:flex`, hiding the pills below 768px
-            with no fallback — directly contradicting the GH #156
-            "visible on every page" intent. The two pills are narrow
-            enough to fit alongside the hamburger even at phone widths;
-            both render to null when not in Electron / not relevant. */}
+        {/* Status pills: deliberately visible at EVERY viewport (no
+            responsive gate) so Sync + NFC state stay surfaced on phones /
+            narrow Electron windows; both render to null when not in
+            Electron / not relevant. */}
         <div className="flex items-center gap-2">
           <SyncStatusIndicator />
           <NfcStatus />
         </div>
         {/* Primary nav — desktop-only; mobile uses the drawer below.
-            xl (not md) since the 8th link (#1168): the full set alongside
-            the brand/version and BOTH status pills — which in German
-            hybrid/NFC states run to ~260px — doesn't reliably fit below
-            ~1280px, so the drawer stays active through tablet and narrow
-            desktop widths (Codex P2 #1184 r6+r7). */}
+            xl (not md): the full link set alongside the brand/version and
+            BOTH status pills — which in German hybrid/NFC states run to
+            ~260px — doesn't reliably fit below ~1280px, so the drawer
+            stays active through tablet and narrow desktop widths. */}
         <div className="hidden xl:flex items-center gap-3">
           <nav className="flex items-center gap-1" aria-label={t("nav.aria.primary")}>
             {LINKS.map((link) => (

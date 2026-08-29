@@ -14,17 +14,12 @@ export default function UnsavedChangesDialog({ onCancel, onDiscard }: Props) {
   const discardRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // GH #522.2: split the effect — capture/restore + initial focus + Tab
-  // trap run once on mount; the Escape→onCancel handler tracks the live
-  // callback in a separate effect. Pre-fix the whole block was keyed on
-  // [onCancel], so a parent re-render with an inline arrow function
-  // identity-changed onCancel, fired cleanup (which restored focus to
-  // the background), then immediately re-ran the effect (which snapshot
-  // the just-restored focus and re-focused the dialog). Net effect:
-  // focus bounced between the background field and the dialog's Cancel
-  // button on every parent re-render. /filaments/new re-renders on NFC
-  // events, so the trigger was real-world. Same fix shape ImportAtlasDialog
-  // applied for the identical bug.
+  // Split the effect — capture/restore + initial focus + Tab trap run
+  // once on mount; the Escape→onCancel handler tracks the live callback
+  // in a separate effect. Keying the whole block on [onCancel] (an inline
+  // parent callback) would fire cleanup + re-run on every parent
+  // re-render, bouncing focus between the background field and the
+  // dialog. Same fix shape as ImportAtlasDialog.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     cancelRef.current?.focus();

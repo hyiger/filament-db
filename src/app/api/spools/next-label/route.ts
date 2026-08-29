@@ -5,27 +5,20 @@ import { computeNextSpoolLabel } from "@/lib/nextSpoolLabel";
 import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
- * GET /api/spools/next-label — the "Next #" roll-number suggestion (GH #1060).
+ * GET /api/spools/next-label — the "Next #" roll-number suggestion
+ * (GH #1060). Returns `{ next, max }`. Suggestion-only: nothing is
+ * reserved, and two concurrent readers can receive the same value
+ * (accepted — single-admin reality, and the human edits the field anyway).
  *
- * Returns `{ next, max }`: the highest numeric spool label across the WHOLE
- * database plus one, and the max itself (null when no label parses as a
- * number). Suggestion-only semantics — the client pre-fills an editable
- * field; nothing is reserved or assigned, and two concurrent readers can
- * receive the same value (accepted by the issue: single-admin reality, and
- * the human edits the field anyway).
+ * THE QUERY DELIBERATELY FILTERS NOTHING — no `_deletedAt`, `_purged`, or
+ * `retired`, the opposite of every other spool read. Roll numbers are
+ * physical and permanent: a number on a trashed filament's spool must
+ * never be handed out again (restore would collide), and a retired spool's
+ * written number is still on the shelf. Skipping past numbers the user
+ * might think are free is the safe direction.
  *
- * THE QUERY DELIBERATELY FILTERS NOTHING. No `_deletedAt`, no `_purged`, no
- * `retired` — the opposite of every other spool read in this app. Roll
- * numbers are physical and permanent (the reporter's are hand-written on
- * the spools): a number on a trashed filament's spool must never be handed
- * out again, because restoring that filament would collide; a retired
- * spool's written number is still on the shelf. Skipping past numbers the
- * user might think are free is the safe direction.
- *
- * Label-only projection per the GH #1005 posture — this must never stream
- * photo blobs or usage history. Read-only GET, so no assertSameOriginRequest
- * (repo posture: the guard covers mutating verbs, GH #360); the optional
- * FILAMENTDB_API_KEY bearer gate in src/proxy.ts applies automatically.
+ * Label-only projection (GH #1005 posture — never stream photo blobs).
+ * Read-only GET, so no assertSameOriginRequest (GH #360).
  */
 export async function GET() {
   try {

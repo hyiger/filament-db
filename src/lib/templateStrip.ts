@@ -54,7 +54,7 @@ export type TemplateStripField = (typeof TEMPLATE_STRIP_FIELDS)[number];
  * Explicit nulls are left untouched (they pass through to the write).
  *
  * MUST be called inside `runExclusive(filamentLockKey(id), …)` TOGETHER
- * with the persisting write (review P1-c on the PUT): decided-then-written
+ * with the persisting write: decided-then-written
  * across a gap, a write racing a first-variant promotion could pass the
  * hasVariants check while the target was still a standalone and persist
  * AFTER the promotion cleared it — re-materializing inventory/color on a

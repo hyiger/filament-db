@@ -1,5 +1,5 @@
 /**
- * GH #595 spool deep links, made SELF-HEALING (round 7 P2).
+ * GH #595 spool deep links, made SELF-HEALING.
  *
  * A printed label's QR encodes `/filaments/<filamentId>?spool=<spoolId>`
  * permanently (buildFilamentDeepLink — src/lib/labelDeepLink.ts). Any

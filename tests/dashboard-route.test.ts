@@ -341,7 +341,7 @@ describe("/api/dashboard — totalGrams + low-stock subtract empty-spool mass (G
   });
 
   it("a variant inherits spoolWeight from its parent (Codex P1 PR #190)", async () => {
-    // Parent has spoolWeight=250; variant leaves it null. Pre-Codex-fix the
+    // Parent has spoolWeight=250; variant leaves it null. Pre-fix the
     // dashboard treated the variant's null as 0 and contributed the full
     // gross weight (1000) to totalGrams, re-introducing the original bug.
     const parent = await Filament.create({

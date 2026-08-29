@@ -15,30 +15,18 @@ import Location from "@/models/Location";
 import PrintHistory from "@/models/PrintHistory";
 import SharedCatalog from "@/models/SharedCatalog";
 
-// Simple in-memory mutex to prevent concurrent restore operations.
-// Limitation: this only guards within a single Node.js process. In a
-// horizontally-scaled deployment each instance would have its own flag,
-// so concurrent restores from different instances would not be blocked.
-// This is acceptable for a single-instance desktop app.
+// In-memory mutex against concurrent restores. Guards a single Node process
+// only — acceptable for a single-instance desktop app.
 let restoreInProgress = false;
 
 /** Current snapshot schema version (see the version history in GET). Bumped
  * whenever the snapshot shape changes so restore can reject newer files
- * (GH #953). v5 changes no collection, but carries the
- * `legacyNozzleCleanupComplete` provenance flag (GH #1021 r13) — a pre-#1022
- * build restoring a v5 file would silently DROP that provenance, and the
- * post-upgrade migration would then re-judge (and could erase) a
- * byte-identical post-cleanup user pin; the #953 version guard in those
- * builds rejects v5 instead.
- *
- * v7 (GH #1074, Codex P1 r3 on PR #1092): usage entries on BOTH ledgers
- * (PrintHistory.usage[] + spool usageHistory[]) carry `debitedGrams`. A
- * pre-#1074 build restoring a v7 file would ACCEPT it while its strict
- * schemas silently strip the field — a "successful" restore that quietly
- * loses the very data preventing the clamped-debit over-refund; the #953
- * guard in those builds rejects v7 instead (same argument as v6's
- * `desiccantChangedAt`: a refused restore is recoverable, a silent
- * partial one isn't). */
+ * (GH #953). v5 carries the `legacyNozzleCleanupComplete` provenance flag
+ * (GH #1021); v7 (GH #1074) adds `debitedGrams` on BOTH usage ledgers — a
+ * pre-#1074 build would ACCEPT a v7 file while its strict schemas silently
+ * strip the field, quietly losing the data that prevents the clamped-debit
+ * over-refund. A refused restore is recoverable, a silent partial one
+ * isn't. */
 const CURRENT_SNAPSHOT_VERSION = 7;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
@@ -55,14 +43,10 @@ const KNOWN_COLLECTION_KEYS = [
 ] as const;
 
 /**
- * Wipe / insert / rollback order: reference targets before referrers, so
- * nozzles, printers, bedTypes and locations all exist before the filaments
- * that point at them via calibrations / spools.locationId.
- *
+ * Wipe / insert / rollback order: reference targets before referrers.
  * Deliberately SEPARATE from KNOWN_COLLECTION_KEYS, which is the order the
- * validation guards walk (and whose first mismatch names the collection in the
- * 400). Collapsing the two would change which collection a malformed file is
- * reported against.
+ * validation guards walk — collapsing the two would change which collection
+ * a malformed file is reported against.
  */
 const SNAPSHOT_RESTORE_ORDER = [
   "nozzles",
@@ -75,12 +59,10 @@ const SNAPSHOT_RESTORE_ORDER = [
 ] as const;
 
 /**
- * The slice of a Mongoose model the wipe / rollback needs.
- *
- * Declared structurally rather than as a union of the seven model types: TS
- * resolves a union's `deleteMany` to an intersection of their overloads, which
- * makes even `deleteMany({})` unassignable. Only these two methods are used
- * here, and both are called with values this file constructs.
+ * The slice of a Mongoose model the wipe / rollback needs. Declared
+ * structurally rather than as a union of the seven model types: TS resolves
+ * a union's `deleteMany` to an intersection of overloads, making even
+ * `deleteMany({})` unassignable.
  */
 interface SnapshotCollectionModel {
   deleteMany(filter: Record<string, unknown>): Promise<unknown>;
@@ -115,12 +97,10 @@ const OID_FIELDS = new Set([
   "spoolId",
 ]);
 /**
- * GH #890: the ObjectId-array fields. The array branch of restoreTypes must
- * coerce a 24-hex string element to an ObjectId ONLY for these keys — mirroring
- * the field-gated scalar path (OID_FIELDS). Without this gate it coerced EVERY
- * 24-hex array element regardless of field name, so a future string-array field
- * whose values happened to be 24 hex chars would have its type silently changed
- * on restore. The only ObjectId arrays in the schema are the two nozzle arrays.
+ * GH #890: the ObjectId-array fields. restoreTypes coerces a 24-hex string
+ * array element ONLY for these keys — ungated, a future string-array field
+ * whose values happen to be 24 hex chars would have its type silently
+ * changed on restore.
  */
 const OID_ARRAY_FIELDS = new Set(["compatibleNozzles", "installedNozzles"]);
 const DATE_FIELDS = new Set([
@@ -136,12 +116,10 @@ const DATE_FIELDS = new Set([
 ]);
 
 /**
- * Recursively restore ObjectId and Date fields that were serialized as strings.
- * Handles _id, parentId, ObjectId-array elements (only the keys in
- * OID_ARRAY_FIELDS — compatibleNozzles/installedNozzles), nested refs in
- * calibrations/spools, and timestamp fields. Array-element ObjectId coercion is
- * field-gated (GH #890) so a non-ObjectId 24-hex string in any other array
- * round-trips as a string.
+ * Recursively restore ObjectId and Date fields that were serialized as
+ * strings. Array-element ObjectId coercion is field-gated (OID_ARRAY_FIELDS,
+ * GH #890) so a non-ObjectId 24-hex string in any other array round-trips as
+ * a string.
  */
 function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
   for (const [key, val] of Object.entries(doc)) {
@@ -155,8 +133,6 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
       }
     } else if (Array.isArray(val)) {
       doc[key] = val.map((item) => {
-        // GH #890: gate on the key, mirroring the scalar path — only coerce
-        // 24-hex elements of the known ObjectId arrays, never any 24-hex string.
         if (typeof item === "string" && OID_RE.test(item) && OID_ARRAY_FIELDS.has(key)) {
           return new mongoose.Types.ObjectId(item);
         }
@@ -173,17 +149,11 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * GH #1009 (Codex P2): re-tombstone a purged-but-not-deleted row at restore time.
- *
- * A snapshot exported from an install affected by the purged-zombie bug can
- * carry a filament / print-history / shared-catalog row with `_purged: true`
- * but `_deletedAt: null` — an active "zombie" (`_purged` and `_deletedAt` are
- * set together everywhere else). The startup `purgedZombies` migration only
- * runs once per process, and its in-memory flag is already set by the time this
- * restore runs, so a restored zombie would stay visible until an app restart
- * while the hybrid sync engine treats it as a permanent tombstone. Normalize
- * the state here (soft-delete it) rather than only at startup. No-op for the
- * common case (`_purged` absent/false).
+ * GH #1009: re-tombstone a purged-but-not-deleted "zombie" row at restore
+ * time. The startup `purgedZombies` migration runs once per process and its
+ * in-memory flag is already set when this restore runs, so a restored zombie
+ * would stay visible until an app restart while hybrid sync treats it as a
+ * permanent tombstone. No-op for the common case.
  */
 function normalizePurgedTombstone(doc: Record<string, unknown>): Record<string, unknown> {
   if (doc._purged === true && doc._deletedAt == null) {
@@ -195,25 +165,17 @@ function normalizePurgedTombstone(doc: Record<string, unknown>): Record<string, 
 /**
  * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
- * The snapshot includes all documents (including soft-deleted) from
- * filaments, nozzles, printers, bed types, locations, print history,
- * and shared catalogs. Timestamps, _ids, and references are preserved
- * so the snapshot can be restored as-is.
+ * Includes all documents (soft-deleted too) from the seven collections;
+ * timestamps, _ids and references are preserved so the snapshot restores
+ * as-is (filaments whole, embedded spools + per-spool instanceId included).
  *
- * #732 Phase 5: filaments are exported whole (embedded spools included),
- * so each spool's per-spool `instanceId` round-trips with no special
- * handling — restore re-hydrates the subdoc through the Filament schema.
- *
- * Note on JSON keys: `bedTypes`, `printHistory`, and `sharedCatalogs`
- * are camelCase keys in the JSON shape, but the restore writes go
- * through the corresponding Mongoose models (BedType, PrintHistory,
- * SharedCatalog) — the keys never reach Mongo, so there's no
- * collection-name mismatch. The keys are kept stable so older
- * snapshots round-trip on the same shape.
+ * The camelCase JSON keys (`bedTypes`, `printHistory`, `sharedCatalogs`)
+ * never reach Mongo — restore writes go through the Mongoose models — and
+ * are kept stable so older snapshots round-trip on the same shape.
  */
 export async function GET(request: NextRequest) {
-  // GH #252: a snapshot is a full data export — reject cross-origin
-  // (CSRF) callers so a hostile page can't trigger an exfiltration.
+  // GH #252: a snapshot is a full data export — reject cross-origin (CSRF)
+  // callers so a hostile page can't trigger an exfiltration.
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
 
@@ -242,23 +204,15 @@ export async function GET(request: NextRequest) {
   //   v2 — adds bedTypes
   //   v3 — adds locations + printHistory
   //   v4 — adds sharedCatalogs (GH #158: previously dropped on every
-  //        snapshot/restore round-trip, silently losing every published
-  //        share link; now symmetric with /api/snapshot/delete which
-  //        always cleared SharedCatalog)
-  //   v5 — adds the top-level legacyNozzleCleanupComplete provenance flag
-  //        (GH #1021: restore must know whether the data predates the
-  //        one-shot nozzle-condition cleanup; bumped so pre-#1022 builds —
-  //        which would drop the flag — reject the file via the #953 guard)
-  //   v6 — adds Location.desiccantChangedAt. Bumped for the same reason as
-  //        v5 and v4: a build without the field would accept the file and
-  //        its stricter Location schema would silently DROP the date, so the
-  //        user gets a "restored successfully" that quietly lost data. v4
-  //        exists because exactly that happened to share links. Failing
-  //        closed via the #953 guard is the established trade-off here —
-  //        a refused restore is recoverable, a silent partial one isn't.
-  // Older snapshots still restore cleanly because POST destructures
-  // missing collections to `[]`.
-  // GH #1021 r12: cleanup provenance. Restore uses this to decide whether the
+  //        round-trip, silently losing every published share link)
+  //   v5 — adds the top-level legacyNozzleCleanupComplete flag (GH #1021)
+  //   v6 — adds Location.desiccantChangedAt (a build without the field
+  //        would accept the file and silently DROP the date; failing closed
+  //        via the #953 guard is the established trade-off)
+  //   v7 — adds debitedGrams on both usage ledgers (GH #1074)
+  // Older snapshots still restore cleanly because POST destructures missing
+  // collections to `[]`.
+  // GH #1021: cleanup provenance — restore uses this to decide whether the
   // snapshot's data predates the one-shot legacy nozzle-condition cleanup
   // (absent/false → re-run it over the restored rows) or is post-cleanup
   // (true → a byte-identical pure nozzle condition in the backup is a USER
@@ -296,17 +250,12 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST /api/snapshot — Restore the database from a JSON snapshot.
- *
- * This is a destructive operation: all existing documents in the
- * snapshot-scoped collections are deleted and replaced with the snapshot
- * contents.
- *
- * Expects multipart/form-data with a single "file" field containing
- * the snapshot JSON.
+ * Destructive: documents in the collections the snapshot CARRIES are deleted
+ * and replaced. Expects multipart/form-data with a "file" field.
  */
 export async function POST(request: NextRequest) {
-  // GH #252: restore wipes and replaces every collection — reject
-  // cross-origin (CSRF) callers before the destructive work begins.
+  // GH #252: restore wipes and replaces collections — reject cross-origin
+  // (CSRF) callers before the destructive work begins.
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
 
@@ -363,17 +312,15 @@ async function restoreSnapshot(request: NextRequest) {
       const text = await file.text();
       snapshot = JSON.parse(text);
     } else {
-      // GH #889: cap the raw body via Content-Length BEFORE buffering it, so a
-      // multi-GB body can't force full allocation before the post-buffer guard
-      // fires (the sibling raw-body routes — prusaslicer, nfc/decode — do this).
+      // GH #889: cap the raw body via Content-Length BEFORE buffering it, so
+      // a multi-GB body can't force full allocation (mirrors the sibling
+      // raw-body routes).
       const lenError = checkContentLength(request, MAX_SNAPSHOT_SIZE);
       if (lenError) return lenError;
       const text = await request.text();
-      // Codex P2 (#890→#920): measure BYTES, not UTF-16 code units. When the
-      // Content-Length header is missing/wrong the preflight above doesn't fire,
-      // so this belt-and-suspenders check is the only byte cap — and multi-byte
-      // text would slip past a `text.length` (code-unit) comparison. Matches the
-      // sibling raw-body routes' `Buffer.byteLength(body, "utf8")`.
+      // Measure BYTES, not UTF-16 code units — with a missing/wrong
+      // Content-Length this is the only byte cap, and multi-byte text slips
+      // past a `text.length` comparison.
       if (Buffer.byteLength(text, "utf8") > MAX_SNAPSHOT_SIZE) {
         return NextResponse.json(
           { error: `Snapshot too large (max ${MAX_SNAPSHOT_SIZE / 1024 / 1024}MB)` },
@@ -386,12 +333,10 @@ async function restoreSnapshot(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON in snapshot file" }, { status: 400 });
   }
 
-  // GH #953: reject a snapshot from a NEWER app version BEFORE the destructive
-  // wipe. The restore only knows the seven v≤4 collection keys (destructured
-  // with `= []` defaults); a v5+ file that added/renamed/moved a collection
-  // would have that data silently dropped after every current collection is
-  // wiped, and the handler would still report "restored successfully" — a
-  // partial restore over a full wipe with no warning. Fail closed instead.
+  // GH #953: reject a snapshot from a NEWER app version BEFORE the
+  // destructive wipe — a newer file's added/renamed collections would be
+  // silently dropped after the wipe while still reporting success. Fail
+  // closed instead.
   if (
     typeof snapshot.version === "number" &&
     snapshot.version > CURRENT_SNAPSHOT_VERSION
@@ -404,12 +349,10 @@ async function restoreSnapshot(request: NextRequest) {
     );
   }
 
-  // Validate structure. `collections` must be a plain, non-array object that
-  // carries at least one recognized collection key. GH #953: the old bare
-  // truthiness check (`if (!snapshot.collections)`) let a wrong-shape file
-  // through — `collections: 1`, `collections: {}`, or `collections: { foo: [] }`
-  // all destructure the seven known keys to `[]`, so the wipe runs, nothing is
-  // inserted, and the handler reports success over an emptied DB.
+  // GH #953: `collections` must be a plain, non-array object carrying at
+  // least one recognized key — a wrong-shape file (`collections: 1`, `{}`,
+  // `{ foo: [] }`) would destructure every known key to `[]`, wipe, insert
+  // nothing, and report success over an emptied DB.
   const cols = snapshot.collections;
   if (typeof cols !== "object" || cols === null || Array.isArray(cols)) {
     return NextResponse.json(
@@ -426,11 +369,10 @@ async function restoreSnapshot(request: NextRequest) {
       { status: 400 },
     );
   }
-  // GH #953 (Codex P1): each PRESENT known collection must be an array. The
-  // destructure below only defaults ABSENT keys to `[]` — a present non-array
-  // value (`{ filaments: {} }`, `{ locations: 1 }`) survives, its `.length` is
-  // undefined so every insert is skipped, and the handler wipes the DB then
-  // reports success with nothing restored. Reject before the backup/wipe.
+  // GH #953: each PRESENT known collection must be an array — the
+  // destructure only defaults ABSENT keys to `[]`, so a present non-array
+  // survives, its `.length` is undefined, every insert is skipped, and the
+  // handler wipes then reports success. Reject before the backup/wipe.
   const colsRecord = cols as Record<string, unknown>;
   for (const key of KNOWN_COLLECTION_KEYS) {
     if (key in colsRecord && !Array.isArray(colsRecord[key])) {
@@ -441,16 +383,12 @@ async function restoreSnapshot(request: NextRequest) {
     }
   }
 
-  // GH #1104: which collections this file actually CARRIES, as distinct from
-  // which ones it happens to leave empty. A present-but-empty array is a
-  // deliberate "make this collection empty"; an ABSENT key means the file has
-  // no opinion, and wiping on its behalf is what silently emptied Locations,
-  // PrintHistory and SharedCatalog whenever an older-format snapshot (which
-  // predates those collections entirely) was restored.
-  //
-  // `in` rather than a truthiness check: the validation above already rejected
-  // every present non-array, and JSON.parse cannot produce an `undefined`
-  // value, so present ⇒ array by this point.
+  // GH #1104: which collections this file actually CARRIES. A
+  // present-but-empty array is a deliberate "make this collection empty"; an
+  // ABSENT key means the file has no opinion — wiping on its behalf is what
+  // silently emptied Locations/PrintHistory/SharedCatalog when an
+  // older-format snapshot was restored. `in` rather than truthiness: the
+  // validation above rejected every present non-array, so present ⇒ array.
   const present = new Set(
     KNOWN_COLLECTION_KEYS.filter((k) =>
       Object.prototype.hasOwnProperty.call(colsRecord, k),
@@ -469,14 +407,12 @@ async function restoreSnapshot(request: NextRequest) {
   } = cols;
 
   // GH #1004 F2(b): pre-validate EVERY incoming doc BEFORE the destructive
-  // wipe. The forward inserts below deliberately validate + throw on the
-  // first bad doc (#259 all-or-nothing) — but real installs carry legacy
-  // docs that fail CURRENT schema validation (the reason the #905
-  // `validateModifiedOnly` fixes exist), so a snapshot of one's own DB
-  // could previously wipe-then-fail-then-rollback every time. Validating
-  // up front turns that into a clean 400 with the DB untouched; the
-  // rollback path below remains reachable only for driver-level errors
-  // (duplicate keys inside the snapshot file, BSON limits).
+  // wipe. Real installs carry legacy docs that fail CURRENT schema
+  // validation, so a snapshot of one's own DB could previously
+  // wipe-then-fail-then-rollback every time; validating up front turns that
+  // into a clean 400 with the DB untouched. The rollback path below remains
+  // reachable only for driver-level errors (duplicate keys inside the file,
+  // BSON limits).
   const UNIQUE_NAME_COLLECTIONS = new Set([
     "nozzles",
     "printers",
@@ -496,24 +432,18 @@ async function restoreSnapshot(request: NextRequest) {
     ["sharedCatalogs", SharedCatalog, sharedCatalogs],
   ];
   for (const [colName, Model, rows] of preValidate) {
-    // GH #1116: `name` now carries `trim: true`, and Mongoose applies a setter
-    // on insertMany — so a snapshot taken before that (which may legitimately
-    // hold both `X` and `X `) collapses to two identical names and aborts the
-    // ordered batch on E11000, AFTER the wipe. Same posture as the validation
-    // check below: state it up front, change nothing.
-    //
-    // Scoped to the collections whose `name` is actually a UNIQUE key.
-    // `printHistory` and `sharedCatalogs` have no `name` field today, so the
-    // helper is already a no-op there — the explicit set keeps it that way if
-    // one ever gains a non-unique `name`.
+    // GH #1116: `name` carries `trim: true` and the setter applies on
+    // insertMany — a pre-trim snapshot legitimately holding both `X` and
+    // `X ` would collapse to identical names and abort the ordered batch on
+    // E11000 AFTER the wipe. State it up front, change nothing. Scoped to
+    // the collections whose `name` is a UNIQUE key.
     const collision = UNIQUE_NAME_COLLECTIONS.has(colName)
       ? // Only `filaments` gets the `_purged` exemption: it is the one
-        // unique-name collection this route re-tombstones before inserting
-        // (see the normalizePurgedTombstone calls below). The other four
-        // schemas don't declare `_purged` at all, so strict mode strips it
-        // and the row inserts ACTIVE — exempting it there would suppress a
-        // real collision and produce the post-wipe E11000 this check exists
-        // to replace.
+        // unique-name collection this route re-tombstones before inserting.
+        // The other four schemas don't declare `_purged` at all, so strict
+        // mode strips it and the row inserts ACTIVE — exempting it there
+        // would suppress a real collision and produce the post-wipe E11000
+        // this check exists to replace.
         findTrimmedNameCollision(rows, colName === "filaments")
       : null;
     if (collision) {
@@ -526,10 +456,9 @@ async function restoreSnapshot(request: NextRequest) {
     }
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
-      // Codex P3 on #1009: a null / non-object element passes the array-shape
-      // check upstream, but restoreTypes(null) → Object.entries(null) throws
-      // OUTSIDE the try below — escaping as a 500 instead of the intended clean
-      // 400 with the DB untouched. Reject non-object rows here.
+      // A null / non-object element passes the array-shape check upstream,
+      // but restoreTypes(null) → Object.entries(null) throws OUTSIDE the try
+      // below — a 500 instead of the intended clean 400. Reject here.
       if (row === null || typeof row !== "object" || Array.isArray(row)) {
         return NextResponse.json(
           {
@@ -577,46 +506,35 @@ async function restoreSnapshot(request: NextRequest) {
   try {
     // Delete existing documents from each collection the snapshot CARRIES.
     //
-    // GH #1104: this used to wipe all seven unconditionally and then insert
-    // only the keys the file had. Restoring a v2-era snapshot (filaments /
-    // nozzles / printers / bedTypes — the only collections that existed then)
-    // therefore emptied Locations, PrintHistory and SharedCatalog: every
-    // spool's locationId dangled and every published share link vanished,
-    // under a green "Restored N filament(s), M nozzle(s), P printer(s)" that
-    // never mentioned them. The version guard only fails closed on NEWER
-    // files, and the code comment claimed older ones "still restore cleanly".
-    //
-    // Trade-off, stated plainly: this is better on balance, not strictly
-    // better. A partial restore can leave a surviving document pointing at a
-    // replaced one — _id values ARE preserved, so refs resolve whenever the
-    // target is in the file or in a surviving collection, but e.g. a
-    // nozzles-only file over surviving filaments can strand
+    // GH #1104: wiping all seven unconditionally emptied Locations,
+    // PrintHistory and SharedCatalog whenever a v2-era snapshot was restored
+    // — dangling every spool's locationId and destroying every share link
+    // under a green success message. Trade-off, stated plainly: better on
+    // balance, not strictly better — _ids ARE preserved so refs resolve
+    // whenever the target is in the file or a surviving collection, but e.g.
+    // a nozzles-only file over surviving filaments can strand
     // `calibrations[].nozzle`. That is recoverable and visible; silently
-    // losing every location and print job is neither. The response names what
-    // was skipped so the user can see it happened.
+    // losing every location and print job is neither. The response names
+    // what was skipped.
     await Promise.all(
       SNAPSHOT_RESTORE_ORDER.filter((k) => present.has(k)).map((k) =>
         SNAPSHOT_MODELS[k].deleteMany({}),
       ),
     );
 
-    // Insert snapshot data (order matters: reference targets before referrers
-    // — nozzles, printers, bedTypes, locations all exist before filaments
-    // that reference them via calibrations / spools.locationId).
+    // Insert snapshot data (order matters: reference targets before
+    // referrers).
     //
-    // GH #259: `insertMany` runs WITHOUT `lean: true`. `lean` skipped
-    // Mongoose hydration entirely — so casting, schema validation, and
-    // strict-mode unknown-key stripping were all bypassed, making
-    // restore an arbitrary-document-write primitive (negative numerics,
-    // injected keys, bad types). Hydrating each doc applies the schema.
+    // GH #259: `insertMany` runs WITHOUT `lean: true` — `lean` skips
+    // Mongoose hydration entirely (casting, schema validation, strict-mode
+    // stripping), making restore an arbitrary-document-write primitive.
     //
-    // GH #259 (Codex P1): `ordered: true` (NOT `ordered: false`). With
-    // `ordered: false` Mongoose inserts the valid subset and — with the
-    // default `throwOnValidationError: false` — does NOT throw, so an
-    // invalid snapshot would be acknowledged as a successful restore
-    // while silently dropping records. `ordered: true` throws on the
-    // first invalid document, and the catch below rolls every
-    // collection back to the pre-restore backup — true all-or-nothing.
+    // And `ordered: true` (NOT false): with `ordered: false` Mongoose
+    // inserts the valid subset and does NOT throw (default
+    // `throwOnValidationError: false`), so an invalid snapshot would be
+    // acknowledged as successful while silently dropping records.
+    // `ordered: true` throws on the first invalid document and the catch
+    // below rolls back — true all-or-nothing.
     const results = {
       filaments: 0,
       nozzles: 0,
@@ -652,9 +570,8 @@ async function restoreSnapshot(request: NextRequest) {
     }
 
     if (filaments.length > 0) {
-      // GH #1009 (Codex P2): normalizePurgedTombstone re-tombstones any
-      // purged-but-active zombie the snapshot carries (Filament / PrintHistory /
-      // SharedCatalog all carry `_purged`).
+      // normalizePurgedTombstone applies to the three `_purged`-carrying
+      // collections (Filament / PrintHistory / SharedCatalog).
       const docs = (filaments as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await Filament.insertMany(docs, { ordered: true });
       results.filaments = filaments.length;
@@ -672,38 +589,30 @@ async function restoreSnapshot(request: NextRequest) {
       results.sharedCatalogs = sharedCatalogs.length;
     }
 
-    // GH #1021 (Codex P1 r11/r12): the restore replaced filaments+nozzles,
-    // but snapshots don't carry `_migrations` — a completed marker would keep
-    // skipping the cleanup over freshly-restored PRE-upgrade data. The
-    // snapshot's own provenance flag decides (r12): post-cleanup backups keep
-    // their pins (no re-run — a byte-identical condition there is user
-    // input); pre-cleanup/older backups get re-cleaned. Best-effort: a
-    // transient failure leaves the process-local flag false, so the next
-    // dbConnect retries (and fails requests until terminal, per the r7
-    // posture) — the restore itself already succeeded either way.
+    // GH #1021: snapshots don't carry `_migrations`, so a completed marker
+    // would keep skipping the cleanup over freshly-restored PRE-upgrade
+    // data. The snapshot's own provenance flag decides: post-cleanup backups
+    // keep their pins (a byte-identical condition there is user input);
+    // pre-cleanup/older backups get re-cleaned. Best-effort: a transient
+    // failure leaves the process-local flag false so the next dbConnect
+    // retries — the restore itself already succeeded.
     //
-    // GH #1104: gated on the snapshot actually CARRYING filaments. This call
-    // has two effects, and both are wrong when it doesn't. For a pre-v5 file
-    // (no provenance flag) it durably INVALIDATES the one-shot marker and
-    // re-runs the cleanup over the live filaments collection — which used to
-    // be safe only because the filaments had just been wiped and replaced.
-    // With the wipe now scoped, an unrelated locations-only restore would
-    // re-judge untouched filaments, and CLAUDE.md's accepted residue ("a user
-    // pin byte-identical to the current derivation IS cleared; re-enter it and
-    // it survives from then on") only holds because the marker is spent. The
-    // v5+ branch has the mirror problem: it would stamp `completed` on a DB
-    // whose filaments were never cleaned, suppressing a legitimate future run.
-    // One gate covers both.
+    // GH #1104: gated on the snapshot actually CARRYING filaments — ungated,
+    // a pre-v5 locations-only restore would durably invalidate the one-shot
+    // marker and re-judge UNTOUCHED live filaments (clearing legitimate
+    // pins), while the v5+ branch would stamp `completed` over filaments
+    // never cleaned, suppressing a legitimate future run. One gate covers
+    // both.
     if (present.has("filaments")) {
       try {
         await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
       } catch (cleanupErr) {
-      // Codex P1 r16: distinguish the two failure shapes. If the DURABLE
-      // marker state was never updated, no later dbConnect (or restart) will
-      // re-run the cleanup — reporting success would strand restored legacy
-      // conditions forever. The restore is idempotent, so fail the request
-      // and have the user run it again. A failure AFTER the durable
-      // invalidation genuinely retries on the next connect.
+      // Two failure shapes: if the DURABLE marker state was never updated,
+      // no later dbConnect (or restart) will re-run the cleanup — reporting
+      // success would strand restored legacy conditions forever, so fail the
+      // request and have the user run the (idempotent) restore again. A
+      // failure AFTER the durable invalidation genuinely retries on the next
+      // connect.
         if (cleanupErr instanceof RestoreCleanupInvalidationError) {
           console.error("[snapshot] Restore cleanup invalidation failed:", cleanupErr);
           return NextResponse.json(
@@ -725,35 +634,28 @@ async function restoreSnapshot(request: NextRequest) {
       message: "Snapshot restored successfully",
       restored: results,
       // GH #1104: name the collections this file had no opinion about, so a
-      // partial restore can't read as a full one. The UI turns this into a
-      // notice; a scripted client can assert on it.
+      // partial restore can't read as a full one.
       skipped,
     });
   } catch (err) {
     // --- Rollback: attempt to restore the pre-restore data ---
     try {
-      // GH #1104: roll back only what the forward pass touched. Wiping a
-      // collection the restore never wiped, then re-inserting its backup,
-      // would be a no-op in the happy case — but it needlessly destroys and
-      // recreates untouched data inside an error path that is already
-      // handling one failure, and a second failure there reports "database
-      // may be in an inconsistent state" for a collection this restore was
-      // never going to change.
+      // GH #1104: roll back only what the forward pass touched — destroying
+      // and recreating untouched collections inside an error path risks a
+      // second failure reporting "inconsistent state" for data this restore
+      // was never going to change.
       await Promise.all(
         SNAPSHOT_RESTORE_ORDER.filter((k) => present.has(k)).map((k) =>
           SNAPSHOT_MODELS[k].deleteMany({}),
         ),
       );
-      // GH #1004 F2(a): `lean: true` — the backup docs came verbatim from
-      // THIS database via `.lean()` above and never left the server, so
-      // #259's untrusted-input rationale doesn't apply here. Without it,
-      // Mongoose re-validates the backup against the CURRENT schema and —
-      // with ordered:false + the default throwOnValidationError:false —
-      // silently SKIPS any legacy doc that no longer validates, while the
-      // response below claims a full rollback. Byte-identical reinsertion
-      // is the correct rollback semantic. The count checks catch any
-      // residual silent-subset path and route it into rollbackErr so the
-      // user is told data may be lost instead of being told all is well.
+      // GH #1004 F2(a): `lean: true` here — the backup docs came verbatim
+      // from THIS database and never left the server, so #259's
+      // untrusted-input rationale doesn't apply. Without it, Mongoose
+      // re-validates against the CURRENT schema and silently SKIPS any
+      // legacy doc that no longer validates while the response claims a full
+      // rollback. Byte-identical reinsertion is the correct rollback
+      // semantic; the count checks catch any residual silent-subset path.
       const rollbackInsert = async (
         name: string,
         model: { insertMany(docs: unknown[], opts: Record<string, unknown>): Promise<unknown[]> },

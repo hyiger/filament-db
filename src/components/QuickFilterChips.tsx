@@ -29,9 +29,7 @@ const FILTERS: { key: QuickFilter; labelKey: string }[] = [
 ];
 
 /**
- * Chip row above the filament list for one-click filtering. Kept in a
- * dedicated component so the main list file stays readable and the chips
- * can be reused on the dashboard later.
+ * Chip row above the filament list for one-click filtering.
  */
 export default function QuickFilterChips({ active, onChange, counts, trailing }: Props) {
   const { t } = useTranslation();
@@ -45,12 +43,9 @@ export default function QuickFilterChips({ active, onChange, counts, trailing }:
         {FILTERS.map((f) => {
           const isActive = active === f.key;
           const count = counts?.[f.key];
-          // #1117(c): the badge used to be gated on `count > 0`, so a chip
-          // with nothing to show simply lost its badge — "Low stock" looked
-          // like it had no count at all while its neighbours had one. It also
-          // stayed clickable at zero and dead-ended on "no filaments match".
-          // Show the zero and disable the chip instead; "All" is never
-          // disabled, since it is how you get back.
+          // Show a zero badge and disable the chip rather than hiding the
+          // badge (a clickable zero-count chip dead-ends on "no filaments
+          // match"); "All" is never disabled, since it is how you get back.
           const hasCount = count !== undefined;
           const isEmpty = hasCount && count === 0 && f.key !== "all";
           return (

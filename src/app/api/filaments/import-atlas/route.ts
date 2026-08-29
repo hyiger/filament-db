@@ -18,14 +18,13 @@ import {
 } from "@/lib/trimmedNameLookup";
 
 /**
- * GH #255: explicit ALLOW-LIST of filament fields that may be copied
- * from a remote Atlas document. The remote DB is whatever URI the
- * caller supplied — fully attacker-controlled — so spreading the remote
- * document and stripping a fixed deny-list let everything unlisted
- * through, including `syncId` / `instanceId` (a sync-engine collision /
- * takeover vector). Cross-DB ObjectId refs (`parentId`,
- * `compatibleNozzles`, `calibrations`) are deliberately NOT listed —
- * they point at the source database and are force-emptied below.
+ * GH #255: explicit ALLOW-LIST of filament fields copyable from a remote
+ * Atlas document. The remote DB is attacker-controlled (caller-supplied
+ * URI), so a deny-list would let unlisted keys through — including
+ * `syncId` / `instanceId` (a sync-engine collision / takeover vector).
+ * Cross-DB ObjectId refs (`parentId`, `compatibleNozzles`, `calibrations`)
+ * are deliberately NOT listed — they point at the source database and are
+ * force-emptied below.
  */
 const IMPORTABLE_FILAMENT_FIELDS = [
   "name", "vendor", "type", "color", "colorName", "cost", "density",
@@ -59,12 +58,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Connection string is required" }, { status: 400 });
   }
 
-  // GH #627 item 1: cap the per-request id count — every sibling bulk
-  // endpoint enforces one (openprinttag/import: 500, share: 500,
-  // print-history: 100) but this one looped an unbounded id list through
-  // sequential findOne/updateOne/create round-trips. Checked BEFORE the
-  // SSRF guard / remote connect so an oversized request never touches
-  // the network.
+  // GH #627: cap the per-request id count (the loop does sequential
+  // round-trips per id). Checked BEFORE the SSRF guard / remote connect so
+  // an oversized request never touches the network.
   const MAX_IMPORT_IDS = 1_000;
   if (Array.isArray(body.filamentIds) && body.filamentIds.length > MAX_IMPORT_IDS) {
     return NextResponse.json(
@@ -73,11 +69,9 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // GH #254: SSRF guard — without this, a request body with
-  // `uri: "mongodb://10.0.0.5:27017"` turns the server into an
-  // internal-network port scanner. Importing from a remote Atlas
-  // legitimately uses a public `mongodb+srv://` host, so require that
-  // scheme and reject any host resolving to a private/internal address.
+  // GH #254: SSRF guard — a `uri: "mongodb://10.0.0.5:27017"` would turn
+  // the server into an internal-network port scanner. Require the public
+  // `mongodb+srv://` scheme and reject private/internal hosts.
   try {
     await assertSafeMongoUri(uri, { requireSrv: true, blockPrivateHosts: true });
   } catch (err) {
@@ -104,7 +98,6 @@ export async function POST(request: NextRequest) {
     } catch { /* use default */ }
     const db = client.db(dbName);
 
-    // If filament IDs provided, import them
     if (body.filamentIds && Array.isArray(body.filamentIds)) {
       const { ObjectId } = await import("mongodb");
 
@@ -129,30 +122,27 @@ export async function POST(request: NextRequest) {
 
       let created = 0;
       let updated = 0;
-      // GH #605 (codex round 3 sweep): per-row notes for content the import
-      // refused to apply (remote spools aimed at a local template). The row
-      // itself still imports — only the offending payload is skipped.
+      // GH #605: per-row notes for content the import refused to apply; the
+      // row itself still imports.
       const errors: string[] = [];
 
       for (const remote of remoteFilaments) {
-        // GH #255: copy ONLY allow-listed fields from the (attacker-
-        // controlled) remote document — `syncId` / `instanceId` /
+        // GH #255: copy ONLY allow-listed fields — `syncId` / `instanceId` /
         // `_purged` and any other unlisted key never make it through.
         const filamentData: Record<string, unknown> = {};
         for (const key of IMPORTABLE_FILAMENT_FIELDS) {
           if (remote[key] !== undefined) filamentData[key] = remote[key];
         }
 
-        // GH #1021 (Codex P1 r20): a pre-#1022 source Atlas can carry the
-        // stamped machine condition in the allow-listed `settings` bag — and
-        // the local one-shot marker is already completed, so nothing later
-        // catches it. The provenance lives in the SOURCE database's nozzle
-        // refs, which the block below is about to discard — so resolve them
-        // against the SOURCE db first (own refs, else the ACTIVE source
-        // parent's) and strip a provenance-matching value into the cloned
-        // bag. A non-matching pure nozzle condition imports as a user pin;
-        // the source Atlas itself stays read-only by contract (its own
-        // deployment's migration owns cleaning it).
+        // GH #1021: a pre-#1022 source Atlas can carry the stamped machine
+        // condition in the allow-listed `settings` bag — the local one-shot
+        // marker is already completed, so nothing later catches it. The
+        // provenance lives in the SOURCE database's nozzle refs (which the
+        // block below discards), so resolve them against the SOURCE db first
+        // (own refs, else the ACTIVE source parent's) and strip a
+        // provenance-matching value. A non-matching pure nozzle condition
+        // imports as a user pin; the source Atlas stays read-only by
+        // contract.
         const importedSettings = filamentData.settings;
         if (
           importedSettings &&
@@ -195,10 +185,9 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Foreign-ObjectId references point at documents in the *source*
-        // Atlas database and won't resolve locally. Set them to explicit
-        // empty values (rather than omitting them) so an updateOne on an
-        // existing row actually *clears* any previously-stored Atlas IDs.
+        // Foreign-ObjectId refs point at the *source* database and won't
+        // resolve locally. Set explicit empty values (not omit) so an
+        // updateOne actually *clears* any previously-stored Atlas IDs.
         filamentData.parentId = null;
         filamentData.compatibleNozzles = [];
         filamentData.calibrations = [];
@@ -207,22 +196,17 @@ export async function POST(request: NextRequest) {
             if (s && typeof s === "object") {
               const spool = s as Record<string, unknown>;
               spool.locationId = null;
-              // GH #732: the top-level `instanceId` is already excluded from
-              // IMPORTABLE_FILAMENT_FIELDS so a remote can't spoof a filament
-              // identity. The spool `instanceId` rides inside the allow-listed
-              // `spools` array, so regenerate it locally — otherwise an
-              // attacker-controlled / unrelated Atlas DB could persist duplicate
-              // or spoofed spool identities that Phase 2 will match labels/NFC
+              // GH #732: the spool `instanceId` rides inside the
+              // allow-listed `spools` array, so regenerate it locally —
+              // otherwise an attacker-controlled Atlas DB could persist
+              // duplicate/spoofed spool identities that labels/NFC match
               // against.
               spool.instanceId = generateInstanceId();
-              // GH #626: the remote document is attacker-controllable, and
-              // spool photos here bypassed the MIME allow-list + 5MB cap
-              // that the dedicated spool routes enforce via
-              // validateSpoolBody (SVG is rejected because inline <script>
-              // can execute in some rendering contexts). Sanitize rather
-              // than reject — same posture as the ref force-emptying above,
-              // and a legacy oversized photo in the user's own Atlas DB
-              // shouldn't abort the whole import.
+              // GH #626: enforce the MIME allow-list + 5MB cap the spool
+              // routes apply (SVG rejected — inline <script> can execute in
+              // some rendering contexts). Sanitize rather than reject — a
+              // legacy oversized photo in the user's own Atlas DB shouldn't
+              // abort the whole import.
               const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
               spool.photoDataUrl = photo.ok ? (photo.value ?? null) : null;
             }
@@ -230,14 +214,12 @@ export async function POST(request: NextRequest) {
         }
 
         // GH #732: on an UPDATE the whole spools array is replaced, so reuse
-        // the EXISTING LOCAL spool instanceId by position rather than the
-        // freshly-minted one — otherwise a routine re-import from Atlas would
-        // rotate the durable spool identity every time and orphan any
-        // label/NFC/match that stored the prior id. New positions (beyond the
-        // local count) keep their minted id; the remote's id is never trusted
-        // (anti-spoofing, GH #732 round 2). Matching is positional because
-        // spool subdocs have no stable cross-side id (the deferred spool-syncId
-        // migration — same limitation as amsSlots[].spoolId).
+        // the EXISTING LOCAL spool instanceId by position — otherwise a
+        // routine re-import would rotate the durable spool identity and
+        // orphan any label/NFC that stored the prior id. New positions keep
+        // their minted id; the remote's id is never trusted (anti-spoofing).
+        // Matching is positional because spool subdocs have no stable
+        // cross-side id.
         const preserveLocalSpoolIds = (
           localSpools: Array<{ instanceId?: string }> | undefined,
         ) => {
@@ -250,41 +232,30 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        // GH #1116: normalize the SOURCE name at the boundary.
+        // GH #1116: normalize the SOURCE name at the boundary. Not
+        // load-bearing today (the Mongoose setter casts the query below),
+        // but written explicitly because that behaviour is invisible — this
+        // repo moves hot lookups to the raw driver routinely, and the day
+        // this query moves the trim would silently stop applying (an older
+        // Atlas source holding `"PLA Basic "` would miss the local row, fall
+        // through to create, and E11000 on the setter).
         //
-        // Not load-bearing today — Mongoose applies a String schema setter to
-        // QUERY values, so the `findOne` below already casts `"PLA Basic "`
-        // to `"PLA Basic"` and resolves the local row. It is written
-        // explicitly because that behaviour is invisible: this repo moves hot
-        // lookups to the raw driver routinely, and the driver does no
-        // casting, so the day this query moves the trim would silently stop
-        // applying — an older Atlas source holding `"PLA Basic "` would miss
-        // the local row, fall through to create, and E11000 on the setter,
-        // failing the whole selected-filament import.
-        //
-        // ONLY values the String schema itself accepts (Codex P2). The remote
-        // document is attacker-influenceable — this route connects to a URI
-        // the caller supplies — and a blanket `String(...)` would MANUFACTURE
-        // a legal name out of one Mongoose would have rejected: an array
-        // `["Victim"]` stringifies to `Victim` and would then select and
-        // overwrite the local `Victim` row, where previously the cast error
-        // refused the row outright. A non-castable name is therefore left
-        // exactly as it arrived, for the update/create below to reject.
+        // ONLY values the String schema itself accepts: a blanket
+        // `String(...)` would MANUFACTURE a legal name out of one Mongoose
+        // would have rejected — an array `["Victim"]` stringifies to
+        // `Victim` and would select and overwrite the local `Victim` row. A
+        // non-castable name is left exactly as it arrived, for the
+        // update/create below to reject.
         const castName = castNameLikeSchema(filamentData.name);
         const importName = castName === null ? "" : castName.trim();
         if (castName !== null) filamentData.name = importName;
         let existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (!existing && importName !== "") {
-          // GH #1116 (Codex P1): the miss may be a LOOKUP failure, not an
-          // absence. The setter casts this query, so it cannot select a local
-          // row whose stored name is still the raw `"PLA Basic "` — which is
-          // what survives when `trimEntityNames` had to skip the filaments
-          // collection or leave that row alone. Falling through to create
-          // would succeed (the two raw strings are distinct, so the partial
-          // unique index has no objection) and mint a second active filament
-          // that renders identically to the first.
-          //
-          // Re-hydrate by `_id`, the one key casting cannot break.
+          // GH #1116: the miss may be a LOOKUP failure, not an absence — the
+          // setter casts this query, so it cannot select an untrimmed
+          // survivor, and falling through to create would mint a second
+          // active filament rendering identically. Re-hydrate by `_id`, the
+          // one key casting cannot break.
           const survivor = await findByTrimmedName(
             Filament.collection as unknown as MinimalNameCollection,
             importName,
@@ -299,26 +270,20 @@ export async function POST(request: NextRequest) {
         }
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
-          // GH #605 (codex round 3 sweep; extended round 4, F4): when the
-          // LOCAL row is a TEMPLATE (it has live color variants), the
-          // remote's per-variant state must not be written onto it — a
-          // template holds no inventory (`spools`, `totalWeight`, the
-          // `lowStockThreshold` that alarms on it) and no color identity
-          // (`color`, `colorName`). PUT-parity rule: whatever the PUT
-          // handler strips on templates (the shared TEMPLATE_STRIP_FIELDS
-          // in src/lib/templateStrip.ts, also used by every slicer sync
-          // route), this path drops — keep this inline mirror in lockstep
-          // (it stays hand-rolled for its per-field human-readable notes
-          // and the extra `spools` guard the shared list doesn't carry).
-          // Drop only the offending keys (the rest of the update
-          // still applies, and the local state stays untouched) and report
-          // it per-row; an import can't confirm the alternative (a
-          // promotion). Explicit remote nulls still apply (clearing a
-          // legacy leftover is legitimate cleanup — same posture as PUT).
-          // Decided and written inside the same per-filament mutex the
-          // promotion gate locks, so a concurrent first-variant promotion
-          // can't land between the check and the update and have this write
-          // re-attach the just-moved state.
+          // GH #605: when the LOCAL row is a TEMPLATE, the remote's
+          // per-variant state must not be written onto it. PUT-parity rule:
+          // whatever the PUT handler strips on templates (the shared
+          // TEMPLATE_STRIP_FIELDS in src/lib/templateStrip.ts, also used by
+          // every slicer sync route), this path drops — keep this inline
+          // mirror in lockstep (it stays hand-rolled for its per-field
+          // human-readable notes and the extra `spools` guard the shared
+          // list doesn't carry). Drop only the offending keys (the rest of
+          // the update still applies) and report per-row; an import can't
+          // confirm the alternative (a promotion). Explicit remote nulls
+          // still apply (same posture as PUT). Decided and written inside
+          // the same per-filament mutex the promotion gate locks, so a
+          // concurrent first-variant promotion can't land between the check
+          // and the update.
           await runExclusive(filamentLockKey(existing._id), async () => {
             const remoteSpools = filamentData.spools;
             const carriesSpools = Array.isArray(remoteSpools) && remoteSpools.length > 0;
@@ -370,32 +335,23 @@ export async function POST(request: NextRequest) {
           updated++;
         } else {
           // If a soft-deleted doc with the same name exists, resurrect it.
-          //
-          // GH #499: filter on `_purged: { $ne: true }` to match every
-          // other resurrection path (filament-import, bambustudio,
-          // restore, prusaslicer). A `_purged: true` doc is the v1.15
-          // permanent-delete tombstone — a one-way "gone forever on both
-          // peers" signal documented on the Filament model. Without this
-          // filter, an Atlas import containing a name that the user
-          // permanent-deleted locally would flip `_deletedAt` back to
-          // null while leaving `_purged: true` set — the row becomes
-          // invisible everywhere (list / trash both filter on `_purged:
-          // { $ne: true }`) but still occupies the name on the partial-
-          // unique active-name index, so the user can't recreate it.
+          // GH #499: filter on `_purged: { $ne: true }` like every other
+          // resurrection path — `_purged` is the one-way permanent-delete
+          // tombstone, and resurrecting it would flip `_deletedAt` back to
+          // null while leaving `_purged: true`: invisible everywhere yet
+          // still occupying the name on the partial-unique index.
           let softDeleted = await Filament.findOne({
             name: importName,
             _deletedAt: { $ne: null },
             _purged: { $ne: true },
           });
           if (!softDeleted && importName !== "") {
-            // Same lookup failure as the active branch above, one state over.
-            // Missing an untrimmed TOMBSTONE does not immediately duplicate —
-            // the partial unique index only covers active rows, so the create
-            // below succeeds legitimately — but it defers the duplicate rather
-            // than avoiding it: restoring that tombstone later flips only
-            // `_deletedAt`, leaving its raw name intact, and the user ends up
-            // with two ACTIVE rows rendering identically. Resurrect the row
-            // that is actually there instead.
+            // Same lookup failure, one state over. Missing an untrimmed
+            // TOMBSTONE doesn't immediately duplicate (the partial unique
+            // index only covers active rows) but defers it: restoring that
+            // tombstone later flips only `_deletedAt`, leaving its raw name
+            // intact — two ACTIVE rows rendering identically. Resurrect the
+            // row that is actually there instead.
             const survivor = await findByTrimmedName(
               Filament.collection as unknown as MinimalNameCollection,
               importName,
@@ -410,50 +366,38 @@ export async function POST(request: NextRequest) {
             }
           }
           if (softDeleted) {
-            // GH #605 sweep: no template check needed on the resurrect — a
-            // trashed doc cannot have live variants (soft-deleting a parent
-            // with variants is refused, and since round 8 F3 that refusal
-            // and the trash write hold the SAME per-filament mutex the
-            // first-variant gates lock, so a mid-flight first variant can't
-            // race past the check; restoring a variant under a trashed
+            // GH #605: no template check needed on the resurrect — a trashed
+            // doc cannot have live variants (soft-deleting a parent with
+            // variants is refused under the same per-filament mutex the
+            // first-variant gates lock; restoring a variant under a trashed
             // parent is refused; variant creation requires an ACTIVE
-            // parent), so the revived row is never a template at this
-            // write. The create below is a fresh doc — same reasoning.
+            // parent). The create below is a fresh doc — same reasoning.
             preserveLocalSpoolIds(softDeleted.spools);
-            // GH #1079 item 2 (GH #1004 F1 parity): a permanent delete can
-            // land BETWEEN the findOne above and this write — the import
-            // loop does per-row remote round-trips, so the window is real.
-            // The read-side `_purged: { $ne: true }` filter alone can't
-            // close it: an unguarded update would flip `_deletedAt: null`
-            // on a row whose `_purged: true` was just set, minting the
-            // active-but-purged "zombie" #1004 F1 exists to prevent (it
-            // renders in the app, hybrid sync one-way-propagates the purge,
-            // and a later soft-delete vanishes it from the trash entirely).
-            // Re-assert the tombstone check on the WRITE, mirroring the
-            // resurrect guard in src/lib/importFilaments.ts; a zero-match
-            // falls through to a fresh create instead of incrementing
-            // `updated` against a write that matched nothing.
+            // GH #1079: a permanent delete can land BETWEEN the findOne
+            // above and this write. An unguarded update would flip
+            // `_deletedAt: null` on a row whose `_purged: true` was just
+            // set, minting the active-but-purged "zombie" #1004 F1 exists to
+            // prevent. Re-assert the tombstone check on the WRITE, mirroring
+            // the resurrect guard in src/lib/importFilaments.ts; a
+            // zero-match falls through to a fresh create.
             const res = await Filament.updateOne(
               { _id: softDeleted._id, _purged: { $ne: true } },
               { ...filamentData, _deletedAt: null },
               { runValidators: true, context: "query" },
             );
             if (res.matchedCount === 0) {
-              // The tombstone was purged mid-import — mint a fresh doc. The
-              // partial-unique name index permits it because the purged row
-              // keeps `_deletedAt` set (same reasoning as the create branch
-              // below).
+              // The tombstone was purged mid-import — mint a fresh doc (the
+              // partial-unique name index permits it; the purged row keeps
+              // `_deletedAt` set).
               await Filament.create(filamentData);
               created++;
             } else {
               updated++;
             }
           } else {
-              // The partial-unique index on `name` is filtered to
-            // `_deletedAt: null`, and `_purged` rows by definition have
-            // `_deletedAt != null` (the permanent-delete handler keeps
-            // the tombstone date set), so a `_purged` row owning this
-            // name doesn't block the create below.
+              // The partial-unique index on `name` covers `_deletedAt: null`
+            // only, and `_purged` rows keep `_deletedAt` set — so a
+            // `_purged` row owning this name doesn't block the create.
             await Filament.create(filamentData);
             created++;
           }

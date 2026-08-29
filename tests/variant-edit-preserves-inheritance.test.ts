@@ -225,7 +225,7 @@ describe("variant edit round-trip preserves inheritance", () => {
   });
 
   it("diameter inheritance survives a variant edit round-trip (parent has non-default diameter)", async () => {
-    // Guard against a Codex-flagged regression: with raw=true the variant's
+    // Guard against a regression: with raw=true the variant's
     // diameter arrives as null; if the form defaulted null → "1.75" in its
     // initial state and then submitted it as a number, any parent diameter
     // other than 1.75 (say a 2.85mm filament) would be silently overridden

@@ -69,12 +69,10 @@ export async function POST(request: NextRequest) {
     delete body.updatedAt;
     delete body.__v;
     delete body.syncId;
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "Smooth PEI" and a surviving
-    // untrimmed "Smooth PEI " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
+    // GH #1116: the partial unique index compares RAW stored strings, so a
+    // submitted "Smooth PEI" beside a surviving untrimmed "Smooth PEI "
+    // would write an indistinguishable duplicate. Ask the trimmed question
+    // explicitly, in the same 409 shape handleDuplicateKeyError produces.
     const nameConflict = await survivorNameConflict(
       BedType.collection as unknown as MinimalNameCollection,
       body.name,

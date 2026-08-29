@@ -59,16 +59,12 @@ interface CompareFilament {
   spools: { totalWeight: number | null; retired?: boolean }[];
   spoolWeight: number | null;
   // Legacy single-spool shape: stock tracked on the filament itself, with no
-  // spools[] subdocuments. Present in the payload all along; the "On hand" row
-  // just never looked at it (GH #1110).
+  // spools[] subdocuments (GH #1110).
   totalWeight: number | null;
   netFilamentWeight: number | null;
 }
 
 export default function ComparePage() {
-  // GH #638: the Suspense fallback was hardcoded English. The provider
-  // mounts above this component (ClientProviders in the root layout), so
-  // t() is available here.
   const { t } = useTranslation();
   return (
     <Suspense fallback={<main id="main-content" className="p-8"><p className="text-gray-500">{t("common.loading")}</p></main>}>
@@ -121,11 +117,10 @@ function ComparePageInner() {
     if (selectedIds.length === 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived state
       setComparison([]);
-      // Codex P2 on PR #1013: also clear loading here. When the last selection
-      // is removed while a compare fetch is still in flight, the previous
-      // effect's cleanup aborts it and the AbortError branch below now
-      // (correctly) ignores that rejection — so without this, `loading` would
-      // stay true forever: a stuck spinner with no request behind it.
+      // Also clear loading here: when the last selection is removed while a
+      // compare fetch is in flight, the previous effect's cleanup aborts it
+      // and the AbortError branch below ignores that rejection — without
+      // this, `loading` would stay true forever.
       setLoading(false);
       setError(null);
       setSettledKey("");
@@ -136,9 +131,8 @@ function ComparePageInner() {
     setLoading(true);
     fetch(`/api/filaments/compare?ids=${selectedIds.join(",")}`, { signal: ac.signal })
       .then(async (r) => {
-        // GH #1109: this used to be `r.ok ? r.json() : []`, so an API error
-        // became an empty comparison that no render gate matched — a blank
-        // page with no explanation. Surface it instead.
+        // GH #1109: folding an API error into `[]` produced a blank page
+        // with no explanation — surface it instead.
         if (!r.ok) {
           // Deliberately NOT rendering the server's text: a hand-edited id
           // makes the route throw a Mongoose CastError, whose message names
@@ -189,21 +183,11 @@ function ComparePageInner() {
     });
   };
 
-  // GH #522.3: was previously inlined as
-  // `selectedIds={useMemo(() => new Set(selectedIds), [selectedIds])}`
-  // inside the FilamentPicker JSX, which calls useMemo lexically inside
-  // a JSX prop expression — still legal Hook rules-wise (the call is in
-  // the function component body, not a callback), but the React team
-  // flags this shape because the dep is read implicitly and refactors
-  // tend to break it. Hoisted into a real binding.
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
-  // GH #1110: this was a hand-rolled copy of the spools[] sum that had no
-  // legacy fallback, so a roll tracked via the top-level `totalWeight` (no
-  // spools[] subdocuments) reported "—" here while /inventory and the detail
-  // page both showed its grams. `getRemainingGrams` is the shared helper every
-  // other surface uses — it still subtracts the tare (the GH #182 fix this
-  // replaces) and still skips retired spools, and it handles the legacy shape.
+  // GH #1110: `getRemainingGrams` is the shared helper every other surface
+  // uses — it subtracts the tare, skips retired spools, and handles the
+  // legacy top-level-totalWeight shape a hand-rolled spools[] sum missed.
   // null means "not weight-tracked", which is distinct from a real 0 g.
   const onHandGrams = useMemo(() => comparison.map(getRemainingGrams), [comparison]);
 
@@ -213,10 +197,9 @@ function ComparePageInner() {
     {
       label: t("compare.row.color"),
       get: (f) => {
-        // GH #1120: interpolating a null `color` printed the literal string
-        // "Ruby (null)", and a coextruded filament with no colourName rendered
-        // an empty cell. `allColors` returns the primary plus every secondary,
-        // so a multi-colour filament lists what it actually is.
+        // GH #1120: `color` is nullable — interpolating it raw prints
+        // "Ruby (null)". `allColors` returns the primary plus every
+        // secondary, so a multi-colour filament lists what it actually is.
         const hexes = allColors(f);
         // No stored colour at all — a v1.70 template is deliberately
         // colourless. Report that as unknown rather than reaching for
@@ -228,10 +211,8 @@ function ComparePageInner() {
       },
     },
     {
-      // `cost` is stored per-kg (the form labels it "Cost ({symbol}/kg)"), so a
-      // single per-kg row covers it — the old plain "Cost" row showed the same
-      // number without the /kg suffix (#779). No density needed: it's already
-      // per-kg, no 1kg-spool conversion.
+      // `cost` is stored per-kg, so a single per-kg row covers it — no
+      // density conversion needed.
       label: t("compare.row.costPerKg"),
       get: (f) => (f.cost != null ? `${formatCurrency(f.cost)}/kg` : "—"),
     },
@@ -302,8 +283,8 @@ function ComparePageInner() {
       label: t("compare.row.onHand"),
       get: (_f, i) => {
         const g = onHandGrams[i];
-        // Gating on `> 0` (as this did) rendered a genuinely-empty roll as an
-        // unknown. Only a null — not weight-tracked — is an em-dash.
+        // Gating on `> 0` would render a genuinely-empty roll as an unknown.
+        // Only a null — not weight-tracked — is an em-dash.
         return g == null ? "—" : `${formatGrams(g)} g`;
       },
     },
@@ -339,18 +320,14 @@ function ComparePageInner() {
         />
       </section>
 
-      {/* Comparison grid.
-          GH #1109: these gates used to be "loading && selected>0" and
-          "!loading && empty && selected===0" — leaving the state "filaments
-          are selected but none could be loaded" matched by NOTHING, which is
-          how a 9-id link produced a silent blank page. The third branch below
-          closes that hole for every cause: the over-cap 400, a malformed id,
-          and a bookmarked link whose filaments were since trashed (which
-          returns 200 with an empty array, so error-handling alone wouldn't
-          have covered it). */}
+      {/* Comparison grid. GH #1109: the third branch below covers "filaments
+          are selected but none could be loaded" for every cause — the
+          over-cap 400, a malformed id, and a bookmarked link whose filaments
+          were since trashed (200 with an empty array, so error-handling
+          alone wouldn't cover it). */}
       {/* "Not settled for THIS selection" rather than just `loading`, so the
           frame before the fetch effect runs shows the loading cue instead of
-          nothing (or, before settledKey existed, a false failure). */}
+          nothing or a false failure. */}
       {selectedIds.length > 0 && (loading || settledKey !== selectedIds.join(",")) && (
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       )}

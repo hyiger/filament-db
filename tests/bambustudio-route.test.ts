@@ -7,14 +7,6 @@ import { MAX_SETTINGS_KEYS } from "@/lib/slicerSettings";
  * Route-level tests for the Bambu Studio importer (`POST
  * /api/filaments/bambustudio` + `POST /api/filaments/{id}/bambustudio`).
  *
- * Covers:
- *   - both content-types (multipart upload + raw JSON body)
- *   - upsert by name on the bulk route + id-pinned target on the per-id route
- *   - calibration auto-detect when a Printer + matching nozzle exist
- *   - calibration "unresolved" path when the printer hint doesn't match
- *   - required-field validation on create
- *   - non-multipart / non-JSON body rejection
- *
  * Schema re-registration in beforeEach is the same pattern as the other
  * route-level tests (tests/setup.ts wipes mongoose.models between tests).
  */
@@ -380,7 +372,7 @@ describe("Bambu Studio importer routes", () => {
       const freshVariant = await Filament.findById(variant._id);
       expect(freshVariant._deletedAt).toBeNull();
       // Parent is a template now — the leftover alarm is dead config, cleared
-      // AFTER the write (round 7 P2 parity with the CSV importer's gate).
+      // AFTER the write (parity with the CSV importer's gate).
       const freshParent = await Filament.findById(parent._id);
       expect(freshParent.lowStockThreshold ?? null).toBeNull();
     });
@@ -1219,7 +1211,7 @@ describe("Bambu Studio importer routes", () => {
       expect(res.status).toBe(404);
     });
 
-    // Codex P1 on PR #473 round 2: pin the augment-helper wire-up. The
+    // PR #473: pin the augment-helper wire-up. The
     // unit tests in tests/bambuStudioApply.test.ts verify the
     // $unset-on-revert-to-parent behavior of buildStructuredUpdate, but
     // they pass in a hand-built `existing` shape that already includes

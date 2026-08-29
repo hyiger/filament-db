@@ -212,7 +212,7 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
     expect(fresh.settings.cooling).toBe("0"); // no incoming bag → nothing healed
   });
 
-  // ── GH #951 (Codex R2-C): a concurrent rename in the read→write window must
+  // ── GH #951: a concurrent rename in the read→write window must
   //    not be reverted / mis-targeted; the `name` in each by-_id filter makes
   //    the write miss and fall through to create a fresh row. ────────────────
 
@@ -687,7 +687,7 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       const freshVariant = await Filament.findById(variant._id).lean();
       expect(freshVariant._deletedAt ?? null).toBeNull();
       // The parent is a template now — the leftover alarm is dead config and
-      // was cleared AFTER the write (round 7 P2 parity with the CSV importer).
+      // was cleared AFTER the write (parity with the CSV importer).
       const freshParent = await Filament.findById(parent._id).lean();
       expect(freshParent.lowStockThreshold ?? null).toBeNull();
     });
@@ -719,7 +719,7 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
 });
 
 /**
- * GH #1116 (Codex P1, round 24). `trimEntityNames` can leave a raw untrimmed
+ * GH #1116. `trimEntityNames` can leave a raw untrimmed
  * row behind — a skipped collection, or a row whose trim would collide. The
  * INI importer then cannot see it (the `trim: true` setter casts the query),
  * falls through all three phases, and CREATES a second active filament that
@@ -798,7 +798,7 @@ describe("upsertIniFilament — a surviving untrimmed row (GH #1116)", () => {
 });
 
 /**
- * GH #1116 (Codex P1). Accepting a trim-equal id/name pair and then
+ * GH #1116. Accepting a trim-equal id/name pair and then
  * re-resolving by NAME sends the update to the wrong row: with an active
  * "PLA" and a survivor "PLA ", an exported INI carrying the SURVIVOR's
  * `filamentdb_id` passes the guard, and the canonical-first query then selects
@@ -811,7 +811,7 @@ describe("upsertIniFilament — an id-selected survivor keeps the update (GH #11
   beforeEach(async () => {
     Filament = (await import("@/models/Filament")).default;
     await Filament.collection.deleteMany({});
-    // Build the PRODUCTION index (Codex P1). Without it this test passed while
+    // Build the PRODUCTION index. Without it this test passed while
     // the update was in fact trying to rename the survivor onto the canonical
     // row's name — an E11000 in the real world. The partial filter is what
     // lets the two coexist in the first place.

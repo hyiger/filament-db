@@ -25,8 +25,8 @@ export default function NewLocation() {
   // for one (the same pattern the detail page uses for `?spool=`). The value
   // is validated as a same-origin path before anything navigates to it; a
   // missing or hostile one falls back to /locations, the pre-#1117 behaviour.
-  // Read through useSyncExternalStore, NOT a lazy `useState` initializer
-  // (Codex P2). This component is still server-rendered, and a
+  // Read through useSyncExternalStore, NOT a lazy `useState` initializer.
+  // This component is still server-rendered, and a
   // `typeof window` check inside an initializer produces different first
   // renders on the two sides — the server emits the fallback while the client
   // emits `/inventory`, a hydration mismatch that can leave the Back link
@@ -64,7 +64,7 @@ export default function NewLocation() {
   return (
     <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
-        {/* #1117(h) (Codex P2): the href is dynamic, so the LABEL has to be
+        {/* The href is dynamic, so the LABEL has to be
             too. Opened from the filament list or Inventory this link goes
             back there, and "Back to Locations" would then name a destination
             it doesn't lead to — worst for a screen-reader user, who has only

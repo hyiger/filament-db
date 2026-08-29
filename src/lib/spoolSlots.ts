@@ -162,7 +162,7 @@ export async function assignSpoolToSlot(
  * an explicit null) passes through — the schema handles shape errors.
  */
 /**
- * GH #1114 (Codex P2): validate each slot's `filamentId` against an ACTIVE
+ * GH #1114: validate each slot's `filamentId` against an ACTIVE
  * filament.
  *
  * The delete-side cleanup alone can't hold the invariant. A PrinterForm opened
@@ -192,7 +192,7 @@ export async function assignSpoolToSlot(
  * `filamentId`, which renders as an empty slot and is cleared by the next
  * delete of that filament. PrinterForm's post-fetch pass also drops a
  * `filamentId` the fetched options don't know about — note that pass had to be
- * EXTENDED for this (Codex P2): it previously returned early for a slot with
+ * EXTENDED for this: it previously returned early for a slot with
  * no `spoolId`, which is precisely this shape, so the stale id sat behind an
  * empty select while the new validation rejected every save with a 400 and no
  * way to clear it.
@@ -235,7 +235,7 @@ export async function findInvalidSlotSpoolRef(
   amsSlots: unknown,
 ): Promise<string | null> {
   if (!Array.isArray(amsSlots)) return null;
-  // GH #631 (Codex P2 on #646): a spool occupies at most one slot. The
+  // GH #631: a spool occupies at most one slot. The
   // per-slot checks below validate each occurrence independently, so the
   // SAME spoolId in two slots of one payload would pass — and the route's
   // follow-up `clearSpoolsFromOtherPrinters` deliberately excludes the
@@ -255,7 +255,7 @@ export async function findInvalidSlotSpoolRef(
     if (!mongoose.isValidObjectId(spoolId)) {
       return `Slot ${slotLabel}: spoolId is not a valid id`;
     }
-    // Canonicalize before the duplicate check (Codex P2 round 2 on #646):
+    // Canonicalize before the duplicate check:
     // ObjectId hex is case-insensitive and Mongoose casts e.g. lowercase
     // and uppercase forms to the SAME id, but `String(spoolId)` preserves
     // the original casing — so two slots with the same id in different

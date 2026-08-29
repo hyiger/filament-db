@@ -79,7 +79,7 @@ export const OPT_MANAGED_FIELDS: ReadonlyArray<{ field: string; labelKey: string
 const COLOR_SENTINEL = "#808080";
 
 /**
- * GH #607 (Codex P2): fields where an explicit null / empty-array from
+ * GH #607: fields where an explicit null / empty-array from
  * OpenPrintTag is a REAL, syncable value rather than "OPT carries nothing
  * here". For these the diff must surface a clear:
  *   - `color: null` — the material went coextruded (primary dropped, the
@@ -98,7 +98,7 @@ const OPT_CLEARABLE_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * GH #607 (Codex P2): the ARRAY clearables. A variant can't clear an
+ * GH #607: the ARRAY clearables. A variant can't clear an
  * inherited array — `resolveFilament` treats an empty array as "inherit", so
  * `$set`-ing `[]` onto the variant just re-inherits the parent's array. The
  * effective value never reaches empty, so offering the clear would report a
@@ -248,7 +248,7 @@ export interface DiffOptOptions {
  * fields already equal to the upstream value, are omitted.
  *
  * `parentEffective` — the resolved values of the filament's PARENT, or null
- * for a root filament (GH #607, Codex P2). Used to suppress an UNAPPLYABLE
+ * for a root filament (GH #607). Used to suppress an UNAPPLYABLE
  * array clear: clearing a variant's `secondaryColors`/`optTags` writes `[]`,
  * which resolves back to the parent's array, so the clear only reaches empty
  * when the parent's array is ALSO empty. When the parent's array is non-empty
@@ -279,9 +279,9 @@ export function diffOptFields(
     // value — skip (don't offer to wipe local data). For clearable fields
     // (color/secondaryColors/optTags) an explicit null/[] IS the update, so
     // fall through and let valuesEqual decide whether it's a real change
-    // (GH #607, Codex P2 — explicit upstream clears must surface).
+    // (GH #607 — explicit upstream clears must surface).
     if (!hasIncoming(incoming) && !OPT_CLEARABLE_FIELDS.has(field)) continue;
-    // GH #607 (Codex P2): suppress an array clear that can't actually take.
+    // GH #607: suppress an array clear that can't actually take.
     // Clearing a variant's array writes `[]`, which resolves to the parent's
     // array — so the clear only reaches empty when the parent's array is also
     // empty. Drop the change when the parent's array is non-empty (covers an
@@ -462,7 +462,7 @@ export function pruneOptPayloadAgainstParent(
   // array that DIFFERS from the parent stays — that's the variant's distinct
   // data (e.g. a coextruded variant's own secondaryColors).
   //
-  // KNOWN LIMITATION (Codex P2 on #753): when the OPT material's array is EMPTY
+  // KNOWN LIMITATION (#753): when the OPT material's array is EMPTY
   // but the parent's is NON-empty, the variant can't represent "explicitly
   // empty" — `resolveFilament` reads `[]` as "inherit", so the variant resolves
   // to the parent's array (e.g. a single-color/no-tag material imported under a

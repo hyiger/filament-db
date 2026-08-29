@@ -84,7 +84,7 @@ describe("list filter specs", () => {
 });
 
 /**
- * GH #1141 (Codex P2, fourth pass): type and vendor are EXACT keys into
+ * GH #1141: type and vendor are EXACT keys into
  * stored data — the schema does not trim them and the APIs compare with $eq —
  * so their parsers must not editorialize. Pinned on the REAL specs, because
  * the exactTextParam unit tests alone would stay green if someone swapped an
@@ -106,7 +106,7 @@ describe("exact-key params are untrimmed", () => {
 });
 
 /**
- * The invariant the key-set comparison above CANNOT catch (Codex P1 review):
+ * The invariant the key-set comparison above CANNOT catch:
  * `groupBy` is both persisted and sticky, so a writer that forgets to record
  * the touch passes every test above while silently never persisting — or, the
  * other way, a URL-derived write laundering into storage.
@@ -154,7 +154,7 @@ describe("preference writers record the touch", () => {
 });
 
 /**
- * GH #1141 (Codex P2). The persist effects parse the stored blob inside a
+ * GH #1141. The persist effects parse the stored blob inside a
  * catch-everything try; a corrupt blob threw at the parse, skipped the
  * `setItem`, and so was never overwritten — persistence dead until the user
  * cleared storage by hand. The write path is the one chance to heal, so the

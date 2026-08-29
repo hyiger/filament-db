@@ -241,8 +241,7 @@ describe("parseBambuStudioProfile", () => {
 
   it("extracts overhang_fan_speed + additional_cooling_fan_speed as fan hints (Codex P1 #387 r3)", () => {
     // These match what the exporter (calibrationToOrcaSlicerKeys) emits
-    // for `fanMinSpeed` and `fanMaxSpeed`. Round 2 wrongly passed them
-    // through settings — round 3 hooks them up properly so the
+    // for `fanMinSpeed` and `fanMaxSpeed`, so the
     // export → import round-trip preserves the calibration row.
     const { calibrationHints, filament } = parseBambuStudioProfile({
       name: ["X"],
@@ -317,7 +316,7 @@ describe("parseBambuStudioProfile", () => {
       activate_chamber_temp_control: ["1"],
     });
     expect(calibrationHints.chamberTemp).toBe(45);
-    // chamber alone does NOT trip hasAnyHint (Codex P2 PR #968): it has a
+    // chamber alone does NOT trip hasAnyHint: it has a
     // settings-bag fallback when calibration can't resolve, so a chamber-only
     // profile must not surface a misleading "calibration unresolved" warning —
     // same posture as maxVolumetricSpeed.
@@ -356,10 +355,10 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.chamberTemp).toBeUndefined();
     // chamber is the ONLY would-be hint and it's suppressed → no calibration row.
     expect(calibrationHints.hasAnyHint).toBe(false);
-    // GH #950 (Codex r5): the explicit disable is recorded so the applier can
+    // GH #950: the explicit disable is recorded so the applier can
     // CLEAR a pre-existing calibrations[].chamberTemp (a bare absence must not).
     expect(calibrationHints.chamberDisabled).toBe(true);
-    // GH #950 (Codex P1 r2): a DISABLED chamber has NO structural home (chamberTemp
+    // GH #950: a DISABLED chamber has NO structural home (chamberTemp
     // is cleared, so neither the calibration row nor the applier fallback carries
     // it) — the raw keys must ride the settings bag so the profile round-trips
     // instead of silently dropping "chamber temp 45 but off".
@@ -436,7 +435,7 @@ describe("parseBambuStudioProfile", () => {
     });
     expect(single.filament.settings.filament_notes).toBe('"quoted single line"');
 
-    // Codex P2 r3: the full Bambu import → Orca export round-trip is
+    // The full Bambu import → Orca export round-trip is
     // LOSSLESS — the JSON exporter decodes the multi-line wire value back
     // to the original content (JSON carries real newlines natively), and a
     // second import → export cycle is stable.

@@ -13,8 +13,7 @@ import {
  * Backed by a module-level store via useSyncExternalStore so every mounted
  * instance shares live state: editing the format in LabelFormatEditor is
  * immediately visible to LabelPrinterSettings' test print and to the
- * PrintLabelDialog on the same page, not just after a remount (Codex P3 on
- * PR #593).
+ * PrintLabelDialog on the same page, not just after a remount.
  *
  * Persistence mirrors useCurrency: electron-store (via the generic
  * getConfig/saveConfig bridge) is the source of truth on desktop; a

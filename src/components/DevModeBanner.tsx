@@ -5,33 +5,15 @@ import { useIsElectron } from "@/hooks/useIsElectron";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 /**
- * Tiny banner that surfaces a data-safety footgun in the Electron
- * dev workflow (issue #489).
+ * Banner for a data-safety footgun in the Electron dev workflow
+ * (issue #489): in dev mode (`!app.isPackaged`) the renderer is served
+ * by a separately-run `next dev` reading MONGODB_URI from `.env.local`,
+ * so the connection-mode wizard's selection has NO effect on the
+ * renderer's data source — a user clicking through Offline Mode can be
+ * silently writing to production Atlas.
  *
- * In the packaged app, Electron starts an embedded Next server via
- * `utilityProcess.fork(...)` and the connection-mode wizard
- * (Atlas / Hybrid / Offline) controls which MongoDB the renderer
- * talks to. The setup is end-to-end consistent.
- *
- * In dev mode (`!app.isPackaged`), the renderer is served by a
- * separately-run `next dev` process which reads MONGODB_URI from
- * `.env.local`. Electron's main process still honors the wizard
- * selection (starts/stops local mongo, stores config) — but those
- * actions have NO effect on the renderer's data source. A user who
- * clicks through Offline Mode sees a "Local" status pill while
- * writes go to whatever `.env.local` points to. With `.env.local`
- * pointing at production Atlas, that's a destructive surprise.
- *
- * The right architectural fix would re-route the dev renderer's
- * queries through the embedded mongo, but that needs the next dev
- * process to be relaunched with the embedded mongo's URI in its
- * env — invasive enough to be its own feature. This banner is the
- * minimum we can do today to keep the footgun from firing silently.
- *
- * Renders nothing in:
- *   - The web app (not in Electron at all — no wizard, no embedded
- *     mongo, no mismatch potential).
- *   - The packaged Electron app (the wizard is the truth there).
+ * Renders nothing in the web app and in the packaged Electron app
+ * (where the wizard is the truth).
  */
 export default function DevModeBanner() {
   const isElectron = useIsElectron();
@@ -42,12 +24,9 @@ export default function DevModeBanner() {
   useEffect(() => {
     if (!isElectron) return;
     let cancelled = false;
-    // The IPC handler always returns synchronously after a Boolean
-    // check; we only need to ask once per session. Persist dismissal
-    // in sessionStorage so navigating between pages doesn't keep
-    // re-summoning the banner the user just dismissed, but DO bring
-    // it back on a full app restart (a fresh dev session with a
-    // different `.env.local` deserves a fresh warning).
+    // Dismissal persists in sessionStorage so navigating between pages
+    // doesn't re-summon the banner, but a full app restart brings it
+    // back (a fresh dev session deserves a fresh warning).
     window.electronAPI
       ?.getRuntimeMode()
       .then(({ isPackaged }) => {
@@ -60,9 +39,6 @@ export default function DevModeBanner() {
     if (typeof window !== "undefined") {
       const stored = window.sessionStorage.getItem("filamentdb.devModeBannerDismissed");
       if (stored === "1" && !cancelled) {
-        // Restoring persisted dismissal state from sessionStorage —
-        // legitimately effect-driven (depends on isElectron), same
-        // pattern as the project's other data-fetching effects.
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setDismissed(true);
       }

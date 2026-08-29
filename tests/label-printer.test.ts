@@ -572,7 +572,7 @@ describe("disableBidi — elevated Windows BiDi-disable helper", () => {
     expect(l).toContain("1223");
     expect(l).toContain(`exit ${ELEVATION_CANCELLED_EXIT}`);
     expect(l).toContain(`exit ${ELEVATION_UNAVAILABLE_EXIT}`);
-    // No mutable temp -File script reaches the elevated process (Codex P1 fix).
+    // No mutable temp -File script reaches the elevated process.
     // (`-FilePath` is Start-Process's exe param — a `-File` *script arg* would
     // appear single-quoted in the -ArgumentList array, so check that form.)
     expect(l).not.toContain("'-File'");

@@ -65,7 +65,7 @@ describe("GET /api/spools/by-location", () => {
       // No `spoolWeight` → tare unknown → falls back to a 0g tare so
       // gross weight survives. Matches the posture of `/api/dashboard`
       // and `/api/locations` for legacy rolls tracked before
-      // `spoolWeight` existed (Codex P2 round 4 on PR #400).
+      // `spoolWeight` existed (PR #400).
       spools: [{ label: "S3", totalWeight: 1000, locationId: dry._id }],
     });
 
@@ -275,7 +275,7 @@ describe("GET /api/spools/by-location", () => {
     // The schema marks both as required, so we have to bypass
     // Mongoose validation to seed the inheriting-variant case. Real
     // data in this shape exists when CSV imports or hand-crafted docs
-    // leave the fields off, and it's exactly the case Codex flagged.
+    // leave the fields off.
     const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
     const parent = await Filament.create({
       name: "Polymaker PLA Parent",
@@ -318,7 +318,7 @@ describe("GET /api/spools/by-location", () => {
   });
 
   it("?type= and ?vendor= treat EMPTY-STRING inherited values as missing (Codex P2 #400)", async () => {
-    // The case Codex specifically flagged: a variant with explicit
+    // A variant with explicit
     // empty-string `type`/`vendor` should still fall back to the
     // parent's values, because `resolveFilament` treats `""` the same
     // way it treats null/missing for INHERITABLE_FIELDS
@@ -333,8 +333,7 @@ describe("GET /api/spools/by-location", () => {
     });
     await Filament.collection.insertOne({
       name: "EmptyVariant",
-      // Explicit empty strings instead of missing/null — the case
-      // Codex called out.
+      // Explicit empty strings instead of missing/null.
       type: "",
       vendor: "",
       parentId: parent._id,
@@ -543,7 +542,7 @@ describe("GET /api/spools/by-location", () => {
       spools: [],
       totalWeight: 800,
     });
-    // Codex P2 on #783: a catalog-only row (no spools[], no totalWeight) must
+    // #783: a catalog-only row (no spools[], no totalWeight) must
     // still be pruned up front and contribute 0 (not a self-lookup over the
     // whole catalog, and not a phantom spool).
     await Filament.create({

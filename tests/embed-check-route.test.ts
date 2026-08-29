@@ -119,7 +119,6 @@ describe("/api/embed-check", () => {
     expect(body.reason).toMatch(/ECONNREFUSED/);
   });
 
-  // Codex P1 follow-up: redirect-based SSRF.
   describe("redirect handling (manual, per-hop revalidation)", () => {
     it("rejects a public URL that 302-redirects to a private IP (the SSRF gap)", async () => {
       // First fetch: public host returns 302 → http://10.0.0.5/secret

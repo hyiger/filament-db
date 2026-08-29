@@ -2,21 +2,15 @@ import crypto from "crypto";
 import mongoose, { Schema, Document, Model } from "mongoose";
 
 /**
- * A public, read-only snapshot of selected filament profiles. Lets users share
- * their personal calibrations / tuned profiles with others via a link like
- * `/share/{slug}` without exposing their full catalog or needing an account.
- *
- * Contents are denormalised into `payload` so that later edits to the user's
- * catalog don't retroactively change what someone else downloaded. If the
- * user wants to refresh the share, they re-publish and get a new slug.
+ * A public, read-only snapshot of selected filament profiles, shared via
+ * `/share/{slug}`. Contents are denormalised into `payload` so later
+ * catalog edits don't retroactively change what someone else downloaded;
+ * refreshing a share means re-publishing under a new slug.
  */
 export interface ISharedCatalog extends Document {
-  /** Short URL-safe identifier used in the share link. */
   slug: string;
   syncId: string | null;
-  /** Human-readable title shown on the share page. */
   title: string;
-  /** Optional description shown on the share page. */
   description: string;
   /** Denormalised filament documents at publish time. */
   payload: {
@@ -34,9 +28,9 @@ export interface ISharedCatalog extends Document {
   /** Soft-delete tombstone so a hard-delete on one peer doesn't get
    * resurrected by the next sync cycle from the other peer. */
   _deletedAt: Date | null;
-  /** GH #524.5: "delete forever" tombstone, mirroring Filament — the
-   * hybrid-sync engine's generic `_purged` branch propagates it so the
-   * row stays gone on both sides without resurrection. */
+  /** "Delete forever" tombstone, mirroring Filament — the hybrid-sync
+   * engine propagates it so the row stays gone on both sides without
+   * resurrection. */
   _purged: boolean;
   createdAt: Date;
   updatedAt: Date;

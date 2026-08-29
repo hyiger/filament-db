@@ -197,8 +197,7 @@ describe("filamentToSlicerKeys", () => {
     // any condition remaining in a settings bag is user-authored by
     // construction. The export must NOT purge at export time — an export-time
     // rule cannot distinguish a user's pure nozzle pin from a stale machine
-    // value (the two Codex P1 rounds on #1022 hit opposite sides of exactly
-    // that ambiguity).
+    // value.
     for (const pin of [
       "nozzle_diameter[0]==0.4",
       "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
@@ -510,7 +509,7 @@ describe("filamentToSlicerKeys", () => {
     // primary to null) and saved before adding any secondary slots.
     // We must NOT fall back to displayColor()'s gray sentinel — that
     // would force a #808080 the user never picked. Better to omit the
-    // key and let the slicer use its own default. (Codex P2 on PR #485.)
+    // key and let the slicer use its own default.
     const filament = {
       name: "Coextruded Empty",
       vendor: "Test",
@@ -1250,7 +1249,7 @@ describe("generatePrusaSlicerBundle", () => {
       expect("temperature" in parsed[0].settings).toBe(false);
       expect(parsed[0].temperatures.nozzle).toBeNull();
       // The note survives as the escaped WIRE value (the bag is
-      // wire-canonical — Codex P2s on PR #1086); the form codec restores
+      // wire-canonical); the form codec restores
       // the raw content, newlines and all, for display.
       const wire = parsed[0].settings.filament_notes as string;
       expect(wire.includes("\n")).toBe(false);

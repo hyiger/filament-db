@@ -1,17 +1,9 @@
 /**
- * GH #983 — user-selectable date format.
- *
- * The app used to render every date via `Intl.DateTimeFormat(appLocale,
- * { dateStyle: "short" })` (see `src/lib/dateFormat.ts`), so a UK user on
- * the English app locale got US-ordered `M/D/YY` dates with no way to change
- * it. This module is the pure, DB-free, React-free core of the preference:
- * the stored shape, its validation, the preset → pattern resolution, and a
- * deterministic token formatter for the fixed presets + custom patterns.
- *
- * Kept separate from `src/lib/dateFormat.ts` (which owns the locale-aware
- * `Intl` path) so the token logic is small and exhaustively unit-testable
- * against the `src/lib/**` coverage gate. The React binding lives in
- * `src/hooks/useDateFormat.ts`; the Settings UI in
+ * GH #983 — user-selectable date format: the pure, DB-free, React-free core
+ * of the preference (stored shape, validation, preset → pattern resolution,
+ * and a deterministic token formatter). Kept separate from
+ * `src/lib/dateFormat.ts` (which owns the locale-aware `Intl` path). The
+ * React binding lives in `src/hooks/useDateFormat.ts`; the Settings UI in
  * `src/components/DateFormatSection.tsx`.
  */
 

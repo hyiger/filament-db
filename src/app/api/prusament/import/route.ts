@@ -22,11 +22,9 @@ import {
 } from "@/lib/apiErrorHandler";
 
 /**
- * GH #307: validate a renderer-supplied Prusament spool payload before
- * any DB write. The spool's `totalWeight` reaches the Filament via a
- * `$push`, which skips the subdocument validators the dedicated spool
- * routes rely on — so a non-numeric weight or a garbage colour would
- * otherwise be persisted. Returns a rejection reason, or null when ok.
+ * GH #307: validate the spool payload before any DB write — the `$push`
+ * write path skips the subdocument validators the dedicated spool routes
+ * rely on. Returns a rejection reason, or null when ok.
  */
 function validatePrusamentSpool(spool: unknown): string | null {
   if (!spool || typeof spool !== "object") {
@@ -60,12 +58,9 @@ function validatePrusamentSpool(spool: unknown): string | null {
   if (typeof s.manufactureDate !== "string") {
     return "spool.manufactureDate must be a string";
   }
-  // GH #622: the fields below ride straight into schema-validated paths
-  // (`cost` has min:0, `temperatures.nozzle` max:600, `temperatures.bed`
-  // max:300, `tdsUrl` has the http(s) validator). Pre-fix they were
-  // unchecked, so a bad value threw a ValidationError out of the handler
-  // → Next's bare 500 instead of the JSON 400 every sibling route
-  // returns. Reject them here so the caller gets a named reason.
+  // GH #622: these fields ride straight into schema-validated paths — an
+  // unchecked bad value would throw a ValidationError out of the handler as
+  // a bare 500 instead of a named JSON 400.
   if (
     s.priceUsd != null &&
     (typeof s.priceUsd !== "number" || !Number.isFinite(s.priceUsd) || s.priceUsd < 0)
@@ -84,9 +79,8 @@ function validatePrusamentSpool(spool: unknown): string | null {
       return `spool.${field} must be a number between 0 and 300`;
     }
   }
-  // pageUrl lands on `tdsUrl`, whose schema validator rejects anything
-  // but http(s) (empty/null are allowed — the field is optional). Same
-  // posture here so a `javascript:` URL 400s instead of throwing.
+  // pageUrl lands on `tdsUrl` (http(s)-only validator) — same posture here
+  // so a `javascript:` URL 400s instead of throwing.
   if (s.pageUrl != null && s.pageUrl !== "") {
     if (typeof s.pageUrl !== "string" || !isHttpUrl(s.pageUrl)) {
       return "spool.pageUrl must be a valid http(s) URL";
@@ -105,18 +99,12 @@ function isHttpUrl(v: string): boolean {
   }
 }
 
-/** Cap on spools per filament. GH #430 added it to the add-spool branch,
- *  then (Codex follow-up r3) to the existing-name $push fallback; GH #622
- *  hoisted the duplicated constants here so the resurrect + race-recovery
- *  phases reuse the same value. */
+/** Cap on spools per filament (GH #430), shared by every phase. */
 const MAX_SPOOLS_PER_FILAMENT = 500;
 
-/** GH #430 (Codex round 4 follow-up): the per-filament spool cap enforced
- *  ATOMICALLY inside each conditional update via
- *  `$expr: { $lt: [{ $size: spools }, 500] }`. The previous
- *  "fetch → check length → $push" sequence was a race: several concurrent
- *  add-spool requests against the same filament could each see
- *  length<500, then all $push, blowing past the cap. */
+/** GH #430: the per-filament spool cap, enforced ATOMICALLY inside each
+ *  conditional update — a "fetch → check length → $push" sequence is a race
+ *  (concurrent requests could each see length<500 and all $push). */
 const SPOOL_CAP_EXPR = {
   $lt: [{ $size: { $ifNull: ["$spools", []] } }, MAX_SPOOLS_PER_FILAMENT],
 };
@@ -166,14 +154,11 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // GH #622: everything below touches the DB. Pre-fix only dbConnect and
-  // the body parse were guarded, so any write error (a ValidationError a
-  // future field slips past the validator above, an E11000 create race,
-  // a transient driver failure) escaped the handler as Next's bare 500.
-  // The catch at the bottom maps duplicate-key → 409, client-input → 400,
-  // everything else → JSON 500 — same posture as the sibling importers.
+  // GH #622: the catch at the bottom maps duplicate-key → 409, client-input
+  // → 400, everything else → JSON 500 — same posture as the sibling
+  // importers (an unguarded write error would escape as Next's bare 500).
   try {
-    // Compute density from Prusament data: weight(g) / volume(cm³)
+    // Density from Prusament data: weight(g) / volume(cm³);
     // volume = length(m) * 100(cm/m) * π * (diameter_mm / 20)²
     const radiusCm = spool.diameter / 20;
     const volumeCm3 = spool.lengthMeters * 100 * Math.PI * radiusCm * radiusCm;
@@ -182,35 +167,29 @@ export async function POST(request: NextRequest) {
     const spoolLabel = `${spool.spoolId} (${spool.manufactureDate.split(" ")[0]})`;
 
     if (action === "add-spool" && filamentId) {
-      // GH #430: validate the filament id up front so a malformed id
-      // surfaces as 400, not a downstream CastError → bare 500.
+      // GH #430: validate the id up front so a malformed id surfaces as
+      // 400, not a downstream CastError → bare 500.
       if (!mongoose.isValidObjectId(filamentId)) {
         return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
       }
 
-      // GH #430: carry the Prusament-specific traceability fields onto
-      // the spool subdoc. Pre-fix the $push only carried label +
-      // totalWeight, silently dropping the lot number and manufacture
-      // date that are the whole point of a Prusament import.
-      // `manufactureDate` is "YYYY-MM-DD HH:MM" — split off the time
-      // and validate before persisting.
+      // `manufactureDate` is "YYYY-MM-DD HH:MM" — split off the time and
+      // validate before persisting.
       const purchaseDateStr = spool.manufactureDate.split(" ")[0];
       const purchaseDate = isValidIsoDateString(purchaseDateStr)
         ? new Date(purchaseDateStr)
         : null;
 
-      // GH #605 (codex round 3, Finding B): route through the same
-      // race-hardened template guard the dedicated spool route uses, inside
-      // the same per-filament mutex — a raw $push here could land inventory
-      // on a TEMPLATE (a filament with live color variants). The spool cap
-      // stays enforced atomically via the guard's extraFilter.
+      // GH #605: route through the same race-hardened template guard the
+      // dedicated spool route uses, inside the same per-filament mutex — a
+      // raw $push could land inventory on a TEMPLATE. The spool cap stays
+      // enforced atomically via the guard's extraFilter.
       const result = await runExclusive(filamentLockKey(filamentId), () =>
         pushSpoolWithTemplateGuard(
           Filament,
           filamentId,
           {
-            // #732: stamp the spool id explicitly (belt-and-suspenders;
-            // the schema default would also fire on $push).
+            // #732: stamp the spool id explicitly (belt-and-suspenders).
             instanceId: generateInstanceId(),
             label: spoolLabel,
             totalWeight: spool.totalWeight,
@@ -226,9 +205,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
       }
       if (result.outcome === "not_found") {
-        // The conditional didn't match — either the filament doesn't
-        // exist, or it's already at cap. Probe to differentiate so the
-        // caller gets a clear error rather than a generic 404.
+        // The conditional didn't match — filament missing OR at cap. Probe
+        // to differentiate.
         const probe = await Filament.findOne(
           { _id: filamentId, _deletedAt: null },
           { spools: 1 },
@@ -254,13 +232,9 @@ export async function POST(request: NextRequest) {
     // action === "create" — create a new filament
     const name = `Prusament ${spool.material} ${spool.colorName}`;
 
-    // GH #430 (Codex follow-up on #463): the create flow ALSO has to
-    // carry the Prusament traceability fields onto every spool subdoc
-    // it writes. Pre-fix the create branch + the existing-name $push
-    // fallback both wrote `{ label, totalWeight }` only, silently
-    // dropping the spool id and manufacture date that are the whole
-    // point of a Prusament import — even though the add-spool branch
-    // higher up already did the right thing.
+    // GH #430: every branch that writes a spool subdoc must carry the
+    // Prusament traceability fields (lot number + manufacture date are the
+    // whole point of the import).
     const purchaseDateForCreate = isValidIsoDateString(
       spool.manufactureDate.split(" ")[0],
     )
@@ -268,9 +242,7 @@ export async function POST(request: NextRequest) {
       : null;
     const prusamentSpoolFields = {
       // #732: stamp the spool id once for every branch that reuses this
-      // object (the create path + the existing-name $push fallbacks).
-      // Belt-and-suspenders: the schema default would also fire on both
-      // Filament.create and $push — explicit keeps the invariant obvious.
+      // object (belt-and-suspenders — the schema default would also fire).
       instanceId: generateInstanceId(),
       label: spoolLabel,
       totalWeight: spool.totalWeight,
@@ -278,24 +250,18 @@ export async function POST(request: NextRequest) {
       ...(purchaseDateForCreate ? { purchaseDate: purchaseDateForCreate } : {}),
     };
 
-    // GH #430 (Codex follow-up r3): cap per-filament spool count on
-    // the existing-name $push fallback too — the cap previously only
-    // applied to the dedicated add-spool branch above, so a hostile
-    // client routed through the default `action=create` flow could
-    // push past the limit by re-importing against an existing name.
-    //
-    // GH #605 (codex round 3, Finding B): the fallback now resolves the
-    // active row's id first and routes the push through the template guard
-    // inside the per-filament mutex — re-importing a spool against a name
-    // that has since become a TEMPLATE must 400, not attach inventory to
-    // it. The `name` pin plus the cap ride the guard's extraFilter so the
-    // atomic-write semantics of the original single findOneAndUpdate hold.
+    // GH #430: the cap applies on the existing-name $push fallback too —
+    // otherwise the `action=create` flow could push past the limit against
+    // an existing name. GH #605: the fallback resolves the active row's id
+    // first and routes the push through the template guard inside the
+    // per-filament mutex — a name that has since become a TEMPLATE must
+    // 400, not attach inventory. The `name` pin plus the cap ride the
+    // guard's extraFilter so the atomic-write semantics hold.
     let activeByName = await Filament.findOne({ name, _deletedAt: null })
       .select("_id")
       .lean();
-    // GH #1116 (Codex P1): a row the migration could not trim is invisible to
-    // a name-filtered query (the setter casts it), so this would miss and the
-    // create below would mint a second active row.
+    // GH #1116: an untrimmed survivor is invisible to a name-filtered query
+    // (the setter casts it) — a miss here would mint a second active row.
     const activeSurvivorId = activeByName
       ? null
       : await findSurvivorId(
@@ -317,10 +283,9 @@ export async function POST(request: NextRequest) {
           hasVariants,
           {
             // The `name` pin makes the push atomic against a concurrent
-            // rename. It cannot be used for a SURVIVOR — a cast filter can
-            // never match its raw stored value — so pin the `_id` there,
-            // which is strictly more specific and preserves the same
-            // "still the row we resolved" guarantee.
+            // rename. It cannot match a SURVIVOR's raw stored value, so pin
+            // the `_id` there — strictly more specific, same "still the row
+            // we resolved" guarantee.
             extraFilter: activeSurvivorId
               ? { _id: activeSurvivorId, $expr: SPOOL_CAP_EXPR }
               : { name, $expr: SPOOL_CAP_EXPR },
@@ -341,13 +306,10 @@ export async function POST(request: NextRequest) {
       // cap — fall through to the same probe the pre-guard code used.
     }
 
-    // No conditional match — either the name doesn't exist (continue
-    // to create) OR the name exists but is over cap. Check which.
-    // GH #1116 (Codex P1): reuse the resolved survivor id. Against a survivor
-    // the guarded push above fails on the cap expression, and this probe --
-    // filtered by a cast `name` -- would then MISS the very row that is over
-    // cap, so the request fell through and created a canonical duplicate
-    // carrying the spool. The cap error is the correct answer.
+    // No conditional match — name absent (continue to create) OR over cap.
+    // GH #1116: reuse the resolved survivor id — a cast `name` probe would
+    // MISS the very survivor that is over cap, and the request would fall
+    // through and create a canonical duplicate carrying the spool.
     const blocked = await Filament.findOne(
       activeSurvivorId ? { _id: activeSurvivorId } : { name, _deletedAt: null },
       { spools: 1 },
@@ -364,38 +326,28 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // GH #622 phase 2 (mirrors `/api/filaments/import` #297): if a
-    // TRASHED (non-purged) filament owns this name, resurrect it and
-    // push the spool rather than creating a second active row — a
-    // duplicate would strand the trashed one (its restore would 409 on
-    // the name conflict forever). Like the active-name fallback above,
-    // the resurrect only adds the spool; it doesn't rewrite the
-    // filament's structured fields.
+    // GH #622 phase 2 (mirrors `/api/filaments/import` #297): if a TRASHED
+    // (non-purged) filament owns this name, resurrect it and push the spool
+    // rather than creating a second active row — a duplicate would strand
+    // the trashed one (its restore would 409 on the name forever). The
+    // resurrect only adds the spool; it doesn't rewrite structured fields.
     //
-    // GH #605 (codex round 3 sweep): this $push needs NO template guard —
-    // a trashed doc cannot be a template. Soft-deleting a parent with live
-    // variants is refused (DELETE's hasVariants guard — held, since round 8
-    // F3, in the same per-filament mutex as the trash write and the
-    // first-variant gates, so the refusal can't be raced by a mid-flight
-    // first variant), restoring a variant
-    // under a trashed parent is refused (restore's parent-active check),
-    // and variant creation requires an ACTIVE parent — so no live variant
-    // can point at a trashed doc, and the resurrect+push is one atomic
-    // findOneAndUpdate (no window between the revive and the push). A
-    // first-variant create racing the just-revived row serializes behind
-    // the promotion gate's own in-lock re-fetch, which then sees (and
-    // moves) this spool.
-    // GH #1116: same blind spot as the active branch — a surviving untrimmed
-    // TRASHED row is unreachable by a cast name filter, so this resurrect
-    // would miss and the create below would take the name, stranding the
-    // tombstone whose restore then 409s on the conflict forever.
+    // GH #605: this $push needs NO template guard — a trashed doc cannot be
+    // a template (soft-deleting a parent with live variants is refused
+    // under the same mutex as the first-variant gates; restoring a variant
+    // under a trashed parent is refused; variant creation requires an
+    // ACTIVE parent), and the resurrect+push is one atomic findOneAndUpdate
+    // (no window between revive and push). A first-variant create racing
+    // the just-revived row serializes behind the promotion gate's in-lock
+    // re-fetch, which then sees (and moves) this spool.
     //
-    // CANONICAL FIRST, survivor only on a miss (Codex P2). The partial unique
-    // index covers active rows only, so a canonical `"PLA"` tombstone and an
-    // untrimmed `"PLA "` tombstone may BOTH exist — and the scan's `$expr`
-    // matches either with no ordering. Scanning first would resurrect an
-    // arbitrary one of them and attach the spool to it, where the indexed
-    // query deterministically restored the canonical row.
+    // GH #1116: a surviving untrimmed TRASHED row is unreachable by a cast
+    // name filter — a missed resurrect lets the create take the name and
+    // strand the tombstone. CANONICAL FIRST, survivor only on a miss: a
+    // canonical tombstone and an untrimmed one may BOTH exist, and the
+    // scan's `$expr` matches either with no ordering — scanning first could
+    // resurrect an arbitrary one where the indexed query deterministically
+    // restores the canonical row.
     const resurrectFilter = {
       _deletedAt: { $ne: null },
       _purged: { $ne: true },
@@ -433,9 +385,8 @@ export async function POST(request: NextRequest) {
         message: `Restored "${name}" from trash and added spool ${spool.spoolId}.`,
       });
     }
-    // Same over-cap probe as the active branch: a trashed row at cap
-    // must NOT fall through to create (the new active row would strand
-    // the trashed one on the name forever).
+    // Same over-cap probe as the active branch: a trashed row at cap must
+    // NOT fall through to create (stranding the trashed one on the name).
     const trashedBlocked = await Filament.findOne(
       trashedSurvivorId
         ? { _id: trashedSurvivorId }
@@ -454,14 +405,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // GH #622 phase 3 — create, recovering from the E11000 race where a
-    // concurrent import created the same name between the conditional
-    // $push above and this create. The loser resolves it as an
-    // add-spool against the winner, so identical parallel imports stay
-    // idempotent (same pattern as `/api/filaments/import`).
-    //
-    // Use the max nozzle temp as the default (Prusament typically
-    // recommends a range).
+    // GH #622 phase 3 — create, recovering from the E11000 race: the loser
+    // resolves it as an add-spool against the winner, so identical parallel
+    // imports stay idempotent (same pattern as `/api/filaments/import`).
+    // Max nozzle temp as the default (Prusament recommends a range).
     let filament;
     try {
       filament = await Filament.create({
@@ -491,11 +438,9 @@ export async function POST(request: NextRequest) {
     // name-lookup-ok: post-E11000 recovery: the index proved an exact stored-string match
     } catch (createErr) {
       if (!isDuplicateKeyError(createErr)) throw createErr;
-      // GH #605 (codex round 3, Finding B): same guard treatment as the
-      // active-name fallback above — the race winner is normally a fresh
-      // spool-less row, but nothing stops it from being (or instantly
-      // becoming) a template, so the recovery push must not bypass the
-      // guard either.
+      // GH #605: same guard treatment as the active-name fallback — nothing
+      // stops the race winner from being (or instantly becoming) a
+      // template, so the recovery push must not bypass the guard either.
       // name-lookup-ok: post-E11000 recovery; the index proved an exact stored-string match
       const winner = await Filament.findOne({ name, _deletedAt: null })
         .select("_id")

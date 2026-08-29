@@ -2,20 +2,15 @@ import http from "http";
 
 /**
  * Poll the embedded Next.js server until it answers an HTTP request.
+ * Lives outside main.ts (which runs Electron setup at import time) so
+ * it's unit-testable.
  *
- * Extracted from electron/main.ts so the probe's failure modes can be
- * unit-tested in isolation — main.ts executes Electron app setup at
- * import time and isn't importable from tests/ (same extraction pattern
- * as electron/csp-scope.ts).
- *
- * GH #1077: the original inline version read its 30s deadline ONLY
- * inside `req.on("error")` and set no socket timeout. Node's HTTP client
- * has no default response timeout, so a listener that completed the TCP
- * handshake and never wrote a response — the embedded server accepting
- * connections before it can serve, a wedged standalone server, or a
- * foreign process squatting the port — left the promise permanently
- * unsettled: the app hung at startup with no window and no error. Two
- * bounds close that:
+ * GH #1077: Node's HTTP client has no default response timeout, so a
+ * listener that completes the TCP handshake and never writes a response
+ * (server accepting before it can serve, a wedged standalone server, a
+ * foreign process squatting the port) would leave the promise
+ * permanently unsettled — the app hung at startup with no window and no
+ * error. Two bounds close that:
  *
  *   1. a per-attempt socket timeout (`req.setTimeout` → `req.destroy()`)
  *      so an accepted-but-silent socket fails THAT attempt and retries
@@ -23,10 +18,7 @@ import http from "http";
  *   2. one overall deadline timer that settles the promise regardless of
  *      socket state.
  *
- * Every timer is cleared on settle, so nothing leaks after a successful
- * startup: the deadline is cleared on resolve, the retry timer only
- * exists between failed attempts, and the deadline path clears the retry
- * timer + destroys any in-flight request before rejecting.
+ * Every timer is cleared on settle, so nothing leaks after startup.
  */
 export function waitForServer(
   port: number,

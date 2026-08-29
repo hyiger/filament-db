@@ -5,9 +5,7 @@
  * (~50–200 µs each). The home list and /inventory render a fresh formatter per
  * cell per render — on a ~2,000-row table that's thousands of constructions on
  * every keystroke. Cache the constructed formatters keyed by (locale | options)
- * so repeated (locale, options) pairs reuse one instance. (The analytics page
- * already memoises its formatter for exactly this reason since v1.60.1; this
- * generalises it to every date/number render site.)
+ * so repeated (locale, options) pairs reuse one instance.
  *
  * A formatter is pure — a (locale, options) pair maps to a deterministic
  * formatter — so a module-level cache is safe to share across React renders AND

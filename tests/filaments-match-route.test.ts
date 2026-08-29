@@ -132,7 +132,7 @@ describe("/api/filaments/match", () => {
     // The schema generates lowercase hex going forward, but legacy /
     // re-imported filaments may carry uppercase or mixed-case values.
     // Both directions must match — the comparison can't normalise just
-    // one side. (Codex P2 round 14 on PR #487.)
+    // one side.
     await Filament.create({
       name: "Legacy uppercase",
       vendor: "Test",
@@ -168,7 +168,6 @@ describe("/api/filaments/match", () => {
     // The schema doesn't enforce hex — importFilaments.ts assigns
     // row.instanceId verbatim, and existing rows may carry strings
     // like "custom-id-123". The match endpoint must resolve them.
-    // (Codex P2 round 15 on PR #487.)
     await Filament.create({
       name: "Imported custom ID",
       vendor: "Test",
@@ -215,8 +214,7 @@ describe("/api/filaments/match", () => {
     // Legacy data can hold both "ABC" and "abc" because the partial
     // unique index on instanceId is case-sensitive. A query for one
     // of them must return THAT one, not the other — the exact-case
-    // match runs before the case-insensitive fallback. (Codex P2
-    // round 16 on PR #487.)
+    // match runs before the case-insensitive fallback.
     await Filament.create({
       name: "Upper case",
       vendor: "Test",

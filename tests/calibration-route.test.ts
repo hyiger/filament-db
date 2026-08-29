@@ -203,7 +203,7 @@ describe("GET /api/filaments/[id]/calibration", () => {
       // The impostor case one level deeper: the addressed printer is real but
       // has no calibration for THIS nozzle, so the id can't be matched among
       // the rows. Inferring "unknown id" from that and re-trying as a name
-      // handed the request to the twin (Codex P2 round 2).
+      // handed the request to the twin.
       const Printer = mongoose.models.Printer;
       const noz = await Nozzle.create({ name: "0.4 R", diameter: 0.4, type: "Brass" });
       const other = await Nozzle.create({ name: "0.6 R", diameter: 0.6, type: "Brass" });
@@ -229,7 +229,7 @@ describe("GET /api/filaments/[id]/calibration", () => {
     it("an EXISTING exact name with no row here does not fold case to its twin", async () => {
       // Same shape one rung down the ladder: "XL" and "xl" can both exist
       // (the name index is case-sensitive). A request for "XL" whose machine
-      // has no row for this nozzle must not be answered by "xl" (Codex P2 r3).
+      // has no row for this nozzle must not be answered by "xl".
       const Printer = mongoose.models.Printer;
       const noz = await Nozzle.create({ name: "0.4 T", diameter: 0.4, type: "Brass" });
       const other = await Nozzle.create({ name: "0.6 T", diameter: 0.6, type: "Brass" });

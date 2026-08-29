@@ -110,7 +110,7 @@ export async function assertSafeMongoUri(
   if (!opts.blockPrivateHosts) return;
 
   if (isSrv) {
-    // GH #332 (Codex P1): a `mongodb+srv://` connection does NOT connect
+    // GH #332: a `mongodb+srv://` connection does NOT connect
     // to the seed host — the driver does a DNS SRV lookup of
     // `_mongodb._tcp.<seed>` and connects to the hosts in those records.
     // A seed host with a public A record but SRV targets pointing at

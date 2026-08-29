@@ -38,10 +38,8 @@ export function useNfc() {
 
     const api = window.electronAPI!;
 
-    // Get initial status
     api.nfcGetStatus().then(setStatus).catch(() => {});
 
-    // Subscribe to status changes
     const unsubStatus = api.onNfcStatusChange((s: NfcStatus) => {
       setStatus(s);
     });

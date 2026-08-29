@@ -11,7 +11,6 @@ describe("Filament Model", () => {
     delete mongoose.models.Filament;
     const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
     if (schemas) delete schemas.Filament;
-    // Dynamic import to re-evaluate the module
     const mod = await import("@/models/Filament");
     Filament = mod.default;
     await Filament.syncIndexes();
@@ -453,7 +452,6 @@ describe("Filament Model", () => {
     const variantCount = await Filament.countDocuments({ parentId: parent._id, _deletedAt: null });
     expect(variantCount).toBe(1);
 
-    // Soft-delete the variant
     await Filament.findOneAndUpdate(
       { name: "Variant ASA - Black" },
       { _deletedAt: new Date() },
@@ -595,7 +593,6 @@ describe("Calibration sub-document updates", () => {
       (c: any) => (c.toObject ? c.toObject() : { ...c })
     );
 
-    // Find the matching entry and Object.assign new values
     const match = updatedCals.find(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (c: any) => c.nozzle.toString() === nozzleId.toString()
@@ -603,11 +600,9 @@ describe("Calibration sub-document updates", () => {
     expect(match).toBeDefined();
     Object.assign(match, { extrusionMultiplier: 1.05 });
 
-    // Save the filament with the updated calibrations
     filament.calibrations = updatedCals;
     await filament.save();
 
-    // Re-fetch and verify
     const found = await Filament.findById(filament._id);
     expect(found!.calibrations).toHaveLength(1);
     expect(found!.calibrations[0].extrusionMultiplier).toBe(1.05);
@@ -1389,7 +1384,7 @@ describe("Filament Model — v1.11 spool fields", () => {
     expect(reread!.optTags).toEqual([]);
   });
 
-  // Codex P2 on PR #650: a rejecting validator would block ANY save() on a
+  // A rejecting validator would block ANY save() on a
   // legacy doc that already carries a bad optTags value — even when the
   // save only mutates spools/usageHistory. The setter approach must let
   // such a save through (and clean the bad value on the next optTags write).

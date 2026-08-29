@@ -1,19 +1,13 @@
 /**
- * Filter/search/sort state carried in the URL query string (GH #1141).
- *
- * The filament list and Spool Inventory kept every filter in a bare
- * `useState`, so a filtered view could not be shared or bookmarked and a
- * refresh — or a Back from a detail page — silently dropped the user to the
- * unfiltered list. `src/app/page.tsx` documented the gap and deferred it;
- * this is that deferral.
+ * Filter/search/sort state carried in the URL query string (GH #1141), for
+ * the filament list and Spool Inventory pages.
  *
  * ## Why a pure module
  *
- * `vitest.config.ts` runs `environment: "node"` with no jsdom and no component
- * harness, so page-level behaviour is untestable here by construction. Putting
- * the whole parse/serialize contract in `src/lib/**` is the only shape that
- * can be pinned — and it lands under the coverage gate, where the traps below
- * get permanent guards instead of review comments.
+ * `vitest.config.ts` runs `environment: "node"` with no jsdom, so page-level
+ * behaviour is untestable by construction. The whole parse/serialize contract
+ * lives in `src/lib/**` so it lands under the coverage gate, where the traps
+ * below get permanent guards.
  *
  * ## The rule that must never be broken: MERGE, never rebuild
  *
@@ -49,7 +43,7 @@ export interface FilterParamSpec<T> {
   serialize?: (value: T) => string;
   /**
    * This key is backed by a PERSISTED preference, so its absence is
-   * ambiguous — and the ambiguity is a bug (GH #1141, Codex P1).
+   * ambiguous — and the ambiguity is a bug (GH #1141).
    *
    * Serialization normally omits a value equal to its fallback, which means a
    * shared `?sort=cost` from a sender on ascending order says nothing about
@@ -110,11 +104,10 @@ export const textParam = {
 
 /**
  * Free text that is an EXACT KEY into stored data — type and vendor
- * (GH #1141, Codex P2, and the distinction is the finding). The Filament
- * schema trims `name` but NOT `type`/`vendor`, and the list APIs compare both
- * with exact `$eq` — so a stored `"PLA "` is a legitimately selectable value,
- * and trimming it at the URL boundary broke the round trip: select it, filter
- * correctly, refresh, and the parsed `"PLA"` matches nothing. The stored
+ * (GH #1141). The Filament schema trims `name` but NOT `type`/`vendor`, and
+ * the list APIs compare both with exact `$eq` — so a stored `"PLA "` is a
+ * legitimately selectable value, and trimming it at the URL boundary breaks
+ * the round trip (refresh → the parsed `"PLA"` matches nothing). The stored
  * bytes are the value; the URL layer may not editorialize them. (A lone
  * `?type=%20` therefore filters on a space, faithfully — GH #1149 tracks
  * normalizing the FIELDS, after which this could trim again.)
@@ -203,7 +196,7 @@ export function serializeFilterParams<S extends FilterSpec>(
       emittedAny = true;
     }
   }
-  // Sticky keys are emitted on EITHER trigger (Codex P2, second pass):
+  // Sticky keys are emitted on EITHER trigger:
   //
   //  1. anything else emitted — the original rule, which makes a shared link
   //     deterministic; or
@@ -266,8 +259,8 @@ export function nextFilterHref<S extends FilterSpec>(
 /**
  * The query component of an href, without the `?` and WITHOUT the fragment.
  *
- * For the own-write marker (GH #1141, Codex P2, third pass): the pages record
- * what they hand to `router.replace` so the echo through `useSearchParams` can
+ * For the own-write marker (GH #1141): the pages record what they hand to
+ * `router.replace` so the echo through `useSearchParams` can
  * be told apart from an external navigation. `nextFilterHref` preserves the
  * hash — correctly, the skip link's `#main-content` must survive a write — but
  * `useSearchParams().toString()` never contains one. A naive
@@ -314,12 +307,9 @@ export function withCurrentValue(options: string[], current: string): string[] {
  * for an absent param is the spec fallback — i.e. a filter the URL is silent
  * about is CLEARED, while a preference it is silent about is KEPT.
  *
- * This lives here rather than in the pages because it was seven hand-copied
- * ternaries across two files, and stickiness declared in the spec but consumed
- * by hand is the same drift class as the hand-mirrored IPC channels in
- * `electron/main.ts`. It is also the only way to get the rule under the
- * coverage gate at all — `vitest.config.ts` is `environment: "node"`, so the
- * pages themselves cannot be exercised.
+ * Lives here rather than in the pages so the rule is declared once (rather
+ * than hand-copied ternaries drifting per page) and sits under the coverage
+ * gate.
  *
  * Both callers use it: the mount seed passes the STORED preferences, and the
  * re-seed (a same-route navigation) passes the CURRENT state, which is the
@@ -354,7 +344,7 @@ export function seedFilterState<S extends FilterSpec>(
  *   - the re-seed on a same-route navigation — clicking the header link
  *     clears the FILTERS but must not reset the sort the user has saved and
  *     then let the persist effect overwrite storage with the fallback
- *     (GH #1141, Codex P2).
+ *     (GH #1141).
  *
  * Presence means the param is there AND its value parses. A garbage value is
  * treated as absent, which keeps the persisted preference rather than

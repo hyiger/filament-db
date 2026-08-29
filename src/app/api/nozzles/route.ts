@@ -26,10 +26,9 @@ export async function GET(request: NextRequest) {
 
     const nozzles = await Nozzle.find(filter).sort({ diameter: 1, type: 1 }).lean();
 
-    // Attach the list of printers each nozzle is installed in, so the UI can
-    // differentiate otherwise-identical nozzles (e.g. a Diamondback 0.4 in the
-    // Core One vs. the H2D). Uses the reverse lookup through
-    // Printer.installedNozzles so no schema change is needed.
+    // Attach the printers each nozzle is installed in (reverse lookup
+    // through Printer.installedNozzles — no schema change needed) so the UI
+    // can differentiate otherwise-identical nozzles.
     const printers = await Printer.find({ _deletedAt: null })
       .select("_id name installedNozzles")
       .lean();
@@ -81,12 +80,11 @@ export async function POST(request: NextRequest) {
     delete body.printerIds;
     delete body.printers;
 
-    // GH #1083: validate the assignment BEFORE Nozzle.create — mirrors the
-    // PUT route's #897/#912 posture via the shared helper (dedupe → at most
-    // one printer → valid ObjectId → live target). Pre-fix, a rejected or
-    // malformed assignment left a committed nozzle behind (CastError → 500,
-    // missing printer → silent no-op) and a multi-printer array bypassed the
-    // one-printer-per-nozzle invariant (#232) every other write path enforces.
+    // GH #1083: validate the assignment BEFORE Nozzle.create (shared helper
+    // with the PUT route: dedupe → at most one printer → valid ObjectId →
+    // live target) — a rejected assignment must not leave a committed
+    // nozzle behind, and a multi-printer array would bypass the
+    // one-printer-per-nozzle invariant (#232).
     const assignment = await validateNozzlePrinterAssignment(
       rawPrinterIds,
       (targetId) =>
@@ -96,12 +94,10 @@ export async function POST(request: NextRequest) {
       return errorResponse(assignment.message, 400);
     }
 
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "0.4 Brass" and a surviving
-    // untrimmed "0.4 Brass " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
+    // GH #1116: the partial unique index compares RAW stored strings, so a
+    // submitted "0.4 Brass" beside a surviving untrimmed "0.4 Brass " would
+    // write an indistinguishable duplicate. Ask the trimmed question
+    // explicitly, in the same 409 shape handleDuplicateKeyError produces.
     const nameConflict = await survivorNameConflict(
       Nozzle.collection as unknown as MinimalNameCollection,
       body.name,

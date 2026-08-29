@@ -150,9 +150,9 @@ export function useDateFormat() {
   // was empty/invalid and so collapsed to null — render in the device region.
   // That's the documented "system" fallback; keying it on `pattern === null`
   // (not `mode === "system"`) stops an invalid custom pattern from silently
-  // reverting to app-locale date ordering (Codex P2). A non-null pattern
-  // renders locale-independently, so `locale` there is moot. Pre-`ready` we
-  // use the app locale so the first render matches the server (no hydration
+  // reverting to app-locale date ordering. A non-null pattern renders
+  // locale-independently, so `locale` there is moot. Pre-`ready` we use the
+  // app locale so the first render matches the server (no hydration
   // mismatch); `osLocale` is only set post-mount.
   const dateLocale =
     ready && pattern === null ? osLocale ?? locale : locale;

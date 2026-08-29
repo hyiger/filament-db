@@ -2,9 +2,8 @@
  * Brother PT-P710BT raster command encoder.
  *
  * Pure JavaScript / TypeScript, no Node or browser dependencies — usable
- * from both the Electron main process (over a serial port) and the
- * renderer (for download-fallback when not running in Electron) and
- * from the standalone CLI in `scripts/print-label.ts`.
+ * from the Electron main process, the renderer (download-fallback when not
+ * running in Electron), and the standalone CLI in `scripts/print-label.ts`.
  *
  * The encoder takes a row-major **1-bit-per-pixel** bitmap as a packed
  * Uint8Array — one bit per print dot, MSB-first across each row, exactly
@@ -174,7 +173,6 @@ export function encodeLabel(opts: EncodeOpts): Uint8Array {
   // no-chain (0x08) so the label feeds out + gets cut; a deliberate
   // chain print (autoCut=false, --no-cut on the CLI) wants chain mode
   // (0x00) so the printer holds the tape ready for the next job.
-  // (Codex P1+P2 rounds 17+18 on PR #487.)
   out[pos++] = 0x1b;
   out[pos++] = 0x69;
   out[pos++] = 0x4b;
@@ -223,11 +221,6 @@ export function encodeLabel(opts: EncodeOpts): Uint8Array {
  * 255 = white) into 16 bytes of MSB-first 1-bit packed data. Black bits
  * (gray < 128) become 1s in the output; the bit position is
  * MSB-of-byte-0 = leftmost dot of the print head.
- *
- * Used by the renderer when converting an HTML-canvas-rendered grayscale
- * image to the printer's wire format, and by the CLI spike's sharp-based
- * pipeline. Pure function over the input row — no allocations outside
- * the returned Uint8Array.
  */
 export function packGrayscaleRow(grayRow: Uint8Array): Uint8Array {
   if (grayRow.length !== PRINT_HEAD_DOTS) {

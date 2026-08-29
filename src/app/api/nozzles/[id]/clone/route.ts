@@ -10,22 +10,13 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { nextCloneName, clonePeerNamePattern } from "@/lib/nozzleConflicts";
 
 /**
- * POST /api/nozzles/{id}/clone
- *
- * GH #232 — clone an existing nozzle into a new physical-instance row.
- *
- * Use case: PrinterForm just hit a 409 conflict (the nozzle the user
- * picked is already installed in another printer). The "Clone" choice
- * from the resolution modal calls this endpoint to mint an
- * identically-specced nozzle under a "Name #2" / "Name #3" suffix, then
- * assigns the new id to this printer instead of the conflicting one.
- *
- * The clone shares every spec field (diameter, type, highFlow, hardened,
- * notes) but starts with a fresh `_id`, fresh `syncId` (null — the hybrid-
- * sync engine assigns one on first publish), and fresh timestamps. It is
- * NOT auto-attached to any printer — the caller is responsible for the
- * follow-up assignment, because this endpoint deliberately doesn't know
- * which printer triggered the clone.
+ * POST /api/nozzles/{id}/clone (GH #232) — clone a nozzle into a new
+ * physical-instance row under a "Name #2" / "Name #3" suffix (PrinterForm's
+ * 409-conflict resolution). The clone shares every spec field but gets a
+ * fresh `_id`, a null `syncId` (the sync engine assigns one on first
+ * publish), and fresh timestamps. It is NOT auto-attached to any printer —
+ * the caller does the follow-up assignment; this endpoint deliberately
+ * doesn't know which printer triggered the clone.
  */
 /** How many `#N` suffixes to probe before giving up. Each miss consumes one,
  *  so the loop terminates on its own; this only bounds a pathological DB. */
@@ -47,11 +38,9 @@ export async function POST(
       return errorResponse("Source nozzle not found", 404);
     }
 
-    // Pick the next available "Name #N" suffix among non-deleted nozzles
-    // so the clone is visually distinguishable from its siblings in the
-    // /nozzles list. GH #298: the pattern is anchored at both ends, so
-    // it matches only the base name + its numbered clones — not
-    // unrelated siblings that share a prefix.
+    // Pick the next available "Name #N" suffix. GH #298: the pattern is
+    // anchored at both ends, so it matches only the base name + its
+    // numbered clones — not unrelated siblings sharing a prefix.
     const peers = await Nozzle.find({
       _deletedAt: null,
       name: { $regex: clonePeerNamePattern(source.name) },
@@ -61,24 +50,19 @@ export async function POST(
     const peerNames = peers.map((p) => p.name);
     const firstName = nextCloneName(source.name, peerNames);
 
-    // GH #1116 (Codex P1): the GENERATED name needs the survivor check too.
-    // The peer regex above is a raw-name match that misses an untrimmed
-    // survivor, so with an active `"0.4 #2 "` it picks `"0.4 #2"`, the unique
-    // index compares the raw strings and permits it, and the clone renders
-    // identically to the row it failed to see.
-    //
-    // ADVANCE past it rather than refusing (Codex P2). This endpoint is the
-    // UI's way to mint a distinct physical nozzle, and a survivor is a
-    // permanent state — the migration leaves it precisely because it cannot be
-    // repaired automatically. Returning 409 would make cloning impossible
-    // forever, on every retry, even though `"0.4 #3"` is free. So treat the
-    // survivor as an occupied suffix, which is exactly what it is to a human
-    // reading the list, and take the next candidate.
+    // GH #1116: the GENERATED name needs the survivor check too — the peer
+    // regex misses an untrimmed survivor, so with an active `"0.4 #2 "` it
+    // would pick `"0.4 #2"` and the clone would render identically to the
+    // row it failed to see. ADVANCE past a survivor rather than refusing: a
+    // survivor is a permanent state (the migration leaves it because it
+    // cannot be repaired automatically), so a 409 would make cloning
+    // impossible forever even though the next suffix is free — treat it as
+    // an occupied suffix and take the next candidate.
     let newName = firstName;
     let attempt = 0;
     let nameConflict: string | null = null;
-    // Bounded: each miss consumes one suffix, so this terminates. The cap only
-    // stops a pathological database from spinning.
+    // Bounded: each miss consumes one suffix, so this terminates; the cap
+    // only stops a pathological database from spinning.
     while (attempt < MAX_CLONE_SUFFIX_PROBES) {
       nameConflict = await survivorNameConflict(
         Nozzle.collection as unknown as MinimalNameCollection,

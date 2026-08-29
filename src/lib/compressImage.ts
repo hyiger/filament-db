@@ -1,18 +1,9 @@
 /**
  * Compress an uploaded image file to a JPEG base64 data URL under a target
- * size budget. Runs entirely client-side; we store the result inline on the
+ * size budget. Runs entirely client-side; the result is stored inline on the
  * spool subdocument so there's no file-upload endpoint or storage layer.
- *
- * Strategy:
- *   1. Draw the image to an OffscreenCanvas (or regular canvas fallback)
- *      at a maximum dimension (default 1200px on the longest edge).
- *   2. Encode as JPEG at descending qualities until the result fits
- *      within `maxBytes`. Very rough bound: most spool photos fit
- *      comfortably at q=0.75 / 1200px.
- *
- * Returns null on error or if the browser doesn't support the required
- * APIs (fallback: the caller should surface a "photo upload not supported
- * in this browser" toast).
+ * Returns null on error or when the browser doesn't support the required APIs
+ * (the caller should surface a "not supported" toast).
  */
 
 export interface CompressOpts {
@@ -31,9 +22,8 @@ export async function compressImageToDataUrl(
 
   if (typeof window === "undefined") return null;
 
-  // Read the source file into an HTMLImageElement via object URL. Using
   // createImageBitmap would be faster but has patchy support in older
-  // Electron builds; the image element fallback is universally safe.
+  // Electron builds; the image-element path is universally safe.
   const bitmap = await loadImage(file);
   if (!bitmap) return null;
 
@@ -81,9 +71,8 @@ function loadImage(file: File): Promise<HTMLImageElement | null> {
 
 /**
  * Approximate decoded size of a base64 data URL payload.
- * @internal Exported for unit testing in `tests/compressImage.test.ts`.
- *   Not part of the public API — consume via `compressImageToDataUrl`,
- *   which uses this helper to decide whether to recompress.
+ * @internal Exported for unit testing only — consume via
+ *   `compressImageToDataUrl`.
  */
 export function dataUrlSizeBytes(dataUrl: string): number {
   const commaIdx = dataUrl.indexOf(",");

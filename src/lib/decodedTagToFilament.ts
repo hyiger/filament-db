@@ -14,44 +14,36 @@ function auxTemp(v: unknown): number | null {
 }
 
 /**
- * GH #1072 (item 4): coerce a top-level tag string field. Despite the
- * `DecodedOpenPrintTag` typing, `tagData` is unvalidated client JSON — any of
- * these fields may arrive as a number, boolean, object, or array. Optional
- * chaining only guards null/undefined, so `.trim` on a non-string threw out
- * of the only caller (the create-from-tag branch of `POST /api/filaments`,
- * OUTSIDE its try/catch) as a 500 where the route contract promises 400.
- * Same threat model `auxTemp` above already documents; junk coerces to ""
- * (field absent) so the payload falls back sensibly.
+ * GH #1072: coerce a top-level tag string field. Despite the
+ * `DecodedOpenPrintTag` typing, `tagData` is unvalidated client JSON — a
+ * non-string here made `.trim` throw OUTSIDE the caller's try/catch as a 500
+ * where the route contract promises 400. Junk coerces to "" (field absent)
+ * so the payload falls back sensibly.
  */
 function strField(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
 /**
- * Map a tag decoded by `POST /api/nfc/decode` (a `DecodedOpenPrintTag`) into a
- * Filament DB creation payload — the server-side mapper behind create-from-scan
- * (mobile Phase 2, plan §4.4). The phone never reproduces this mapping: it
- * POSTs `{ tagData }` and the server builds the document, so the field mapping
- * lives in exactly one place (design rule #1).
+ * Map a tag decoded by `POST /api/nfc/decode` (a `DecodedOpenPrintTag`) into
+ * a Filament DB creation payload — the server-side mapper behind
+ * create-from-scan. The phone never reproduces this mapping: it POSTs
+ * `{ tagData }` and the server builds the document, so the field mapping
+ * lives in exactly one place.
  *
  * Mirrors `mapToFilamentPayload` (the OpenPrintTag community-DB importer in
- * `openprinttagBrowser.ts`) so a filament created from a physical tag matches
- * one imported from the same material in the OPT database — sourcing from the
- * decoded NFC shape instead of `OPTMaterial`, and capturing the couple of extra
- * fields a physical tag carries (shore A hardness, the tag's own diameter).
- * The decoded `tags` are ALREADY numeric `OPT_TAG` enum values (the decoder
- * resolved the bit flags), so unlike the `OPTMaterial` path there is no
- * string→enum step.
+ * `openprinttagBrowser.ts` — keep in sync) so a filament created from a
+ * physical tag matches one imported from the OPT database. The decoded `tags`
+ * are ALREADY numeric `OPT_TAG` enum values, so there is no string→enum step.
  *
- * Pure + DB-free (unit-tested). Spool subdocs / usage history are never
- * produced here (plan §4.4) — create makes the filament only; the user adds a
- * spool afterward via the existing spool routes.
+ * Pure + DB-free. Spool subdocs / usage history are never produced here —
+ * create makes the filament only.
  *
- * `name` / `vendor` / `type` are `required` on the schema. The tag is
- * best-effort; the create screen prefills these and requires non-empty values,
- * which arrive as `overrides` and win over the mapper output. When the tag
- * carries no vendor/type and the caller supplies no override, `Filament.create`
- * rejects with a required-field error — correct, not a silent bad document.
+ * `name` / `vendor` / `type` are `required` on the schema; the create screen
+ * prefills them and its `overrides` win over the mapper output. When the tag
+ * carries no vendor/type and the caller supplies no override,
+ * `Filament.create` rejects with a required-field error — correct, not a
+ * silent bad document.
  */
 export function decodedTagToFilamentPayload(
   decoded: DecodedOpenPrintTag,
@@ -59,15 +51,12 @@ export function decodedTagToFilamentPayload(
   const brand = strField(decoded.brandName);
   const material = strField(decoded.materialName);
   const type = strField(decoded.materialType);
-  // NOTE: the tag's spool_uid is deliberately NOT adopted as the new filament's
-  // instanceId. instanceId is system-assigned (auto-generated, partial-unique)
-  // and the POST handler strips any client-supplied value on purpose — and
-  // tagData is unsigned client JSON, so adopting spool_uid would make instanceId
-  // client-writable (a forgeable scan-match target) and could 409 against the
-  // unique index. A re-scan of this filament's physical tag instead resolves
-  // through the decode route's heuristic (vendor+type / name) path
-  // (matchedBy:"heuristic" → the scanner offers "open existing or create"), so
-  // re-scans still find it without re-opening the instanceId guard.
+  // NOTE: the tag's spool_uid is deliberately NOT adopted as the new
+  // filament's instanceId. instanceId is system-assigned and the POST handler
+  // strips any client-supplied value on purpose — tagData is unsigned client
+  // JSON, so adopting spool_uid would make instanceId client-writable (a
+  // forgeable scan-match target) and could 409 against the unique index.
+  // Re-scans still resolve through the decode route's heuristic path.
 
   // Best-effort default name from the tag; the create screen lets the user edit
   // it before submit (it's the unique key, so a sensible default matters).
@@ -86,17 +75,13 @@ export function decodedTagToFilamentPayload(
   const secondaryColors = Array.isArray(decoded.secondaryColors) ? decoded.secondaryColors : [];
 
   // GH #1008 F6: for an OpenTag3D tag with a RANGED print temp,
-  // `decoded.nozzleTemp` is the Extended range MAX (`maxPrintTemp ??
-  // recPrintTemp` — see opentag3d-decode.ts), while the Core RECOMMENDED
+  // `decoded.nozzleTemp` is the range MAX, while the Core RECOMMENDED
   // print_temp survives only in `aux.opentag3d_recommended_print_temp_c`
   // (stashed exactly when a distinct max exists). Mapping the max into the
-  // everyday `temperatures.nozzle` made write→scan→create asymmetric: a
-  // filament written with nozzle=215 / rangeMax=230 scanned back and created
-  // with nozzle=230 — the same everyday-vs-max drift #970 fixed on the OPT
-  // encode side. Prefer the preserved recommended value for the everyday temp;
-  // the max stays on `nozzleRangeMax`. Same for bed — the schema has no
-  // bed-range fields, so the recommended value simply wins the single `bed`
-  // slot. Only OpenTag3D decodes populate these aux keys, so OpenPrintTag /
+  // everyday `temperatures.nozzle` made write→scan→create asymmetric
+  // (nozzle=215/rangeMax=230 scanned back as nozzle=230). Prefer the
+  // preserved recommended value; the max stays on `nozzleRangeMax`. Same for
+  // bed. Only OpenTag3D decodes populate these aux keys, so OpenPrintTag /
   // Bambu payloads are unchanged.
   const recommendedNozzle = auxTemp(decoded.aux?.opentag3d_recommended_print_temp_c);
   const recommendedBed = auxTemp(decoded.aux?.opentag3d_recommended_bed_temp_c);
@@ -107,9 +92,9 @@ export function decodedTagToFilamentPayload(
     type: type || null,
     // Preserve a null primary for coextruded / multi-color tags (secondaries
     // but no primary) — same posture as mapToFilamentPayload (GH #477). Only
-    // fall back to gray when the tag carries no colors at all. GH #1072
-    // (item 4): typeof-guarded so a non-string color (an object, a number)
-    // falls to the fallback instead of riding into the schema validator.
+    // fall back to gray when the tag carries no colors at all. typeof-guarded
+    // so a non-string color falls to the fallback instead of riding into the
+    // schema validator (GH #1072).
     color:
       (typeof decoded.color === "string" && decoded.color) ||
       (secondaryColors.length > 0 ? null : "#808080"),

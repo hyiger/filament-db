@@ -50,7 +50,7 @@ export const INVALID_SHAPE_MESSAGE =
  * so the write preceding this lookup COMMITS for such an id, while
  * `String(objectId)` is always lowercase. A case-sensitive compare here
  * would answer that committed write with a 404, and a retrying client
- * would double-apply it (adversarial-review finding on GH #1027).
+ * would double-apply it.
  */
 export function findSpoolById<T extends { _id: unknown }>(
   spools: readonly T[] | undefined | null,
@@ -75,7 +75,7 @@ export function findSpoolByInstanceId<T extends { instanceId?: unknown }>(
   // LAST element. instanceId uniqueness is best-effort (a documented
   // read-then-write race can admit a duplicate), and a first-match scan
   // would then identify the WRONG, pre-existing spool in the create
-  // response (adversarial-review finding on GH #1027).
+  // response.
   if (!spools) return null;
   for (let i = spools.length - 1; i >= 0; i--) {
     if (spools[i].instanceId === instanceId) return spools[i];

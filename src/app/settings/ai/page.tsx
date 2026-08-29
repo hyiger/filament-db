@@ -14,18 +14,13 @@ const AI_PROVIDERS: { id: AiProvider; name: string; keyUrl: string }[] = [
 
 export default function AiSettingsPage() {
   const { t } = useTranslation();
-  // GH #1112: the SELECTED provider (what the buttons show) and the CONFIGURED
-  // one (what the server/store actually holds) are different things, and
-  // conflating them is the bug. Clicking a provider only ever mutated local
-  // state, while the single write path — Save Key — is disabled unless a NEW
-  // key is typed. So a user with a key already configured could not switch at
-  // all, and the status line, cost note and key link all claimed a provider
-  // the backend had never heard of.
-  //
-  // They stay separate because an API key is provider-specific: a Gemini key
-  // cannot drive Claude. "Switch provider" therefore genuinely REQUIRES a new
-  // key — the fix is to say so, not to persist a selection that would leave
-  // the app holding one provider's key under another provider's name.
+  // GH #1112: the SELECTED provider (what the buttons show) and the
+  // CONFIGURED one (what the server/store actually holds) are different
+  // things — conflating them is the bug. They stay separate because an API
+  // key is provider-specific: a Gemini key cannot drive Claude. "Switch
+  // provider" therefore genuinely REQUIRES a new key — say so, rather than
+  // persist a selection that would leave the app holding one provider's key
+  // under another provider's name.
   const [aiProvider, setAiProvider] = useState<AiProvider>("gemini");
   const [configuredProvider, setConfiguredProvider] = useState<AiProvider | null>(null);
   const [aiKey, setAiKey] = useState("");

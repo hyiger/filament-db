@@ -64,10 +64,8 @@ export async function PUT(
     delete body.instanceId;
     delete body.syncId;
 
-    // GH #424: replace the "delete each known leak field + spread the rest"
-    // pattern with an explicit allowlist so a future schema field doesn't
-    // become automatically client-writable. Matches the Filament PUT
-    // posture.
+    // GH #424: explicit allowlist so a future schema field doesn't become
+    // automatically client-writable.
     const update: Record<string, unknown> = {};
     if ("name" in body) update.name = body.name;
     if ("diameter" in body) update.diameter = body.diameter;
@@ -76,20 +74,16 @@ export async function PUT(
     if ("hardened" in body) update.hardened = body.hardened;
     if ("notes" in body) update.notes = body.notes;
 
-    // If the client sent `printerIds`, sync Printer.installedNozzles to match:
-    // any printer in the list gets this nozzle added, any other printer that
-    // currently has it installed gets it removed. This lets the nozzle edit
-    // form manage the assignment from the nozzle side while the Printer form
-    // continues to manage it from the printer side.
+    // `printerIds` syncs Printer.installedNozzles from the nozzle side
+    // (the Printer form manages it from the printer side).
     //
-    // GH #897 / #912 (Codex P2): VALIDATE printerIds BEFORE mutating the nozzle,
-    // so a rejected assignment (multi-printer, bad/missing target) doesn't leave
-    // the nozzle partially updated (e.g. renamed but the request 400s).
-    // A single physical nozzle lives in at most ONE printer (#232); the
-    // nozzle-side assignment is AUTHORITATIVE (auto-move) — the $pull below
-    // displaces the previous claim — but it can't be in two printers at once.
-    // The dedupe → one-printer → ObjectId → existence sequence lives in the
-    // shared validateNozzlePrinterAssignment helper so the POST route (#1083)
+    // GH #897 / #912: VALIDATE printerIds BEFORE mutating the nozzle, so a
+    // rejected assignment doesn't leave the nozzle partially updated
+    // (renamed but the request 400s). A physical nozzle lives in at most
+    // ONE printer (#232); the nozzle-side assignment is AUTHORITATIVE
+    // (auto-move — the $pull below displaces the previous claim) but can't
+    // be in two printers at once. The validation sequence lives in the
+    // shared validateNozzlePrinterAssignment helper so the POST route
     // enforces the identical contract and the two can't drift.
     const assignment = await validateNozzlePrinterAssignment(
       body.printerIds,
@@ -159,14 +153,11 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
-    // Prevent deleting a nozzle that is referenced by any filament.
-    //
-    // GH #629: trashed filaments count too — a filament in the trash can be
-    // restored, which would resurrect a dangling nozzle ref if the nozzle
-    // were deleted in the meantime. Only `_purged` tombstones are gone
-    // forever and don't block.
-    // Predicate shared with GH #1149's dependents counter — see
-    // src/lib/entityDependents.ts; the two must not drift.
+    // Prevent deleting a nozzle referenced by any filament. GH #629:
+    // trashed filaments count too (a restore would resurrect a dangling
+    // ref); only `_purged` tombstones don't block. Predicate shared with
+    // the dependents counter (src/lib/entityDependents.ts) — the two must
+    // not drift.
     const referencingCount = await Filament.countDocuments(nozzleFilamentRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(
@@ -175,11 +166,11 @@ export async function DELETE(
       );
     }
 
-    // Prevent deleting a nozzle that is installed on any printer.
-    // Deliberately keeps the `_deletedAt: null` term (unlike the filament
-    // guard above): printers have no trash/restore loop, so a soft-deleted
-    // printer's refs can never resurrect — and counting them would block
-    // the delete with no way for the user to clear the reference.
+    // Prevent deleting a nozzle installed on any printer. Deliberately
+    // keeps the `_deletedAt: null` term (unlike the filament guard above):
+    // printers have no trash/restore loop, so a soft-deleted printer's refs
+    // can never resurrect — counting them would block the delete with no
+    // way for the user to clear the reference.
     const printerCount = await Printer.countDocuments(nozzlePrinterRefFilter(id));
     if (printerCount > 0) {
       return errorResponse(

@@ -67,10 +67,8 @@ export async function POST(request: NextRequest) {
   if (body.filamentIds.length > 500) {
     return errorResponse("filamentIds may contain at most 500 entries", 400);
   }
-  // GH #630: a non-ObjectId entry would throw a CastError inside the `$in`
-  // query below, and the catch maps that to a hardcoded 500. Bad input is
-  // the client's fault: validate up front and 400 (same hex-24 pattern as
-  // the import-atlas / snapshot routes).
+  // GH #630: a non-ObjectId entry would CastError inside the `$in` query
+  // into a 500 — validate up front and 400.
   const invalidIds = (body.filamentIds as unknown[]).filter(
     (id) => typeof id !== "string" || !/^[a-f0-9]{24}$/i.test(id),
   );
@@ -113,14 +111,12 @@ export async function POST(request: NextRequest) {
       BedType.find({ _id: { $in: Array.from(bedTypeIds) }, _deletedAt: null }).lean(),
     ]);
 
-    // GH #1122: project each filament down to an ALLOW-LIST. This was a
-    // deny-list — strip four fields, publish everything else — which leaks by
-    // default: /share/{slug} is unauthenticated, so every field added to the
-    // schema afterwards became public unless someone remembered to deny it.
-    // That already published `cost` (what this user paid per kg) alongside
-    // internal bookkeeping (syncId, openprinttagSnapshot, promotedByToken,
-    // _purged, the promotion marker). See src/lib/sharePublicFields.ts for
-    // what is on the list and why.
+    // GH #1122: project each filament down to an ALLOW-LIST. A deny-list
+    // leaks by default — /share/{slug} is unauthenticated, so every field
+    // added to the schema afterwards became public unless someone
+    // remembered to deny it (it already published `cost` alongside internal
+    // bookkeeping). See src/lib/sharePublicFields.ts for what is on the
+    // list and why.
     const filaments = rawFilaments.map((f) =>
       pickSharedFilamentFields(f as unknown as Record<string, unknown>),
     );
@@ -138,21 +134,17 @@ export async function POST(request: NextRequest) {
       typeof body.expiresAt === "string" && body.expiresAt
         ? new Date(body.expiresAt)
         : null;
-    // GH #426: a malformed `expiresAt` (e.g. "not a date") parses to
-    // `Invalid Date`. Persisting that makes the catalog effectively
-    // immortal — downstream `expiresAt: { $gt: now }` compares against
-    // NaN and the expiry branch is silently bypassed. Reject up front
-    // (matches the print-history POST handler's post-#306 posture).
+    // GH #426: a malformed `expiresAt` parses to Invalid Date — persisted,
+    // it makes the catalog effectively immortal (`$gt: now` compares
+    // against NaN and the expiry branch is silently bypassed). Reject up
+    // front.
     if (expiresAt && Number.isNaN(expiresAt.getTime())) {
       return errorResponse("expiresAt is not a valid date", 400);
     }
 
     // GH #282: the catalog document must stay under MongoDB's 16MB BSON
-    // limit. Spool subdocuments (which carry base64 photoDataUrl images
-    // + usage/dry history) are already stripped from each filament
-    // above, but a very large catalog could still approach the limit
-    // from filament count alone. Reject with a clear message before the
-    // write rather than letting Mongo hard-fail mid-insert.
+    // limit — reject with a clear message before the write rather than
+    // letting Mongo hard-fail mid-insert.
     const MAX_PAYLOAD_BYTES = 12 * 1024 * 1024; // 12MB — headroom under 16MB
     const payloadBytes = Buffer.byteLength(JSON.stringify(payload), "utf8");
     if (payloadBytes > MAX_PAYLOAD_BYTES) {

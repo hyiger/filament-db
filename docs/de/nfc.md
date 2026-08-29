@@ -84,8 +84,12 @@ Von der Detailseite eines beliebigen Filaments:
 
 1. Lege einen Tag auf den Reader (die NFC-Statusanzeige wird grün)
 2. Klicke auf **„NFC schreiben"** (lila Button)
-3. Die App codiert die Filamentdaten als OpenPrintTag-CBOR, verpackt sie in eine NDEF-Nachricht und schreibt sie blockweise
+3. Die App **erkennt den aufgelegten Chip automatisch** und codiert den passenden Standard — ein **OpenPrintTag**-Tag (SLIX2 / NFC-V) bekommt OpenPrintTag-CBOR, ein **OpenTag3D**-Tag (NTAG213/215/216) das OpenTag3D-Binärabbild —, verpackt ihn in eine NDEF-Nachricht und schreibt sie seiten-/blockweise
 4. Der Button zeigt Fortschritt und Erfolg/Fehler an
+
+> Ein NTAG215/216 fasst das vollständige OpenTag3D-Abbild; auf einen kleineren NTAG213 passen nur die Kernfelder (du bekommst einen Hinweis, dass Spulen-ID und Restgewicht ausgelassen wurden). Ein kombinierter Filamenttyp wie `PA12-CF` wird in OpenTag3Ds getrennte Slots für Basis (`PA12`) und Modifikator (`CF`) aufgeteilt.
+
+> **Lässt sich die Größe eines leeren NTAG nicht automatisch erkennen** (der Tag beantwortet die Größenabfrage nicht), fragt die App vor dem Schreiben nach dem Tag-Typ — NTAG213, 215 oder 216. Hake **„Merken — nicht erneut fragen"** an, um deine Wahl als Standard zu speichern, damit beim Beschreiben eines Stapels nicht bei jedem Tag erneut gefragt wird; der gespeicherte Standard lässt sich später unter **Einstellungen → Geräte** ändern (die Einstellung **„Standard-NTAG-Typ"**, wo **„Jedes Mal fragen"** die Abfrage wiederherstellt). *(v1.64.2)*
 
 **Vor dem Überschreiben prüft die App den Tag** (v1.34.8 / #583):
 
@@ -143,7 +147,7 @@ Das „Loaded"-Label bleibt sichtbar, nachdem der Tag-Lese-Dialog geschlossen wu
 
 Die App kommuniziert mit dem ACR1552U via PC/SC und `@pokusew/pcsclite`:
 
-- **Verbindung**: Verbindet immer mit `SCARD_SHARE_SHARED`. Auf macOS registrieren sowohl der eingebaute `ifd-ccid`-Treiber als auch Apples `ifd-acsccid`-Treiber je eine Instanz des ACR1552U, aber nur der ACS-Treiber beherrscht ISO 15693 — die App versucht einen SHARED-Connect auf jeder registrierten Reader-Instanz und nutzt diejenige, die funktioniert (beim Hot-Plug wartet sie zudem kurz, bis sich beide Treiber-Instanzen registriert haben)
+- **Verbindung**: Verbindet immer mit `SCARD_SHARE_SHARED`. Auf macOS registrieren sowohl Apples eingebauter `ifd-ccid`-Treiber als auch der ACS-Treiber `ifd-acsccid` je eine Instanz des ACR1552U, aber nur der ACS-Treiber beherrscht ISO 15693 — die App versucht einen SHARED-Connect auf jeder registrierten Reader-Instanz und nutzt diejenige, die funktioniert (beim Hot-Plug wartet sie zudem kurz, bis sich beide Treiber-Instanzen registriert haben)
 - **Tag-Erkennung**: Versucht zuerst MIFARE-Classic-Read (Bambu); bei Misserfolg fällt sie auf ISO 15693 (OpenPrintTag) zurück
 - **OpenPrintTag-Befehle**: ACR1552U-Pass-Through (`FF FB`), das ISO-15693-Read/Write-Single-Block-Befehle umschließt
 - **Bambu-Befehle**: Standard-PC/SC-Pseudo-APDUs für MIFARE Classic — Get UID (`FF CA`), Load Key (`FF 82`), Authenticate (`FF 86`), Read Binary (`FF B0`)
@@ -272,7 +276,7 @@ Sie werden auf dasselbe Datenmodell wie OpenPrintTag-Felder gemappt, sodass die 
 
 - Stelle sicher, dass der Tag mittig auf dem Reader liegt und nicht bewegt wird
 - SLIX2-Tags haben eine kleine Antenne — die Position ist entscheidend
-- Auf macOS beanspruchen zwei Treiber-Instanzen den ACR1552U, aber nur Apples `ifd-acsccid` beherrscht ISO 15693; die App versucht einen SHARED-Connect auf jeder Reader-Instanz und nutzt diejenige, die funktioniert, sodass ein vorübergehender Fehler auf einer Instanz automatisch ausgeglichen wird
+- Auf macOS beanspruchen zwei Treiber-Instanzen den ACR1552U, aber nur der ACS-Treiber `ifd-acsccid` beherrscht ISO 15693; die App versucht einen SHARED-Connect auf jeder Reader-Instanz und nutzt diejenige, die funktioniert, sodass ein vorübergehender Fehler auf einer Instanz automatisch ausgeglichen wird
 
 ### Schreiben schlägt am letzten Block fehl (SW 640F)
 

@@ -72,11 +72,9 @@ export async function PUT(
       return errorResponse("Invalid printerId or slotId", 400);
     }
 
-    // The spool must exist on an active filament. The positional
-    // projection returns just the matched subdocument so we can also
-    // check its retired flag — retired spools are out of inventory and
-    // must not be newly loaded into a printer. The UI disables this; it
-    // is enforced here too so a direct API call can't bypass it.
+    // The spool must exist on an active filament, and must not be retired
+    // (out of inventory, not loadable) — the UI disables this, but it is
+    // enforced here too so a direct API call can't bypass it.
     const filament = await Filament.findOne(
       { _deletedAt: null, "spools._id": spoolId },
       { "spools.$": 1 },

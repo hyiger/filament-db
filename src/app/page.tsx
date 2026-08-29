@@ -116,8 +116,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
         <div className="space-y-1.5">
           {byType.map(([type, count]) => (
             <div key={type} className="flex items-center gap-2 text-sm">
-              {/* w-24 matches the vendor row below (was w-16, which clipped
-                  "PLA Tough" to "PLA TO…" — GH #89). title= is the
+              {/* w-24 matches the vendor row below (GH #89); title= is the
                   fallback for any type name that still exceeds 96px. */}
               <span title={type} className="w-24 truncate text-gray-600 dark:text-gray-300 font-medium">{type}</span>
               <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
@@ -181,11 +180,11 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
   );
 }
 
-// #831: persist the home list's sort across reloads (mirrors the /inventory
-// prefs pattern, #795). Only sort is persisted — persisting the type/vendor/
-// quick filters would land a returning user on a filtered subset of their
-// catalog, which reads as "filaments missing". Loaded post-mount so SSR /
-// first paint stay on defaults (no hydration mismatch).
+// #831: persist the home list's sort across reloads. Only sort is persisted —
+// persisting the type/vendor/quick filters would land a returning user on a
+// filtered subset of their catalog, which reads as "filaments missing".
+// Loaded post-mount so SSR / first paint stay on defaults (no hydration
+// mismatch).
 const SORT_KEY_VALUES: SortKey[] = ["name", "vendor", "type", "nozzle", "bed", "cost", "remaining", "purchased", "opened"];
 
 function loadHomePrefs(): HomePrefs {
@@ -205,24 +204,18 @@ function loadHomePrefs(): HomePrefs {
   }
 }
 
-/** Sentinel `<option>` value for "take me to the create-a-location form"
- *  (#1117 item h). Not a valid ObjectId, so it can never collide with a real
- *  location id. */
+/** Sentinel `<option>` value for "take me to the create-a-location form".
+ *  Not a valid ObjectId, so it can never collide with a real location id. */
 const NEW_LOCATION_OPTION = "__new_location__";
 
 /**
- * GH #1141: the filters this list mirrors into the URL.
- *
- * `family=1` is deliberately absent — it is an outbound API query param
- * (`/api/filaments?family=1`), never a page URL param, so it is not state to
- * carry. `?spool=` and friends on other routes are likewise unowned and are
- * preserved by `serializeFilterParams`.
+ * GH #1141: `family=1` is deliberately absent from the URL-mirrored filters —
+ * it is an outbound API query param, never a page URL param, so it is not
+ * state to carry.
  */
 /**
- * Distinct type + vendor values for the filter dropdowns.
- *
- * Shared by the mount effect and the post-import refresh so the two cannot
- * drift. Cheap distinct queries — the same endpoints /inventory uses.
+ * Distinct type + vendor values for the filter dropdowns. Shared by the
+ * mount effect and the post-import refresh so the two cannot drift.
  */
 async function fetchFilterOptions(
   signal: AbortSignal,
@@ -244,19 +237,8 @@ export default function Home() {
   const { formatDate } = useDateFormat();
   const { formatGrams } = useNumberFormat();
   const router = useRouter();
-  // #1117(h): the create-a-location detour carries the CURRENT url back, so
-  // the user lands on this page again rather than being stranded on
-  // /locations.
-  //
-  // What that does and does NOT preserve, stated plainly (Codex P2): the
-  // PAGE and anything already in its query string; plus whatever this page
-  // persists itself (sort key/direction here, and group/sort/retired on
-  // /inventory, both localStorage). What resets is the in-page filter state —
-  // search, type, vendor, the quick-filter chip — because neither list
-  // mirrors those into the URL. That is a pre-existing property of both
-  // pages, not something this option introduces, and putting filter state in
-  // the URL is a product decision (it changes what Back does) rather than
-  // part of adding an affordance. Tracked separately.
+  // The create-a-location detour carries the CURRENT url back, so the user
+  // lands on this page again rather than being stranded on /locations.
   const newLocationHref = useCallback(
     () =>
       withReturnTo(
@@ -283,16 +265,14 @@ export default function Home() {
   const [showOutOfStock, setShowOutOfStock] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
-  // #831: gate the persist effect so it doesn't fire on the default state
-  // before the post-mount load runs.
+  // Gate the persist/mirror effects so they don't fire on the default state
+  // before the post-mount seed runs.
   //
-  // STATE, not a ref (GH #1141, Codex P1). Effects in one commit run in
-  // declaration order, so a ref set by the seed effect is already true when the
-  // mirror effect below runs — in the SAME commit, still closed over the
-  // initial defaults. It then serialized those defaults over the URL that had
-  // just been read, and `/?type=PLA` landed on a bare `/`: the second run saw
-  // `window.location` not yet updated by the pending `router.replace`, found
-  // nothing to change, and never wrote the filter back. A state flag is only
+  // STATE, not a ref (GH #1141). Effects in one commit run in declaration
+  // order, so a ref set by the seed effect is already true when the mirror
+  // effect below runs — in the SAME commit, still closed over the initial
+  // defaults. It then serialized those defaults over the URL that had just
+  // been read, and `/?type=PLA` landed on a bare `/`. A state flag is only
   // true from the commit AFTER the seed, so the mirror first runs with the
   // seeded values.
   const [seeded, setSeeded] = useState(false);
@@ -313,10 +293,10 @@ export default function Home() {
   // filament id. Separate from expandedParents (which toggles parent→variants).
   const [expandedSpools, setExpandedSpools] = useState<Set<string>>(new Set());
   const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
-  // Set of `${filamentId}:${spoolId}` keys with a location change in flight, so
-  // each spool's dropdown disables independently. A Set (not a single key) so
-  // concurrent moves don't re-enable each other's select mid-request (Codex P2
-  // on PR #721) — only the completed key is cleared.
+  // Set of `${filamentId}:${spoolId}` keys with a location change in flight,
+  // so each spool's dropdown disables independently. A Set (not a single key)
+  // so concurrent moves don't re-enable each other's select mid-request —
+  // only the completed key is cleared.
   const [pendingMoves, setPendingMoves] = useState<Set<string>>(new Set());
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
@@ -324,9 +304,7 @@ export default function Home() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
-  // GH #525.2: track live progress + allow aborting a long bulk delete.
-  // `bulkProgress` is { done, total } while a delete is running so the
-  // button can show "Deleting 12/40" instead of an indeterminate spinner.
+  // Live progress + abort flag for a long bulk delete (GH #525.2).
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const bulkAbortRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -337,25 +315,23 @@ export default function Home() {
   const confirm = useConfirm();
 
   const fetchFilamentsRef = useRef<AbortController | null>(null);
-  // GH #292: dedicated controller for the post-import filter-options
-  // refresh, aborted on unmount so it can't setState after the page is
-  // gone or race the main list fetch un-cancellably.
+  // GH #292: dedicated controller for the post-import filter-options refresh,
+  // aborted on unmount so it can't setState after the page is gone.
   const filterOptionsAcRef = useRef<AbortController | null>(null);
   useEffect(() => () => filterOptionsAcRef.current?.abort(), []);
 
-  // #831: load the persisted sort post-mount (SSR / first paint use defaults to
-  // avoid a hydration mismatch), then persist on change. Mirrors /inventory.
+  // #831: load the persisted sort post-mount (SSR / first paint use defaults
+  // to avoid a hydration mismatch), then persist on change.
   useEffect(() => {
     const p = loadHomePrefs();
     // GH #1141: the URL wins over the persisted pref, for the keys it carries.
     //
     // Read post-mount, defaults-then-adopt — NOT a lazy `useState` initializer
     // with a `typeof window` check, which produces different first renders on
-    // the two sides (the Codex P2 in src/app/locations/new/page.tsx).
-    // Sort falls back to the PERSISTED pref when the URL is silent, so a bare
-    // "/" still opens the way the user left it, while a link that carries the
-    // sort applies it for the visit. `seedFilterState` owns that rule for both
-    // this seed and the re-seed below — see its docblock.
+    // the two sides. Sort falls back to the PERSISTED pref when the URL is
+    // silent, so a bare "/" still opens the way the user left it, while a
+    // link that carries the sort applies it for the visit. `seedFilterState`
+    // owns that rule for both this seed and the re-seed below.
     const url = seedFilterState(window.location.search, HOME_FILTER_SPEC, p);
 
     setSearch(url.search); // eslint-disable-line react-hooks/set-state-in-effect -- URL + persisted prefs
@@ -393,20 +369,20 @@ export default function Home() {
         sortKey,
         sortDir,
       },
-      // The persisted sort, read fresh each run (Codex P2): the sticky keys
-      // must stay encoded while the VIEW's sort differs from the stored one,
-      // or clearing the last filter drops the URL to bare while the page
-      // still shows a shared link's sort — and a reload then silently swaps
-      // it for the persisted one. Bare means "use my prefs"; it has to be
-      // true before the URL is allowed to say it.
+      // The persisted sort, read fresh each run: the sticky keys must stay
+      // encoded while the VIEW's sort differs from the stored one, or
+      // clearing the last filter drops the URL to bare while the page still
+      // shows a shared link's sort — and a reload then silently swaps it for
+      // the persisted one. Bare means "use my prefs"; it has to be true
+      // before the URL is allowed to say it.
       loadHomePrefs(),
     );
     if (href) {
       // Record what we wrote so the re-seed can tell our own change from
       // someone else's and not loop on it.
-      // Query component ONLY (Codex P2): the href keeps the hash, the echo
-      // through useSearchParams never has one, and a mismatched marker turns
-      // our own write into a "external" re-seed that clobbers live input.
+      // Query component ONLY: the href keeps the hash, the echo through
+      // useSearchParams never has one, and a mismatched marker turns our own
+      // write into an "external" re-seed that clobbers live input.
       ownUrlWriteRef.current = queryStringOf(href);
       // Through the ROUTER, not `window.history` directly. A raw
       // `replaceState` leaves the router's own model of the URL untouched, so
@@ -429,25 +405,19 @@ export default function Home() {
     router,
   ]);
 
-  // GH #1141 (Codex P2): re-seed when something ELSE changes the query string.
-  // The mount seed misses a client-side navigation to the SAME route —
-  // clicking the header's home link while filtered reuses this page, so the
-  // URL goes bare while the state stays filtered.
+  // GH #1141: re-seed when something ELSE changes the query string. The
+  // mount seed misses a client-side navigation to the SAME route — clicking
+  // the header's home link while filtered reuses this page, so the URL goes
+  // bare while the state stays filtered.
   const reseedFromUrl = useCallback((nextSearch: string) => {
     // Our own replaceState comes back through here; CONSUME the marker rather
-    // than just testing it (Codex P2). Left set, a later external navigation
-    // to the same query looks like another page write — type `pla`, click the
-    // header link to the bare route, press Back, and the URL returns to
-    // `?q=pla` while the list stays unfiltered. A marker is good for one echo.
-    // One OBSERVATION, one chance (Codex P2, fourth marker pass). Consuming
-    // only on a match left the marker armed whenever our own write produced
-    // no observable change — a normalization-only replace (`?q=foo%20bar` →
-    // `q=foo+bar`) is invisible to useSearchParams, which already reported
-    // the canonical form. The stale marker then matched a LATER genuine
-    // navigation to that same query: click the bare header link, press Back,
-    // and the restored filtered URL was mistaken for our own echo — list
-    // unfiltered under a filtered URL, the original bug re-entered through
-    // the encoding. Whatever the next observed change is, the marker's write
+    // than just testing it — a marker is good for one echo. And it is spent
+    // on one OBSERVATION regardless of match: consuming only on a match left
+    // the marker armed whenever our own write produced no observable change
+    // (a normalization-only replace like `?q=foo%20bar` → `q=foo+bar` is
+    // invisible to useSearchParams), and the stale marker then matched a
+    // LATER genuine navigation to that same query — list unfiltered under a
+    // filtered URL. Whatever the next observed change is, the marker's write
     // either was it, produced nothing observable, or was superseded; in all
     // three it is spent.
     const own = ownUrlWriteRef.current;
@@ -461,13 +431,12 @@ export default function Home() {
     setVendorFilter(url.vendorFilter);
     setQuickFilter(url.quickFilter);
     setShowOutOfStock(url.showOutOfStock);
-    // Sort is PERSISTED, so an absent param means "unchanged", not "default"
-    // (GH #1141, Codex P2). Clicking the header link while filtered navigates
-    // to a bare `/`; resetting to the fallback there would then have the
-    // persist effect below overwrite the user's saved sort with `name`/`asc` —
-    // a stored preference destroyed by a navigation that never mentioned it.
-    // Same rule as the mount seed, applied to the CURRENT state rather than
-    // the stored one; functional updates keep the callback free of state deps.
+    // Sort is PERSISTED, so an absent param means "unchanged", not "default".
+    // Resetting to the fallback on a bare `/` would have the persist effect
+    // below overwrite the user's saved sort with `name`/`asc` — a stored
+    // preference destroyed by a navigation that never mentioned it. Same rule
+    // as the mount seed, applied to the CURRENT state rather than the stored
+    // one; functional updates keep the callback free of state deps.
     setSortKey((cur) => (present.has("sortKey") ? url.sortKey : cur));
     setSortDir((cur) => (present.has("sortDir") ? url.sortDir : cur));
     // Any touch still armed here is DEAD: a real one was consumed by the
@@ -477,27 +446,23 @@ export default function Home() {
     // must not authorize persisting the values this re-seed just adopted.
     prefsTouchedRef.current.clear();
   }, []);
-  // Persist ONLY what the user chose (GH #1141, Codex P1).
+  // Persist ONLY what the user chose (GH #1141).
   //
-  // Sticky keys are now emitted into every non-bare URL, which is what makes a
-  // shared link deterministic — but it also means every shared link MENTIONS
-  // the sort. An ungated persist effect would therefore let a friend's link
+  // Sticky keys are emitted into every non-bare URL, so every shared link
+  // MENTIONS the sort. An ungated persist effect would let a friend's link
   // permanently overwrite the recipient's saved preference just by being
-  // opened. Tracking which keys the user actually touched, and merging those
-  // over whatever is stored, keeps "applies to this visit" and "is my
-  // preference" separate.
-  //
-  // Per-key rather than a single boolean because the record is one blob:
-  // a boolean cannot express "store the direction I just changed, leave the
-  // sort key alone".
+  // opened. Tracking which keys the user actually touched keeps "applies to
+  // this visit" and "is my preference" separate. Per-key rather than a
+  // single boolean because the record is one blob: a boolean cannot express
+  // "store the direction I just changed, leave the sort key alone".
   useEffect(() => {
     if (!seeded || prefsTouchedRef.current.size === 0) return;
     try {
-      // Tolerant parse (Codex P2): a corrupt blob must not throw here — the
-      // catch below would skip the setItem, so nothing would ever overwrite
-      // the bad value and persistence would be dead until storage was cleared
-      // by hand. Parsed as `{}`, it merges against defaults and THIS write
-      // replaces it: the write path is the one chance to heal.
+      // Tolerant parse: a corrupt blob must not throw here — the catch below
+      // would skip the setItem, so nothing would ever overwrite the bad value
+      // and persistence would be dead until storage was cleared by hand.
+      // Parsed as `{}`, it merges against defaults and THIS write replaces
+      // it: the write path is the one chance to heal.
       const stored = parseStoredPrefs(
         window.localStorage.getItem(HOME_PREFS_KEY),
       ) as Partial<HomePrefs>;
@@ -505,21 +470,17 @@ export default function Home() {
       const next: HomePrefs = { ...DEFAULT_HOME_PREFS, ...stored };
       for (const key of prefsTouchedRef.current) next[key] = live[key] as never;
       window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify(next));
-      // CONSUME the touches (Codex P2). A touch is an authorization for ONE
-      // write — the user's change, which has now been stored. Left armed, it
-      // authorized every LATER state change too, including URL-derived ones:
-      // open a shared sort link, change the sort yourself, press Back, and the
-      // re-seed restored the link's values while the stale touch let this
-      // effect write them over the choice you just made.
+      // CONSUME the touches. A touch is an authorization for ONE write — the
+      // user's change, which has now been stored. Left armed, it authorizes
+      // every LATER state change too, including URL-derived ones the re-seed
+      // restores.
       prefsTouchedRef.current.clear();
     } catch {
       /* ignore quota / disabled storage / a corrupt stored blob */
     }
   }, [seeded, sortKey, sortDir]);
 
-  // #717: load locations for the per-spool "move to" dropdowns. Best-effort —
-  // if it fails the panel just shows the ids' current selection with no
-  // options, and the rest of the page is unaffected.
+  // Load locations for the per-spool "move to" dropdowns. Best-effort.
   useEffect(() => {
     const ac = new AbortController();
     fetch("/api/locations", { signal: ac.signal })
@@ -531,12 +492,11 @@ export default function Home() {
 
   // Debounce search input by 300ms
   useEffect(() => {
-    // Trimmed at the debounce (Codex P2): the parser trims on read, so an
-    // untrimmed live value made the view disagree with its own mirrored URL —
-    // `" pla "` filtered differently before and after a refresh. The INPUT
-    // keeps the raw text (trimming state mid-typing would eat the space the
-    // user just typed); everything downstream — the fetch and the mirror —
-    // reads the canonical form.
+    // Trimmed at the debounce: the URL parser trims on read, so an untrimmed
+    // live value makes the view disagree with its own mirrored URL. The
+    // INPUT keeps the raw text (trimming state mid-typing would eat the
+    // space the user just typed); everything downstream reads the canonical
+    // form.
     const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => clearTimeout(timer);
   }, [search]);
@@ -587,18 +547,12 @@ export default function Home() {
     }
   }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
-  // GH #795 / #1141: the type + vendor dropdown options come from dedicated
-  // distinct-value endpoints, NOT from the list response.
-  //
-  // They used to be derived from an UNFILTERED list fetch, which made them a
-  // side effect of having no filter active. That breaks the moment a filter is
-  // seeded from the URL (#1141): the seeded fetch is filtered, the derivation
-  // is skipped, and the Type <select> renders with only "All types" — so a
-  // shared /?type=PLA link shows a filter that is invisible AND unclearable.
-  //
-  // These endpoints are cheap distinct queries and are what /inventory already
-  // uses. GH #292: own AbortController so this doesn't race the list fetch
-  // un-cancellably or setState after unmount.
+  // The type + vendor dropdown options come from dedicated distinct-value
+  // endpoints, NOT from the list response — deriving them from a list fetch
+  // breaks when a filter is seeded from the URL (#1141): the seeded fetch is
+  // filtered, so a shared /?type=PLA link would render a filter that is
+  // invisible AND unclearable. GH #292: own AbortController so this doesn't
+  // race the list fetch or setState after unmount.
   const refreshFilterOptions = useCallback(async () => {
     filterOptionsAcRef.current?.abort();
     const ac = new AbortController();
@@ -613,11 +567,9 @@ export default function Home() {
     }
   }, []);
 
-  // Populate them once on mount, independently of the list fetch and of
-  // whatever filter the URL seeded. Fetched inline (rather than calling
-  // `refreshFilterOptions`) so the state updates land in a `.then`, which is
-  // the shape `react-hooks/set-state-in-effect` accepts and the same one
-  // /inventory uses.
+  // Populate them once on mount, independently of the list fetch. Fetched
+  // inline (rather than calling `refreshFilterOptions`) so the state updates
+  // land in a `.then`, the shape `react-hooks/set-state-in-effect` accepts.
   useEffect(() => {
     const ac = new AbortController();
     fetchFilterOptions(ac.signal)
@@ -651,9 +603,8 @@ export default function Home() {
     fetchFilaments();
   }, [fetchFilaments]);
 
-  // Refetch when an Electron sync cycle finishes — picks up parent links
-  // and variant edits that landed from another device without waiting for
-  // the user to navigate away and back (GH #127). No-op in the web app.
+  // Refetch when an Electron sync cycle finishes — picks up edits that
+  // landed from another device. No-op in the web app.
   useEffect(() => {
     const api = window.electronAPI;
     if (!api?.onSyncComplete) return;
@@ -662,23 +613,18 @@ export default function Home() {
     });
   }, [fetchFilaments]);
 
-  // Inventory aggregates exclude parent filaments. Parents don't
-  // represent a physical roll on the shelf — they're a template for
-  // their color variants (the variants own the spools, calibrations,
-  // and remaining weight). Counting them in totals double-counted what
-  // the user actually has and made "By Type" / "By Vendor" disagree
-  // with the headline number. Auto-detected via the `hasVariants` flag
-  // shipped by `/api/filaments`; parents collapse out of every count
-  // here but still render in the list as grouping headers.
+  // Inventory aggregates exclude parent filaments — a parent is a template,
+  // not a physical roll, and counting it double-counts what the user has.
+  // Detected via the `hasVariants` flag from `/api/filaments`; parents still
+  // render in the list as grouping headers.
   const inventoryFilaments = useMemo(
     () => filaments.filter((f) => !f.hasVariants),
     [filaments],
   );
 
-  // #575.1: the header type/vendor counts derive from the CURRENTLY-FETCHED
-  // set (which already reflects the search / type / vendor filters), not the
-  // global `types`/`vendors` dropdown options — otherwise filtering updates
-  // the filament count while "21 type(s) · 18 vendor(s)" stays frozen.
+  // The header type/vendor counts derive from the CURRENTLY-FETCHED set, not
+  // the global dropdown options — otherwise filtering updates the filament
+  // count while the type/vendor counts stay frozen.
   const filteredTypeCount = useMemo(
     () => new Set(inventoryFilaments.map((f) => f.type)).size,
     [inventoryFilaments],
@@ -688,25 +634,20 @@ export default function Home() {
     [inventoryFilaments],
   );
 
-  // #616: total active spools + distinct spool locations, for the headline
-  // stat line. Counts every non-retired spool across the fetched set —
-  // parents included, since a parent can carry its own roll (see the #552
-  // note on `hasSpools`).
+  // Total active spools + distinct spool locations, for the headline stat
+  // line. Counts every non-retired spool across the fetched set — parents
+  // included, since a parent can carry its own roll.
   const spoolStats = useMemo(() => {
     let spools = 0;
     const locations = new Set<string>();
     // Active spools with no location count as one synthetic "no location"
-    // bucket, exactly like the Inventory page's location total (it derives
-    // `locationCount` from `groups.length`, which includes that bucket).
-    // Without it, a shelf of unassigned spools reads "13 spool(s) in 0
-    // location(s)" — confusing, and out of step with /inventory (Codex P2
-    // on #658).
+    // bucket, exactly like the Inventory page's location total — without it,
+    // a shelf of unassigned spools reads "13 spool(s) in 0 location(s)".
     let hasUnlocated = false;
     for (const f of filaments) {
       // getSpoolCount handles the legacy single-spool shape (empty spools[]
-      // but a top-level totalWeight) and excludes retired spools, matching
-      // the "Has spools" chip and the list helpers — a manual `f.spools`
-      // loop would undercount pre-migration rows (Codex P2 on #658).
+      // but a top-level totalWeight) and excludes retired spools — a manual
+      // `f.spools` loop would undercount pre-migration rows.
       const count = getSpoolCount(f);
       spools += count;
       if (f.spools && f.spools.length > 0) {
@@ -723,19 +664,16 @@ export default function Home() {
     return {
       spools,
       locations: locations.size + (hasUnlocated ? 1 : 0),
-      // #1117(g): the synthetic bucket is deliberate (it keeps this in step
-      // with /inventory), but with NO real locations defined it produced
-      // "73 spool(s) in 1 location(s)" against a Locations page showing none
-      // — true by that definition, and a bug to every reader. Surface the
-      // real count so the caller can word that case honestly.
+      // The synthetic bucket is deliberate (it keeps this in step with
+      // /inventory), but with NO real locations defined "1 location(s)"
+      // against an empty Locations page reads as a bug — surface the real
+      // count so the caller can word that case honestly.
       realLocations: locations.size,
     };
   }, [filaments]);
 
-  // Group filaments: parents with their variants, standalone filaments as-is
-  // Client-side quick filter (low stock / has spools / missing calibrations).
-  // Applied before grouping so a parent whose variants are filtered out is
-  // still shown standalone if it matches itself.
+  // Client-side quick filter, applied before grouping so a parent whose
+  // variants are filtered out is still shown standalone if it matches itself.
   const quickFilterCounts = useMemo(() => {
     const counts: Record<QuickFilter, number> = {
       all: inventoryFilaments.length,
@@ -747,19 +685,13 @@ export default function Home() {
       if (isLowStock(f)) counts.lowStock++;
       if (!f.hasCalibrations) counts.noCalibration++;
     }
-    // #552: "Has spools" is a presence check, not an inventory aggregate.
-    // A parent is excluded from `inventoryFilaments` because its gram/spool
-    // totals live on its variants — but a parent can still carry its OWN
-    // spool, and that roll is real. Count every filament with its own
-    // spool, parents included, so the chip badge matches the rows the
-    // filter renders (see the matching source switch in `visibleFilaments`).
-    // GH #1107: this was `(f.spools?.length ?? 0) > 0`, which disagreed with
-    // the rest of the app in both directions — it EXCLUDED legacy rolls (a
-    // top-level `totalWeight` with no spools[] subdocuments, which every other
-    // surface counts) and INCLUDED filaments whose only spool is retired
-    // (simultaneously reported as out of stock right beside it). `getSpoolCount`
-    // is the shared helper this same file already uses for `spoolStats`,
-    // `inStock`, `outOfStockCount` and the row cell.
+    // #552: "Has spools" is a presence check, not an inventory aggregate —
+    // a parent can still carry its OWN spool, so count every filament with
+    // one, parents included, so the chip badge matches the rows the filter
+    // renders (see the matching source switch in `visibleFilaments`).
+    // GH #1107: MUST use `getSpoolCount` (the shared helper this file uses
+    // everywhere) — a raw `spools.length` check excludes legacy rolls and
+    // includes retired-only filaments.
     counts.hasSpools = filaments.filter((f) => getSpoolCount(f) > 0).length;
     return counts;
   }, [filaments, inventoryFilaments]);
@@ -779,7 +711,7 @@ export default function Home() {
     [parentsWithStock],
   );
   // Count of hidden inventory rows — drives the toggle's badge. Parents are
-  // grouping headers (not stock). A variant of a STOCKED family is now always
+  // grouping headers (not stock). A variant of a STOCKED family is always
   // rendered under its parent (#786), so it isn't "hidden" even with no spool
   // of its own — only standalone rows and variants of a fully-out-of-stock
   // family are actually hidden by the default filter.
@@ -804,40 +736,30 @@ export default function Home() {
   const visibleFilaments = useMemo(() => {
     // The "all" view keeps parents in the dataset so the list renders them as
     // grouping headers above their color variants. By default it hides
-    // out-of-stock filaments (no active spools); the toggle reveals them.
-    // The hide runs ONLY on the UNFILTERED view: search/type/vendor are applied
-    // server-side, so a filtered response can return a parent WITHOUT its
-    // (stocked) variants — parentsWithStock would then miss it and wrongly hide
-    // the family. While a filter is active, show every match in or out of stock
-    // (Codex P2 on #712).
+    // out-of-stock filaments; the toggle reveals them. The hide runs ONLY on
+    // the UNFILTERED view: search/type/vendor are applied server-side, so a
+    // filtered response can return a parent WITHOUT its (stocked) variants —
+    // parentsWithStock would then miss it and wrongly hide the family. While
+    // a filter is active, show every match in or out of stock (#712).
     if (quickFilter === "all") {
       const filterActive = !!debouncedSearch || !!typeFilter || !!vendorFilter;
       if (showOutOfStock || filterActive) return filaments;
       const inStockList = filaments.filter(inStock);
-      // #847: don't let the default out-of-stock hide empty the unfiltered "All"
-      // view. A catalog with nothing in stock (e.g. filaments but 0 spools)
-      // would otherwise render "No filaments match" under "All (N)". Show
-      // everything when there's nothing to declutter to; the #712 hide still
-      // applies whenever at least one filament IS stocked.
+      // #847: don't let the default out-of-stock hide empty the unfiltered
+      // "All" view — a catalog with nothing in stock would otherwise render
+      // "No filaments match" under "All (N)".
       return inStockList.length === 0 ? filaments : inStockList;
     }
-    // #552: "Has spools" resolves against the full list (parents
-    // included) because a parent carrying its own spool genuinely has
-    // one — see the matching note in `quickFilterCounts`. Dropping it
-    // here is what made the filter return no rows for a parent whose
-    // only spool sat on the parent itself.
-    // GH #1107: must use the same predicate as the badge above, or the two
-    // disagree by construction.
+    // "Has spools" resolves against the full list (parents included) and
+    // MUST use the same predicate as the badge above, or the two disagree by
+    // construction (see quickFilterCounts).
     if (quickFilter === "hasSpools") {
       return filaments.filter((f) => getSpoolCount(f) > 0);
     }
     // Every other filter resolves against `inventoryFilaments` instead —
-    // otherwise the chip badge (derived from `inventoryFilaments`, see
-    // `quickFilterCounts` above) disagrees with the rendered row count
-    // whenever a parent happens to match the filter criterion.
-    // `noCalibration` is the obvious case: a parent without calibrations
-    // would otherwise appear in the list even though the badge excluded
-    // it from the count. Codex round-1 P2 on PR #356.
+    // otherwise the chip badge (derived from `inventoryFilaments`) disagrees
+    // with the rendered row count whenever a parent happens to match the
+    // filter criterion.
     return inventoryFilaments.filter((f) => {
       if (quickFilter === "lowStock") return isLowStock(f);
       if (quickFilter === "noCalibration") return !f.hasCalibrations;
@@ -845,14 +767,10 @@ export default function Home() {
     });
   }, [filaments, inventoryFilaments, quickFilter, showOutOfStock, inStock, debouncedSearch, typeFilter, vendorFilter]);
 
-  // Parent lookup built from the *full* filament list so variant
-  // enrichment (inherited nozzle/bed/cost/density/spool/net) works
-  // even when the parent has been filtered out of `visibleFilaments`.
-  // Codex round-2 P2 on PR #356 — previously the inheritance merge in
-  // `groupedFilaments` only ran when a parent row was present in
-  // `visibleFilaments`, so on filtered views (e.g. `noCalibration`)
-  // orphaned variants rendered with `—` for fields they should
-  // inherit from their parent.
+  // Parent lookup built from the *full* filament list so variant enrichment
+  // works even when the parent has been filtered out of `visibleFilaments` —
+  // otherwise on filtered views orphaned variants render `—` for fields they
+  // should inherit.
   const parentLookup = useMemo(() => {
     const map = new Map<string, Filament>();
     for (const f of filaments) {
@@ -879,19 +797,15 @@ export default function Home() {
       };
     };
 
-    // #744 / #786: in the unfiltered "all" view a shown parent's group carries
-    // EVERY variant from the full fetched list, not just those left after the
-    // #712 out-of-stock hide — there the hide is a visibility declutter, not a
-    // content filter, so a shown family shows all its colors and the chip
-    // (rendered as group.variants.length below) counts them all.
-    //
-    // Under a CONTENT filter the variants must respect it, so source from
-    // `visibleFilaments` instead (Codex P2 on #788): otherwise a parent visible
-    // under `hasSpools` (its own spool) would pull in no-spool variants the
-    // filter excluded, and expand → select-all would then include them.
-    // (`lowStock`/`noCalibration` drop parents entirely, so they have no group
-    // either way.) When a server-side search/type/vendor filter is active,
-    // `quickFilter` is "all" but `filaments` is already that filtered set.
+    // #786: in the unfiltered "all" view a shown parent's group carries EVERY
+    // variant from the full fetched list, not just those left after the #712
+    // out-of-stock hide — the hide is a visibility declutter, not a content
+    // filter. Under a CONTENT filter the variants must respect it, so source
+    // from `visibleFilaments` instead: otherwise a parent visible under
+    // `hasSpools` would pull in no-spool variants the filter excluded, and
+    // expand → select-all would then include them. When a server-side
+    // search/type/vendor filter is active, `quickFilter` is "all" but
+    // `filaments` is already that filtered set.
     const variantSource = quickFilter === "all" ? filaments : visibleFilaments;
     const { groups, standalone } = buildFilamentGroups(variantSource, visibleFilaments, {
       enrichVariant,
@@ -928,10 +842,10 @@ export default function Home() {
     });
   };
 
-  // #717: change one spool's location from the home page. Optimistically
-  // patches local state (location isn't a filter/sort/visibility input, so the
-  // row stays put and the panel stays open) instead of a full refetch that
-  // would collapse the expansion. PUT is same-origin so the CSRF guard passes.
+  // Change one spool's location from the home page. Optimistically patches
+  // local state (location isn't a filter/sort/visibility input, so the row
+  // stays put and the panel stays open) instead of a full refetch that would
+  // collapse the expansion.
   const moveSpool = useCallback(
     async (filamentId: string, spoolId: string, locationId: string | null) => {
       const key = `${filamentId}:${spoolId}`;
@@ -979,7 +893,7 @@ export default function Home() {
   const handleSort = (key: SortKey) => {
     const next = nextSortState({ sortKey, sortDir }, key);
     // The ONLY place a user chooses a sort here, so the only place that may
-    // record one (GH #1141, Codex P1). See the persist effect.
+    // record one. See the persist effect.
     prefsTouchedRef.current.add("sortKey");
     prefsTouchedRef.current.add("sortDir");
     setSortKey(next.sortKey);
@@ -987,24 +901,20 @@ export default function Home() {
   };
 
   /** GH #500: Select-all and bulk delete operate on the CURRENTLY VISIBLE
-   *  rows only — not the full fetched set. Pre-fix, ticking the header
-   *  checkbox while a quick-filter chip was active selected every fetched
-   *  filament including invisible rows, and the bulk delete then
-   *  soft-deleted all of them with no UI cue. Mirrors the inventory
-   *  page's #420 pattern. Flatten parents + variants so a group whose
-   *  parent passed the filter pulls in its visible children too. */
+   *  rows only — not the full fetched set, which would let bulk delete
+   *  soft-delete invisible rows with no UI cue. Flatten parents + variants
+   *  so a group whose parent passed the filter pulls in its visible
+   *  children too. */
   const visibleFilamentIds = useMemo(() => {
     const ids: string[] = [];
     for (const item of groupedFilaments) {
       if ("parent" in item) {
         ids.push(item.parent._id);
-        // Codex P2 round 2 on PR #540: a collapsed parent group does
-        // NOT render its variant rows (renderParentRow only calls
-        // renderRow for variants when expanded), so they have no
-        // visible checkbox. Including them here would let select-all
-        // tick + bulk-delete hidden variants with no UI cue — the
-        // exact no-cue-deletion bug #500 was about. Only count variant
-        // ids as visible when the parent is actually expanded.
+        // A collapsed parent group does NOT render its variant rows, so they
+        // have no visible checkbox. Including them here would let select-all
+        // tick + bulk-delete hidden variants with no UI cue — the exact bug
+        // #500 was about. Only count variant ids as visible when the parent
+        // is actually expanded.
         if (expandedParents.has(item.parent._id)) {
           for (const v of item.variants) ids.push(v._id);
         }
@@ -1015,13 +925,11 @@ export default function Home() {
     return ids;
   }, [groupedFilaments, expandedParents]);
 
-  // Codex P2 round 1 on PR #540: derive select-all state by MEMBERSHIP,
-  // not a count comparison. `selected.size === visible.length` is wrong
-  // when the user has N hidden rows selected and the filter now shows N
-  // DIFFERENT visible rows — the count matches but none of the visible
-  // rows are actually selected, so the header checkbox renders "checked"
-  // and a click would CLEAR the hidden selection instead of selecting
-  // the visible rows. Membership check: every visible id present.
+  // Derive select-all state by MEMBERSHIP, not a count comparison.
+  // `selected.size === visible.length` is wrong when the user has N hidden
+  // rows selected and the filter now shows N DIFFERENT visible rows — the
+  // count matches but none of the visible rows are selected, so the header
+  // checkbox renders "checked" and a click would CLEAR the hidden selection.
   const visibleSelectedCount = useMemo(
     () => visibleFilamentIds.filter((id) => selected.has(id)).length,
     [visibleFilamentIds, selected],
@@ -1056,8 +964,7 @@ export default function Home() {
   const handleBulkDelete = async () => {
     // GH #500: intersect against visible IDs at delete time too — if the
     // user toggles a filter AFTER selecting, the count + deletion target
-    // should reflect what they currently SEE. Selections that fell out
-    // of view are dropped (the same posture inventory uses).
+    // should reflect what they currently SEE.
     const visibleSet = new Set(visibleFilamentIds);
     const targets = Array.from(selected).filter((id) => visibleSet.has(id));
     const count = targets.length;
@@ -1078,11 +985,9 @@ export default function Home() {
           aborted = true;
           break;
         }
-        // GH #1080: a network-level fetch rejection used to escape the
-        // handler, freezing the bar at a stale "Deleting N/M" forever and
-        // skipping the refetch (list silently disagreeing with the DB).
-        // Record the failure per-row and keep going — same posture as
-        // trash/page.tsx (GH #640).
+        // GH #1080: a network-level fetch rejection must not escape the
+        // handler (it would freeze the bar and skip the refetch). Record the
+        // failure per-row and keep going — same posture as trash/page.tsx.
         try {
           const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
           if (res.ok) {
@@ -1106,8 +1011,8 @@ export default function Home() {
             : t("filaments.deletedCount", { count: deleted }),
         );
       }
-      // GH #525.2: aggregate failures into a single scrollable dialog instead
-      // of one ever-growing toast that overflows the screen on a large batch.
+      // Aggregate failures into a single scrollable dialog instead of one
+      // ever-growing toast that overflows the screen on a large batch.
       if (errors.length > 0) {
         const MAX_SHOWN = 10;
         const shown = errors.slice(0, MAX_SHOWN);
@@ -1121,8 +1026,8 @@ export default function Home() {
         });
       }
     } finally {
-      // GH #1080: cleanup lives in a `finally` so no future throw above can
-      // wedge the bar in its disabled "Deleting…" state.
+      // Cleanup lives in a `finally` so no future throw above can wedge the
+      // bar in its disabled "Deleting…" state.
       setBulkProgress(null);
       setBulkDeleting(false);
       // Drop only the rows we actually deleted from the selection so a user
@@ -1160,11 +1065,10 @@ export default function Home() {
     //                                → "Import notes"
     //   - the INI importer, which returns no row accounting at all and puts
     //     BOTH per-profile write failures and non-fatal adjustments into the
-    //     same `errors` array. Those two are indistinguishable from out here
-    //     (Codex P2, twice: "no row accounting" is not a failure signal), so
-    //     that shape gets a neutral title rather than one that would either
-    //     understate a failure or accuse a successful import of failing.
-    //     Separating them properly means new response fields on that route.
+    //     same `errors` array. Those two are indistinguishable from out here,
+    //     so that shape gets a neutral title rather than one that would
+    //     either understate a failure or accuse a successful import of
+    //     failing.
     const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
     const noRowAccounting = data.skipped === undefined && data.skippedRows === undefined;
     await confirm({
@@ -1203,11 +1107,9 @@ export default function Home() {
         toast(data.message);
         fetchFilaments();
         refreshFilterOptions();
-        // GH #1115: the importer has always returned per-row skip reasons and
-        // per-row notes; nothing ever showed them, so the user got a count and
-        // no way to learn WHICH rows failed. Same acknowledge-only dialog the
-        // bulk-delete failures use above — a toast is string-only, length-
-        // capped and auto-dismissing, which a 12-row list can't survive.
+        // GH #1115: show the per-row skip reasons/notes. Same
+        // acknowledge-only dialog the bulk-delete failures use — a toast is
+        // string-only and auto-dismissing, which a 12-row list can't survive.
         await showImportReport(data);
       } else {
         toast(t("filaments.importFailed", { error: data.error }), "error");
@@ -1222,10 +1124,9 @@ export default function Home() {
 
   const thClass = "py-3 px-2 cursor-pointer select-none hover:text-blue-500 transition-colors";
 
-  // #717: shared spool-location controls, used by BOTH renderRow (standalones +
-  // variants) and renderParentRow (a parent can carry its own spools — Codex P2
-  // on PR #721). The toggle sits in the remaining-stock cell; the panel is the
-  // sub-row rendered just below the filament's main row when expanded.
+  // Shared spool-location controls, used by BOTH renderRow and
+  // renderParentRow (a parent can carry its own spools). The toggle sits in
+  // the remaining-stock cell; the panel is the sub-row below the main row.
   const renderSpoolToggle = (f: Filament) => {
     const spools = f.spools ?? [];
     if (spools.length === 0) return null;
@@ -1257,8 +1158,7 @@ export default function Home() {
                 <span className="font-medium text-gray-700 dark:text-gray-300 min-w-[110px]">
                   {s.label || t("filaments.spools.spoolN", { n: i + 1 })}
                 </span>
-                {/* #732 Phase 4: surface the per-spool id (read-only; edit on
-                    the filament detail page). */}
+                {/* Per-spool id (read-only; edit on the detail page). */}
                 {s.instanceId && (
                   <code className="inline-block max-w-[12rem] truncate align-bottom text-[10px] text-gray-400 dark:text-gray-500 font-mono" title={s.instanceId}>
                     {s.instanceId}
@@ -1269,11 +1169,9 @@ export default function Home() {
                     {t("filaments.spools.retired")}
                   </span>
                 )}
-                {/* GH #804: show remaining filament weight (gross − empty-spool
-                    tare) as subtext under the total, so a glance answers "do I
-                    have enough?" without recalling the empty-spool weight.
-                    GH #805: formatGrams trims float noise to 2 dp. Remaining is
-                    only shown when the tare (filament spoolWeight) is known. */}
+                {/* Remaining filament weight (gross − empty-spool tare) as
+                    subtext under the total; only shown when the tare is
+                    known. */}
                 <span className="text-gray-500 dark:text-gray-400 flex flex-col leading-tight">
                   {s.totalWeight == null ? (
                     "—"
@@ -1314,10 +1212,9 @@ export default function Home() {
                         {l.name}
                       </option>
                     ))}
-                    {/* #1117(h): with no locations defined the menu held a
-                        single "No location" entry and nothing else — no way
-                        to discover that locations exist, let alone create
-                        one. */}
+                    {/* With no locations defined the menu would otherwise hold
+                        a single "No location" entry — no way to discover that
+                        locations exist. */}
                     <option value={NEW_LOCATION_OPTION}>
                       {t("filaments.spools.newLocation")}
                     </option>
@@ -1331,16 +1228,15 @@ export default function Home() {
     );
   };
 
-  // #941: Purchased / Opened cells — the earliest date across this filament's
-  // own spools (matches the sort value from earliestSpoolDate). "—" when unset.
+  // Purchased / Opened cells — the earliest date across this filament's own
+  // spools (matches the sort value from earliestSpoolDate). "—" when unset.
   const dateCells = (spools: Filament["spools"] | undefined) => {
     const purchased = earliestSpoolDate(spools, "purchaseDate");
     const opened = earliestSpoolDate(spools, "openedDate");
     const cls = "py-2 px-2 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400";
-    // purchaseDate/openedDate are calendar-day values stored as UTC midnight
-    // (the SpoolCard date picker sends a bare YYYY-MM-DD → Mongoose casts it to
-    // UTC midnight). Format in UTC so the day matches the detail page + CSV
-    // export and doesn't shift back a day for users west of UTC (#941 review).
+    // purchaseDate/openedDate are calendar-day values stored as UTC midnight.
+    // Format in UTC so the day matches the detail page + CSV export and
+    // doesn't shift back a day for users west of UTC (#941).
     const fmt = (iso: string) => formatDate(iso, { timeZone: "UTC" });
     return (
       <>
@@ -1425,10 +1321,7 @@ export default function Home() {
         {(() => {
           // GH #1048: three-tier cell (bar / grams-only / em-dash) — the
           // decision lives in getRemainingDisplay so it's unit-testable.
-          // A legacy record with no netFilamentWeight has no percentage
-          // denominator but a perfectly computable gram figure; it used
-          // to fall through to the em-dash while the detail page showed
-          // the grams. Mirrors the inventory page's remaining cell.
+          // Mirrors the inventory page's remaining cell.
           const display = getRemainingDisplay(f);
           const spoolCt = getSpoolCount(f);
           const color =
@@ -1448,8 +1341,8 @@ export default function Home() {
                   title={
                     // The tooltip names the input(s) the percentage actually
                     // lacks — grams tolerates a missing tare (#954) but the
-                    // bar needs both weights, so "set net weight" would name
-                    // an already-set field for a tare-less record.
+                    // bar needs both weights, so a fixed "set net weight"
+                    // would name an already-set field for a tare-less record.
                     display.missing === "tare"
                       ? t("filaments.remainingGramsOnlyTare")
                       : display.missing === "both"
@@ -1516,11 +1409,9 @@ export default function Home() {
                 onClick={() => toggleExpanded(f._id)}
                 className="text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-100 text-base leading-none w-5 flex-shrink-0"
                 title={isExpanded ? t("filaments.collapseVariants") : t("filaments.expandVariants")}
-                // GH #416: a SR user could neither read the chevron glyph
-                // nor tell whether it was expanded. The translated label
-                // names the row and the `aria-expanded` state announces
-                // open/closed; `aria-controls` ties it to the variant
-                // tbody that gets toggled below.
+                // GH #416: a SR user can't read the chevron glyph — the
+                // translated label names the row and `aria-expanded`
+                // announces open/closed.
                 aria-label={isExpanded
                   ? t("filaments.collapseVariants")
                   : t("filaments.expandVariants")}
@@ -1571,10 +1462,9 @@ export default function Home() {
           </td>
           <td className="py-2 px-2 text-right">
             {(() => {
-              // GH #1048: same three-tier cell as renderRow. `f` here is
-              // the parent itself, so both the bar and the grams fallback
-              // describe the parent's OWN spools (#552/#616 legacy
-              // carrying preserved) — never a variant aggregate.
+              // Same three-tier cell as renderRow. `f` here is the parent
+              // itself, so both the bar and the grams fallback describe the
+              // parent's OWN spools — never a variant aggregate.
               const display = getRemainingDisplay(f);
               const color =
                 display.kind !== "bar"
@@ -1609,7 +1499,7 @@ export default function Home() {
                       <span className="text-xs text-gray-500 w-8 text-right">{display.pct}%</span>
                     </div>
                   )}
-                  {/* #717: a parent can carry its own spools (Codex P2 on #721) */}
+                  {/* A parent can carry its own spools */}
                   {renderSpoolToggle(f)}
                 </div>
               );
@@ -1664,11 +1554,9 @@ export default function Home() {
         <SearchParamsSync onExternalChange={reseedFromUrl} />
       </Suspense>
     <main id="main-content" className="w-full px-4 py-8">
-      {/* GH #411: visually-hidden h1 so screen-reader users navigating
-          by heading land on the page title. Sighted users already get
-          the "Filaments" cue from the AppHeader brand pill + active
-          nav link, so keeping the heading visible was rejected in
-          #176; the a11y need is met by sr-only. */}
+      {/* GH #411: visually-hidden h1 so screen-reader users navigating by
+          heading land on the page title; sighted users already get the cue
+          from the AppHeader brand pill + active nav link. */}
       <h1 className="sr-only">{t("filaments.pageTitle")}</h1>
       {mounted && (
         <input
@@ -1680,21 +1568,14 @@ export default function Home() {
         />
       )}
       <div ref={stickyHeaderRef} className="sticky top-[var(--app-header-h)] z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
-      {/* Page heading was removed (#176) — the brand "Filament DB" + version
-          pill in AppHeader (and the active "Filaments" nav link) already
-          identify the page. The action buttons used to share this row so
-          there'd be no wasted vertical space above the metadata, but they
-          were moved down to the search-filter row so all the controls
-          actually used together live together. */}
       {filaments.length > 0 && (
         <button
           onClick={() => setShowStats((s) => !s)}
           className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-3"
         >
           <span>{showStats ? "▾" : "▸"}</span>
-          {/* #573: the list collapses each parent's variants into one group,
-              so the headline count (parents excluded) disagrees with the
-              Dashboard/export totals that count every record. Surface both
+          {/* The headline count (parents excluded) disagrees with the
+              Dashboard/export totals that count every record — surface both
               numbers when variants exist instead of one unexplained figure. */}
           <span>
             {filaments.length > inventoryFilaments.length
@@ -1708,12 +1589,10 @@ export default function Home() {
           <span>{t("filaments.stats.typeCount", { count: filteredTypeCount })}</span>
           <span className="text-gray-600">·</span>
           <span>{t("filaments.stats.vendorCount", { count: filteredVendorCount })}</span>
-          {/* #1117(d): every figure on this line is a LIBRARY total — it
-              tracks the server-side search/type/vendor filters but never the
-              client-side quick-filter chips, so picking a chip left the line
-              describing a set the table below wasn't showing. Name the
-              matched count rather than silently rewriting the totals, which
-              are still the useful number. */}
+          {/* Every figure on this line is a LIBRARY total — it tracks the
+              server-side filters but never the client-side quick-filter
+              chips. Name the matched count rather than silently rewriting
+              the totals, which are still the useful number. */}
           {quickFilter !== "all" && (
             <>
               <span className="text-gray-600">·</span>
@@ -1722,8 +1601,7 @@ export default function Home() {
               </span>
             </>
           )}
-          {/* #616: surface spool + location totals at a glance, like the
-              Inventory page header. */}
+          {/* Spool + location totals, like the Inventory page header. */}
           {spoolStats.spools > 0 && (
             <>
               <span className="text-gray-600">·</span>
@@ -1739,8 +1617,6 @@ export default function Home() {
           )}
         </button>
       )}
-      {/* Statistics expansion — toggle lives on the stats text above; this
-          just renders the expanded grid when the user opens it. */}
       {filaments.length > 0 && showStats && (
         <div className="mb-4">
           <FilamentStats filaments={inventoryFilaments} />
@@ -1763,9 +1639,6 @@ export default function Home() {
                     : "bg-transparent text-gray-600 border-gray-300 hover:bg-gray-100 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
                 }`}
               >
-                {/* #1117(e): this read "Show out of stock (4)" beside chips
-                    badged with a pill ("All 71"). Same row, two conventions —
-                    use the chips' pill so the count reads consistently. */}
                 {showOutOfStock ? t("filaments.hideOutOfStock") : t("filaments.showOutOfStockPlain")}
                 {!showOutOfStock && (
                   <span className="ml-1.5 text-[10px] px-1 rounded bg-gray-200 dark:bg-gray-700">
@@ -1918,19 +1791,12 @@ export default function Home() {
         </select>
       </div>
 
-      {/* Codex P2 round 1 on PR #540: gate the bar + count on the VISIBLE
-          selection, not raw `selected.size`. Deletion is intersected with
-          visible IDs, so the bar must report the count it will actually
-          act on — otherwise it reads "5 selected · Delete 5" while only
-          2 are visible and deletable. */}
+      {/* Gate the bar + count on the VISIBLE selection, not raw
+          `selected.size`. Deletion is intersected with visible IDs, so the
+          bar must report the count it will actually act on. */}
       {visibleSelectedCount > 0 && (
-        // GH #196: previously the bar used `bg-red-950/30` + `text-red-300`
-        // + small text-sm — pink-on-dark-red is a low-contrast pairing on
-        // a near-black page and the small thin font compounded the problem.
-        // Bumped the bg to red-900/50 (deeper, less transparent), the count
-        // text to red-100 with font-medium, and the Clear button to
-        // gray-200 hover-white so all three elements meet WCAG-AA contrast
-        // on dark mode.
+        // GH #196: colors chosen so all three elements meet WCAG-AA contrast
+        // in dark mode.
         <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-red-50 dark:bg-red-900/50 border border-red-200 dark:border-red-700 rounded-lg">
           <span className="text-sm font-medium text-red-700 dark:text-red-100">{t("filaments.bulk.selected", { count: visibleSelectedCount })}</span>
           <button
@@ -1945,7 +1811,7 @@ export default function Home() {
               : t("filaments.bulk.delete", { count: visibleSelectedCount })}
           </button>
           {bulkDeleting ? (
-            // GH #525.2: let the user stop a long bulk delete partway.
+            // Let the user stop a long bulk delete partway.
             <button
               onClick={() => { bulkAbortRef.current = true; }}
               className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-200 dark:hover:text-white"
@@ -1971,9 +1837,8 @@ export default function Home() {
       </div>{/* end sticky header */}
 
       {loading ? (
-        // #830: row-shaped skeletons instead of a one-line loader so the
-        // landing route doesn't reflow when the list lands (matches the
-        // dashboard / inventory / analytics pages, GH #449).
+        // Row-shaped skeletons so the landing route doesn't reflow when the
+        // list lands.
         <SkeletonRegion label={t("common.loading")} className="space-y-2">
           {Array.from({ length: 8 }).map((_, i) => (
             <div
@@ -1990,14 +1855,13 @@ export default function Home() {
       ) : filaments.length === 0 ? (
         <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : groupedFilaments.length === 0 ? (
-        // #575.2: a client-side quick filter (e.g. Low stock) can empty the
-        // grouped list even though the fetch returned rows. Show a message
-        // instead of a bare header-only table.
+        // A client-side quick filter can empty the grouped list even though
+        // the fetch returned rows — show a message, not a header-only table.
         <p className="text-gray-500">{t("filaments.noMatch")}</p>
       ) : (
         <div>
-          {/* Expand-all / collapse-all — only worth showing when there's
-            * actually a parent group to expand. (GH #127) */}
+          {/* Expand-all / collapse-all — only shown when there's actually a
+            * parent group to expand. */}
           {(() => {
             const parentIds = groupedFilaments
               .filter((g): g is GroupedFilament => "parent" in g)

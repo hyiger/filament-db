@@ -82,14 +82,10 @@ export async function PUT(
         return errorResponse("One or more selected nozzles no longer exist.", 400);
       }
 
-      // GH #232 — a physical nozzle can only live in one printer at a
-      // time. Reject the request with a structured 409 listing the
-      // conflicting nozzles + the printer that currently claims each
-      // one. The client (PrinterForm) reads the `conflicts[]` payload to
-      // offer a Move / Clone / Cancel prompt rather than just showing
-      // a raw error. See src/lib/nozzleConflicts.ts for the rationale
-      // on keeping resolution client-side instead of adding a `force`
-      // flag here.
+      // GH #232 — a physical nozzle lives in one printer at a time. Reject
+      // with a structured 409 listing the conflicts; PrinterForm reads
+      // `conflicts[]` to offer Move / Clone / Cancel. Resolution stays
+      // client-side (no `force` flag) — see src/lib/nozzleConflicts.ts.
       const conflicts = await findNozzleConflicts(
         Printer,
         Nozzle,
@@ -107,9 +103,9 @@ export async function PUT(
       }
     }
 
-    // Validate bed-type refs. Bed types are a shared catalog (a surface
-    // spec can be on many printers) so this is an existence check only —
-    // no conflict detection, unlike the nozzle block above.
+    // Bed types are a shared catalog (a surface spec can be on many
+    // printers), so this is an existence check only — no conflict
+    // detection, unlike the nozzle block above.
     if (body.installedBedTypes?.length > 0) {
       const activeBedCount = await BedType.countDocuments({
         _id: { $in: body.installedBedTypes },
@@ -136,8 +132,7 @@ export async function PUT(
     }
 
     // GH #424: explicit allowlist so a future schema field doesn't
-    // silently become client-writable. Matches the Filament PUT
-    // pattern.
+    // silently become client-writable.
     const update: Record<string, unknown> = {};
     if ("name" in body) update.name = body.name;
     if ("manufacturer" in body) update.manufacturer = body.manufacturer;
@@ -207,13 +202,10 @@ export async function DELETE(
     const { id } = await params;
 
     // Prevent deleting a printer referenced by filament calibrations.
-    //
-    // GH #629: trashed filaments count too — a filament in the trash can be
-    // restored, which would resurrect a dangling calibration printer ref if
-    // the printer were deleted in the meantime. Only `_purged` tombstones
-    // are gone forever and don't block.
-    // Predicate shared with GH #1149's dependents counter — see
-    // src/lib/entityDependents.ts; the two must not drift.
+    // GH #629: trashed filaments count too (a restore would resurrect a
+    // dangling ref); only `_purged` tombstones don't block. Predicate
+    // shared with the dependents counter (src/lib/entityDependents.ts) —
+    // the two must not drift.
     const referencingCount = await Filament.countDocuments(printerCalibrationRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(

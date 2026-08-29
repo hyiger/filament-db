@@ -127,13 +127,10 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
   const [bedTypesFetchError, setBedTypesFetchError] = useState(false);
   const [filamentOptions, setFilamentOptions] = useState<FilamentOption[]>([]);
   const [saving, setSaving] = useState(false);
-  // GH #640 (mirrors the GH #286 FilamentForm fix): derive dirtiness by
-  // comparing a snapshot of the editable form state against the last
-  // clean baseline, instead of one-way latching a boolean on every edit.
-  // The latch meant reverting a change still triggered the
-  // unsaved-changes prompt on navigation; the snapshot comparison is
-  // two-way. The baseline is seeded with the initial snapshot via the
-  // lazy useState initializer and re-pointed after a successful save.
+  // Derive dirtiness by comparing a snapshot against the last clean baseline
+  // (two-way, unlike a latched boolean — reverting an edit un-dirties).
+  // Mirrors the GH #286 FilamentForm fix; the baseline is re-pointed after a
+  // successful save.
   const dirtySnapshot = useMemo(() => JSON.stringify(form), [form]);
   const [dirtyBaseline, setDirtyBaseline] = useState(dirtySnapshot);
   const dirty = dirtySnapshot !== dirtyBaseline;
@@ -153,16 +150,12 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
   const conflictDialogRef = useRef<HTMLDivElement>(null);
   const conflictModalOpen = pendingConflicts !== null;
 
-  // GH #637 (#1): focus capture/restore + initial focus + Tab loop for the
-  // nozzle-conflict modal, mirroring SpoolCsvImportDialog's GH #522.1 fix.
-  // Pre-fix the modal declared role="dialog" aria-modal="true" but keyboard
-  // users could Tab past the backdrop into the underlying form (still
-  // focusable, still actionable) and Escape did nothing — the same
-  // aria-modal contract break #522.1 fixed for SpoolCsvImportDialog. Two
+  // Focus capture/restore + initial focus + Tab loop for the nozzle-conflict
+  // modal (the aria-modal contract), mirroring SpoolCsvImportDialog. Two
   // effects — one for capture/restore + initial-focus + Tab trap (keyed on
-  // the open boolean so a retry-conflict reopen re-captures), one for
-  // Escape (keyed on resolvingConflicts so Escape is inert mid-resolution,
-  // matching the disabled Cancel button).
+  // the open boolean so a retry-conflict reopen re-captures), one for Escape
+  // (keyed on resolvingConflicts so Escape is inert mid-resolution, matching
+  // the disabled Cancel button).
   useEffect(() => {
     if (!conflictModalOpen) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
@@ -281,12 +274,11 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
     if (filamentOptions.length > 0) return;
     const ac = new AbortController();
     fetch("/api/filaments", { signal: ac.signal })
-      // GH #1114 (Codex P1): distinguish a real empty catalog from a FAILED
-      // load. This chain used to fold every non-2xx into `[]`, and the repair
-      // below treats an id absent from the options as deleted — so one
-      // transient 500 would have cleared every AMS assignment in form state,
-      // and a save while the user was editing an unrelated field would have
-      // persisted them all as null.
+      // GH #1114: distinguish a real empty catalog from a FAILED load —
+      // folding a non-2xx into `[]` would let the repair below (which treats
+      // an id absent from the options as deleted) clear every AMS assignment
+      // in form state on one transient 500, and a later save would persist
+      // them all as null.
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("filament options failed"))))
       .then((options: FilamentOption[]) => {
         setFilamentOptions(options);
@@ -300,14 +292,12 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         setForm((prev) => {
           let changed = false;
           const amsSlots = prev.amsSlots.map((slot) => {
-            // GH #1114 (Codex P2): a slot dedicated to a filament that no
-            // longer exists — "Any spool" on a since-deleted filament, which
-            // the printer-PUT/filament-DELETE race can still produce — was
-            // skipped entirely by the `!slot.spoolId` early return below. It
-            // then sat behind an apparently empty select while every save was
-            // rejected 400 by the new ref validation, with no way to clear it
-            // from the form. Drop a filamentId the fetched options don't know
-            // about, before that return.
+            // GH #1114: a slot dedicated to a filament that no longer exists
+            // (the printer-PUT/filament-DELETE race can still produce one)
+            // would otherwise sit behind an apparently empty select while
+            // every save is rejected 400 by the ref validation, with no way
+            // to clear it. Drop a filamentId the fetched options don't know
+            // about, BEFORE the `!slot.spoolId` early return below.
             if (slot.filamentId && !options.some((f) => f._id === slot.filamentId)) {
               changed = true;
               return { ...slot, filamentId: null, spoolId: null };
@@ -316,10 +306,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
             const owner = options.find((f) =>
               f.spools?.some((sp) => sp._id === slot.spoolId),
             );
-            // Repair a MISMATCHED pair too (PR #1046 review): the old path
-            // could track a spool in a slot dedicated to a different
-            // filament, which rendered the wrong filament's spool list and
-            // invited the same trample the null case did.
+            // Repair a MISMATCHED pair too: a spool tracked in a slot
+            // dedicated to a different filament renders the wrong filament's
+            // spool list and invites the same trample the null case did.
             if (!owner || owner._id === slot.filamentId) return slot;
             changed = true;
             return { ...slot, filamentId: owner._id };

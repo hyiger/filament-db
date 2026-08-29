@@ -16,9 +16,9 @@ export default function DateFormatSection() {
   // The custom-pattern text is derived directly from `config.pattern` (not
   // local state) so it stays correct across the useSyncExternalStore
   // hydration swap — opening /settings/ui with a saved custom format shows
-  // the persisted pattern rather than an empty input (Codex P2). Every
-  // keystroke already writes through onPatternChange, so config.pattern is
-  // always the live value.
+  // the persisted pattern rather than an empty input. Every keystroke
+  // already writes through onPatternChange, so config.pattern is always
+  // the live value.
   const pattern = config.pattern ?? "";
 
   // A single "today" instance so the preview doesn't churn every render.

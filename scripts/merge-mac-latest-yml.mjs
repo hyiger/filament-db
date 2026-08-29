@@ -31,10 +31,6 @@ import { parse, stringify } from "yaml";
  *   arch-filtered `files` array (getFileList returns it whenever it's
  *   non-empty), so the top-level fields are only a fallback for very old
  *   clients; x64 is the broadest-compatible default (runs on arm64 via Rosetta).
- *
- * @param {string} arm64Yml raw contents of the arm64 latest-mac.yml
- * @param {string} x64Yml   raw contents of the x64 latest-mac.yml
- * @returns {string} the merged multi-arch latest-mac.yml
  */
 export function mergeMacLatestYml(arm64Yml, x64Yml) {
   const arm = parse(arm64Yml);

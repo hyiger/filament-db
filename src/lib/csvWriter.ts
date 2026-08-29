@@ -14,7 +14,6 @@
  *     with a single quote (`'`), which spreadsheet apps consume as the
  *     "treat as text" marker. The visible apostrophe is acceptable in an
  *     exported file — the alternative (the cell silently executing) is not.
- *     (Codex P2 on PR #141.)
  */
 
 const FORMULA_TRIGGERS = ["=", "+", "-", "@", "\t", "\r"];
@@ -31,8 +30,8 @@ export function sanitizeFormulaPrefix(value: string): string {
   if (value.length > 0 && FORMULA_TRIGGERS.includes(value[0])) {
     return "'" + value;
   }
-  // GH #649/#955 (Codex P3): a value that GENUINELY starts with an apostrophe
-  // RUN of any length immediately followed by a trigger (e.g. `'+95A`, `''+95A`)
+  // GH #649/#955: a value that GENUINELY starts with an apostrophe RUN of
+  // any length immediately followed by a trigger (e.g. `'+95A`, `''+95A`)
   // is exported unguarded by the clause above (its first char isn't a trigger),
   // yet `unsanitizeCsvCell` would strip one of those real apostrophes on import
   // — corrupting the name. Prepend one apostrophe so the unguard restores
@@ -75,19 +74,14 @@ export function csvCell(value: string | number | boolean | null | undefined): st
     str = sanitizeFormulaPrefix(str);
   }
 
-  // GH #627 item 4: `\r` must trigger quoting too (RFC 4180). A bare CR
-  // mid-string emitted unquoted is treated as a row terminator by
-  // parseCsv (and by spec-compliant readers), splitting the row on
-  // round-trip. Leading CR was already neutralized by the formula guard
-  // above, but a CR in the middle of a cell slipped through unquoted.
+  // GH #627: `\r` must trigger quoting too (RFC 4180) — a bare CR mid-string
+  // emitted unquoted is treated as a row terminator by parseCsv (and by
+  // spec-compliant readers), splitting the row on round-trip.
   // GH #1116: EDGE WHITESPACE must trigger quoting too. `parseCsv` strips
-  // leading/trailing whitespace from an UNQUOTED field — and its comment
-  // already asserts the contract this function has to uphold ("csvCell quoted
-  // it"). It didn't, so a name like `Drybox #1 ` survived export and came back
-  // as `Drybox #1`: the spool importer then found no exact match, auto-created
-  // a SECOND location, and moved every re-imported spool onto it while the
-  // original silently dropped to zero. This is the un-landed other half of GH
-  // #955.1 (PR #963), which only ever worked when a comma forced the quoting.
+  // leading/trailing whitespace from an UNQUOTED field (its comment asserts
+  // "csvCell quoted it"), so a name like `Drybox #1 ` came back as
+  // `Drybox #1` — the spool importer then auto-created a SECOND location and
+  // moved every re-imported spool onto it.
   //
   // Checked AFTER the formula guard: that guard can PREPEND a `'`, so testing
   // the pre-sanitized string would ask about a value we aren't emitting.
@@ -125,17 +119,11 @@ export function isFormulaCandidate(value: unknown): boolean {
  * pattern that `csvCell` produces. A value that genuinely starts with `'`
  * followed by a non-trigger character (e.g. `'70s blue`) is left alone.
  *
- * GH #649/#955 (Codex P3): `sanitizeFormulaPrefix` prepends one apostrophe for a
- * value that genuinely begins with an apostrophe RUN of any length + a trigger,
- * so that shape unwinds by exactly one here too — `'+95A` (guarded `+95A`) →
- * `+95A`, `''+95A` (guarded genuine `'+95A`) → `'+95A`, `'''+95A` → `''+95A`. A
- * run + benign char (`'70s`, `''70s`) is untouched.
- *
- * Codex P2 follow-up to PR #144: without this, exporting then re-
- * importing a row whose filament name / vendor / location starts with
- * a trigger char would either fail to match an existing filament (the
- * import is exact-string-match on `filament`) or persist the apostrophe
- * verbatim into the document.
+ * GH #649/#955: `sanitizeFormulaPrefix` prepends one apostrophe for a value
+ * that genuinely begins with an apostrophe RUN of any length + a trigger, so
+ * that shape unwinds by exactly one here too — `'+95A` → `+95A`,
+ * `''+95A` → `'+95A`, `'''+95A` → `''+95A`. A run + benign char (`'70s`,
+ * `''70s`) is untouched.
  */
 export function unsanitizeCsvCell(value: string): string {
   let n = 0;

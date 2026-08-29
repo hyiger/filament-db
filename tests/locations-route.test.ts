@@ -179,7 +179,7 @@ describe("/api/locations", () => {
 
     it("variant inherits spoolWeight from parent in the location aggregation (Codex P2 PR #190)", async () => {
       // Parent spoolWeight=250; variant inherits. Spool on the variant
-      // assigned to a location. Pre-Codex-fix the $lookup was missing
+      // assigned to a location. Pre-fix the $lookup was missing
       // and the variant's null spoolWeight fell through to 0, leaving
       // the over-reporting bug intact for variant spools.
       const loc = await Location.create({ name: "Drybox C", kind: "drybox" });

@@ -216,7 +216,7 @@ describe("dbConnect", () => {
     }
   });
 
-  // GH #732 (Codex P2): the filament backfill is gated on the spool backfill
+  // GH #732: the filament backfill is gated on the spool backfill
   // succeeding. If the spool backfill throws, NO filament id may be minted —
   // otherwise the next retry's carry-over would adopt that brand-new id.
   it("does not mint filament ids while the spool backfill is failing", async () => {
@@ -315,7 +315,7 @@ describe("dbConnect", () => {
   });
 
   it("retries a failed migration on the next connect (doesn't poison the cache)", async () => {
-    // Codex round-4 P2: a transient failure on backfillInstanceIds or
+    // A transient failure on backfillInstanceIds or
     // syncIndexes used to set the single `migrated` flag and skip both
     // migrations forever after. With per-migration flags, only the
     // succeeded migration sticks; a failed one retries on the next call.
@@ -627,7 +627,7 @@ describe("dbConnect", () => {
     }
   });
 
-  // #955.14 (Codex re-review): the terminal-E11000 handling must NOT fire while
+  // #955.14: the terminal-E11000 handling must NOT fire while
   // the instanceId backfills are still pending. If the spool backfill throws
   // transiently, the filament backfill is gated off and legacy rows stay without
   // an instanceId — building the partial-unique index would E11000 on the shared
@@ -933,7 +933,7 @@ describe("purgedZombies migration (GH #1004 F1)", () => {
 });
 
 /**
- * GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based shrinkageXY.
+ * GH #1008 F1 — normalize legacy 100-based shrinkageXY.
  * The pre-#1016 importer stored Orca's `filament_shrink` raw (98 = "98%
  * remaining size"), which the convention-aware export would double-convert
  * into a catastrophic "2% of size" compensation. `>= 50` separates legacy
@@ -1073,7 +1073,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
         compatibleNozzles: [noz06, noz025],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6" } },
       // Same SYNTAX but the ticks don't derive to it → a pre-upgrade user pin
-      // (Codex P1 r6) — must survive.
+      // — must survive.
       { name: "PreUpgradePin", vendor: "T", type: "PLA",
         compatibleNozzles: [noz06],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" } },
@@ -1102,7 +1102,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     // Completion persisted DURABLY, not just in the process-local flag.
     expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).not.toBeNull();
 
-    // Codex P1 r3 on #1022 — THE point of the marker: a pure nozzle pin
+    // THE point of the marker: a pure nozzle pin
     // authored AFTER the one-shot cleanup must SURVIVE a restart (simulated by
     // resetting the process-local flags), even when it is byte-identical to a
     // provenance-matching legacy machine value.
@@ -1155,7 +1155,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
         return col;
       }) as never);
     try {
-      // Codex P1 r7: the CURRENT caller must fail too — a request served
+      // The CURRENT caller must fail too — a request served
       // before the DB reaches a terminal cleanup state could write a pin the
       // eventual retry would legitimately clear.
       await expect(dbConnect()).rejects.toThrow("transient");
@@ -1209,8 +1209,8 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
     });
 
-    // Rig the re-clean: a dbConnect RACES it inside the marker delete (the
-    // r12 window), and its cleanup then fails transiently.
+    // Rig the re-clean: a dbConnect RACES it inside the marker delete, and
+    // its cleanup then fails transiently.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const rawDb = mongoose.connection.db!;
     const realCollection = rawDb.collection.bind(rawDb);
@@ -1252,7 +1252,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     try {
       await expect(rerunLegacyNozzleCleanupAfterRestore(false)).rejects.toThrow("transient");
       expect(flagSeenByRacerPath).toBe(true); // racer saw the still-true flag (early return)
-      // THE r12 assertion: the failed re-clean leaves the flag FALSE — the
+      // The failed re-clean leaves the flag FALSE — the
       // racer could not flip it back — so the retry-on-next-connect survives.
       expect(cached.migrations.legacyNozzleConditions).toBe(false);
     } finally {
@@ -1350,7 +1350,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       _deletedAt: null,
       amsSlots: [
         // An EMPTY slot first — the normal partially-loaded AMS shape. This
-        // is the regression pin for PR #1046 round 2: the bare negated-array
+        // is the regression pin for PR #1046: the bare negated-array
         // query `"amsSlots.spoolId": {$ne: null}` requires EVERY slot to be
         // non-null, so this one empty slot silently excluded the whole
         // printer from the repair.

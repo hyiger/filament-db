@@ -76,7 +76,7 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   // Fold the color into the display/default NAME so two colors of the same
   // brand+material don't both default to the same (unique-constrained) filament
   // name on create — otherwise every Polar Filament PLA color decodes to "PLA"
-  // and the second scan hits a duplicate-name failure (Codex P2). materialType
+  // and the second scan hits a duplicate-name failure. materialType
   // stays the bare base.
   const materialName = [base, mod, colorNameStr].filter(Boolean).join(" ") || undefined;
   if (mod) aux.opentag3d_material_modifier = mod;

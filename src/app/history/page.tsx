@@ -28,7 +28,7 @@ import { safeGrams, sumUsageGrams } from "@/lib/capUsageHistory";
 interface JobUsageRow {
   /** GH #1074: grams ACTUALLY debited when the job was recorded —
    *  min(spool remaining, grams). The DELETE refund restores THIS, not the
-   *  requested grams, so the confirm dialog must sum it (Codex P2 #1184).
+   *  requested grams, so the confirm dialog must sum it.
    *  Absent on legacy rows predating #1074 (fall back to grams). */
   debitedGrams?: number;
   filamentId: {
@@ -38,11 +38,11 @@ interface JobUsageRow {
     type?: string;
     color?: string | null;
     /** Populated refs resolve even for trashed filaments — the GET selects
-     *  _deletedAt so the UI can render a non-link (Codex P2 #1184). */
+     *  _deletedAt so the UI can render a non-link. */
     _deletedAt?: string | null;
     /** A permanent-delete tombstone (also carries _deletedAt) — not in the
      *  trash view and not restorable, so it renders through the removed
-     *  fallback rather than the "in trash" label (Codex r16). */
+     *  fallback rather than the "in trash" label. */
     _purged?: boolean;
   } | null;
   spoolId: string | null;
@@ -115,7 +115,7 @@ export default function HistoryPage() {
   const [jobs, setJobs] = useState<PrintJob[] | null>(null);
   const [jobsError, setJobsError] = useState(false);
   // Whether the FETCH filled the window — deleting a row locally must not
-  // hide the truncation disclosure (Codex P2 #1184): older jobs may exist
+  // hide the truncation disclosure: older jobs may exist
   // even though the mutable array now holds fewer than the limit.
   const [jobsTruncated, setJobsTruncated] = useState(false);
   const [printers, setPrinters] = useState<PickerPrinter[]>([]);
@@ -153,10 +153,10 @@ export default function HistoryPage() {
     return () => ac.abort();
   }, [printerFilter]);
 
-  // ?includeTrashed=1 carries trashed printers explicitly (Codex #1184
-  // r8/r9/r12): their history rows remain queryable, and deriving them from
-  // the fetched jobs both raced the lookup and missed printers whose every
-  // job is older than the fetched window.
+  // ?includeTrashed=1 carries trashed printers explicitly: their history
+  // rows remain queryable, and deriving them from the fetched jobs both
+  // raced the lookup and missed printers whose every job is older than the
+  // fetched window.
   const printerOptions = useMemo(
     () => printers.map((p) => ({ ...p, trashed: p._deletedAt != null })),
     [printers],
@@ -186,7 +186,7 @@ export default function HistoryPage() {
   const handleDelete = async (job: PrintJob) => {
     const ok = await confirm({
       title: t("history.delete.title"),
-      // No numeric refund quote (Codex r13/r14/r17): the client-visible
+      // No numeric refund quote: the client-visible
       // PrintHistory debit copy can diverge from the spool-ledger copy the
       // DELETE actually refunds from, so any number here is unverifiable —
       // the wording states the semantics, not an amount.
@@ -306,7 +306,7 @@ export default function HistoryPage() {
           ) : visibleJobs.length === 0 ? (
             <>
               <p className="text-sm text-gray-500">{t("history.jobs.empty")}</p>
-              {/* Codex P2 (#1184): the label search runs over the fetched
+              {/* The label search runs over the fetched
                   window, so an empty result may just mean the match is
                   OLDER than the newest {limit} jobs — the disclosure must
                   not vanish exactly when it matters most. */}
@@ -366,8 +366,7 @@ export default function HistoryPage() {
                               </Link>
                             ) : u.filamentId && !u.filamentId._purged ? (
                               // Trashed: populate still resolves the ref, but the
-                              // active-only detail API would 404 — name, no link
-                              // (Codex P2 #1184).
+                              // active-only detail API would 404 — name, no link.
                               <span>
                                 {u.filamentId.name}
                                 {u.filamentId.vendor ? ` — ${u.filamentId.vendor}` : ""}

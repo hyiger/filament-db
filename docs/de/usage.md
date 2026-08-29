@@ -13,6 +13,7 @@ Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle mit Spalten f�
 - **Filter nach Typ**: Nutze die Typ-Dropdown-Liste, um nur bestimmte Materialtypen anzuzeigen (PLA, PETG, ASA usw.)
 - **Filter nach Vendor**: Nutze die Vendor-Dropdown-Liste, um nur Filamente eines bestimmten Herstellers anzuzeigen
 - **Sortieren**: Klicke einen Spaltenkopf, um auf-/absteigend zu sortieren. Die aktive Sortierspalte ist mit einem blauen Pfeil hervorgehoben
+- **Spulen-Standort direkt wechseln** *(#717)*: Eine Filamentzeile mit Spulen zeigt einen **×N**-Umschalter in der Restbestands-Zelle. Klappe ihn auf, um jede Spule mit ihrem aktuellen Standort und einem **„Verschieben nach"**-Dropdown zu sehen — so änderst du den Standort einer Spule inline, ohne die Detailseite des Filaments zu öffnen. Die Verschiebung wird direkt an der Spule gespeichert (Eltern-Filamente mit eigenen Spulen bekommen dasselbe Panel).
 
 ## Filament-Details ansehen
 
@@ -85,12 +86,13 @@ Es wird nichts hinter deinem Rücken umgebaut. Sobald eine Aktion einem Filament
 
 Bestätigst du mit **Umwandeln und erstellen**, legt die App diese Variante an, verschiebt Farbe, Farbname, Spulen, Gesamtgewicht und Low-Stock-Schwellwert des Eltern-Filaments dorthin und lässt das Eltern-Filament farblos und ohne Bestand zurück. Brichst du ab, wird überhaupt nichts geschrieben — kein Filament angelegt, keine Daten angefasst.
 
-Dieselbe Bestätigung sichert vier Einstiegspunkte ab, jeweils mit passendem Wortlaut:
+Dieselbe Bestätigung sichert drei Einstiegspunkte ab, jeweils mit passendem Wortlaut:
 
 - **„Variante erstellen"** oder **Duplizieren** auf der Detailseite sowie `/filaments/new` mit gewähltem Eltern-Filament — *„Dies ist die erste Variante von …"*, **Umwandeln und erstellen**
 - **Bearbeiten → Übergeordnetes Filament** an einem bestehenden Filament — *„Durch das Speichern wird dieses Filament zur ersten Variante von …"*, **Umwandeln und speichern**
-- **Wiederherstellen** aus dem Papierkorb — *„Durch das Wiederherstellen wird dieses Filament zur ersten Variante von …"*, **Umwandeln und wiederherstellen**
 - **„Als Variante importieren"** im OpenPrintTag-Browser (genau ein Material auswählen, unter **Eltern-Filament** statt „Kein Elternteil (eigenständig)" ein Filament wählen — daraufhin wechselt der Import-Button auf diese Beschriftung) — gleicher Wortlaut wie beim Anlegen
+
+**Wiederherstellen** aus dem Papierkorb gehört bewusst *nicht* dazu: Das Wiederherstellen einer Variante, deren Eltern-Filament noch eine eigene Farbe oder eigene Spulen trägt, wird rundheraus abgelehnt — mit einem Hinweis auf **„In Vorlage umwandeln"** am Eltern-Filament. Einmal für die ganze Familie umwandeln, dann wiederherstellen. Siehe [Aus dem Papierkorb wiederherstellen oder endgültig löschen](#aus-dem-papierkorb-wiederherstellen-oder-endgültig-löschen).
 
 Die neue Variante heißt `<Name des Eltern-Filaments> — <Farbname>`, bzw. `<Name des Eltern-Filaments> — Original`, wenn das Eltern-Filament keinen Farbnamen hatte (mit dem Suffix ` (2)` / ` (3)`, falls dieser Name schon vergeben ist). Alles, was auf die verschobenen Spulen zeigte, folgt ihnen: Druckverlaufs-Einträge, AMS-Slot-Zuweisungen an Druckern und bereits gedruckte QR-Etiketten — beim Scannen eines alten Etiketts löst die App den aktuellen Besitzer der Spule auf und bringt dich dorthin.
 
@@ -318,6 +320,17 @@ Drucker können nicht gelöscht werden, wenn Filament-Kalibrierungen sie referen
 
 ---
 
+## Datenzustand *(v1.77)*
+
+**Einstellungen → Datenzustand** zeigt Namenskonflikte, die die automatische Bereinigung nicht allein beheben kann: Paare von Zeilen (Filamente, Düsen, Drucker, Druckbett-Typen, Locations), deren Namen sich nur durch unsichtbare Leerzeichen am Rand unterscheiden — „Drybox 1" vs. „Drybox 1 " —, meist Überbleibsel alter Importe oder roher Datenbank-Schreibvorgänge. Die Seite listet jeden solchen Konflikt mit sichtbar gemachten Leerzeichen, zeigt, was jede Zeile noch referenziert, und bietet die zwei sicheren Auflösungen an:
+
+- **Löschen** — nur verfügbar, wenn nichts auf die Zeile verweist (ein reines Duplikat).
+- **Umbenennen** — gibt die kanonische Schreibweise frei, ohne eine einzige Referenz anzufassen.
+
+Eine gesunde Datenbank zeigt eine leere Liste. Im Hybrid-Modus prüft die Seite die Datenbank, mit der die App verbunden ist; seit v1.78 (#1164) erscheinen zusätzlich Konflikte, die der Sync auf der **Remote**-Datenbank findet, in einem schreibgeschützten „auf der Gegenseite"-Abschnitt — und die Sync-Anzeige in der Kopfleiste trägt einen Konfliktzähler, der direkt auf die Seite verlinkt.
+
+---
+
 ## Kalibrierungen
 
 Beim Bearbeiten eines Filaments erscheint unter den Kompatible-Düsen-Checkboxen der Abschnitt **„Kalibrierungen"**. Für jede ausgewählte Düse kannst du Override-Werte eintragen für:
@@ -537,7 +550,9 @@ Gehe zu **Einstellungen → Sicherung & Wiederherstellen** und klicke auf **„A
 
 ## Instance-IDs
 
-Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21072a`), die bei der Erstellung automatisch erzeugt wird. Das entspricht dem `brand_specific_instance_id`-Format von Prusament und wird auf NFC-Tags geschrieben. Instance-IDs sind auf der Filament-Detailseite neben Vendor/Typ sichtbar und in CSV-/XLSX-Exporten enthalten.
+Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21072a`), die bei der Erstellung automatisch erzeugt wird. Das entspricht dem `brand_specific_instance_id`-Format von Prusament. Instance-IDs sind auf der Filament-Detailseite neben Vendor/Typ sichtbar und in CSV-/XLSX-Exporten enthalten.
+
+Seit v1.48–v1.50 (#732) hat **auch jede Spule ihre eigene Instance-ID** — die dauerhafte Pro-Rollen-Identität, die NFC-Tags tragen, QR-Etiketten kodieren und der Spulen-CSV-Roundtrip erhält; beim Tag-/QR-Abgleich wird sie vor der Filament-ID aufgelöst. Die ID einer Spule wird auf der Filament-Detailseite angezeigt und ist dort bearbeitbar (das Feld „Spulen-ID" — trage eine eigene ein, z. B. eine Prusament-Rollen-ID, oder generiere sie neu) und erscheint schreibgeschützt auf der Inventar-Seite und in der Hauptliste. Die ID auf Filament-Ebene bleibt als Fallback für ältere Tags erhalten.
 
 ---
 
@@ -545,7 +560,7 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Das ist der Drucker für Spulen-Etiketten; 10×15-cm-Trockenbox-Etiketten laufen über ein separates Gerät mit eigener Einstellung — siehe [Trockenbox-Etiketten](#trockenbox-etiketten-knaon-y813bt-v169). Zwei QR-Modi, die du pro Druck wählen kannst:
 
-- **Filament-Instanz-ID** — die 5-Byte-Hex-ID des Filaments (z. B. `2acc21072a`). Das ist ein Wert auf **Filament-Ebene** (einer pro Filament — *nicht* pro Spule) und entspricht dem, was auf einem NFC-Tag steht. Er wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
+- **Instanz-ID** — eine 5-Byte-Hex-ID (z. B. `2acc21072a`). Seit #732 kodiert dieser Modus die Instanz-ID der **ausgewählten Spule** (die Spulenauswahl bestimmt welche; Standard ist die erste nicht ausgemusterte Spule). Die ID auf **Filament-Ebene** wird stattdessen kodiert, wenn du in der Auswahl die Option **„Nur Filament"** wählst (auch verfügbar, wenn das Filament Spulen hat — für den Druck eines Legacy-QR auf Filament-Ebene) oder wenn das Filament keine Spulen hat. Sie entspricht dem, was auf einem NFC-Tag steht, und wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
 - **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit **einem beliebigen Smartphone** öffnet sich die Seite direkt — keine App nötig. Das ist die per Handy scanbare Option. Bei einem Filament mit **mehreren Spulen** erscheint eine Spulenauswahl, sodass der QR eine bestimmte Spule ansteuern kann (`…/filaments/<id>?spool=<spoolId>`); beim Scannen öffnet sich das Filament mit hervorgehobener Spule. *(Spulen-Targeting, v1.35.)*
 
 Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
@@ -688,6 +703,8 @@ Hake die gewünschten Änderungen an und klicke auf **„Anwenden"**. Nur die Id
 
 Sagt der Dialog, das Filament sei **aktuell**, gibt es upstream nichts Neues. Sagt er, das Material sei **nicht mehr in der Datenbank**, wurde der Eintrag auf der OpenPrintTag-Seite umbenannt oder entfernt.
 
+**Verknüpfung entfernen oder ändern** *(v1.77, #1150)*: Derselbe Dialog trägt die Buttons **„Verknüpfung ändern…"** und **„Verknüpfung entfernen"** — beide auch verfügbar, wenn das verknüpfte Material aus der OpenPrintTag-Datenbank verschwunden ist, was früher eine Sackgasse war. **„Verknüpfung entfernen"** fasst deine Werte nie an: Nur die Verknüpfung und ihre Update-Verfolgung werden entfernt, und du kannst jederzeit neu verknüpfen. **„Verknüpfung ändern…"** öffnet die Materialauswahl erneut, sodass die Update-Verfolgung gegen das neue Material neu aufgebaut wird, während deine bearbeiteten Felder deine bleiben.
+
 ---
 
 ## PrusaSlicer-Integration
@@ -727,7 +744,7 @@ Die **Dashboard**-Seite unter `/dashboard` ist die Heimat deines Inventars auf e
 - **Summen** — Filamentanzahl, Spulenanzahl, Gramm vorrätig sowie Drucker-/Düsen-/Betttyp-Anzahl
 - **Low-Stock-Warnungen** — jedes Filament, dessen aggregierter Rest unter seinem pro-Filament-`lowStockThreshold` liegt. Klicken einer Zeile springt zur Filament-Detailseite.
 - **Trocknen nötig** — Spulen, deren letzter Trockenzyklus älter als 30 Tage ist (später in den Einstellungen konfigurierbar), nach Filamenttyp gruppiert
-- **Neueste Druckhistorie** — die zuletzt protokollierten Druckaufträge
+- **Neueste Druckhistorie** — die zuletzt protokollierten Druckaufträge, mit einem **„Alle anzeigen →"**-Link zur [Verlauf-Seite](#druckverlaufs-browser-v179) und einem **„Druckauftrag erfassen"**-Button *(v1.79, #1167)*, der einen In-App-Dialog öffnet — Auftragsbezeichnung, Drucker, Datum, Notizen und eine oder mehrere Filament-/Spulen-/Gramm-Zeilen — und über dieselbe `/api/print-history`-Maschinerie schreibt wie die Slicer-Integrationen, sodass Spulenabbuchungen und Validierung identisch funktionieren. Vorlagen sind von der Filamentauswahl ausgeschlossen, und eine Zeile, deren Filament keine aktive Spule hat, sagt das schon vor dem Absenden (der Auftrag wird dann ohne Bestandsabzug erfasst).
 
 Low-Stock-Schwellen werden pro Filament auf der Bearbeitungsseite unter **Bestandseinstellungen → Low-Stock-Schwellwert (g)** gesetzt. Ein Filament ohne Schwellwert wird nie geflaggt.
 
@@ -776,12 +793,24 @@ Der Importer meldet Pro-Zeile-Erfolg/-Fehler, sodass ein paar Tippfehler nicht d
 
 ## Druckverlauf *(v1.11)*
 
-Wenn ein Slicer (oder ein Nutzer) einen Druckauftrag an `/api/print-history` postet, passieren zwei Dinge:
+Wenn ein Druckauftrag erfasst wird — von einem Slicer per `/api/print-history` oder in der App über den **„Druckauftrag erfassen"**-Dialog des Dashboards *(v1.79)* — passieren zwei Dinge:
 
 1. Ein `PrintHistory`-Dokument wird angelegt — der kanonische Datensatz, was gelaufen ist, auf welchem Drucker, mit wie viel Gramm welchen Filaments.
 2. Jeder referenzierten Spule wird `totalWeight` reduziert und ein `usageHistory`-Eintrag mit `source: "job"` angehängt.
 
 Diese Schreibvorgänge laufen in einer MongoDB-Transaktion, wo das Deployment es unterstützt (Atlas-Replicas, Hybrid-Modus), sodass ein Fehler mitten im Schreiben nicht das Inventar aus dem History-Ledger geraten lässt.
+
+## Druckverlaufs-Browser *(v1.79)*
+
+Die **Verlauf**-Seite unter `/history` (in der Top-Navigation zwischen Analytics und Share) durchstöbert alles, was die obigen Ledger aufzeichnen, in zwei bewusst getrennten Tabs:
+
+- **Druckaufträge** — die `PrintHistory`-Datensätze: Suche nach Auftragsbezeichnung *innerhalb des geladenen Ausschnitts* (siehe Hinweis unten), Filter nach Drucker (auch Drucker im Papierkorb, deren Aufträge erhalten bleiben), ein Auftrag lässt sich zu seiner Pro-Filament-Aufschlüsselung mit Deep-Links zu jedem Filament aufklappen, und **Löschen** macht den Auftrag mit Gutschrift rückgängig — die abgebuchten Gramm werden den belasteten Spulen gutgeschrieben, bis zur Kapazität jeder Spule (Gramm von inzwischen gelöschten Filamenten oder Spulen bleiben abgezogen).
+- **Spulennutzungs-Journal** — eine spulenübergreifende Suche über die `usageHistory`-Einträge aller Spulen (getragen von `GET /api/spools/usage-search`): Suche nach Eintrags-Bezeichnung, Filter nach Quelle (`manual`, `slicer`, `job`, `nfc`). Standard ist **manual** — die Einträge, die nirgendwo sonst existieren —, denn auftrags- und slicer-getaggte Einträge sind Projektionen der bereits im Druckaufträge-Tab gezeigten PrintHistory-Zeilen; eine zusammengelegte Liste würde jeden Druck doppelt zeigen. Das ist die erste Oberfläche, auf der sich die Auftragsbezeichnung eines *manuellen* Eintrags spulenübergreifend wiederfinden lässt.
+
+Vollständigkeits-Hinweise, beide auch auf der Seite selbst ausgewiesen:
+
+- **Druckaufträge** lädt nur die neuesten 200 Aufträge („Es werden die letzten 200 Aufträge angezeigt." erscheint, sobald dieses Limit erreicht ist), und die Suche nach Bezeichnung filtert *diesen* Ausschnitt, statt den Server abzufragen — ein passender älterer Auftrag taucht daher nicht auf. Der Drucker-Filter läuft dagegen serverseitig: Die Einschränkung auf den Drucker, der den Auftrag ausgeführt hat, fragt neu ab und holt dessen neueste 200 in Reichweite.
+- **Spulennutzungs-Journal** ist doppelt begrenzt. Durch die *Speicherung*: Jede Spule behält höchstens 1.000 Nutzungseinträge, wobei die ältesten manuellen Einträge zuerst entfernt werden — sehr alte Einträge können daher ganz fehlen. Und durch das *Ergebnisfenster*: Die Seite fordert 200 Einträge an, und die Suche läuft zwar serverseitig, sortiert aber vor dem Limit nach „neueste zuerst" — eine Suche mit mehr als 200 Treffern zeigt also die neuesten 200 und lässt ältere Treffer stillschweigend weg. Grenze nach Quelle (oder mit einer spezifischeren Bezeichnung) ein, um ältere Einträge ins Fenster zu holen.
 
 ## Verbrauchsanalyse *(v1.11)*
 

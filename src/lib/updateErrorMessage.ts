@@ -58,8 +58,8 @@ export function classifyUpdateError(err: unknown): ClassifiedUpdateError {
     // while requesting the metadata file carries the `latest*.yml` URL in its
     // message too, so it must be classified `network` BEFORE the URL-based
     // no-metadata check below — otherwise "couldn't reach the server" would
-    // read as "no update for this release" (Codex review). Certificate/TLS
-    // wording is deliberately NOT matched here — see the ordering note on the
+    // read as "no update for this release". Certificate/TLS wording is
+    // deliberately NOT matched here — see the ordering note on the
     // signature branch.
     /enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|epipe|net::|getaddrinfo|request timed out|timed out|socket hang up|network error|\bdns\b/.test(
       lower,
@@ -73,7 +73,7 @@ export function classifyUpdateError(err: unknown): ClassifiedUpdateError {
     // mentions its signing `certificate` too (e.g. electron-updater's "not
     // signed by the application owner: publisherNames …") — a broad
     // `certificate` transport match would misreport a failed verification as
-    // "check your connection" (Codex review).
+    // "check your connection".
     /sha512|checksum|integrity|code ?sign|not signed|signature|notariz|publisher/.test(lower)
   ) {
     kind = "signature";

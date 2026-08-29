@@ -52,7 +52,7 @@ describe("formatDate", () => {
   });
 
   /**
-   * PR #936 (round-3 self-review P2): when the Intl formatter path
+   * PR #936: when the Intl formatter path
    * throws, the fallback used to be `d.toLocaleDateString()` with no
    * arguments — the browser's local timezone would silently shift a
    * UTC-flagged input to the previous calendar day (`2026-05-30T02:30Z`

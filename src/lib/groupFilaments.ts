@@ -2,21 +2,13 @@
  * Group filaments into parent families + standalone rows for the main list.
  *
  * The crux (GH #744 / #786): a parent's "N colors" chip and the variant
- * rows/swatches rendered under it MUST come from the same set, or they drift.
- * #712 hides out-of-stock filaments by removing them from `visibleFilaments`;
- * when a shown parent's variants were sourced from that filtered set, the chip
- * — counted from the full list — over-counted the variants actually displayed.
- * tonysurma's report: chip says 6, the list shows fewer.
- *
- * Fix: a shown parent's group carries ALL of its variants from `allFilaments`
- * (the full fetched set, which is already server-filtered when a search /
- * type / vendor filter is active). The list then renders the chip as
- * `group.variants.length`, so the count and the displayed variants are the
- * SAME array — they cannot disagree.
- *
- * `visibleFilaments` still decides which TOP-LEVEL rows appear, so a
- * fully-out-of-stock family stays hidden; it just no longer prunes the
- * variants of a family that is shown.
+ * rows/swatches rendered under it MUST come from the same set, or they drift
+ * (#712's out-of-stock filter removes rows from `visibleFilaments`, so a chip
+ * counted from the full list over-counts the variants displayed). A shown
+ * parent's group therefore carries ALL of its variants from `allFilaments`,
+ * and the chip renders `group.variants.length` — the count and the displayed
+ * variants are the SAME array. `visibleFilaments` still decides which
+ * TOP-LEVEL rows appear, so a fully-out-of-stock family stays hidden.
  */
 export interface VariantGroup<F> {
   parent: F;

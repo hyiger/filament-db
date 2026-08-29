@@ -112,10 +112,8 @@ async function generate() {
   const assetsDir = path.join(__dirname, "..", "assets");
   const publicDir = path.join(__dirname, "..", "public");
 
-  // Save SVG
   fs.writeFileSync(path.join(assetsDir, "icon.svg"), SVG.trim());
 
-  // Generate PNGs at various sizes
   const sizes = [16, 32, 48, 64, 128, 256, 512, 1024];
   for (const size of sizes) {
     await sharp(Buffer.from(SVG))

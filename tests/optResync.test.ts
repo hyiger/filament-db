@@ -85,7 +85,7 @@ describe("buildOptSnapshot", () => {
       payload({ color: null, secondaryColors: ["#000000", "#98282f"], optTags: [17, 27] }),
     );
     expect(snap.secondaryColors).toEqual(["#000000", "#98282f"]);
-    // GH #607 (Codex P2): tags stay numbers so a sync writes the [Number]
+    // GH #607: tags stay numbers so a sync writes the [Number]
     // schema, not strings.
     expect(snap.optTags).toEqual([17, 27]);
     // A coextruded material's null primary isn't recorded (null = no offer);
@@ -289,7 +289,7 @@ describe("diffOptFields", () => {
   it("KEEPS a variant-owned array clear when the parent's array is empty (GH #607 Codex P2)", () => {
     // A variant OWNS its arrays and the parent has none: clearing them DOES
     // take ([] resolves to the empty parent array), so the clear must stay
-    // offered. (`isVariant`-alone over-suppressed this — Codex P2 round 4.)
+    // offered. (`isVariant`-alone over-suppressed this.)
     const stored = {
       color: "#3d3e3d",
       secondaryColors: ["#000000"],
@@ -565,7 +565,7 @@ describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
     // The OPT material has no tags but the parent does. The prune leaves the
     // variant's optTags as []; downstream resolveFilament treats [] as
     // "inherit", so the variant resolves to the parent's tags. This is the
-    // documented empty=inherit model limitation (Codex P2 on #753) — the prune
+    // documented empty=inherit model limitation (#753) — the prune
     // must not fabricate the parent's data onto the variant.
     const p = payload({ optTags: [], secondaryColors: [] });
     const pruned = pruneOptPayloadAgainstParent(p, { optTags: [16], secondaryColors: ["#aabbcc"] });

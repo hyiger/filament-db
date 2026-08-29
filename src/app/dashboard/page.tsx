@@ -75,10 +75,9 @@ export default function DashboardPage() {
       .then(setData)
       .catch((err) => {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        // GH #289: `r.statusText` is often empty on HTTP/2, so the old
-        // `setError(String(err))` rendered a raw, untranslated, sometimes
-        // "undefined" string. Log the real cause for debugging; show the
-        // user a translated message like every other page.
+        // GH #289: `r.statusText` is often empty on HTTP/2, so rendering the
+        // raw error can show "undefined". Log the real cause; show the user
+        // a translated message like every other page.
         console.error("Failed to load dashboard:", err);
         setError(t("dashboard.loadError"));
       });
@@ -339,10 +338,10 @@ export default function DashboardPage() {
                   <p className="font-medium truncate">{p.jobLabel}</p>
                   <p className="text-xs text-gray-500">
                     {p.printerName ? `${p.printerName} · ` : ""}
-                    {/* Codex P2 (PR #1182): a date-only backfill is stored as
-                        UTC midnight — formatted as a LOCAL datetime it reads
-                        as the previous evening west of UTC. Render it as a
-                        UTC calendar day instead (the #941 convention). */}
+                    {/* A date-only backfill is stored as UTC midnight —
+                        formatted as a LOCAL datetime it reads as the previous
+                        evening west of UTC. Render it as a UTC calendar day
+                        instead (the #941 convention). */}
                     {isUtcMidnight(p.startedAt)
                       ? formatDate(p.startedAt, { timeZone: "UTC" })
                       : formatDateTime(p.startedAt)}

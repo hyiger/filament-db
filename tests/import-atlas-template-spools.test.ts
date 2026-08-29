@@ -12,7 +12,7 @@ vi.mock("@/lib/mongoUriGuard", () => ({
 }));
 
 /**
- * GH #605 (codex round 3 sweep) — the Atlas import's UPDATE path replaces
+ * GH #605 — the Atlas import's UPDATE path replaces
  * the whole local `spools` array with the remote's, so a remote row whose
  * name matches a LOCAL TEMPLATE (a filament with live variants) used to
  * attach inventory to it. The route now drops the remote spools for that

@@ -10,8 +10,7 @@
  * shared Atlas, a raw import, or the sync engine itself. Once present, it
  * sits BETWEEN the two classifications the engine uses: OUTSIDE the partial
  * unique name index (`{_deletedAt: null}` matches null and missing only) yet
- * DELETED to the sync loop (`_deletedAt != null`). Two #1142 review rounds
- * each had to defend a different predicate against it; this removes the shape
+ * DELETED to the sync loop (`_deletedAt != null`). This removes the shape
  * instead of guarding every reader.
  *
  * The write-site guards in `electron/sync-service.ts` stop the ENGINE from
@@ -80,17 +79,15 @@ export interface MinimalTombstoneCollection {
 export async function repairMalformedTombstones(
   collection: MinimalTombstoneCollection,
 ): Promise<number> {
-  // `$exists` ONLY (Codex P2, twice — same trap, two operators). Query-form
-  // `$type: "date"` matches array ELEMENTS, so it hid `[new Date()]`; the
-  // `$nin: [null]` that replaced it has the SAME multikey semantics and hid
+  // `$exists` ONLY. Query-form `$type: "date"` matches array ELEMENTS, so it
+  // hid `[new Date()]`; `$nin: [null]` has the SAME multikey semantics and hid
   // `[null]` and `[null, "bad"]`. Every value-inspecting query operator
   // evaluates against elements when the field holds an array, and arrays are
   // precisely a shape this repair exists to catch — so the server side gets
   // NO value predicate at all. The JS filter below is the single decision
   // point (scalar null included: `isReadableTombstone(null)` is true, so an
   // active row is simply skipped). The cost is fetching one projected field
-  // for every row that has `_deletedAt` at all — these collections are small,
-  // and after two rounds of multikey surprises, correctness over cleverness.
+  // for every row that has `_deletedAt` at all — these collections are small.
   const candidates = await collection
     .find(
       { _deletedAt: { $exists: true } },
@@ -99,7 +96,7 @@ export async function repairMalformedTombstones(
     .toArray();
   const broken = candidates.filter((d) => !isReadableTombstone(d._deletedAt));
   if (broken.length === 0) return 0;
-  // CONDITIONAL on the observed value, per row (Codex P1) — the same
+  // CONDITIONAL on the observed value, per row — the same
   // observed-state rule every staging write follows. An `_id`-only filter is
   // a TOCTOU: an API restore or a snapshot replacement landing between the
   // read above and this write would have its fresh `null` (or valid date)
@@ -109,7 +106,7 @@ export async function repairMalformedTombstones(
   const res = await collection.bulkWrite(
     broken.map((d) => ({
       updateOne: {
-        // `$eq`, not implicit equality (Codex P2): the observed value sits in
+        // `$eq`, not implicit equality: the observed value sits in
         // QUERY position, and raw-driver values are explicitly in scope — a
         // BSON regex placed there implicitly becomes a regex QUERY that never
         // matches the regex-valued row (the repair would repeat forever), and

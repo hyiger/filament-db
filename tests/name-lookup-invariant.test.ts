@@ -21,7 +21,7 @@ import { join } from "node:path";
  * class three rounds running, every instance found by a human reading the diff.
  * This test is the mechanism that replaces the human.
  *
- * ## Granularity is the whole point (Codex P1)
+ * ## Granularity is the whole point
  *
  * The first version of this file asked whether the FILE imported the helper.
  * That is worthless: one guarded query anywhere exempts every other query in

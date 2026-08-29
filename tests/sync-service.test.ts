@@ -196,7 +196,7 @@ describe("wrapSyncErrorMessage", () => {
 });
 
 /**
- * GH #1142 (Codex P2, twice). A stranded row needs a HUMAN — nothing scans for
+ * GH #1142. A stranded row needs a HUMAN — nothing scans for
  * leftover `__sync-staging-…` names on a later cycle, and the equal-`updatedAt`
  * case is documented as never repaired by LWW — so the one announcement has to
  * survive whatever else the wrapper decides about the error.
@@ -350,7 +350,7 @@ describe("isDuplicateKeyError (GH #439, scoped to syncId per Codex on #464)", ()
 });
 
 /**
- * GH #1153 (Codex P2, several rounds of it): a quarantine without a report is
+ * GH #1153: a quarantine without a report is
  * a silently held-back pair under a green cycle — the posture violation the
  * sweep exists to end, and it was reintroduced three separate times on three
  * different branches. Pin it structurally: every quarantine site must have a
@@ -432,7 +432,7 @@ describe("every quarantine reports (source invariant)", () => {
   });
 
   it("the loop catch carries BOTH notice channels onto the thrown error", async () => {
-    // Codex P2, round 20: `trySync` keeps only the thrown message, and the
+    // `trySync` keeps only the thrown message, and the
     // post-loop rendering never runs on this path — so a catch that carried
     // `strandedNotices` alone silently dropped every hold-back report for the
     // cycle whenever an unrelated transfer threw later in the same pass. The
