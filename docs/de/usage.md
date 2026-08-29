@@ -810,7 +810,7 @@ Die **Verlauf**-Seite unter `/history` (in der Top-Navigation zwischen Analytics
 Vollständigkeits-Hinweise, beide auch auf der Seite selbst ausgewiesen:
 
 - **Druckaufträge** lädt nur die neuesten 200 Aufträge („Es werden die letzten 200 Aufträge angezeigt." erscheint, sobald dieses Limit erreicht ist), und die Suche nach Bezeichnung filtert *diesen* Ausschnitt, statt den Server abzufragen — ein passender älterer Auftrag taucht daher nicht auf. Der Drucker-Filter läuft dagegen serverseitig: Die Einschränkung auf den Drucker, der den Auftrag ausgeführt hat, fragt neu ab und holt dessen neueste 200 in Reichweite.
-- **Spulennutzungs-Journal** ist durch die Speicherung begrenzt: Jede Spule behält höchstens 1.000 Nutzungseinträge, wobei die ältesten manuellen Einträge zuerst entfernt werden — sehr alte Einträge können daher fehlen.
+- **Spulennutzungs-Journal** ist doppelt begrenzt. Durch die *Speicherung*: Jede Spule behält höchstens 1.000 Nutzungseinträge, wobei die ältesten manuellen Einträge zuerst entfernt werden — sehr alte Einträge können daher ganz fehlen. Und durch das *Ergebnisfenster*: Die Seite fordert 200 Einträge an, und die Suche läuft zwar serverseitig, sortiert aber vor dem Limit nach „neueste zuerst" — eine Suche mit mehr als 200 Treffern zeigt also die neuesten 200 und lässt ältere Treffer stillschweigend weg. Grenze nach Quelle (oder mit einer spezifischeren Bezeichnung) ein, um ältere Einträge ins Fenster zu holen.
 
 ## Verbrauchsanalyse *(v1.11)*
 

@@ -795,7 +795,7 @@ The **History** page at `/history` (in the top nav, between Analytics and Share)
 Completeness caveats, both surfaced on the page itself:
 
 - **Print jobs** loads only the newest 200 jobs ("Showing the most recent 200 jobs." appears once that limit is hit), and the label search filters *that* window rather than querying the server — so a matching older job won't appear. The printer filter *is* server-side, so narrowing to the printer that ran the job re-queries and brings its newest 200 into reach.
-- **Spool usage ledger** is bounded by storage: each spool keeps at most 1,000 usage entries, with the oldest manual entries dropped first, so very old entries may be absent.
+- **Spool usage ledger** is bounded twice over. By *storage*: each spool keeps at most 1,000 usage entries, with the oldest manual entries dropped first, so very old entries may be absent entirely. And by *result window*: the page requests 200 entries, and the search runs server-side but sorts newest-first before applying that limit — so a query matching more than 200 entries shows the newest 200 and silently omits older matches. Narrow by source (or by a more specific label) to bring older entries into the window.
 
 ## Usage Analytics *(v1.11)*
 
