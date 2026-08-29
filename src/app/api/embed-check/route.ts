@@ -5,25 +5,19 @@ import { errorResponse, getErrorMessage } from "@/lib/apiErrorHandler";
 /**
  * GET /api/embed-check?url=<https-url>
  *
- * Probes a remote URL's response headers to decide whether it can be rendered
- * inside an <iframe>. Used by the filament detail page so we can show a
- * graceful fallback instead of a blank embed when the source site sets
- * `X-Frame-Options: DENY|SAMEORIGIN` or `Content-Security-Policy:
- * frame-ancestors` directives that would block embedding.
+ * Probes a remote URL's response headers to decide whether it can render
+ * inside an <iframe> (X-Frame-Options / CSP frame-ancestors), so the detail
+ * page can show a graceful fallback instead of a blank embed.
  *
- * Response shape:
- *   { embeddable: boolean, reason?: string, contentType?: string | null }
+ * Response: { embeddable: boolean, reason?: string, contentType?: string | null }
  *
- * SSRF: URL goes through assertExternalUrl (loopback / RFC1918 / metadata IPs
- * blocked, http(s) only). Redirects are followed *manually* with the same
+ * SSRF: URL goes through assertExternalUrl (loopback / RFC1918 / metadata
+ * IPs blocked, http(s) only). Redirects are followed *manually* with the
  * guard re-applied on every hop, so a public host that 30x-redirects to a
- * private IP is rejected — closes the redirect-based SSRF gap that the
- * earlier `redirect: "follow"` implementation left open.
+ * private IP is rejected — `redirect: "follow"` left that gap open.
  *
- * Network failures (timeout, DNS, 4xx/5xx) collapse to `embeddable: false`
- * with an explanatory `reason` rather than a 5xx — the frontend should fall
- * back to the same "open in new tab" affordance either way, so a single
- * failure mode keeps the UI simple.
+ * Network failures collapse to `embeddable: false` with a `reason` rather
+ * than a 5xx — the frontend falls back to "open in new tab" either way.
  */
 
 /** Cap redirect chains. Real-world TDS hosts rarely chain more than 2-3. */
@@ -42,14 +36,12 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     let res: Response | null = null;
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       // Re-validate every hop so a hostile public host can't bounce us into
-      // private space via 30x. assertExternalUrl throws on disallowed
-      // schemes / loopback / RFC1918 / metadata IPs; the outer catch turns
-      // that into embeddable: false.
+      // private space via 30x; the outer catch turns a throw into
+      // embeddable: false.
       await assertExternalUrl(currentUrl);
 
-      // Use GET, not HEAD: many servers (Shopify, Cloudflare-fronted sites)
-      // reply to HEAD with stripped headers or 405. We only read headers
-      // and discard the body, but a UA helps with picky CDNs.
+      // GET, not HEAD: many servers reply to HEAD with stripped headers or
+      // 405. Only headers are read; the body is discarded.
       const hopRes = await fetch(currentUrl, {
         method: "GET",
         signal: controller.signal,
@@ -58,10 +50,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           Accept: "text/html,application/xhtml+xml,application/pdf,*/*",
         },
         redirect: "manual",
-        // GH #256: pin the connection to the SSRF-validated IP. The
-        // per-hop assertExternalUrl above resolves the host once; the
-        // dispatcher re-validates at connect time so a DNS rebind
-        // between the two can't land the socket on a private address.
+        // GH #256: the dispatcher re-validates at connect time, so a DNS
+        // rebind after assertExternalUrl's resolution can't land the socket
+        // on a private address.
         dispatcher: ssrfDispatcher,
       } as RequestInit & { dispatcher?: typeof ssrfDispatcher });
 
@@ -113,12 +104,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const blockedByXfo =
       xfo.includes("deny") || xfo.includes("sameorigin");
 
-    // CSP frame-ancestors blocks framing when set to anything but '*' or a
-    // host list that includes us. We can't know the rendering origin from
-    // here, so any directive other than '*' is treated as "blocked" — false
-    // positives for permissive CSPs that happen to whitelist our origin are
-    // acceptable: the user still gets the "open in new tab" fallback, which
-    // is the same affordance.
+    // We can't know the rendering origin from here, so any frame-ancestors
+    // directive other than '*' is treated as "blocked" — a false positive
+    // still gets the same "open in new tab" fallback.
     const faMatch = csp.match(/frame-ancestors\s+([^;]+)/);
     const blockedByCsp = faMatch
       ? !faMatch[1].trim().split(/\s+/).includes("*")

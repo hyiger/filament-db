@@ -17,7 +17,7 @@ import {
 
 const FILAMENT_ID = "507f1f77bcf86cd799439011";
 const SPOOL_ID = "507f1f77bcf86cd799439012";
-// "Today" is injected — the helper never reads the clock (Codex P1 #1182).
+// "Today" is injected — the helper never reads the clock (#1182).
 const TODAY = "2026-08-27";
 
 function validForm(overrides: Partial<PrintJobFormState> = {}): PrintJobFormState {

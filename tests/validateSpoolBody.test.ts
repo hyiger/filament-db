@@ -137,7 +137,7 @@ describe("validateSpoolBody (POST semantics)", () => {
     }
   });
 
-  // GH #372 (Codex follow-up): the original check used `new Date(s)` only,
+  // GH #372: the original check used `new Date(s)` only,
   // which silently NORMALISES out-of-range calendar dates ("2025-02-29"
   // becomes March 1 in a non-leap year). A typoed date used to pass and
   // persist as a different day — exactly the silent corruption the
@@ -233,7 +233,7 @@ describe("isValidIsoDateString", () => {
     expect(isValidIsoDateString("2025-01-01T23:00:00Z")).toBe(true);
   });
 
-  // Codex P3 on PR #375: Date.UTC has a legacy 2-digit-year remap that
+  // PR #375: Date.UTC has a legacy 2-digit-year remap that
   // would silently shift years 0-99 into 1900-1999, falsely rejecting
   // valid 4-digit ISO inputs like "0099-12-31". The helper now uses
   // setUTCFullYear which takes the year verbatim.

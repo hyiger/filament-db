@@ -170,7 +170,6 @@ describe("checkFileSize", () => {
   });
 
   it("returns 413 response for files over 10 MB", async () => {
-    // Create a mock File-like object with a large size
     const bigFile = {
       size: MAX_UPLOAD_SIZE + 1,
       name: "big.csv",

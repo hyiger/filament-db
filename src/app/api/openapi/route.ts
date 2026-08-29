@@ -3,13 +3,10 @@ import { readFileSync } from "fs";
 import path from "path";
 
 /**
- * GH #270: the spec and package.json are static for the lifetime of the
- * process, so read + parse them once and memoise. The pre-fix handler did
- * two `readFileSync` + `JSON.parse` calls on every request, blocking the
- * event loop and serialising concurrent `/api/openapi` hits behind disk
- * I/O. Memoising after the first successful read (rather than at module
- * load) keeps a missing file from crashing the whole route module — the
- * GET handler's try/catch still turns it into a clean 500.
+ * GH #270: the spec and package.json are static for the process lifetime —
+ * read + parse once and memoise. Memoising after the first successful read
+ * (rather than at module load) keeps a missing file from crashing the
+ * whole route module; the GET's try/catch still turns it into a clean 500.
  */
 let cachedSpec: Record<string, unknown> | null = null;
 

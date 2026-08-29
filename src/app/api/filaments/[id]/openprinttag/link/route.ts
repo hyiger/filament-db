@@ -11,24 +11,19 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
- * POST /api/filaments/{id}/openprinttag/link  (Issue #753, approach C)
+ * POST /api/filaments/{id}/openprinttag/link  (Issue #753)
  *
  * Links an EXISTING filament to an OpenPrintTag material so it can use the
- * re-sync ("Check for updates") loop. Body: `{ slug: string }` — the OPT
- * material slug.
+ * re-sync loop. Body: `{ slug: string }`.
  *
- * This writes ONLY the linkage (`settings.openprinttag_slug` / `_uuid`) and the
- * provenance snapshot (`openprinttagSnapshot`) — it never touches a field
- * value. So linking can't clobber a user-set or (for a variant) an inherited
- * value: a variant that inherits a field equal to OPT's offer simply won't be
- * offered that field on the next check (the check route diffs the variant's
- * EFFECTIVE values), and a field the user diverged on classifies as a
- * `conflict` (user decides) rather than auto-reverting.
+ * Writes ONLY the linkage (`settings.openprinttag_slug` / `_uuid`) and the
+ * provenance snapshot — never a field value, so linking can't clobber a
+ * user-set or inherited value: the check route diffs EFFECTIVE values, and
+ * a diverged field classifies as `conflict` rather than auto-reverting.
  *
- * Responses:
- *   { error: ... } 400/404                 — bad body / filament not found
- *   { linked: false, found: false, slug }  — slug no longer in the OPT db
- *   { linked: true, slug, filament }       — link established + fresh doc
+ * Responses: 400/404 bad body / not found;
+ * `{ linked: false, found: false, slug }` when the slug is gone upstream;
+ * `{ linked: true, slug, filament }` on success.
  */
 export async function POST(
   request: NextRequest,
@@ -39,8 +34,8 @@ export async function POST(
 
   try {
     const { id } = await params;
-    // Reject a non-ObjectId id up front (400) instead of letting Mongoose's
-    // CastError fall to the generic 500, matching the sibling routes. (#818)
+    // Reject a non-ObjectId id up front (400) instead of a CastError 500
+    // (#818).
     if (!mongoose.isValidObjectId(id)) {
       return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
     }
@@ -79,15 +74,13 @@ export async function POST(
     const $set = buildOptLinkUpdate(payload);
 
     // Re-filter `_deletedAt: null` on the write so a concurrent soft-delete
-    // between the findOne above and this update doesn't mutate a tombstoned
-    // row (mirrors the sync route, GH #629). runValidators is harmless here —
-    // we only $set the linkage + snapshot, no schema-validated field values.
-    // Inside the per-filament mutex (GH #1150 round 2, Codex P2): a sync
-    // holding its locked critical section must not have this write land
-    // between its read and its final write — that would pair the NEW slug
-    // with provenance rebuilt from the OLD material. The upstream fetch and
-    // material lookup above deliberately stay OUTSIDE the lock (they don't
-    // depend on the filament).
+    // can't mutate a tombstoned row (mirrors the sync route, GH #629).
+    // Inside the per-filament mutex (GH #1150): a sync holding its locked
+    // critical section must not have this write land between its read and
+    // its final write — that would pair the NEW slug with provenance
+    // rebuilt from the OLD material. The upstream fetch and material lookup
+    // deliberately stay OUTSIDE the lock (they don't depend on the
+    // filament).
     const updated = await runExclusive(filamentLockKey(id), async () =>
       Filament.findOneAndUpdate(
         { _id: filament._id, _deletedAt: null },
@@ -115,19 +108,13 @@ export async function POST(
 /**
  * DELETE /api/filaments/{id}/openprinttag/link  (GH #1150)
  *
- * Removes the OpenPrintTag link — the exact three paths the POST writes
- * (`settings.openprinttag_slug`, `settings.openprinttag_uuid`,
- * `openprinttagSnapshot`) and nothing else: field values the material once
- * offered stay on the filament untouched. No upstream fetch is needed — the
- * link can (and should) be removable even when the material is gone from the
- * OPT database, which is precisely the dead-end this endpoint unblocks.
+ * Removes the OpenPrintTag link — the exact three paths the POST writes,
+ * and nothing else: field values the material once offered stay untouched.
+ * No upstream fetch — the link must be removable even when the material is
+ * gone from the OPT database (the dead-end this endpoint unblocks).
  *
  * Idempotent: unlinking an unlinked filament is a 200 (`$unset` on absent
- * paths is a no-op), so a double-click or client retry is harmless.
- *
- * Responses:
- *   { error: ... } 400/404          — bad id / no live filament
- *   { unlinked: true, filament }    — link removed + fresh doc
+ * paths is a no-op), so a double-click or retry is harmless.
  */
 export async function DELETE(
   request: NextRequest,
@@ -144,12 +131,11 @@ export async function DELETE(
 
     await dbConnect();
 
-    // Same per-filament mutex as the sync route (Codex P2): un-serialized,
-    // a sync entering its critical section moments before this unlink could
-    // read the old link, then re-write OPT field values AND recreate
-    // `openprinttagSnapshot` AFTER this DELETE returned success — a
-    // half-restored link the user explicitly removed. Inside the lock the
-    // two orders are both coherent: sync-then-unlink removes everything;
+    // Same per-filament mutex as the sync route: un-serialized, a sync
+    // entering its critical section moments before this unlink could
+    // recreate `openprinttagSnapshot` AFTER this DELETE returned success —
+    // a half-restored link the user explicitly removed. In-lock, both
+    // orders are coherent: sync-then-unlink removes everything;
     // unlink-then-sync finds no link and 4xxes.
     const updated = await runExclusive(filamentLockKey(id), async () =>
       Filament.findOneAndUpdate(

@@ -11,15 +11,10 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { formatSkipReport } from "@/lib/importSkipReport";
 
 /**
- * A dedicated page that mirrors the Import / Export dropdown on the filament
- * list. The dropdown stays — most users will use it because it's right where
- * they're managing filaments — but this page gives you a discoverable entry
- * point from Settings and a stable URL for documentation/links.
- *
- * The import dialogs are the same standalone components the filament list
- * uses, so behaviour stays identical. After a successful import this page
- * just toasts; the user can navigate back to the filament list to see the
- * results (linked at the top).
+ * A dedicated page mirroring the Import / Export dropdown on the filament
+ * list — a discoverable entry point from Settings and a stable URL. The
+ * import dialogs are the same standalone components the filament list uses,
+ * so behaviour stays identical.
  */
 export default function ImportExportPage() {
   const { t } = useTranslation();

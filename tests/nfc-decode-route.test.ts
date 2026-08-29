@@ -288,7 +288,7 @@ describe("POST /api/nfc/decode", () => {
   });
 
   it("rejects an empty Bambu blocks map rather than fabricating a tag (400)", async () => {
-    // Codex P2 (PR #690): {} used to parse into an all-zero array and return
+    // PR #690: {} used to parse into an all-zero array and return
     // 200 with brandName "Bambu Lab" / black color — a failed read must 400.
     const res = await decodeTag(decodeReq({ tagType: "bambu", blocks: {} }));
     expect(res.status).toBe(400);

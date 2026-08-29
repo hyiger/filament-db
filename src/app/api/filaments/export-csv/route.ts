@@ -6,11 +6,10 @@ import { csvCell } from "@/lib/csvWriter";
 /**
  * GET /api/filaments/export-csv — bulk export every filament as CSV.
  *
- * Cells flow through `csvCell()` from `@/lib/csvWriter`, which combines
- * RFC 4180 escaping with formula-injection neutralisation — user-
- * controlled fields (name, vendor, color name, etc.) starting with `=`,
- * `+`, `-`, `@`, tab, or CR get a leading apostrophe so spreadsheet apps
- * treat them as text rather than formulas. (Codex P2 on PR #141.)
+ * Cells flow through `csvCell()`, which combines RFC 4180 escaping with
+ * formula-injection neutralisation — user-controlled fields starting with
+ * `=`, `+`, `-`, `@`, tab, or CR get a leading apostrophe so spreadsheet
+ * apps treat them as text rather than formulas.
  */
 
 export async function GET() {

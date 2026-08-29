@@ -46,23 +46,20 @@ export async function GET(
       return errorResponse("weight must be a non-negative number", 400);
     }
 
-    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try
-    // it FIRST, name lookup only when that _id misses (a preset legitimately
-    // NAMED with 24 hex chars). Name-first let such a name shadow another
-    // filament's real _id, so a slicer addressing this endpoint by id checked
-    // the WRONG row's spool availability — inconsistent with the id-first
-    // sync/export routes. `params.id` is ALREADY URL-decoded — do NOT re-decode
-    // (a literal `%` like "ABS 100%" throws URIError and 500s the request, #671).
+    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE —
+    // try it FIRST, name lookup only when that _id misses (name-first let a
+    // 24-hex preset name shadow another filament's real _id). `params.id`
+    // is ALREADY URL-decoded — do NOT re-decode (a literal `%` throws
+    // URIError, #671).
     const decodedName = id;
     let filament = /^[a-f0-9]{24}$/i.test(id)
       ? await Filament.findOne({ _id: id, _deletedAt: null }).lean()
       : null;
     if (!filament) {
       // name-lookup-ok: read-only; a miss is a 404
-      // GH #1116 (Codex P1, same class as the sync routes): the EXACT stored
-      // spelling wins. The setter casts this query, so with both "X" and "X "
-      // active a request addressed as "X " would return the CANONICAL row's
-      // data — the wrong filament's calibration / spool state.
+      // GH #1116: the EXACT stored spelling wins — the setter casts this
+      // query, so with both "X" and "X " active a request addressed as
+      // "X " would return the CANONICAL row's spool state.
       const exactId = await findExactRawNameId(
         Filament.collection as unknown as MinimalNameCollection,
         decodedName,
@@ -80,28 +77,20 @@ export async function GET(
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
-    // GH #223: variants typically store `spoolWeight: null` and inherit
-    // from their parent (see src/lib/resolveFilament.ts INHERITABLE_FIELDS).
-    // Reading `filament.spoolWeight` directly meant the route hit the
-    // `spoolWeight == null` guard below and returned "no data — skipping
-    // check" for every color variant, silently disabling PrusaSlicer's
-    // insufficient-filament warning. Same bug class as the v1.16 compare
-    // route fix (PR #190): resolve the parent inline.
-    //
-    // Density and diameter use the same inheritance and are needed for the
-    // weight-to-length conversion, so resolve them in the same parent
-    // fetch.
+    // GH #223: variants store `spoolWeight: null` and inherit from their
+    // parent — reading the field directly hit the `spoolWeight == null`
+    // guard and silently disabled PrusaSlicer's insufficient-filament
+    // warning for every variant. Density and diameter inherit the same way
+    // and are needed for the weight-to-length conversion, so resolve all
+    // three in one parent fetch.
     let spoolWeight = filament.spoolWeight as number | null;
     let density = filament.density as number | null;
     let diameter = filament.diameter as number | null;
 
-    // Spool source for the check. A variant usually carries its own
-    // spools array, but a legacy single-weight variant (#273) stores its
-    // capacity in `totalWeight` — which is excluded from variant
-    // inheritance — so its own value is typically null. Without a parent
-    // fallback the check below hits the "no data" branch and silently
-    // disables PrusaSlicer's insufficient-filament warning for every
-    // legacy-mode variant.
+    // Spool source. A legacy single-weight variant (#273) stores its
+    // capacity in `totalWeight` — excluded from variant inheritance — so
+    // without a parent fallback the check hits the "no data" branch and
+    // silently disables the slicer warning for every legacy-mode variant.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ownSpools: any[] = Array.isArray(filament.spools) ? filament.spools : [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -161,14 +150,12 @@ export async function GET(
 
     const requiredLengthM = weightToLengthM(requiredWeight);
 
-    // GH #954 (Codex): the "all measured stock is retired" warning does NOT need
-    // the spool tare (it's a pure retired-vs-active question), so check it BEFORE
-    // the tare guard below — otherwise a filament with only retired weighed stock
-    // and a null/inherited-missing spoolWeight would hit the `spoolWeight == null`
-    // guard and return ok:true, silently suppressing PrusaSlicer's warning for
-    // null-tare legacy data. An active spool that is merely UNWEIGHED counts as
-    // active stock (just unmeasured), so `hasActiveSpool` keeps this from firing a
-    // false warning — that case falls through to the "no data → ok:true" guard.
+    // GH #954: the "all measured stock is retired" warning does NOT need
+    // the spool tare, so check it BEFORE the tare guard — otherwise a
+    // filament with only retired weighed stock and a null tare would return
+    // ok:true and suppress the warning. An active-but-UNWEIGHED spool
+    // counts as active stock (just unmeasured) and falls through to the
+    // "no data → ok:true" guard, not a false warning.
     const hasActiveSpool = rawSpools.some((s) => !s.retired);
     const hasRetiredWeightData = rawSpools.some(
       (s) => s.totalWeight != null && s.retired,
@@ -197,12 +184,9 @@ export async function GET(
       });
     }
 
-    // Check each spool. Retired spools are intentionally out of service
-    // and must not satisfy the check (Codex review) — otherwise a
-    // retired spool with enough weight (the variant's own, or one
-    // borrowed from the parent via the #273 fallback) would suppress
-    // the slicer's insufficient-filament warning while active stock is
-    // empty. Retired spools drop out of spool-check per CLAUDE.md.
+    // Retired spools are intentionally out of service and must not satisfy
+    // the check — otherwise a retired spool with enough weight would
+    // suppress the slicer's warning while active stock is empty.
     const spoolResults = rawSpools
       .filter((s) => s.totalWeight != null && !s.retired)
       .map((s) => {

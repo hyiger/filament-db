@@ -7,12 +7,9 @@ import { deriveArrangement } from "@/lib/filamentColors";
 import { deriveFinish } from "@/lib/filamentFinish";
 
 /**
- * Shared filament picker (#492) used by /compare and /share. Wraps the
- * shared scroll-only checkbox list with search / type filter / selected-
- * only / selected-count affordances that match the main filament list
- * page's UX. Below 12 filaments the controls render but stay invisible
- * because they don't earn their pixels yet; above that the user gets
- * the same find-as-you-type experience as elsewhere in the app.
+ * Shared filament picker used by /compare and /share — a checkbox list
+ * with search / type filter / selected-only affordances matching the main
+ * filament list page's UX.
  */
 
 interface PickerFilament {
@@ -20,38 +17,32 @@ interface PickerFilament {
   name: string;
   vendor: string;
   type: string;
-  /** Nullable per OpenPrintTag key 19 — a coextruded filament's colors live
-   *  in `secondaryColors`, and since v1.70 a template parent is deliberately
-   *  colorless. Typing this `string` rendered those rows with a transparent
-   *  dot (GH #1120). */
+  /** Nullable per OpenPrintTag key 19 — a coextruded filament's colors
+   *  live in `secondaryColors`, and a template parent is deliberately
+   *  colorless. Typing this `string` renders those rows with a
+   *  transparent dot (GH #1120). */
   color: string | null;
   secondaryColors?: string[];
   optTags?: number[];
 }
 
 interface FilamentPickerProps {
-  /** Full catalog. The picker filters this in-memory; callers don't
-   *  need to pre-filter. */
+  /** Full catalog. The picker filters in-memory; callers don't
+   *  pre-filter. */
   filaments: PickerFilament[];
-  /** Set of currently-selected filament _ids. Set is fine because the
-   *  callers track selections that way already and it gives O(1) check. */
   selectedIds: Set<string>;
-  /** Called when the user toggles any row. Caller owns the selection
-   *  state — the picker is purely a controlled view. */
+  /** Caller owns the selection state — the picker is purely a
+   *  controlled view. */
   onToggle: (id: string) => void;
   /** When set, additional selections beyond this cap are disabled.
    *  /compare passes 8 (the comparison table caps at 8 columns). */
   maxSelections?: number;
-  /** Optional ARIA label for the picker. Falls back to a generic
-   *  "Filaments" label via picker.listAriaLabel if you don't want
-   *  callers to plumb a custom one. */
+  /** Falls back to a generic label via picker.listAriaLabel. */
   ariaLabel?: string;
 }
 
-/** Show the controls (search / type filter / selected-only toggle)
- *  only when there are enough filaments that scrolling becomes
- *  painful. 12 is roughly two scrolls in the 240-pixel list height
- *  both callers use today. */
+/** Show the controls only when there are enough filaments that scrolling
+ *  becomes painful — the chrome is meaningless on a tiny list. */
 const CONTROL_THRESHOLD = 12;
 
 export default function FilamentPicker({
@@ -66,9 +57,7 @@ export default function FilamentPicker({
   const [typeFilter, setTypeFilter] = useState<string | null>(null);
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
 
-  // Distinct filament types for the chip row, sorted by frequency
-  // descending so the most-common types surface first. Empty / null
-  // types are filtered out (they wouldn't be useful as a chip).
+  // Distinct filament types for the chip row, most-common first.
   const typeOptions = useMemo(() => {
     const counts = new Map<string, number>();
     for (const f of filaments) {
@@ -81,15 +70,12 @@ export default function FilamentPicker({
   }, [filaments]);
 
   const selectedCount = selectedIds.size;
-  // Codex P2 round 1 on PR #497: the selected-only toggle hides when
-  // there are no selections (the chrome is meaningless without any),
-  // but if `showSelectedOnly` was true when the last selection got
-  // removed (manual unchecks, /share's publish handler clearing
-  // selectedIds, etc.) the filter kept applying with no way to turn
-  // it off. Derive the *effective* value at render time so the empty-
-  // selection case automatically falls back to "show everything"
-  // regardless of the persisted toggle state. Same pattern PR #487's
-  // PrintLabelDialog uses for its QR-mode fallback.
+  // The selected-only toggle hides when there are no selections, but if
+  // `showSelectedOnly` was true when the last selection got removed
+  // (manual unchecks, /share's publish handler clearing selectedIds) the
+  // filter would keep applying with no way to turn it off. Deriving the
+  // *effective* value at render time makes the empty-selection case fall
+  // back to "show everything" regardless of the persisted toggle state.
   const effectiveSelectedOnly = showSelectedOnly && selectedCount > 0;
 
   const filtered = useMemo(() => {

@@ -3,30 +3,17 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 
 /**
- * GET /api/filaments/colors
- *
- * Returns the distinct `(colorName, color)` pairs across all
- * non-deleted filaments — fuel for the colorName typeahead on
- * `FilamentForm`. Skips entries where `colorName` is empty/null so
- * the suggestion list doesn't include un-named entries; multiple
- * filaments sharing the same name with the same hex collapse to one
- * row (e.g. four spools labelled "Prusa Orange" with hex `#FA6E1C`
- * give one suggestion, not four).
- *
- * Different hexes under the same name are kept as separate
- * suggestions — that's intentional. The picker shows the swatch
- * alongside the name so the user can pick the right one even when
- * their previously-saved "Galaxy Black" differs in shade across
- * filaments.
+ * GET /api/filaments/colors — distinct `(colorName, color)` pairs across
+ * non-deleted filaments, for the FilamentForm colorName typeahead. Same
+ * name + same hex collapse to one row; different hexes under the same name
+ * are kept as SEPARATE suggestions on purpose — the picker shows the
+ * swatch so the user can pick the right shade.
  */
 export async function GET() {
   try {
     await dbConnect();
-    // $group on (colorName, color) so a single named hex pair appears
-    // once regardless of how many filaments share it. The filter on
-    // `colorName` keeps non-null, non-empty names only; the same
-    // applies to color (defensive — schema default is "#808080" so
-    // it's normally non-empty, but a malformed import could land null).
+    // The color filter is defensive — the schema default is "#808080", but
+    // a malformed import could land null.
     const docs: Array<{ _id: { name: string; hex: string } }> = await Filament.aggregate([
       {
         $match: {

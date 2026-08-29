@@ -27,30 +27,21 @@ export async function GET(request: NextRequest) {
       return NextResponse.json(locations);
     }
 
-    // Attach spool counts per location so the list page can show "N spools"
-    // without the client having to re-query filaments. Uses a single
-    // aggregation over Filament.spools since spools are embedded.
+    // Attach per-location spool counts in one aggregation.
     //
-    // GH #182: subtract the filament's effective `spoolWeight` from each
-    // spool's `totalWeight` (clamped at 0) so the per-location grams
-    // figure reports remaining filament, not the gross scale reading.
-    // Without it, a location with N spools over-reports inventory by
-    // N × empty-spool-mass.
-    //
-    // Codex P2 on PR #190: `spoolWeight` is inheritable — variants commonly
-    // store null and inherit from their parent. Use $lookup to resolve the
-    // parent's value when the variant's is null, then $ifNull-chain
-    // (variant own → parent → 0) inside the subtract.
+    // GH #182: subtract the effective `spoolWeight` (tare) from each
+    // spool's `totalWeight` (clamped at 0) so the grams figure reports
+    // REMAINING filament, not the gross scale reading — otherwise N spools
+    // over-report by N × empty-spool-mass. `spoolWeight` is inheritable, so
+    // the $lookup resolves the parent's value ($ifNull chain: own → parent
+    // → 0).
     const counts = await Filament.aggregate([
       { $match: { _deletedAt: null } },
-      // GH #1005 F4: this stats pipeline reads only spools.{retired,locationId,
-      // totalWeight}; drop every heavy per-spool subfield (photoDataUrl,
-      // usageHistory, AND dryCycles — no dry stats are computed here) before
-      // the $unwind streams them.
+      // GH #1005 F4: drop the heavy per-spool subfields (incl. dryCycles —
+      // no dry stats are computed here) before the $unwind streams them.
       { $unset: ["spools.photoDataUrl", "spools.usageHistory", "spools.dryCycles"] },
-      // Pull the parent doc (if any) so we can resolve inherited spoolWeight.
-      // Variants without a parentId get an empty array; the $arrayElemAt
-      // below safely returns null for the inherited fallback.
+      // Parent lookup for inherited spoolWeight; $arrayElemAt on the empty
+      // array safely returns null.
       {
         $lookup: {
           from: "filaments",
@@ -61,11 +52,10 @@ export async function GET(request: NextRequest) {
         },
       },
       { $unwind: "$spools" },
-      // GH #1106: the retired filter moved OUT of $match and INTO the
-      // accumulators, so one pass yields both numbers. The page needs the
-      // retired count because a location holding only retired spools read
-      // "Spools 0" and then refused to delete, telling the user to reassign
-      // spools the same row said didn't exist.
+      // GH #1106: the retired filter lives in the accumulators, not $match,
+      // so one pass yields both numbers — a location holding only retired
+      // spools used to read "Spools 0" and then refuse to delete, telling
+      // the user to reassign spools the same row said didn't exist.
       { $match: { "spools.locationId": { $ne: null } } },
       {
         $group: {
@@ -150,12 +140,11 @@ export async function POST(request: NextRequest) {
           isValidIsoDateString(body.desiccantChangedAt))) {
       return errorResponse("desiccantChangedAt must be an ISO date string or null", 400);
     }
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "Drybox" and a surviving
-    // untrimmed "Drybox " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
+    // GH #1116: the partial unique index compares RAW stored strings, so a
+    // submitted "Drybox" beside a surviving untrimmed "Drybox " would write
+    // an indistinguishable duplicate. Ask the trimmed question explicitly,
+    // in the same 409 shape handleDuplicateKeyError produces so the client
+    // contract is unchanged.
     const nameConflict = await survivorNameConflict(
       Location.collection as unknown as MinimalNameCollection,
       body.name,

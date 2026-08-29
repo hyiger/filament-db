@@ -58,7 +58,7 @@ export const NTAG213_NDEF_BYTES = 144;
  * Physical LAST page of each supported NTAG (datasheet §8.5 memory
  * organization): user memory, dynamic lock bytes AND config pages included.
  * The capacity probe reads each rung's physical tail rather than its user
- * extent (GH #978 round 6, Codex P1): smaller chips keep their own
+ * extent (GH #978): smaller chips keep their own
  * dynamic-lock/config pages READABLE right after user memory — an NTAG212's
  * pages 36–39 read fine, so a user-extent probe at the NTAG213 rung
  * misclassified it as a 213 and the erase zero-filled its config pages. The
@@ -77,7 +77,7 @@ export type NtagEraseSizeDecision =
   | { ok: false; error: "size_unknown" | "size_ambiguous" };
 
 /**
- * GH #978 — the Erase sizing decision, at its FIXED POINT (round 8).
+ * GH #978 — the Erase sizing decision.
  *
  * Every acceptance must be backed by a PROOF:
  *   - GET_VERSION's answer (authoritative; auth protection cannot fake it);
@@ -85,15 +85,14 @@ export type NtagEraseSizeDecision =
  *     pages exist — auth cannot fake that either).
  *
  * Anything else is refused as AMBIGUOUS, and this is not conservatism but
- * an information-theoretic limit the review converged on across four
- * rounds: any sub-216 probe conclusion requires at least one NAK, a NAK is
- * indistinguishable from a password-protected in-range page at the PC/SC
- * layer, and every heuristic tie-breaker fell — the user-pick undersized
- * (r2), blanket NAK-demotion undersized on transport blips (r4), user-
- * extent probes misread config tails (r6), and the CC cross-check broke in
- * BOTH directions (r7: a protected 216 carries an 872 CC; a protected AND
- * mis-formatted 216 carries a small one). So: a full-extent read proof or
- * nothing. On a GET_VERSION-dead reader, NTAG216 tags erase hands-free;
+ * an information-theoretic limit: any sub-216 probe conclusion requires at
+ * least one NAK, a NAK is indistinguishable from a password-protected
+ * in-range page at the PC/SC layer, and every heuristic tie-breaker fell —
+ * the user-pick undersized, blanket NAK-demotion undersized on transport
+ * blips, user-extent probes misread config tails, and the CC cross-check
+ * broke in BOTH directions (a protected 216 carries an 872 CC; a protected
+ * AND mis-formatted 216 carries a small one). So: a full-extent read proof
+ * or nothing. On a GET_VERSION-dead reader, NTAG216 tags erase hands-free;
  * smaller-or-protected tags refuse with the Write path (which sizes
  * explicitly and rewrites the CC) named as the recovery.
  */

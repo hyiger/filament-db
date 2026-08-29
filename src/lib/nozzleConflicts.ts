@@ -23,8 +23,7 @@ import type mongoose from "mongoose";
  *
  * Keeping the resolution in the client avoids implicit destructive
  * mutations on the server (a 'force' flag would silently rewrite the
- * OTHER printer's installedNozzles, which is the kind of footgun the
- * sync engine has caused us before — GH #213 Codex P1).
+ * OTHER printer's installedNozzles).
  */
 
 import type { Model } from "mongoose";

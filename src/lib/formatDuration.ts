@@ -3,12 +3,9 @@
  * unit) as a human "Xh Ym" / "Ym" string:
  *   480 → "8h 0m"   90 → "1h 30m"   45 → "45m"   0 → "0m"
  *
- * The OpenPrintTag browser was rendering the raw minutes value with an `h`
- * suffix (so `drying_time: 480` showed as "480 h"); this matches the minutes
- * interpretation the form, NFC read dialog, and compare page already use.
- *
- * Pure + null-safe. Returns null for null/non-finite input so callers can hide
- * the field entirely.
+ * Matches the minutes interpretation the form, NFC read dialog, and compare
+ * page already use. Pure + null-safe: returns null for null/non-finite input
+ * so callers can hide the field entirely.
  */
 export function formatMinutesAsHm(minutes: number | null | undefined): string | null {
   if (minutes == null || !Number.isFinite(minutes)) return null;

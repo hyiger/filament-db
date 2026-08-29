@@ -19,8 +19,8 @@ export function formatGrams(value: number | null | undefined, decimals = 2): str
   // A naive `Math.round(value * 10**decimals)` mis-rounds exact .005-type ties
   // because the binary product lands JUST below the tie (1.005 * 100 ===
   // 100.4999…, so it would show "1" instead of "1.01"). Shifting the decimal
-  // point through the number parser ("1.005e2" → 100.5 exactly) avoids that, and
-  // `String(Number(...))` drops trailing zeros (210.00 → "210"). (#805 / Codex P3)
+  // point through the number parser ("1.005e2" → 100.5 exactly) avoids that,
+  // and `String(Number(...))` drops trailing zeros (210.00 → "210").
   const rounded = Number(`${Math.round(Number(`${value}e${decimals}`))}e-${decimals}`);
   // Guard the parser path: a value that stringifies to exponential notation
   // (absurd for a gram weight) would yield NaN — fall back to the raw value.

@@ -223,7 +223,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   if (name) {
     // 1a. Exact-case — a confident match even when a case-variant sibling exists.
     //
-    // GH #1116 (Codex P2): "exact" has to mean exact. `name` carries
+    // GH #1116: "exact" has to mean exact. `name` carries
     // `trim: true` and the setter casts QUERY values, so with both "X" and an
     // unresolved "X " active, a scan carrying "X " matched the CANONICAL row
     // and returned it as CONFIDENT — never reaching the ambiguity tiers below.

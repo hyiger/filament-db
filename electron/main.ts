@@ -22,16 +22,12 @@ import { shouldApplyAppCsp } from "./csp-scope";
 import { waitForServer } from "./wait-for-server";
 
 // ── Diagnostic log ──
-// Writes lifecycle and crash events to a file in userData so users on
-// machines where the window never appears (GH #176) can attach a log
-// instead of guessing at console output they can't see. Best-effort only —
-// never throws, never blocks startup. Entries are also mirrored to
-// console.log for the dev workflow.
+// Lifecycle + crash events to a file in userData so users on machines where
+// the window never appears (GH #176) can attach a log. Best-effort only —
+// never throws, never blocks startup. Mirrored to console.log.
 const LOG_PATH = path.join(app.getPath("userData"), "logs", "main.log");
-// #829: cap the diagnostic log and keep one rotated backup so it can't grow
-// without bound — it mirrors all embedded Next server stdout/stderr, which
-// accumulates over a long-lived install (and the GH #176 support flow asks
-// users to attach this file, so a multi-hundred-MB log is its own problem).
+// #829: cap the log + keep one rotated backup — it mirrors all embedded Next
+// server stdout/stderr, which grows without bound on a long-lived install.
 const LOG_BACKUP_PATH = `${LOG_PATH}.1`;
 const LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 let logStream: fs.WriteStream | null = null;
@@ -48,11 +44,9 @@ function disableLogger() {
 function openLogStream() {
   fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
   const stream = fs.createWriteStream(LOG_PATH, { flags: "a" });
-  // WriteStream errors (perm-denied on roaming profile, AV file lock,
-  // disk-full mid-write) emit asynchronously on the stream; without a
-  // listener Node treats them as uncaught and would kill the main
-  // process — exactly the failure mode the logger is supposed to
-  // help debug, not cause. Absorb and disable further writes.
+  // WriteStream errors (perm-denied, AV file lock, disk-full) emit
+  // asynchronously; without a listener Node treats them as uncaught and
+  // kills the main process. Absorb and disable further writes.
   stream.on("error", disableLogger);
   logStream = stream;
 }
@@ -137,13 +131,11 @@ let serverProcess: UtilityProcess | null = null;
  * server can't tight-loop forever. */
 let serverRestartCount = 0;
 const MAX_SERVER_RESTARTS = 5;
-/** GH #901: true while an INTENTIONAL stop+restart is in flight (a save-config
- * connection change or a LAN-share toggle). The crash-restart `exit` handler
- * bails when it's set, so a freshly-forked server that fails to start during an
- * intentional restart doesn't ALSO burn a crash-restart attempt + schedule a
- * background respawn that races the caller's own error handling. The caller
- * already owns the failure (it surfaces it to the renderer). Cleared once the
- * intentional restart settles. */
+/** GH #901: true while an INTENTIONAL stop+restart is in flight (save-config
+ * connection change / LAN-share toggle). The crash-restart `exit` handler
+ * bails when set, so a freshly-forked server failing during an intentional
+ * restart doesn't ALSO burn a crash-restart attempt + schedule a respawn
+ * racing the caller's own error handling. Cleared once the restart settles. */
 let intentionalServerRestart = false;
 let nfcService: NfcService | null = null;
 /** GH #505: when resolveMongoUri()'s Atlas-to-local fallback fires at
@@ -160,13 +152,10 @@ let syncService: SyncService | null = null;
 const PORT = parseInt(process.env.PORT || "3456", 10);
 
 // ── Single-instance lock ──
-// Prevent multiple app windows / duplicate servers on the same port.
-//
-// On Windows in particular, an upgrade can leave a previous-version
-// process running in the background — the new install then fails to get
-// the lock and used to silently `app.quit()` with no window and no
-// notification, exactly matching the GH #176 report. Surface the cause
-// before quitting so the user knows why nothing appeared.
+// Prevent multiple app windows / duplicate servers on the same port. On
+// Windows an upgrade can leave a previous-version process running — the new
+// install then fails to get the lock; quitting silently there matched the
+// GH #176 "no window appears" report, so surface the cause first.
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   diag("single-instance lock denied — another instance owns it; quitting");
@@ -185,11 +174,8 @@ if (!gotTheLock) {
 
 app.on("second-instance", () => {
   if (mainWindow) {
-    // The first instance might be hidden (some upgrade paths leave the
-    // window state stuck off-screen); calling .show() before .focus()
-    // resurfaces it whether it was minimized, hidden, or just behind
-    // another window — covers the GH #176 case where the app process
-    // exists but no window is visible.
+    // .show() before .focus() resurfaces the window whether it was
+    // minimized, hidden, or behind another window (GH #176).
     if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -238,13 +224,10 @@ function getAppURL(urlPath = "/") {
 }
 
 /** Hard cap on how long we'll wait for `ready-to-show` before forcing the
- * window visible. The point of the safety net is GH #176: users on Windows
- * with KB5083631 / strict Defender / SAC report the process running with
- * no visible window. If the renderer hangs (load blocked, GPU process
- * crashed mid-paint, server slow to respond), we'd rather show a blank
- * window the user can interact with than leave a phantom background
- * process. Must be longer than the realistic startup time on a cold
- * Windows install with Defender scanning every file. */
+ * window visible (GH #176: process running with no visible window on
+ * Windows). If the renderer hangs, a blank interactable window beats a
+ * phantom background process. Must be longer than realistic cold-startup
+ * time on Windows with Defender scanning every file. */
 const WINDOW_SHOW_TIMEOUT_MS = 20_000;
 
 function createWindow(urlPath = "/") {
@@ -256,28 +239,22 @@ function createWindow(urlPath = "/") {
     minHeight: 600,
     title: "Filament DB",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
-    // Defer paint until the renderer reports ready-to-show (or the
-    // safety-net timeout fires). Without this, a window flash of unstyled
-    // content can occur on slow first loads, AND — more importantly for
-    // GH #176 — there's no path to recover if the renderer never reaches
-    // a visible state on its own.
+    // Defer paint until ready-to-show (or the safety-net timeout) — avoids
+    // an unstyled-content flash and gives GH #176 a recovery path when the
+    // renderer never reaches a visible state on its own.
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
-      // GH #262: run the renderer in the OS-level sandbox. The preload
-      // only uses contextBridge + ipcRenderer, both of which are
-      // sandbox-safe, so nothing in the renderer path needs Node access.
-      // This contains any XSS in user-supplied filament data / community
-      // DB content / TDS-extracted HTML so it can't reach beyond the
-      // renderer process.
+      // GH #262: OS-level sandbox. The preload only uses contextBridge +
+      // ipcRenderer (both sandbox-safe), and this contains any XSS in
+      // user-supplied filament data / community DB content / TDS-extracted
+      // HTML to the renderer process.
       sandbox: true,
-      // GH #410: explicit defence-in-depth. `<webview>` tags load a
-      // distinct WebContents that doesn't inherit the renderer's
-      // sandbox settings. The app doesn't use them anywhere; deny
-      // them so a future stray <webview> can't be a privileged
-      // escape hatch.
+      // GH #410: `<webview>` tags load a distinct WebContents that doesn't
+      // inherit the renderer's sandbox. Unused by the app — deny so a
+      // future stray <webview> can't be a privileged escape hatch.
       webviewTag: false,
     },
   });
@@ -288,10 +265,8 @@ function createWindow(urlPath = "/") {
   });
 
   // GH #505: replay any fallback notice that fired before the window
-  // existed. did-finish-load is the right moment because the renderer's
-  // IPC listeners are guaranteed registered by then (preload + bundle
-  // have run). Cleared after first delivery so a window reload doesn't
-  // re-fire a stale notice.
+  // existed. did-finish-load guarantees the renderer's IPC listeners are
+  // registered; cleared after first delivery so a reload doesn't re-fire.
   mainWindow.webContents.once("did-finish-load", () => {
     if (pendingFallbackNotice && mainWindow && !mainWindow.webContents.isDestroyed()) {
       mainWindow.webContents.send("connection-mode-fallback", pendingFallbackNotice);
@@ -335,13 +310,10 @@ function createWindow(urlPath = "/") {
   // Start the auto-updater bound to this window. No-ops in dev.
   initAutoUpdater(mainWindow, diag);
 
-  // GH #902: the `will-navigate` + `setWindowOpenHandler` guards are NOT
-  // installed per-window here. The global `app.on("web-contents-created")`
-  // handler above already installs identical http(s)-only guards on EVERY
-  // WebContents (it's registered at module load, before this runs), so the
-  // main window is covered by it. Re-installing here only duplicated the
-  // will-navigate listener and overwrote the single-slot window-open handler
-  // with an identical one — dead weight that risked the two copies drifting.
+  // GH #902: do NOT install per-window `will-navigate` / window-open guards
+  // here — the global `web-contents-created` handler above (registered at
+  // module load) already covers EVERY WebContents; a per-window copy would
+  // just duplicate listeners and risk the two copies drifting.
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -492,9 +464,8 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       serviceName: "next-server",
     });
 
-    // Mirror server output into the diag log too — when the utility
-    // process dies during module load (as it did under v1.14.2's asar
-    // packaging), the stack trace lands on stderr and we want it
+    // Mirror server output into the diag log — when the utility process
+    // dies during module load, the stack trace lands on stderr and must be
     // captured alongside the lifecycle events for support reports.
     serverProcess.stdout?.on("data", (data: Buffer) => {
       const text = data.toString().trim();
@@ -557,11 +528,10 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       if (isQuitting || intentionalServerRestart || thisProc !== serverProcess) return;
       if (code === 0 || code === null) return; // clean exit, not a crash
 
-      // The current server crashed unexpectedly. Stop advertising it over mDNS
-      // for the entire down/restart window so a mobile scan can't discover and
-      // save a dead URL — it's re-published only after a healthy restart below
-      // (Codex #723). Covers both the backoff window and a failed restart;
-      // the retry-cap branch inherits this too.
+      // Stop advertising over mDNS for the entire down/restart window so a
+      // mobile scan can't discover and save a dead URL — re-published only
+      // after a healthy restart below (#723). Covers the backoff window, a
+      // failed restart, and the retry-cap branch.
       stopMdnsAdvertisement();
 
       if (serverRestartCount >= MAX_SERVER_RESTARTS) {
@@ -578,16 +548,12 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       const backoffMs = Math.min(serverRestartCount * 2000, 30_000);
       diag(`server crashed (code=${code}); restart ${serverRestartCount}/${MAX_SERVER_RESTARTS} in ${backoffMs}ms`);
       setTimeout(() => {
-        // GH #315 (Codex review): re-check the SAME guard the exit
-        // handler used, but now at timer-fire time. Between the crash
-        // and this delayed restart (backoff up to 30s) an intentional
-        // restart — e.g. save-config's stopServer() + startProduction-
-        // Server() — may already have replaced `serverProcess`.
-        // Restarting anyway would fork a duplicate server (EADDRINUSE)
-        // and leave `serverProcess` pointing at the wrong instance.
-        // `serverProcess !== thisProc` also covers a bare stopServer()
-        // (serverProcess === null): an intentional stop must not be
-        // undone by a stale crash timer.
+        // GH #315: re-check the exit handler's guard at timer-fire time —
+        // during the backoff (up to 30s) an intentional restart may have
+        // replaced `serverProcess`; restarting anyway would fork a
+        // duplicate server (EADDRINUSE). `serverProcess !== thisProc`
+        // also covers a bare stopServer() (serverProcess === null): an
+        // intentional stop must not be undone by a stale crash timer.
         if (isQuitting || serverProcess !== thisProc) return;
         startProductionServer((store.get("mongodbUri") as string) || undefined)
           .then(() => {
@@ -652,7 +618,7 @@ function withIpcTimeout<T>(
  * follow-up startProductionServer() doesn't probe a port the dying process
  * still owns — otherwise waitForServer() can be answered by the OLD server and
  * report "ready" before the replacement has bound, and the new child then
- * fails with EADDRINUSE (Codex P2 on PR #718). serverProcess is nulled FIRST
+ * fails with EADDRINUSE (#718). serverProcess is nulled FIRST
  * so the GH #315 crash-restart guard (thisProc !== serverProcess) suppresses a
  * respawn of the process we're intentionally killing.
  */
@@ -740,13 +706,10 @@ async function resolveMongoUri(): Promise<string | null> {
 
     // Test Atlas connectivity — fall back to local if unreachable.
     // GH #1077: the client is hoisted out of the `try` and closed in a
-    // `finally`, matching the sibling probes (test-connection,
-    // resolveSrvUri, SyncService.checkAtlasConnectivity). The old shape
-    // constructed + closed the client inside the `try`, so any throw
-    // between connect() and close() — e.g. the ping failing on a
-    // reachable-but-unauthorized cluster — leaked a connected client
-    // (socket pool, heartbeat timers, topology monitor) for the rest of
-    // the main-process lifetime.
+    // `finally` — closing inside the `try` leaks a connected client (socket
+    // pool, heartbeat timers, topology monitor) for the rest of the process
+    // lifetime when anything throws between connect() and close(), e.g. the
+    // ping failing on a reachable-but-unauthorized cluster.
     let client: import("mongodb").MongoClient | undefined;
     try {
       const { MongoClient } = await import("mongodb");
@@ -759,18 +722,16 @@ async function resolveMongoUri(): Promise<string | null> {
 
       store.set("mongodbUri", atlasUri);
       // GH #1006 F3: pure Atlas doesn't use the embedded mongod — stop one a
-      // prior offline/hybrid session started, or it idles for the rest of the
-      // session (~200–300 MB RSS + a dbPath lock) serving nothing. No-op when
-      // none is running; the atlas-fallback path below restarts it on demand
-      // when Atlas is unreachable. Mirrors the syncService teardown above (#672).
+      // prior offline/hybrid session started, or it idles for the session
+      // (~200–300 MB RSS + a dbPath lock) serving nothing. No-op when none
+      // is running; the atlas-fallback path restarts it on demand (#672).
       //
-      // Codex P2 on #1015: guard with its OWN try/catch. The enclosing catch
-      // means "Atlas unreachable → fall back to local" — a mongod.stop()
-      // rejection AFTER a successful Atlas ping must not jump the user onto
-      // local-fallback (which would silently ignore their reachable Atlas
-      // selection and, since a failed stop doesn't clear the cached local URI,
-      // startLocalMongo() would hand back the stale mongod). A failed stop just
-      // leaves the mongod idling — the exact pre-F3 behavior, logged, no worse.
+      // Guarded with its OWN try/catch (#1015): the enclosing catch means
+      // "Atlas unreachable → fall back to local" — a mongod.stop() rejection
+      // AFTER a successful Atlas ping must not jump the user onto
+      // local-fallback (silently ignoring their reachable Atlas selection,
+      // with startLocalMongo() handing back the stale mongod). A failed stop
+      // just leaves the mongod idling — logged, no worse than pre-F3.
       try {
         await stopLocalMongo();
       } catch (stopErr) {
@@ -785,11 +746,10 @@ async function resolveMongoUri(): Promise<string | null> {
       // Start sync so it'll push/pull once Atlas is reachable
       initSyncService(localUri, atlasUri);
 
-      // Notify renderer of the fallback. GH #505: at cold-boot this
-      // runs BEFORE createWindow, so mainWindow is null and the `?.`
-      // short-circuits silently — leaving the renderer to render the
-      // Atlas pill green while DB I/O actually targets local mongod.
-      // Stash for replay on did-finish-load.
+      // GH #505: at cold-boot this runs BEFORE createWindow, so mainWindow
+      // is null and the `?.` short-circuits silently — the renderer would
+      // show the Atlas pill green while DB I/O targets local mongod. Stash
+      // for replay on did-finish-load.
       const notice = { intended: "atlas", actual: "local-fallback" };
       if (mainWindow && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("connection-mode-fallback", notice);
@@ -799,10 +759,8 @@ async function resolveMongoUri(): Promise<string | null> {
 
       return localUri;
     } finally {
-      // Runs on BOTH paths — a `return` inside try/catch still executes
-      // the finally before the value is delivered. close() is a no-op on
-      // a client that never connected; swallow close errors like the
-      // sibling probes do.
+      // Runs on BOTH paths. close() is a no-op on a never-connected client;
+      // swallow close errors like the sibling probes do.
       await client?.close().catch(() => {});
     }
   }
@@ -844,11 +802,8 @@ function initSyncService(localUri: string, atlasUri: string) {
 //
 // GH #409: returns the Atlas URI + AI API keys + Mongo URI. Without a
 // sender guard, a sub-frame (embedded TDS, an XSS payload in a
-// user-supplied filament field) could read the full credential blob
-// and exfiltrate it through `img-src https:`-permitted beaconing.
-// The siblings (`save-config`, `test-connection`, `reset-config`) all
-// gate on `assertTrustedSender` already — this read path was the
-// asymmetric hole.
+// user-supplied filament field) could read the full credential blob and
+// exfiltrate it through `img-src https:`-permitted beaconing.
 ipcMain.handle("get-config", (event) => {
   assertTrustedSender(event, "get-config");
   return {
@@ -877,14 +832,11 @@ ipcMain.handle("get-lan-ip", (event) => {
   return { ips: listLanIpv4(), port: PORT };
 });
 
-// (#489) Expose whether Electron is running packaged or in dev mode.
-// In dev mode the renderer is served by `next dev` (separate process)
-// which reads MONGODB_URI from .env.local, NOT from electron-store.
-// So the connection-mode wizard setting is purely cosmetic in dev —
-// the embedded MongoDB Electron starts is unreachable from the
-// renderer. The DevModeBanner uses this flag to surface the gap so
-// users don't think they're working "offline" when writes actually
-// hit whatever .env.local points to.
+// (#489) Whether Electron runs packaged or dev. In dev the renderer is
+// served by `next dev`, which reads MONGODB_URI from .env.local, NOT
+// electron-store — so the connection-mode wizard is cosmetic there and the
+// embedded MongoDB is unreachable from the renderer. DevModeBanner uses
+// this flag to surface that gap.
 ipcMain.handle("get-runtime-mode", (event) => {
   assertTrustedSender(event, "get-runtime-mode");
   return { isPackaged: app.isPackaged };
@@ -917,7 +869,6 @@ ipcMain.handle("save-config", async (event, config: {
     }
   }
 
-  // Update individual fields
   if (config.connectionMode !== undefined) {
     store.set("connectionMode", config.connectionMode);
   }
@@ -942,22 +893,17 @@ ipcMain.handle("save-config", async (event, config: {
   if (config.locale !== undefined) {
     store.set("locale", config.locale);
   }
-  // GH #592: the label format (a cosmetic pref like currency/locale; does
-  // not affect the DB connection so it never triggers a server restart).
+  // Cosmetic local prefs (no server restart): label/date/number format,
+  // default NTAG type (#592/#983/#973).
   if (config.labelFormat !== undefined) {
     store.set("labelFormat", config.labelFormat);
   }
-  // GH #983: the user's date-format preference (a cosmetic local pref like
-  // currency/locale/labelFormat; no server restart).
   if (config.dateFormat !== undefined) {
     store.set("dateFormat", config.dateFormat);
   }
-  // The user's number-format preference (cosmetic local pref; no server restart).
   if (config.numberFormat !== undefined) {
     store.set("numberFormat", config.numberFormat);
   }
-  // #973: the default NTAG type for GET_VERSION-less readers (a local pref;
-  // no server restart).
   if (config.ntagDefaultSize !== undefined) {
     store.set("ntagDefaultSize", config.ntagDefaultSize);
   }
@@ -980,12 +926,9 @@ ipcMain.handle("save-config", async (event, config: {
     store.set("atlasUri", config.mongodbUri);
   }
 
-  // Only the connection-affecting fields require a server restart and a
-  // navigation reload. Saving cosmetic prefs like currency / locale / AI
-  // keys / customCurrencies used to bounce the user back to /, which made
-  // Settings feel unstable and interrupted multi-step configuration (GH
-  // #177). Detect whether the connection actually changed before doing
-  // any of the heavy lifting.
+  // Only connection-affecting fields require a server restart + navigation
+  // reload — restarting on cosmetic prefs bounced the user back to / and
+  // interrupted multi-step configuration (GH #177).
   const connectionChanged =
     config.connectionMode !== undefined ||
     config.atlasUri !== undefined ||
@@ -1009,27 +952,23 @@ ipcMain.handle("save-config", async (event, config: {
         serverRestarted = true;
       } catch (err) {
         console.error("Failed to start server after config save:", err);
-        // GH #1006 F2: stopServer() already killed the healthy server, so the
-        // app now has NO embedded server. The usual cause is a transient port
-        // race (EADDRINUSE from the not-yet-dead old process still holding 3456
-        // during the gap). Clear any half-spawned process and retry once on the
-        // SAME resolved uri — resolveMongoUri already stood up THIS mode's
-        // mongod/sync (and tore down the previous mode's, so the old uri would
-        // now point at a stopped mongod), making the new uri the only coherent
-        // recovery target. Mirrors the LAN-toggle branch's recover-or-fail shape.
+        // GH #1006 F2: stopServer() already killed the healthy server, so
+        // the app has NO embedded server (usual cause: transient EADDRINUSE
+        // from the not-yet-dead old process). Clear any half-spawned process
+        // and retry once on the SAME resolved uri — resolveMongoUri already
+        // stood up THIS mode's mongod/sync and tore down the previous
+        // mode's, so the new uri is the only coherent recovery target.
         await stopServer();
         try {
           await startProductionServer(uri || undefined);
           serverRestarted = true;
         } catch (recoveryErr) {
           console.error("Failed to restore server after config-change failure:", recoveryErr);
-          // Codex P2 on #1015: the failed recovery can leave a stray child —
-          // startProductionServer rejects with the utility process still alive
-          // (waitForServer timeout) or with `serverProcess` pointing at a dead
-          // handle. We're about to report "no embedded server", so make that
-          // true: kill/clear the half-spawned process before returning failure,
-          // or a late child squats the port and the next retry waits on
-          // stopServer()'s 5s safety net for an already-exited handle.
+          // #1015: the failed recovery can leave a stray child
+          // (startProductionServer rejects with the utility process still
+          // alive, or `serverProcess` pointing at a dead handle). We're
+          // about to report "no embedded server" — make that true, or a
+          // late child squats the port.
           await stopServer();
         }
       } finally {
@@ -1041,24 +980,21 @@ ipcMain.handle("save-config", async (event, config: {
       if (serverRestarted) {
         syncMdnsAdvertisement();
       } else {
-        // GH #1006 F2: recovery failed too — the app has no embedded server.
-        // Don't advertise a dead one, don't reload the window into a Chromium
-        // error page (the #176 white-window class), and return failure so the
-        // renderer surfaces its error path instead of showing "Switched to
-        // <mode>" over a dead server. Pre-fix this fell through to loadURL +
-        // { success: true } unconditionally.
+        // GH #1006 F2: recovery failed too — no embedded server. Don't
+        // advertise a dead one, don't reload the window into a Chromium
+        // error page (the #176 white-window class); return failure so the
+        // renderer surfaces its error path instead of "Switched to <mode>"
+        // over a dead server.
         stopMdnsAdvertisement();
         return { success: false };
       }
     }
 
-    // Reload the window on a connection change so the renderer picks up
-    // the new sync state. Destination depends on where the save came from:
-    //   - first-run /setup completes → go home (the existing setup flow
-    //     contract — src/app/setup/page.tsx awaits saveConfig and expects
-    //     the main process to redirect; Codex review on PR #178)
-    //   - any other page (Settings) → stay on /settings so the user can
-    //     keep tuning without being bounced (GH #177)
+    // Reload the window on a connection change so the renderer picks up the
+    // new sync state. Destination: first-run /setup completes → go home
+    // (src/app/setup/page.tsx awaits saveConfig and expects the main
+    // process to redirect, #178); any other page → stay on /settings so the
+    // user isn't bounced (GH #177).
     if (mainWindow) {
       const currentPath = (() => {
         try {
@@ -1073,14 +1009,12 @@ ipcMain.handle("save-config", async (event, config: {
   } else if (exposeToLanChanged && !isDev) {
     // LAN-share toggled with no connection change: respawn the embedded
     // server so it rebinds to the new HOSTNAME, reusing the already-resolved
-    // active URI (store.mongodbUri — the same source the crash-restart path
-    // uses). No URI re-resolution (so sync / local-mongo aren't
+    // active URI. No URI re-resolution (sync / local-mongo aren't
     // re-initialised) and no window reload (the renderer talks to localhost
-    // either way). The await means this resolves only once the server is back
-    // up, so the renderer's "applying…" state reflects real readiness.
-    // GH #901: flag the intentional restart (incl. the recovery restarts) so a
-    // failed start doesn't ALSO trip the crash-restart path; the finally clears
-    // it on every exit, including the `return { success: false }` below.
+    // either way). The await means this resolves only once the server is
+    // back up. GH #901: flag the intentional restart (incl. recovery
+    // restarts) so a failed start doesn't ALSO trip the crash-restart path;
+    // the finally clears it on every exit.
     intentionalServerRestart = true;
     try {
       await stopServer();
@@ -1102,9 +1036,9 @@ ipcMain.handle("save-config", async (event, config: {
           await startProductionServer((store.get("mongodbUri") as string) || undefined);
         } catch (recoveryErr) {
           console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
-          // Codex P2 on #1015 (same hazard as the connection-change branch):
-          // the failed recovery can leave a half-spawned/stale child — clear
-          // it so "no embedded server" is actually true before we report it.
+          // #1015 (same hazard as the connection-change branch): clear any
+          // half-spawned/stale child so "no embedded server" is actually
+          // true before we report it.
           await stopServer();
         }
         // Reflect the reverted bind state in the mDNS advertisement too.
@@ -1116,11 +1050,10 @@ ipcMain.handle("save-config", async (event, config: {
     }
   }
 
-  // Start/stop LAN auto-discovery to match the new "Share on local network"
-  // state once the server's bind has settled. Only for the exposeToLan-ONLY
-  // path: when connectionChanged ran it already synced/stopped mDNS based on
-  // its own restart outcome, so re-syncing here would re-advertise a dead
-  // server if that restart failed while turning LAN sharing on (Codex #723).
+  // Sync mDNS once the server's bind has settled — but only for the
+  // exposeToLan-ONLY path: the connectionChanged branch already synced/
+  // stopped mDNS on its own restart outcome, and re-syncing here would
+  // re-advertise a dead server after a failed restart (#723).
   if (exposeToLanChanged && !connectionChanged) syncMdnsAdvertisement();
   return { success: true };
 });
@@ -1168,20 +1101,15 @@ ipcMain.handle("test-connection", async (event, uri: string) => {
   }
 });
 
-// GH #523: the `show-message` IPC handler that lived here was unguarded
-// (no assertTrustedSender) AND dead code (zero renderer callers — see
-// `grep -rn showMessage\|show-message src electron` before reintroducing).
-// It rendered an OS-native dialog parented to the main window from
-// renderer-controlled type/title/message strings — perfect material for
-// UI-spoofing / credential-phishing prompts if a sub-frame is ever
-// compromised. If a future feature needs it, re-add with
+// GH #523: the `show-message` IPC handler that lived here was unguarded AND
+// dead code. It rendered an OS-native dialog from renderer-controlled
+// type/title/message strings — UI-spoofing / credential-phishing material if
+// a sub-frame is compromised. If a future feature needs it, re-add with
 // assertTrustedSender and a constrained payload allowlist.
 
 // Sync
-// GH #623: read-only, but gate on the trusted sender anyway — the sync
-// status carries the last error text (which can name the Atlas DB), and
-// leaving the getter open was an undocumented asymmetry vs. every other
-// handler's "contain XSS to the renderer" posture.
+// GH #623: read-only, but sender-gated anyway — the sync status carries the
+// last error text (which can name the Atlas DB).
 ipcMain.handle("get-sync-status", (event) => {
   assertTrustedSender(event, "get-sync-status");
   return syncService?.getStatus() ?? {
@@ -1195,31 +1123,25 @@ ipcMain.handle("get-sync-status", (event) => {
   };
 });
 
-// GH #432: trigger-sync was reachable from any sub-frame. The
-// `this.syncing` guard in SyncService makes the SECOND call cheap
-// but the FIRST opens a real MongoClient connection to Atlas, which
-// a compromised sub-frame could weaponise for timing attacks or
-// bandwidth abuse against the user's Atlas tier.
+// GH #432: trigger-sync opens a real MongoClient connection to Atlas — a
+// compromised sub-frame could weaponise it for timing attacks or bandwidth
+// abuse against the user's Atlas tier.
 ipcMain.handle("trigger-sync", async (event) => {
   assertTrustedSender(event, "trigger-sync");
   if (!syncService) {
     return { error: "Sync not available in current mode" };
   }
-  // GH #279: do NOT wrap sync in withIpcTimeout. A 15s race that
-  // abandons an in-flight sync doesn't stop it — the engine keeps
-  // mutating BOTH databases while the renderer is told it "timed out".
-  // Sync is inherently long-running and reports its own progress via
-  // get-sync-status, which the renderer already polls; let it run to
-  // completion.
+  // GH #279: do NOT wrap sync in withIpcTimeout — abandoning the race
+  // doesn't stop the engine, which keeps mutating BOTH databases while the
+  // renderer is told it "timed out". Sync reports its own progress via
+  // get-sync-status; let it run to completion.
   const results = await syncService.sync();
   return { results };
 });
 
-// GH #506: same sub-frame attack surface as #432's trigger-sync — this
-// handler opens a real MongoClient to Atlas (per call when syncService
-// is null; per-cycle thereafter) and is polled by SyncStatusIndicator.
-// A compromised sub-frame can weaponise it for connection-pool / billing
-// exhaustion against the user's Atlas tier.
+// GH #506: same sub-frame attack surface as trigger-sync — opens a real
+// MongoClient to Atlas; a compromised sub-frame can weaponise it for
+// connection-pool / billing exhaustion.
 ipcMain.handle("check-atlas-connectivity", async (event) => {
   assertTrustedSender(event, "check-atlas-connectivity");
   if (!syncService) {
@@ -1248,19 +1170,16 @@ ipcMain.handle("nfc-get-status", (event) => {
     readerName: null,
     tagPresent: false,
     tagUid: null,
-    // GH #1006 F4: NfcService.getStatus() always includes `lastError`, and
-    // src/types/electron.d.ts types it as required (`lastError: {...} | null`,
-    // GH #450). This null-service fallback (SCardSvr stopped / pcsclite threw —
-    // the exact degraded-host path #450 surfaces errors for) must match the
-    // contract, or the renderer receives `undefined` where it's typed `null`.
+    // GH #1006 F4: src/types/electron.d.ts types `lastError` as required —
+    // this null-service fallback must match the contract, or the renderer
+    // receives `undefined` where it's typed `null`.
     lastError: null,
   };
 });
 
-// GH #432 follow-up: nfc-read-tag can move tag state (reads consume
-// a slot in the reader's pipeline) and a sub-frame racing the
-// legitimate auto-read could mask a real scan. Gate on the same
-// trusted-sender check the write/format handlers already use.
+// GH #432: nfc-read-tag can move tag state, and a sub-frame racing the
+// legitimate auto-read could mask a real scan — same trusted-sender gate as
+// the write/format handlers.
 ipcMain.handle("nfc-read-tag", async (event) => {
   assertTrustedSender(event, "nfc-read-tag");
   if (!nfcService) throw new Error("NFC not initialized");
@@ -1361,9 +1280,9 @@ ipcMain.handle("nfc-set-readonly", async (event, readOnly: unknown) => {
 
 // ── Label printer (Brother PT-P710BT) ──
 // Transport-only; the byte stream is built in the renderer via
-// src/lib/labelEncoder.ts + labelBitmap.ts. Main owns the print transport
-// (the OS print system — CUPS / Windows spooler) because the renderer
-// can't shell out or open the USB printer device. (GH #588)
+// src/lib/labelEncoder.ts + labelBitmap.ts. Main owns the OS print
+// transport because the renderer can't shell out or open the USB printer
+// device. (GH #588)
 
 ipcMain.handle("label-printer-list-devices", async (event, probeUsb) => {
   assertTrustedSender(event, "label-printer-list-devices");
@@ -1434,10 +1353,8 @@ const MAX_PRINT_BYTES = 5_000_000;
 for (const spec of LABEL_PRINTER_CHANNELS) {
   ipcMain.handle(spec.channels.get, (event) => {
     assertTrustedSender(event, spec.channels.get);
-    // The picker's chosen device path lives in the same electron-store
-    // the rest of the app uses — see the get-config handler above. Kept
-    // as a separate handler so the renderer doesn't have to read the
-    // whole config object just to render a print dialog.
+    // Separate from get-config so the renderer doesn't read the whole
+    // config object just to render a print dialog.
     return (store as unknown as Store<Record<string, unknown>>).get(spec.storeKey, null);
   });
 
@@ -1487,12 +1404,10 @@ for (const spec of LABEL_PRINTER_CHANNELS) {
     // so a byte in the wrong slot leaves the printer in a wrong-mode or
     // chain-stuck state for the next print.
     //
-    // Codex P2 round 1: use an index loop, not Array.prototype.every —
-    // `every` skips sparse-array holes (`new Array(100)` or
-    // `delete arr[5]`), so a hostile renderer could send a 5MB array
-    // with NO actual bytes and the guard would pass. `new Uint8Array`
-    // would then convert every hole to 0x00, reintroducing the silent
-    // coercion this hardening is meant to block.
+    // Index loop, NOT Array.prototype.every — `every` skips sparse-array
+    // holes, so a hostile renderer could send a 5MB hole-array with NO
+    // actual bytes and the guard would pass; `new Uint8Array` would then
+    // fill every hole with 0x00.
     for (let i = 0; i < bytes.length; i++) {
       const b = bytes[i];
       if (!Number.isInteger(b) || b < 0 || b > 255) {
@@ -1515,15 +1430,10 @@ for (const spec of LABEL_PRINTER_CHANNELS) {
   });
 }
 
-// Public base URL used for URL-mode label QR payloads (e.g.
-// "https://filament-db.lan" or "https://my-instance.example.com").
-// Required for URL mode in packaged Electron because the renderer's
-// window.location.origin is `http://localhost:<port>` — labels encoded
-// with that URL are unscannable from any other device. Web users
-// (renderer running in a regular browser) usually have a real origin
-// already and don't need this setting; the dialog uses it as an
-// override when set, falling back to `window.location.origin`
-// otherwise. (Codex P2 on PR #487.)
+// Public base URL for URL-mode label QR payloads. Required in packaged
+// Electron because window.location.origin is `http://localhost:<port>` —
+// labels encoded with that are unscannable from any other device. The
+// dialog uses it as an override when set, else window.location.origin.
 ipcMain.handle("label-printer-get-public-url", (event) => {
   assertTrustedSender(event, "label-printer-get-public-url");
   return (store as unknown as Store<Record<string, unknown>>).get("labelPrinterPublicUrl", null);
@@ -1554,17 +1464,12 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
       "URL points to localhost — labels encoded with this URL would be unscannable from other devices.",
     );
   }
-  // (Query + fragment rejection moved below to the raw-input check
-  // which also catches bare `?` / `#` delimiters that URL parses as
-  // empty search/hash — Codex P2 round 9 on PR #487.)
-  // Reject bare delimiters too: `https://example.com?` parses with
-  // `parsed.search === ""` (falsy), so the structured check above lets
-  // it through and the original raw string gets stored. Concatenating
-  // `/filaments/<id>` onto that produces `...?/filaments/<id>` which
-  // routes the scan to the wrong place. URL-path `?` and `#` characters
-  // are always delimiters per RFC 3986 — literal versions must be
-  // percent-encoded as `%3F` / `%23` — so checking the raw input is
-  // valid. (Codex P2 round 9 on PR #487.)
+  // Query/fragment rejection checks the RAW input: a bare
+  // `https://example.com?` parses with `parsed.search === ""` (falsy), so a
+  // structured check would let it through — and concatenating
+  // `/filaments/<id>` onto it produces `...?/filaments/<id>`. `?` and `#`
+  // are always delimiters per RFC 3986 (literals must be %3F / %23), so a
+  // raw-substring check is valid.
   if (url.includes("?")) {
     throw new Error("URL must not contain a query string (?...)");
   }
@@ -1621,10 +1526,9 @@ ipcMain.handle("label-printer-disable-bidi", async (event, printerName: string) 
 
 // ── App lifecycle ──
 
-// `child-process-gone` covers GPU, utility, and any other Chromium child
-// processes — useful when the new Windows graphics stack (KB5083631 era)
-// kills the GPU process and the renderer is left half-painted. Logging
-// it gives users on GH #176 something concrete to attach.
+// `child-process-gone` covers GPU, utility, and other Chromium children —
+// useful when the GPU process is killed and the renderer is left
+// half-painted; gives GH #176 reports something concrete to attach.
 app.on("child-process-gone", (_evt, details) => {
   diag(`child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`);
 });
@@ -1731,10 +1635,9 @@ async function initNfc(): Promise<void> {
     const PRESENT_AT_CONNECT_VERIFY_MS = 700;
 
     // Read the tag and route the result to the renderer. `silentOnError`
-    // suppresses the generic error path (used by the #572 connect-time
-    // verification, which must stay quiet when the reader is empty / holds a
-    // card the user didn't deliberately tap). Cooldown-guarded so a real
-    // placement and the verification can't double-read.
+    // suppresses the generic error path (the #572 connect-time verification
+    // must stay quiet when the reader is empty / holds a card the user
+    // didn't deliberately tap). Cooldown-guarded against double-reads.
     const triggerAutoRead = (silentOnError: boolean) => {
       if (!nfcService) return;
       const now = Date.now();
@@ -1746,24 +1649,20 @@ async function initNfc(): Promise<void> {
           mainWindow?.webContents.send("nfc-tag-detected", { data });
         })
         .catch((err) => {
-          // Phantom-present recovery: PC/SC said `isPresent=true` but
-          // the connect retries (up to ~6s) all failed — the present
-          // bit was a driver/SCARD_STATE_CHANGED artifact, not a real
-          // tag. Without this corrective clear, the renderer pill is
-          // stuck at "Tag detected" indefinitely (the reason behind
-          // this fix). The service handles the actual state mutation;
-          // we don't emit a separate nfc-tag-detected here because
-          // there is no tag to report on.
+          // Phantom-present recovery: PC/SC said `isPresent=true` but the
+          // connect retries (up to ~6s) all failed — the present bit was a
+          // driver/SCARD_STATE_CHANGED artifact, not a real tag. Without
+          // this corrective clear the renderer pill sticks at "Tag
+          // detected" indefinitely. No nfc-tag-detected is emitted —
+          // there's no tag to report on.
           if (err.message?.includes("Cannot connect to tag")) {
             nfcService?.clearPhantomPresence();
             return;
           }
-          // Blank/erased tags have no NDEF data — tell the renderer so it
-          // can show an "empty tag" indication instead of silently ignoring.
+          // Blank/erased tags have no NDEF data — surface as "empty tag".
           // Covers an erased NDEF-formatted tag (No NDEF TLV/record) and a
-          // never-formatted blank tag whose all-zero memory has no CC byte
-          // (#556) — both are the friendly "write me to initialize" case,
-          // not a raw error worth surfacing.
+          // never-formatted blank tag with no CC byte (#556) — both the
+          // friendly "write me to initialize" case, not a raw error.
           if (
             err.message?.includes("No NDEF TLV") ||
             err.message?.includes("No NDEF record") ||
@@ -1790,12 +1689,11 @@ async function initNfc(): Promise<void> {
 
     // GH #572: a tag already resting on the reader at connect time only
     // produces the first (skipped) status event, so the present-edge path
-    // above never fires. The service emits `presentAtConnect` when that first
-    // event reported present — do a one-shot, silent verification read. A
-    // real tag connects and reads (its connect emits an INUSE status event
-    // that flips tagPresent), and the cooldown stops that from double-reading;
-    // an empty reader / phantom fails the connect and stays quiet. Gated on no
-    // tag already detected (a real placement during the settle wins).
+    // above never fires. On `presentAtConnect`, do a one-shot silent
+    // verification read: a real tag connects and reads (its connect emits an
+    // INUSE status event that flips tagPresent; the cooldown stops a
+    // double-read); an empty reader / phantom fails the connect and stays
+    // quiet. Gated on no tag already detected.
     nfcService.on("presentAtConnect", () => {
       setTimeout(() => {
         if (
@@ -1817,34 +1715,23 @@ async function initNfc(): Promise<void> {
 
 app.whenReady().then(async () => {
   diag("app ready");
-  // GH #344: React's RSC client uses `eval()` in dev mode for
-  // callstack reconstruction. `next.config.ts` already gates
-  // `'unsafe-eval'` on `NODE_ENV !== "production"`, but the Electron
-  // renderer applies the CSP below INSTEAD of (not in addition to) the
-  // web CSP — `next dev`'s header on its own is overwritten by the
-  // value we set here. So mirror the same dev-only gate, keyed on
-  // `app.isPackaged` (the source of truth for "this is a release
-  // build"). Production builds still get the tight, no-eval policy
-  // from #262.
+  // GH #344: React's RSC client uses `eval()` in dev mode. next.config.ts
+  // gates `'unsafe-eval'` on NODE_ENV, but the Electron renderer applies
+  // the CSP below INSTEAD of (not merged with) the web CSP — so mirror the
+  // dev-only gate here, keyed on `app.isPackaged` (the source of truth for
+  // "release build", NOT NODE_ENV, which isn't reliably set in the main
+  // process). Packaged builds keep the tight no-eval policy (#262).
   const scriptSrc = app.isPackaged
     ? "script-src 'self' 'unsafe-inline'"
     : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
-  // CSP header rewrite, scoped to the embedded Next app's own
-  // responses. Codex flagged a P1 on PR #462: an unfiltered handler
-  // would also rewrite the CSP on the vendor TDS document loaded
-  // inside the `<iframe>` (the `frame-src https:` flow), and setting
-  // `frame-ancestors 'none'` on the vendor doc's response tells
-  // Chromium it can't be embedded by ANY parent — Chromium would
-  // block the frame even though the vendor's own CSP allowed it.
-  // Gate on the response URL's origin matching the app origin.
+  // CSP header rewrite, scoped to the embedded Next app's own responses.
   const APP_ORIGIN = `http://localhost:${PORT}`;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     // Critical: shouldApplyAppCsp returns false for vendor TDS iframe
     // responses (origin !== APP_ORIGIN). Without that early-out, the
-    // `frame-ancestors 'none'` directive below would land on the
-    // vendor document and Chromium would refuse to embed it. See
-    // `electron/csp-scope.ts` for the rationale and the dedicated
-    // unit test that pins this contract.
+    // `frame-ancestors 'none'` directive below would land on the vendor
+    // document and Chromium would refuse to embed it — see
+    // electron/csp-scope.ts for the rationale + the unit test pinning it.
     if (!shouldApplyAppCsp(details.url, APP_ORIGIN)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
@@ -1852,35 +1739,21 @@ app.whenReady().then(async () => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        // GH #262: `'unsafe-eval'` dropped from the PACKAGED build — the
-        // compiled Next.js bundle doesn't need runtime eval(); allowing
-        // it there only weakened CSP for no benefit.
-        // `'unsafe-inline'` on script-src is still required because
-        // Next.js streams the RSC payload via inline <script> tags and
-        // the theme-init bootstrap is inline; migrating those to a
-        // per-request nonce is tracked separately in #225.
-        // GH #250: `frame-src https:` lets the filament detail page embed
-        // an embeddable vendor TDS document in an <iframe>; without it the
-        // load falls back to default-src 'self' and is blocked even after
-        // /api/embed-check confirms the vendor allows framing.
-        // GH #371: `img-src 'self' data: blob: https:` matches the web CSP
-        // in `next.config.ts`. Spool photos are `data:` and previews are
-        // `blob:`, but any external HTTPS image (vendor thumbnails, TDS-
-        // derived images, OpenPrintTag remote previews) needs `https:` here
-        // too — Electron's `onHeadersReceived` REPLACES the Next-sent CSP,
-        // so anything missing on this side is silently dropped in desktop.
-        // `connect-src` intentionally diverges: Electron adds localhost
-        // ws/http for the embedded Next server; everything else mirrors web.
-        //
-        // GH #408: four hardening directives the web CSP has been carrying
-        // were silently absent on desktop — `frame-ancestors 'none'`
-        // (prevents clickjacking by blocking framing of the renderer),
-        // `base-uri 'self'` (prevents <base href> injection redirecting all
-        // relative URLs), `form-action 'self'` (blocks credential-stealing
-        // form exfil), `object-src 'none'` (blocks plugin-based code
-        // execution). Drop-in addition since the Electron CSP REPLACES the
-        // Next-sent header, every directive on the web side has to be
-        // mirrored explicitly here.
+        // This value REPLACES the Next-sent CSP (it does not merge), so
+        // every directive on the web side (next.config.ts) must be mirrored
+        // explicitly here — keep the two in sync (tests/csp-parity.test.ts
+        // pins it). The ONE intentional asymmetry is `connect-src`:
+        // Electron adds localhost ws/http for the embedded Next server.
+        // Notes per directive:
+        // - `'unsafe-eval'` dropped from PACKAGED builds (GH #262);
+        //   `'unsafe-inline'` still required for Next's inline RSC <script>
+        //   streaming + the theme-init bootstrap (nonce migration: #225).
+        // - `frame-src https:` embeds vendor TDS docs (GH #250).
+        // - `img-src ... https:` — external HTTPS images break on desktop
+        //   without it (GH #371).
+        // - `frame-ancestors 'none'` / `base-uri 'self'` /
+        //   `form-action 'self'` / `object-src 'none'` mirror the web
+        //   hardening set (GH #408).
         "Content-Security-Policy": [`default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:; frame-src https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';`],
       },
     });
@@ -1972,18 +1845,15 @@ app.on("before-quit", (event) => {
   if (syncService) syncService.destroy();
   if (nfcService) nfcService.destroy();
 
-  // GH #316: never let a hung mongod.stop() strand the app. Race the
-  // local-Mongo shutdown against a hard timeout — whichever finishes
-  // first re-triggers the quit.
+  // GH #316: never let a hung mongod.stop() strand the app — race the
+  // local-Mongo shutdown against a hard timeout; whichever finishes first
+  // re-triggers the quit.
   //
-  // GH #315 (Codex P1): use `app.quit()`, NOT `app.exit(0)`. The
-  // `isQuitting` guard at the top of this handler already stops a
-  // second before-quit from re-preventDefault-ing, so the original
-  // reason for forcing `app.exit` doesn't hold — and `app.exit(0)`
-  // hard-skips the rest of the quit lifecycle: renderer `beforeunload`
-  // handlers (the unsaved-changes prompt) never fire, and the
-  // auto-updater's install-on-quit never runs. `app.quit()` preserves
-  // both.
+  // GH #315: use `app.quit()`, NOT `app.exit(0)` — the `isQuitting` guard
+  // above already stops a second before-quit from re-preventDefault-ing,
+  // and `app.exit(0)` hard-skips the quit lifecycle: renderer
+  // `beforeunload` (the unsaved-changes prompt) never fires and the
+  // auto-updater's install-on-quit never runs.
   const QUIT_TIMEOUT_MS = 5000;
   let finished = false;
   const finish = () => {

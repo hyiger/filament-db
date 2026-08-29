@@ -1,17 +1,8 @@
 /**
  * Formats a filament import's per-row skip reasons for display (GH #1115).
- *
- * `upsertImportRows` has always built a `skippedRows` list with genuinely
- * useful text — `Invalid color hex "red" (expected #RRGGBB)`,
- * `Missing required field(s): vendor, type`, `Parent "X" not found among
- * active filaments` — and both import routes have always returned it. Nothing
- * ever rendered it: the user saw a bare count and had no way to learn which
- * rows failed or why. The sibling SPOOL importer does show a per-row table, so
- * the omission was inconsistent as well as unhelpful.
- *
  * Pure and string-only because the repo has no React test harness (the vitest
- * env is node, with no jsdom — see `vitest.config.ts`). Keeping the formatting
- * here makes it coverage-gated and lets the two call sites stay dumb.
+ * env is node, no jsdom) — keeping the formatting here makes it
+ * coverage-gated and lets the two call sites stay dumb.
  */
 
 /** One row the importer refused, as returned by `upsertImportRows`. */
@@ -32,32 +23,24 @@ export interface SkippedRowLike {
 export const MAX_SHOWN_SKIPPED = 10;
 
 /**
- * Per-fragment character cap.
- *
- * The entry cap bounds how many LINES the dialog gets, not how long they are —
- * and a skip reason interpolates the offending cell verbatim (`Parent "…" not
- * found`), where a single cell may be close to the route's ~10 MB upload
- * limit. Ten such lines is still a multi-megabyte message in a dialog that
- * neither scrolls nor bounds its height, which puts Close out of reach
- * (Codex P2).
- *
- * 160 is comfortably above every reason the importer actually composes, so in
- * practice this only ever truncates a pathological cell.
+ * Per-fragment character cap. The entry cap bounds how many LINES the dialog
+ * gets, not how long they are — a skip reason interpolates the offending
+ * cell verbatim, and a single cell may be close to the route's ~10 MB upload
+ * limit; ten such lines would put Close out of reach in a dialog that
+ * neither scrolls nor bounds its height. 160 is comfortably above every
+ * reason the importer actually composes.
  */
 export const MAX_FRAGMENT_CHARS = 160;
 
 /**
  * Collapse a fragment to a single line, then clip it to the cap.
  *
- * The flattening is not cosmetic. A CSV field may contain literal newlines
- * (that is what quoting is FOR, and `parseCsv` preserves them), so a Name cell
- * of `"a\nb\nc\n…"` reaches here as real line breaks — and `ConfirmDialog`
- * renders its message with `whitespace-pre-wrap`, unbounded in height. The
- * character cap alone doesn't help: 160 characters of `\n` is 160 RENDERED
- * LINES, so ten such fragments push the Close button off-screen — the exact
- * outcome the cap exists to prevent, just reached by a different axis (Codex
- * P2 round 2). Every Unicode line terminator is folded, not just `\n`, since
- * `pre-wrap` breaks on U+2028/U+2029 too.
+ * The flattening is not cosmetic: a CSV field may contain literal newlines
+ * (that is what quoting is FOR, and `parseCsv` preserves them), and
+ * `ConfirmDialog` renders with `whitespace-pre-wrap`, unbounded in height —
+ * 160 characters of `\n` is 160 RENDERED LINES. Every Unicode line
+ * terminator is folded, not just `\n`, since `pre-wrap` breaks on
+ * U+2028/U+2029 too.
  *
  * Order is load-bearing: fold FIRST, then clip. Clipping first would leave
  * whatever line breaks survived inside the kept 160 characters.
@@ -108,11 +91,9 @@ export function formatSkipReport(
     lines.push(strings.overflow(rows.length - MAX_SHOWN_SKIPPED));
   }
 
-  // Notes are capped on the same budget. "At most a handful" was wrong: a bulk
-  // update touching many templates emits one note PER ROW, up to the route's
-  // 10,000-row limit — and ConfirmDialog's body neither scrolls nor bounds its
-  // height, so an uncapped list would push the Close button off-screen (Codex
-  // P2). The two lists share one budget so the dialog is bounded overall, not
+  // Notes are capped on the same budget: a bulk update touching many
+  // templates emits one note PER ROW, up to the route's 10,000-row limit.
+  // The two lists share one budget so the dialog is bounded overall, not
   // per-section.
   const noteBudget = Math.max(0, MAX_SHOWN_SKIPPED - lines.length);
   lines.push(...extra.slice(0, noteBudget).map(clip));

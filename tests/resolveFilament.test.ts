@@ -355,7 +355,7 @@ describe("resolveFilament", () => {
 
   // --- GH #633: fields the allowlists used to silently drop ---
 
-  // lowStockThreshold is variant-only, NOT inherited (Codex P2 on PR #648):
+  // lowStockThreshold is variant-only, NOT inherited (PR #648):
   // the list aggregation + dashboard read it raw with no parent fallback, so
   // inheriting it in resolveFilament would make the variant's detail/export
   // view disagree with its list badge. It must still be PRESERVED (the #633

@@ -9,10 +9,7 @@
  *
  * This module is the single source of truth so every render site — the
  * NozzleForm select, the nozzles list table, the printer detail page's
- * installed-nozzle chips — translates the same way. Pre-fix the mapping
- * lived only inside NozzleForm, so a German user picked "Messing" in the
- * form but then saw "Brass" everywhere the value was rendered (Codex P2
- * round 1 on PR #538).
+ * installed-nozzle chips — translates the same way.
  *
  * DB-free + i18n-agnostic: takes the `t` function so it works in any
  * component without importing the provider here.

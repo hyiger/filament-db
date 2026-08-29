@@ -15,7 +15,7 @@ import { ApiError, type Api } from './api';
  *     a no-op. logUsage / logDryCycle DECREMENT / APPEND, so replaying them
  *     after a committed-but-lost response (e.g. a slow LAN past the 15s
  *     request timeout) would double-apply — they therefore require live
- *     connectivity and are never queued (Codex review). Offline support for
+ *     connectivity and are never queued. Offline support for
  *     them would need a server-side idempotency key; deferred.
  *   - Network failures (ApiError status 0 — see api.ts) queue a queueable op.
  *     A real server rejection (4xx/5xx) is NOT queued: it would never succeed,
@@ -105,7 +105,7 @@ export async function pendingCount(): Promise<number> {
 /**
  * Drop all queued writes. Called when the configured server changes — queued
  * edits were made against the previous server and must NOT replay to a
- * different Filament DB instance (wrong spools / 404s). Codex P2 on #709.
+ * different Filament DB instance (wrong spools / 404s). GH #709.
  */
 export async function clearQueue(): Promise<void> {
   await withLock(async () => {
@@ -156,7 +156,7 @@ export interface SubmitResult {
  * Whether an op is safe to queue + replay. Only idempotent ops qualify:
  * replaying an `updateSpool` (absolute SET) is a no-op, but logUsage /
  * logDryCycle decrement / append and would double-apply if a committed write's
- * response was lost (Codex review). Non-queueable ops require live connectivity.
+ * response was lost. Non-queueable ops require live connectivity.
  */
 function isQueueable(write: WriteOp): boolean {
   return write.kind === 'updateSpool';
@@ -174,13 +174,13 @@ export async function submitWrite(
   entry: Omit<QueuedWrite, 'id' | 'createdAt'>,
 ): Promise<SubmitResult> {
   // FIFO ordering: while any write is already pending, a live write would let
-  // an OLDER queued write replay on top of it on the next flush (Codex P1/P2,
-  // e.g. queued remaining=100 then a live remaining=50, or a queued SET that
+  // an OLDER queued write replay on top of it on the next flush
+  // (e.g. queued remaining=100 then a live remaining=50, or a queued SET that
   // replays over a live usage decrement).
   if ((await pendingCount()) > 0) {
     // First try to drain — the server may be reachable now even though no
     // mount/focus/foreground flush has fired, so we shouldn't enqueue/block
-    // unnecessarily and leave the user stuck (Codex P2). A concurrent flush
+    // unnecessarily and leave the user stuck. A concurrent flush
     // (the guard) no-ops here; we then re-check below.
     await flushQueue(api).catch(() => {});
   }
@@ -218,7 +218,7 @@ export interface FlushResult {
  * Whether an error status is transient/recoverable (keep the queued write and
  * retry later) vs a permanent rejection of the request (drop it, else it wedges
  * the FIFO queue). Auth (401/403) is transient — the user can fix a stale API
- * key and the edit must survive until then (Codex P1). Network (0), timeout
+ * key and the edit must survive until then. Network (0), timeout
  * (408), rate-limit (429) and server errors (5xx) are transient too. Other 4xx
  * (400/404/409/410/422…) mean the request is bad/gone — drop.
  */
@@ -237,7 +237,7 @@ function isTransient(status: number): boolean {
  * Replay queued writes FIFO. The head is PEEKED, not removed, before its
  * network call: if the app is killed mid-request the entry survives in storage
  * and is retried next flush (safe because only idempotent ops are queued — a
- * lost-but-committed response just re-applies harmlessly; Codex P2). enqueue's
+ * lost-but-committed response just re-applies harmlessly). enqueue's
  * cap-trim skips the in-flight head so a concurrent enqueue can't evict it. A
  * transient error (network / auth / server) stops the flush and KEEPS the head;
  * a permanent client error drops it so it can't wedge the queue. Concurrent
@@ -274,7 +274,7 @@ export async function flushQueue(api: Api): Promise<FlushResult> {
       // Remove the processed head. If it's already gone, the queue was cleared
       // under us (a server change called clearQueue) and may now hold entries
       // for a DIFFERENT server — stop rather than replay them via this now-stale
-      // api (Codex P2).
+      // api.
       if (!(await removeById(head.id))) break;
     }
   } finally {

@@ -55,7 +55,7 @@ describe("SharedCatalog Model", () => {
   });
 
   it("syncIndexes() upgrades a legacy non-partial slug index to the partial-on-_deletedAt one", async () => {
-    // Codex round-3 P2: existing installs already have the prior plain
+    // Existing installs already have the prior plain
     // unique-on-slug index from earlier schema versions; createIndex()
     // won't mutate options in-place, so the soft-delete republish flow
     // would still trip on the old global-uniqueness rule. The migration

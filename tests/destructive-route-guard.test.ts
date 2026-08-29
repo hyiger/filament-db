@@ -54,7 +54,7 @@ describe("assertSameOriginRequest", () => {
   });
 
   it("allows an Origin/Host pair differing only by an explicit default port", () => {
-    // Codex review: matching raw host[:port] strings false-rejected a
+    // Matching raw host[:port] strings false-rejected a
     // legitimate request when one side spelled out the default port.
     expect(
       assertSameOriginRequest(reqWith({ origin: "https://app.example", host: "app.example:443" })),
@@ -65,7 +65,7 @@ describe("assertSameOriginRequest", () => {
   });
 
   it("rejects a same-host different-port Origin (CSRF gap with no Sec-Fetch-Site)", () => {
-    // Codex review: a hostname-only check would let a page on
+    // A hostname-only check would let a page on
     // localhost:8080 POST to the API on localhost:3456 — a real
     // cross-origin request. The port must be part of the comparison.
     expect(

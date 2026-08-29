@@ -16,16 +16,12 @@ import {
 } from "@/lib/printJobForm";
 
 /**
- * GH #1167 — in-app "Log print job" dialog.
- *
- * Print jobs previously entered only via POST /api/print-history (slicer /
- * printer integrations), so the Dashboard's Recent prints and Analytics'
- * Print jobs stayed empty for anyone not running one. This dialog is pure UI
- * over that shipped endpoint — the spool debit, source tagging ("manual" by
- * default), validation, and the #1121 legacy-roll migration all live
- * server-side. Validation/body building is the pure, unit-tested
- * src/lib/printJobForm.ts; this component is a thin shell (the
- * OptLinkDialog/OptResyncDialog focus-trap pattern).
+ * In-app "Log print job" dialog — pure UI over POST /api/print-history:
+ * the spool debit, source tagging ("manual" by default), validation, and
+ * the legacy-roll migration all live server-side. Validation/body
+ * building is the pure, unit-tested src/lib/printJobForm.ts; this
+ * component is a thin shell (the OptLinkDialog/OptResyncDialog
+ * focus-trap pattern).
  */
 
 interface PickerSpool {
@@ -141,10 +137,10 @@ export default function LogPrintJobDialog({ onLogged, onClose }: Props) {
     };
   }, []);
 
-  // Codex P2 (PR #1182 round 2): dismissing while the POST is in flight does
-  // NOT abort it — a user who closes on a slow request, reopens, and submits
-  // again ends up with TWO jobs debiting inventory. Every dismissal gesture
-  // (Escape, backdrop, X, Cancel) funnels through this guard.
+  // Dismissing while the POST is in flight does NOT abort it — a user who
+  // closes on a slow request, reopens, and submits again ends up with TWO
+  // jobs debiting inventory. Every dismissal gesture (Escape, backdrop,
+  // X, Cancel) funnels through this guard.
   const safeClose = useCallback(() => {
     if (!submittingRef.current) onClose();
   }, [onClose]);

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { csvCell, isFormulaCandidate, sanitizeFormulaPrefix, unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
- * Codex P2 on PR #141 — without sanitisation, an attacker who controls
+ * Without sanitisation, an attacker who controls
  * any user-editable string field (filament name, vendor, spool label,
  * location name, lot number, …) can ship a CSV that executes formulas
  * when opened in Excel / Google Sheets. csvCell prefixes leading-trigger
@@ -50,7 +50,7 @@ describe("csvCell — formula injection neutralisation", () => {
 
   it("still escapes the prefixed value when it also contains a comma", () => {
     // Combined sanitization + quoting: the apostrophe goes inside the
-    // quoted cell. Codex's report case includes commas inside formulas.
+    // quoted cell.
     expect(csvCell("=HYPERLINK(\"https://evil\",\"x\")")).toBe(
       '"\'=HYPERLINK(""https://evil"",""x"")"',
     );
@@ -116,7 +116,7 @@ describe("unsanitizeCsvCell — inverse of csvCell's formula guard", () => {
     expect(unsanitizeCsvCell(csvCell("@SUM"))).toBe("@SUM");
   });
 
-  // GH #649 (Codex P3): a value that GENUINELY begins with `'` + a trigger
+  // GH #649: a value that GENUINELY begins with `'` + a trigger
   // must survive the export/import round trip — the guard doubles the
   // apostrophe (`'+95A` → `''+95A`) and the unguard strips exactly one,
   // so the real leading apostrophe is preserved rather than eaten.
@@ -132,7 +132,7 @@ describe("unsanitizeCsvCell — inverse of csvCell's formula guard", () => {
     expect(unsanitizeCsvCell(csvCell("'70s Blue"))).toBe("'70s Blue");
   });
 
-  // GH #955 (Codex P3): the guard/unguard now handle an apostrophe RUN of any
+  // GH #955: the guard/unguard now handle an apostrophe RUN of any
   // length, not just one — a value with 2+ leading apostrophes followed by a
   // trigger must still round-trip losslessly (prepend one, strip one).
   it("round-trips apostrophe RUNS (2+) before a trigger without drift", () => {

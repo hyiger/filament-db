@@ -41,16 +41,12 @@ export default function RootLayout({
          *  light-flash on every cold load.
          *
          *  Plain <script dangerouslySetInnerHTML> instead of next/script's
-         *  `beforeInteractive` strategy. In Next 16 + React 19, the
-         *  next/script wrapper still tripped React's "Scripts inside React
+         *  `beforeInteractive` strategy — in Next 16 + React 19 the
+         *  next/script wrapper trips React's "Scripts inside React
          *  components are never executed when rendering on the client"
-         *  warning on every render — the warning is informational (the
-         *  script does execute on SSR) but spammed the browser console
-         *  (GH #205). React's rendering of a static <script> with
-         *  `dangerouslySetInnerHTML` in the SSR HTML is silent in the
-         *  same React-19 path; the browser parses + executes the inline
-         *  script during initial paint, which is exactly what the
-         *  anti-FOUC pattern needs.
+         *  warning on every render (GH #205), while a static <script> with
+         *  `dangerouslySetInnerHTML` is silent and executes during initial
+         *  paint.
          *
          *  Position: top of <body>, before any of ClientProviders /
          *  AppHeader / children, so the .dark class lands on <html>

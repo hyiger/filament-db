@@ -5,7 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 
 /**
- * GH #1021 (Codex P1 r10) — the INGESTION half: pre-upgrade fork presets /
+ * GH #1021 — the INGESTION half: pre-upgrade fork presets /
  * INIs keep re-sending the stamped machine condition after the one-shot DB
  * cleanup; the write boundaries strip a provenance-matching incoming value.
  */

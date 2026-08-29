@@ -32,7 +32,7 @@ describe("OpenAPI schema invariants", () => {
     // violated the published contract and generated clients would have
     // declared a field the route never returns.
     //
-    // Walks the WHOLE document, not just `components.schemas` (Codex P2):
+    // Walks the WHOLE document, not just `components.schemas`:
     // most of this spec's request/response schemas are declared INLINE under
     // `paths`, and dozens more are nested inside `properties`/`items`/
     // `allOf` — an invariant that only visits the top level would advertise

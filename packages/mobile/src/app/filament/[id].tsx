@@ -76,7 +76,7 @@ function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetS
   // Read initial count after mount (async IIFE — state set after await, not
   // synchronously). Then track changes: a DROP means a flush applied writes —
   // including the app-wide foreground flusher in _layout, which doesn't itself
-  // tell this screen to reload (Codex P2) — so re-fetch to show the synced
+  // tell this screen to reload — so re-fetch to show the synced
   // server state rather than just clearing the pill. An increase is an enqueue,
   // already reflected locally by the optimistic patch, so no re-fetch.
   useEffect(() => {
@@ -91,7 +91,7 @@ function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetS
     const unsub = subscribePending((count) => {
       // A multi-item flush drops the count once per entry; DEBOUNCE the refetch
       // so a reconnect with many queued writes coalesces into a single reload
-      // after the flush settles, not one API burst per item (Codex P2).
+      // after the flush settles, not one API burst per item.
       if (count < prevPending.current) {
         if (reloadTimer.current) clearTimeout(reloadTimer.current);
         reloadTimer.current = setTimeout(() => setReloadKey((k) => k + 1), 500);
@@ -125,13 +125,12 @@ export default function FilamentDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
-  // Show retired spools too (so the Un-retire action is reachable, Codex P2).
+  // Show retired spools too (so the Un-retire action is reachable).
   const [showRetired, setShowRetired] = useState(false);
   // GH #595/#693: arrived via a spool deep-link QR (`?spool=<id>`) — briefly
   // highlight that spool's card once the filament (with its spools) loads.
   const [highlightSpoolId, setHighlightSpoolId] = useState<string | null>(null);
   const deepLinkHandled = useRef(false);
-  // Feature A: scroll-to-spool support.
   const scrollRef = useRef<ScrollView>(null);
   const scrolledToSpool = useRef(false);
 
@@ -144,7 +143,6 @@ export default function FilamentDetailScreen() {
     [baseUrl, apiKey],
   );
 
-  // Feature C: pending-sync count + flush-on-focus.
   const pending = usePendingSync(api, setReloadKey);
 
   // Fetch on mount (and on Retry, which bumps reloadKey). All setState runs
@@ -190,7 +188,7 @@ export default function FilamentDetailScreen() {
   useEffect(() => {
     if (deepLinkHandled.current || !filament || !spoolParam) return;
     deepLinkHandled.current = true;
-    // Feature A: include retired spools in the check too.
+    // Include retired spools in the check too.
     if (!filament.spools?.some((s) => s._id === spoolParam)) return;
     const set = setTimeout(() => setHighlightSpoolId(spoolParam), 0);
     const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
@@ -239,8 +237,8 @@ export default function FilamentDetailScreen() {
   const swatchColor = filament.color || filament.secondaryColors?.[0] || '#808080';
 
   // Which spools to render: active ones, plus retired ones when the user has
-  // toggled them on (so Un-retire is reachable, Codex P2), plus a retired
-  // deep-link target even when the toggle is off (Feature A).
+  // toggled them on (so Un-retire is reachable), plus a retired
+  // deep-link target even when the toggle is off.
   const deepLinkedSpool = spoolParam ? allSpools.find((s) => s._id === spoolParam) : undefined;
   const deepLinkedIsRetiredExtra =
     !showRetired &&
@@ -260,7 +258,7 @@ export default function FilamentDetailScreen() {
   const handleSpoolUpdated = (updated: Filament) =>
     setFilament((prev) => (prev ? { ...prev, spools: updated.spools } : updated));
 
-  // Feature C: optimistic local patch (no server round-trip needed for the UI).
+  // Optimistic local patch (no server round-trip needed for the UI).
   const handleLocalPatch = (spoolId: string, patch: Partial<Spool>) => {
     setFilament((prev) =>
       prev
@@ -276,7 +274,7 @@ export default function FilamentDetailScreen() {
         {[filament.vendor, filament.type].filter(Boolean).join(' · ')}
       </Text>
 
-      {/* Feature C: pending-sync pill */}
+      {/* pending-sync pill */}
       {pending > 0 && (
         <View style={[styles.pendingPill, { borderColor: c.border }]}>
           <Text style={[styles.pendingPillText, { color: c.muted }]}>
@@ -323,7 +321,7 @@ export default function FilamentDetailScreen() {
           // highlight is set after first render and only changes colors, so RN
           // wouldn't re-fire layout — the scroll would never run for a spool
           // below the fold. Keying on spoolParam attaches onLayout from the
-          // first render, so it fires on mount (Codex P2).
+          // first render, so it fires on mount.
           const isDeepLinkTarget = !!spoolParam && s._id === spoolParam;
           return (
             <SpoolRow
@@ -392,14 +390,13 @@ function SpoolRow({
   const remaining = spool.totalWeight == null ? null : Math.max(0, Math.round(spool.totalWeight - tare));
   const [grams, setGrams] = useState(remaining == null ? '' : String(remaining));
   const [saving, setSaving] = useState<string | null>(null);
-  // Feature B: log usage input state.
   const [usageGrams, setUsageGrams] = useState('');
-  // Feature B: dry-cycle inputs (at least one required so an accidental tap
-  // can't log a blank cycle and reset dry-due tracking — Codex P2).
+  // Dry-cycle inputs (at least one required so an accidental tap
+  // can't log a blank cycle and reset dry-due tracking).
   const [dryTemp, setDryTemp] = useState('');
   const [dryDuration, setDryDuration] = useState('');
 
-  /** Feature C: route every spool mutation through the offline write queue.
+  /** Route every spool mutation through the offline write queue.
    * Returns `{ ok }` — false on a real server error so callers can keep the
    * user's input to retry — and the server's authoritative state when the
    * write went through live: `spool` from a #1027+ server (?shape=spool),
@@ -469,7 +466,6 @@ function SpoolRow({
     );
   }
 
-  // Feature B: retire / un-retire toggle.
   async function toggleRetire() {
     const newRetired = !spool.retired;
     await runWrite(
@@ -480,7 +476,6 @@ function SpoolRow({
     );
   }
 
-  // Feature B: log usage.
   async function logUsage() {
     const g = Number(usageGrams);
     if (!usageGrams.trim() || !Number.isFinite(g) || g <= 0) {
@@ -502,7 +497,7 @@ function SpoolRow({
       // Refresh the remaining-weight field from the SERVER's authoritative
       // spool, not the pre-request value — the weight may have changed
       // server-side since this screen loaded (another device / print history),
-      // and a stale value would be written back on a later Save (Codex P2).
+      // and a stale value would be written back on a later Save.
       // Usage is online-only (never queued), so one of the two live shapes is
       // present: `spool` (#1027+ ?shape=spool) or `filament` (older server).
       const updated =
@@ -513,12 +508,11 @@ function SpoolRow({
     }
   }
 
-  // Feature B: log dry cycle.
   async function logDryCycle() {
     const t = dryTemp.trim() ? Number(dryTemp) : null;
     const d = dryDuration.trim() ? Number(dryDuration) : null;
     // Require at least one detail — a blank cycle would still stamp a date and
-    // mark the spool freshly dried on the dashboard (Codex P2).
+    // mark the spool freshly dried on the dashboard.
     if (t == null && d == null) {
       Alert.alert('Add a detail', 'Enter a temperature (°C) or duration (min) for the dry cycle.');
       return;
@@ -616,10 +610,9 @@ function SpoolRow({
         </Pressable>
       </View>
 
-      {/* Feature B: inventory actions */}
+      {/* inventory actions */}
       <View style={[styles.divider, { borderColor: c.border }]} />
 
-      {/* Retire / Un-retire */}
       <Pressable
         style={[
           styles.smallButton,
@@ -635,7 +628,6 @@ function SpoolRow({
         </Text>
       </Pressable>
 
-      {/* Log usage */}
       <Text style={[styles.fieldLabel, { color: c.muted }]}>Log usage (g)</Text>
       <View style={styles.row}>
         <TextInput

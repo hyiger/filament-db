@@ -1,37 +1,24 @@
 /**
- * GH #605 — the shared, race-hardened variant-creation gate (codex round 3,
- * Finding A).
+ * GH #605 — the shared, race-hardened variant-creation gate. Creating the
+ * FIRST variant of a carrying parent restructures a SECOND document (the
+ * parent is promoted to a template), so it is NEVER silent: without
+ * `promoteParent` the caller gets `promotion_required` (mapped to the 409
+ * built by `promotionRequired409Body`); with the flag the request is dry-run
+ * validated BEFORE the promotion (no error responses after an irreversible
+ * side effect), then promoted copy-first/clear-last, then created.
  *
- * Creating the FIRST variant of a parent that still carries variant state (a
- * real color, a color name, its own spools, or a legacy inventory
- * totalWeight — see parentPromotionState) restructures a SECOND document:
- * the parent is promoted to a template and that state moves onto a new
- * sibling variant. The gate makes that side effect explicit and safe:
+ * The whole sequence runs inside the per-parent keyed mutex (`runExclusive`
+ * on `filamentLockKey(parentId)`) — the same key as the spool-POST and PUT
+ * routes, the atlas import's template guard, the OPT sync's offered-set +
+ * write section, and the restore adoption gate — so a spool accepted before
+ * this section is visible to the promotion snapshot, and one queued behind
+ * it hits the spool route's template guard. See src/lib/filamentMutex.ts for
+ * why the process-local lock is sufficient.
  *
- *   - without `promoteParent`, the caller gets a structured
- *     `promotion_required` outcome (the routes map it to the 409
- *     `parent_promotion_required` payload built by
- *     `promotionRequired409Body`) describing exactly what a confirmation
- *     would do — promotion is NEVER silent (owner decision);
- *   - with the flag, the request is dry-run validated BEFORE the promotion
- *     (no error responses after an irreversible side effect), the parent is
- *     promoted copy-first/clear-last, and the requested variant is created.
- *
- * The whole sequence — in-lock parent re-fetch, gate decision, promotion,
- * create — runs inside the per-parent keyed mutex (`runExclusive` on
- * `filamentLockKey(parentId)`), the same key the spool-POST and PUT routes
- * lock (and, since codex round 4, the atlas import's template guard, the
- * OPT sync's offered-set+write section, and the restore adoption gate), so
- * a spool accepted before this section is visible to the promotion
- * snapshot (and moves with the inventory), and one queued behind it hits the
- * spool route's template guard. See src/lib/filamentMutex.ts for why the
- * process-local lock is sufficient (single-process server) and which
- * compensating guards remain for out-of-process writers.
- *
- * Extracted from POST /api/filaments so every route that creates a variant
- * (the filament create route AND the OpenPrintTag variant import, GH #753)
- * enforces identical semantics — a secondary entry point must never mint the
- * first variant of a carrying parent without the confirmation round-trip.
+ * Shared by every route that creates a variant (the filament create route
+ * AND the OpenPrintTag variant import, GH #753) — a secondary entry point
+ * must never mint the first variant of a carrying parent without the
+ * confirmation round-trip.
  */
 
 import { hasVariants } from "@/lib/resolveFilament";
@@ -50,12 +37,12 @@ import {
 // carry the model imports that promoteParent.ts — imported by client
 // components for parentPromotionState — must not. Every promotion routed
 // through here passes them as the external (filamentId, spoolId) reference
-// models the F1 remap updates.
+// models the remap updates.
 import PrintHistory from "@/models/PrintHistory";
 import Printer from "@/models/Printer";
 
-/** The real external-reference models every route-facing promotion remaps
- *  (codex round 4, F1) — see PromotionExternalRefModels. */
+/** The real external-reference models every route-facing promotion remaps —
+ *  see PromotionExternalRefModels. */
 const EXTERNAL_REFS = { printHistory: PrintHistory, printer: Printer };
 
 // Mirrors the loose doc typing the other model-level helpers use
@@ -84,8 +71,8 @@ export type GatedVariantCreateResult =
   | { outcome: "parent_not_found" }
   /** The parent became a VARIANT (a concurrent PUT re-parented it) between
    *  the caller's pre-lock no-nesting validation and the in-lock re-fetch —
-   *  creating under it would mint a grandchild (round 8 F1). Callers respond
-   *  with the same no-nesting 400 their pre-lock check produces. */
+   *  creating under it would mint a grandchild. Callers respond with the
+   *  same no-nesting 400 their pre-lock check produces. */
   | { outcome: "parent_is_variant" }
   /** First variant of a carrying parent and the caller didn't confirm —
    *  respond 409 with `promotionRequired409Body(info)`. Nothing written. */
@@ -119,27 +106,20 @@ export function promotionRequired409Body(
 }
 
 /**
- * The 409 body RESTORE returns instead (GH #1103).
- *
- * Same gate, different verb, so a different answer. Creating a variant is the
- * user building something new; a confirmation that also restructures the
- * parent is a fair trade there. Restore is the user asking for data BACK,
- * exactly as it was — so it refuses and names the one action that unblocks
- * the whole family at once, rather than prompting per variant in the middle
- * of a bulk restore (where the only "yes" rewrote the family and "no" left
- * the variant permanently unrestorable).
- *
- * Deliberately NOT the `parent_promotion_required` code: that code means
- * "repeat with promoteParent: true", and on this route repeating changes
- * nothing. A client matching on it would loop.
+ * The 409 body RESTORE returns instead (GH #1103). Same gate, different
+ * verb, so a different answer: restore is the user asking for data BACK
+ * exactly as it was, so it refuses and names the one action that unblocks
+ * the whole family at once ("Convert to template" on the parent) rather
+ * than prompting per variant mid-bulk-restore. Deliberately NOT the
+ * `parent_promotion_required` code: that code means "repeat with
+ * promoteParent: true", and on this route repeating changes nothing — a
+ * client matching on it would loop.
  */
 export function restoreBlockedByTemplateBody(
   info: PromotionRequiredInfo,
 ): Record<string, unknown> {
-  // Name what is ACTUALLY blocking. `needed` is a disjunction of four things,
-  // and a fixed "its own color and N spool(s)" reads as plainly false to a
-  // user whose parent carries only an inventory weight — while hiding the one
-  // fact they need in order to act.
+  // Name what is ACTUALLY blocking — a fixed "its own color and N spool(s)"
+  // reads as plainly false to a user whose parent carries only a weight.
   const held: string[] = [];
   if (info.parentColor) held.push("its own color");
   if (info.hasColorName && !info.parentColor) held.push("its own color name");
@@ -154,15 +134,10 @@ export function restoreBlockedByTemplateBody(
         ? held[0]
         : `${held.slice(0, -1).join(", ")} and ${held[held.length - 1]}`;
 
-  // Deliberately does NOT name the variant the conversion will create, and
-  // deliberately does not echo `variantName` (Codex P2). The gate resolves
-  // that name against ACTIVE rows plus the document being restored, while
-  // /promote resolves it against active rows plus this parent's TRASHED
-  // children — so with a trashed sibling already holding the obvious name the
-  // two disagree, and this message would promise `Parent — Green` where the
-  // conversion actually produces `Parent — Green (2)`. A predicted name is
-  // worth nothing here anyway: the user is about to press a button that shows
-  // them the result.
+  // Deliberately does NOT predict the variant the conversion will create:
+  // the gate resolves that name against ACTIVE rows while /promote also
+  // reserves this parent's TRASHED children, so the two can legitimately
+  // disagree (`Parent — Green` vs `Parent — Green (2)`).
   return {
     error: "parent_must_be_template_first",
     message:
@@ -179,17 +154,17 @@ export function restoreBlockedByTemplateBody(
 
 /**
  * The gate+promote core, shared by CREATION (createVariantGated) and
- * ADOPTION (gateFirstVariantAdoption — codex round 4, F2/F6). MUST be called
- * while holding `runExclusive(filamentLockKey(parent._id))`, with a `parent`
- * snapshot fetched INSIDE that hold.
+ * ADOPTION (gateFirstVariantAdoption). MUST be called while holding
+ * `runExclusive(filamentLockKey(parent._id))`, with a `parent` snapshot
+ * fetched INSIDE that hold.
  *
  * `beforePromote` runs after the gate decides a CONFIRMED promotion is due,
  * immediately before the promotion itself — the fail-fast checks that must
  * surface BEFORE the irreversible restructuring of the parent (creation:
- * duplicate-name pre-check, dry-run validation; adoption: the round-11
- * target-liveness re-check). Returning a result aborts with the parent
- * untouched; a throw propagates the same way. Generic over the abort
- * payload so each caller keeps its own outcome shape.
+ * duplicate-name pre-check, dry-run validation; adoption: the target-liveness
+ * re-check). Returning a result aborts with the parent untouched; a throw
+ * propagates the same way. Generic over the abort payload so each caller
+ * keeps its own outcome shape.
  */
 async function gateAndPromoteInLock<TAbort>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -206,53 +181,39 @@ async function gateAndPromoteInLock<TAbort>(
   | { kind: "aborted"; abort: TAbort }
   | { kind: "ready"; clearOrphanedThreshold: boolean }
 > {
-  // Round 8 F1: re-assert ROOTNESS from the in-lock snapshot, not just
-  // existence. The callers' pre-lock validation rejects a parent that is
-  // itself a variant (no nested inheritance), but a concurrent PUT can
-  // re-parent the doc between that check and this lock — the gate would
-  // then mint a GRANDCHILD (and a confirmed promotion would even hang a
-  // promotion copy off a variant). Same posture as the parent_not_found
-  // re-check: the in-lock re-fetch owns the final answer.
+  // Re-assert ROOTNESS from the in-lock snapshot, not just existence. The
+  // callers' pre-lock validation rejects a parent that is itself a variant
+  // (no nested inheritance), but a concurrent PUT can re-parent the doc
+  // between that check and this lock — the gate would then mint a GRANDCHILD
+  // (and a confirmed promotion would even hang a promotion copy off a
+  // variant). The in-lock re-fetch owns the final answer.
   if (parent.parentId != null) {
     return { kind: "parent_is_variant" };
   }
 
   const promoState = parentPromotionState(parent);
-  // Round 10: a marker on a parent whose promotion state does NOT gate is
-  // STALE by construction (completion clears the marker atomically with the
-  // fields, so this shape only arises when a crashed run's carried state
-  // was later cleared by hand) — drop it lazily and never resume off it.
-  // Non-destructive housekeeping, safe on every gate pass.
+  // A marker on a parent whose promotion state does NOT gate is STALE by
+  // construction (completion clears the marker atomically with the fields,
+  // so this shape only arises when a crashed run's carried state was later
+  // cleared by hand) — drop it lazily and never resume off it.
   if (!promoState.needed && parent.promotionInFlight != null) {
     await clearStalePromotionMarker(FilamentModel, parent._id);
   }
-  // Round 7 P2: a threshold-ONLY parent (threshold set, nothing that gates)
-  // still needs the first-variant check — not to gate (owner decision: no
-  // confirmation for a promotion that moves nothing) but to flag the
-  // threshold as orphaned so the caller clears it AFTER its variant write.
+  // A threshold-ONLY parent (threshold set, nothing that gates) still needs
+  // the first-variant check — not to gate (no confirmation for a promotion
+  // that moves nothing) but to flag the threshold as orphaned so the caller
+  // clears it AFTER its variant write.
   const orphansThreshold = orphansThresholdOnFirstVariant(parent);
   if (promoState.needed || orphansThreshold) {
     if (await checkHasVariants(FilamentModel, String(parent._id))) {
-      // The parent already has live variants, so this is a NON-first variant
-      // and nothing gates. But a template should never be CARRYING — when it
-      // is, one cause is an INTERRUPTED promotion (round 8 F2's crash
-      // window: copy created, remap/clear failed), and the round-8 detector
-      // inside performParentPromotion is unreachable from here: a RETRY of
-      // the original confirmed create/adopt request lands in this branch
-      // (hasVariants is true because of the partial copy) and would succeed
-      // while the parent still holds the moved inventory and every external
-      // ref still points at it (round 9 F1). Probe for the partial copy and
-      // resume it — remaps + clear only — BEFORE proceeding with the
-      // requested create/adoption. Round 10: the probe is marker-driven
-      // ONLY (parent.promotionInFlight paired with a live promotedByToken
-      // variant — see findPartialPromotionVariant); resuming under that
-      // proof completes an ALREADY-confirmed promotion and moves nothing
-      // new. A carrying template WITHOUT the marker proof — the genuine
-      // pre-#605 legacy shape, or a legitimate lookalike child that merely
-      // coincides on name/values — makes resumePartialParentPromotion
-      // return null and leaves the parent byte-for-byte untouched
-      // (enforce-forward; "Convert to template" remains the recovery
-      // affordance).
+      // NON-first variant, nothing gates — but a template should never be
+      // CARRYING. A RETRY of a confirmed create/adopt whose promotion was
+      // interrupted lands here (hasVariants is true because of the partial
+      // copy) and would otherwise succeed while the parent still holds the
+      // moved inventory. Probe for the marker-proven partial copy and resume
+      // it BEFORE proceeding; without the proof (the genuine pre-#605 legacy
+      // shape, or a lookalike child) the parent stays byte-for-byte
+      // untouched — enforce-forward, "Convert to template" is the recovery.
       if (promoState.needed) {
         await resumePartialParentPromotion(FilamentModel, parent, EXTERNAL_REFS);
       }
@@ -261,10 +222,9 @@ async function gateAndPromoteInLock<TAbort>(
     if (!promoState.needed) {
       // Ungated first-variant creation on a threshold-only parent: proceed
       // without any promotion, but tell the caller the parent's threshold
-      // becomes dead config the moment its variant exists (the form hides
-      // it, the PUT strips it, the dashboard could evaluate it against a
-      // template). The clear itself is the CALLER's last step — parent
-      // state change last, consistent with the crash posture.
+      // becomes dead config the moment its variant exists. The clear itself
+      // is the CALLER's last step — parent state change last, consistent
+      // with the crash posture.
       return { kind: "ready", clearOrphanedThreshold: true };
     }
     if (!promoteParent) {
@@ -309,7 +269,7 @@ async function gateAndPromoteInLock<TAbort>(
  * this function re-fetches the parent FRESH inside the lock and re-decides
  * from that snapshot — never from anything the caller loaded earlier. Both
  * pre-lock facts are re-asserted in-lock: a vanished parent returns
- * `parent_not_found`, a re-parented one `parent_is_variant` (round 8 F1).
+ * `parent_not_found`, a re-parented one `parent_is_variant`.
  *
  * Errors from the dry-run `validate()` and from the final `create()`
  * propagate unchanged (the routes' catch blocks map ValidationError → 400
@@ -350,10 +310,9 @@ export async function createVariantGated(
       checkHasVariants,
       async () => {
         // Confirmed. Fail a doomed duplicate-named request BEFORE mutating —
-        // it would otherwise E11000 with the parent already promoted. No
-        // transactions available (standalone mongod), so the residual risk
-        // window is the name race between this pre-check and the create; the
-        // promotion itself is copy-first/clear-last and self-consistent.
+        // it would otherwise E11000 with the parent already promoted. The
+        // residual risk window (no transactions) is the name race between
+        // this pre-check and the create.
         if (
           typeof body.name === "string" &&
           (await FilamentModel.exists({ name: body.name, _deletedAt: null }))
@@ -362,13 +321,11 @@ export async function createVariantGated(
           // gateAndPromoteInLock is generic over the abort payload.
           return { outcome: "name_taken" as const, name: body.name };
         }
-        // Same principle for a schema-invalid request (bad color hex, negative
-        // cost, …): the route-level guards don't run Mongoose validation, so
-        // without this dry run the promotion would permanently restructure the
-        // parent and THEN the create below would fail — an error response
-        // after an irreversible side effect. Validate the exact payload the
-        // create will use; a ValidationError propagates to the caller with
-        // the parent completely untouched.
+        // Same principle for a schema-invalid request: the route-level
+        // guards don't run Mongoose validation, so without this dry run the
+        // promotion would permanently restructure the parent and THEN the
+        // create would fail — an error response after an irreversible side
+        // effect. A ValidationError propagates with the parent untouched.
         await new FilamentModel(body).validate();
         return null;
       },
@@ -392,10 +349,10 @@ export async function createVariantGated(
     }
 
     const filament = await FilamentModel.create(body);
-    // Round 7 P2: the ungated first variant of a threshold-only parent just
-    // came alive — the parent's threshold is now dead config; clear it AFTER
-    // the create (parent state change last: a crash before this leaves a
-    // harmless legacy value, never a variant-less parent without its alarm).
+    // The ungated first variant of a threshold-only parent just came alive —
+    // clear the now-dead threshold AFTER the create (parent state change
+    // last: a crash before this leaves a harmless legacy value, never a
+    // variant-less parent without its alarm).
     if (gate.clearOrphanedThreshold) {
       await clearOrphanedParentThreshold(FilamentModel, parent._id);
     }
@@ -407,15 +364,15 @@ export type FirstVariantAdoptionResult =
   /** The parent vanished (soft-deleted) between the caller's own pre-lock
    *  validation and the in-lock re-fetch. */
   | { outcome: "parent_not_found" }
-  /** Round 11 F2a: `opts.targetId` was supplied and the ADOPTED document
-   *  vanished (soft-deleted) between the caller's own pre-lock validation
-   *  and the last-responsible-moment in-lock re-check — caught BEFORE the
-   *  confirmed promotion ran, so nothing was restructured. Callers respond
-   *  with the same 404 their own write would produce. */
+  /** `opts.targetId` was supplied and the ADOPTED document vanished
+   *  (soft-deleted) between the caller's own pre-lock validation and the
+   *  last-responsible-moment in-lock re-check — caught BEFORE the confirmed
+   *  promotion ran, so nothing was restructured. Callers respond with the
+   *  same 404 their own write would produce. */
   | { outcome: "target_not_found" }
   /** The parent became a VARIANT (a concurrent PUT re-parented it) before
-   *  the in-lock re-fetch — adopting under it would nest inheritance
-   *  (round 8 F1). Callers respond with the no-nesting 400. */
+   *  the in-lock re-fetch — adopting under it would nest inheritance.
+   *  Callers respond with the no-nesting 400. */
   | { outcome: "parent_is_variant" }
   /** Adopting this document would mint the FIRST live variant of a carrying
    *  parent and the caller didn't confirm — respond 409 with
@@ -424,24 +381,24 @@ export type FirstVariantAdoptionResult =
   /** Safe to proceed (no promotion was due, or the confirmed promotion ran).
    *  When `onReady` was supplied it has already executed, in-lock.
    *
-   *  Round 7 P2 — `clearOrphanedThreshold`: the adoption mints the first
-   *  variant of a threshold-ONLY parent, and the gate could NOT clear the
-   *  now-dead threshold itself because the adoption write is the CALLER's
-   *  (no `onReady`). The caller MUST call `clearOrphanedParentThreshold`
-   *  after its own write succeeds — and skip it when that write fails or is
-   *  rolled back (parent state change last). Always `false` when `onReady`
-   *  was supplied: the gate then clears in-lock right after it. */
+   *  `clearOrphanedThreshold`: the adoption mints the first variant of a
+   *  threshold-ONLY parent, and the gate could NOT clear the now-dead
+   *  threshold itself because the adoption write is the CALLER's (no
+   *  `onReady`). The caller MUST call `clearOrphanedParentThreshold` after
+   *  its own write succeeds — and skip it when that write fails or is rolled
+   *  back (parent state change last). Always `false` when `onReady` was
+   *  supplied: the gate then clears in-lock right after it. */
   | { outcome: "ready"; clearOrphanedThreshold: boolean };
 
 /**
- * ADOPTION gate (codex round 4, F2/F6): an EXISTING document is about to
- * become `parentId`'s first live variant — a PUT that introduces/changes the
- * `parentId`, or a restore that revives a trashed variant under a parent
- * that re-acquired carrying state while it was variant-less. Same contract
- * as creation: 409 (`parent_promotion_required`) until the caller confirms
- * with `promoteParent: true`, then the parent is promoted copy-first/
- * clear-last before the adoption proceeds. No secondary entry point may
- * mint a carrying parent's first live variant without this round-trip.
+ * ADOPTION gate: an EXISTING document is about to become `parentId`'s first
+ * live variant — a PUT that introduces/changes the `parentId`, or a restore
+ * that revives a trashed variant under a parent that re-acquired carrying
+ * state while it was variant-less. Same contract as creation: 409
+ * (`parent_promotion_required`) until the caller confirms with
+ * `promoteParent: true`, then the parent is promoted copy-first/clear-last
+ * before the adoption proceeds. No secondary entry point may mint a carrying
+ * parent's first live variant without this round-trip.
  *
  * Owns its own `runExclusive` hold on the PARENT's key and re-fetches the
  * parent fresh inside it — callers must NOT already hold that key (the
@@ -456,19 +413,18 @@ export type FirstVariantAdoptionResult =
  * at the call site). `opts.adoptedName` reserves the adopted document's
  * name when naming the promotion copy (the copy must never squat on it).
  *
- * `opts.targetId` (round 11 F2a): the id of the EXISTING document being
- * adopted, when its own write runs OUTSIDE this lock (the PUT path). The
- * round-4 target-existence precondition runs pre-lock, so a soft-DELETE of
- * the target landing between it and a CONFIRMED promotion would leave a
- * completed promotion with no adoption. Supplying the id re-checks the
- * target is still alive INSIDE the parent's lock, at the last responsible
- * moment — immediately before performParentPromotion — and aborts with
- * `target_not_found` (nothing restructured) when it is gone. The residual
- * gap between this lock's release and the target-lock write is deliberately
- * NOT closed (it would take a two-key lock order — the AB/BA deadlock
- * above); the write-side re-check documents that posture at the call site.
- * The restore path doesn't need this: its adoption write runs in-lock via
- * `onReady`.
+ * `opts.targetId`: the id of the EXISTING document being adopted, when its
+ * own write runs OUTSIDE this lock (the PUT path). The target-existence
+ * precondition runs pre-lock, so a soft-DELETE of the target landing between
+ * it and a CONFIRMED promotion would leave a completed promotion with no
+ * adoption. Supplying the id re-checks the target is still alive INSIDE the
+ * parent's lock, at the last responsible moment — immediately before
+ * performParentPromotion — and aborts with `target_not_found` (nothing
+ * restructured) when it is gone. The residual gap between this lock's
+ * release and the target-lock write is deliberately NOT closed (it would
+ * take a two-key lock order — the AB/BA deadlock above); the write-side
+ * re-check documents that posture at the call site. The restore path doesn't
+ * need this: its adoption write runs in-lock via `onReady`.
  */
 export async function gateFirstVariantAdoption(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -502,11 +458,11 @@ export async function gateFirstVariantAdoption(
       opts.promoteParent,
       alsoTaken,
       opts.checkHasVariants ?? hasVariants,
-      // beforePromote (round 11 F2a): when the adopted document's own write
-      // runs outside this lock (targetId supplied — the PUT path), re-check
-      // it is still alive immediately before a CONFIRMED promotion
-      // restructures the parent. Adoption introduces no new document/name,
-      // so this is its only fail-fast concern.
+      // beforePromote: when the adopted document's own write runs outside
+      // this lock (targetId supplied — the PUT path), re-check it is still
+      // alive immediately before a CONFIRMED promotion restructures the
+      // parent. Adoption introduces no new document/name, so this is its
+      // only fail-fast concern.
       opts.targetId !== undefined
         ? async () =>
             (await FilamentModel.exists({ _id: opts.targetId, _deletedAt: null }))
@@ -533,9 +489,9 @@ export async function gateFirstVariantAdoption(
     }
     if (opts.onReady) {
       await opts.onReady();
-      // Round 7 P2: the adoption write just ran (in-lock), so the first
-      // variant of a threshold-only parent now exists — clear the parent's
-      // dead threshold last, same posture as the create path.
+      // The adoption write just ran (in-lock), so the first variant of a
+      // threshold-only parent now exists — clear the parent's dead threshold
+      // last, same posture as the create path.
       if (gate.kind === "ready" && gate.clearOrphanedThreshold) {
         await clearOrphanedParentThreshold(FilamentModel, parentKey);
       }

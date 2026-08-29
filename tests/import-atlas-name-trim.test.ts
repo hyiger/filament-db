@@ -126,7 +126,7 @@ describe("Atlas import agrees with the trimmed identity rule (#1116, Codex P2)",
   });
 
   /**
-   * GH #1116 (Codex P1, round 23). The test above covers the SOURCE side
+   * GH #1116. The test above covers the SOURCE side
    * carrying whitespace. This is the mirror — and the one that actually bites:
    * the LOCAL row is the untrimmed one, because `trimEntityNames` skipped the
    * filaments collection (no protective unique index could be established) or

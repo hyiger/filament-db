@@ -15,13 +15,12 @@ import { sumUsageGrams } from "@/lib/capUsageHistory";
 const DRY_DUE_LIMIT = 20;
 
 /**
- * GH #1078 (closing the divergence tracked since v1.60.1/#936): the low-stock
- * swatch color must follow `resolveFilament`'s contract, exactly like the
- * analytics route's `resolveColor` — a variant's `color` is VARIANT-ONLY and
- * is never inherited from its parent; only `secondaryColors` inherits, via
- * the whole-array fallback rule (GH #477). Pre-fix this was a bare
- * `displayColor(f)`, which painted the gray sentinel for a blank-primary
- * variant whose parent carries `secondaryColors`.
+ * GH #1078: the low-stock swatch color must follow `resolveFilament`'s
+ * contract, exactly like the analytics route's `resolveColor` — a variant's
+ * `color` is VARIANT-ONLY and never inherited; only `secondaryColors`
+ * inherits, via the whole-array fallback rule (GH #477). A bare
+ * `displayColor(f)` paints the gray sentinel for a blank-primary variant
+ * whose parent carries `secondaryColors`.
  */
 function lowStockSwatchColor(
   own: { color?: string | null; secondaryColors?: string[] | null },
@@ -60,13 +59,9 @@ export async function GET() {
       bedTypeCount,
       recentPrintHistory,
     ] = await Promise.all([
-      // GH #517: project only the fields the dashboard actually reads.
-      // Pre-fix this pulled every Filament with every spool subfield
-      // (incl. base64 photoDataUrl, unbounded usageHistory[], full
-      // calibrations[]/presets[]/settings) — a hot path on cold load
-      // and on every Electron sync-complete event. The fields below
-      // mirror exactly what the handler consumes downstream
-      // (inheritance via parentMap, low-stock math, dry-due loop).
+      // GH #517: project only the fields the dashboard actually reads —
+      // this is a hot path, and pulling whole documents streams photo blobs
+      // + usage ledgers it never uses.
       Filament.find(
         { _deletedAt: null },
         {
@@ -101,16 +96,12 @@ export async function GET() {
     ]);
 
     const filamentCount = filaments.length;
-    // GH #1113: the filament list headlines the number of ROWS it renders,
-    // which excludes TEMPLATES — `filaments.filter((f) => !f.hasVariants)` —
-    // because a template is a grouping header, not a roll. This counts every
-    // record. Both are defensible, but read back to back they looked like two
-    // answers to "how many filaments do I have".
-    //
-    // Ship the count of the records the list REMOVES, which is what actually
-    // explains the gap. Counting variants instead (my first attempt) named a
-    // different number: one parent with two variants is 3 here and 2 there,
-    // and the single extra record is the parent, not the variants (Codex P2).
+    // GH #1113: the filament list headlines rows-it-renders, which excludes
+    // TEMPLATES (grouping headers, not rolls); this counts every record.
+    // Ship the count of the records the list REMOVES — that is what explains
+    // the gap. Counting variants instead names a different number (one
+    // parent + two variants is 3 here and 2 there; the extra record is the
+    // parent).
     const parentIdsWithVariants = new Set(
       filaments.map((f) => f.parentId && String(f.parentId)).filter(Boolean),
     );
@@ -129,11 +120,9 @@ export async function GET() {
       threshold: number;
     }[] = [];
 
-    // Build a parentMap up front — variants intentionally inherit
-    // `spoolWeight` from their parent (see src/lib/resolveFilament.ts),
-    // so subtracting only the variant's own field treats the inherited
-    // case as 0 and re-introduces the GH #182 over-reporting for every
-    // variant. Codex P1 on PR #190.
+    // Build a parentMap up front — variants inherit `spoolWeight` from
+    // their parent, so subtracting only the variant's own field treats the
+    // inherited case as 0 and re-introduces the GH #182 over-reporting.
     const parentMap = new Map<string, (typeof filaments)[number]>();
     for (const f of filaments) {
       if (!f.parentId) parentMap.set(f._id.toString(), f);
@@ -142,22 +131,14 @@ export async function GET() {
     for (const f of filaments) {
       let remaining = 0;
       // GH #1078: mirror `getRemainingGrams`'s "any weight datum seen" gate
-      // (src/lib/inventoryStats.ts). Without it, a filament whose spools carry
-      // no `totalWeight` reads as 0 g remaining and trips a permanent false
-      // low-stock alert with a fabricated figure — while the home list's
-      // `isLowStock` (via `getRemainingGrams` → null) shows nothing. `weighed`
-      // flips alongside every `remaining +=`; `totalGrams` is untouched
-      // (an unweighed spool contributes 0 there either way).
+      // (src/lib/inventoryStats.ts) — without it, a filament whose spools
+      // carry no `totalWeight` reads as 0 g and trips a permanent false
+      // low-stock alert while the home list shows nothing. `weighed` flips
+      // alongside every `remaining +=`.
       let weighed = false;
-      // Subtracting the empty-spool weight is the bit GH #182 was about:
-      // `spool.totalWeight` is the live scale reading (filament + empty
-      // spool), not remaining filament. Pre-fix the dashboard summed the
-      // raw scale value, which inflated `totalGrams` by one empty-spool
-      // mass per tracked spool and let low-stock alerts hide while the
-      // gross weight still cleared the threshold.
-      //
-      // Resolve the parent's spoolWeight when the variant's is null so
-      // inherited values are honoured.
+      // GH #182: `spool.totalWeight` is the live scale reading (filament +
+      // empty spool), not remaining filament — subtract the tare, resolving
+      // the parent's spoolWeight when the variant's is null.
       const ownMass = typeof f.spoolWeight === "number" ? f.spoolWeight : null;
       const parent = f.parentId ? parentMap.get(f.parentId.toString()) : undefined;
       const inheritedMass = parent && typeof parent.spoolWeight === "number" ? parent.spoolWeight : 0;
@@ -173,12 +154,10 @@ export async function GET() {
           weighed = true;
         }
       }
-      // GH #777: a legacy single-spool row (no spools[] subdocs but a top-level
-      // totalWeight — pre-migration data) counts as one physical roll, matching
-      // the home stat (getSpoolCount). Without this the dashboard under-counts
-      // by one per legacy filament vs Home (65 on Home, 64 here). Mirrors the
-      // synthetic-spool the /inventory aggregation now materializes; only fires
-      // when spools[] is empty (a populated spools[] already counted above).
+      // GH #777: a legacy single-spool row (no spools[] but a top-level
+      // totalWeight) counts as one physical roll, matching the home stat
+      // (getSpoolCount) and the /inventory synthetic spool. Only fires when
+      // spools[] is empty.
       if ((f.spools?.length ?? 0) === 0 && typeof f.totalWeight === "number") {
         spoolCount++;
         remaining += Math.max(0, f.totalWeight - spoolMass);
@@ -195,13 +174,9 @@ export async function GET() {
           _id: String(f._id),
           name: f.name,
           vendor: f.vendor,
-          // GH #477 (Codex P2 on PR #482): primary `color` is nullable
-          // per OpenPrintTag spec. For coextruded / rainbow filaments
-          // the primary IS null and the user's intended representative
-          // color lives in `secondaryColors[0]` — with the variant→parent
-          // array-fallback applied by `lowStockSwatchColor` (GH #1078)
-          // so the swatch matches every other render path instead of a
-          // misleading gray dot.
+          // GH #477: primary `color` is nullable (coextruded) — the
+          // representative color lives in `secondaryColors[0]`, with the
+          // variant→parent array-fallback applied by lowStockSwatchColor.
           color: lowStockSwatchColor(f, parent),
           remainingGrams: remaining,
           threshold: f.lowStockThreshold,
@@ -211,9 +186,7 @@ export async function GET() {
 
     // Spools due for a dry cycle — no dry cycle in the last 30 days and the
     // filament needs drying. A variant with no own dryingTemperature must
-    // inherit from its parent; pre-v1.12.5 this branch only checked the
-    // variant's own field, so child filaments with inherited drying values
-    // were silently skipped (GH #133). Reuses the parentMap built above.
+    // inherit from its parent (GH #133).
     const now = Date.now();
     const dryThresholdMs = 30 * 24 * 60 * 60 * 1000;
     const dryDue: {
@@ -228,21 +201,17 @@ export async function GET() {
         ? resolveFilament(f, parentMap.get(f.parentId.toString()))
         : f;
       if (typeof resolved.dryingTemperature !== "number") continue;
-      // GH #783 (Codex P2): legacy single-spool rows (empty spools[] + a
-      // top-level totalWeight) are intentionally NOT added to dryDue, even
-      // though they count toward the spool total above. A dryDue entry needs a
-      // real spools[] subdoc — it carries a `spoolId` that drives the
-      // dashboard's per-spool dry-cycle actions, which would 404 on a synthetic
-      // legacy id (the same reason /inventory renders these read-only). A
-      // legacy roll also has no dryCycles history to evaluate. The user
-      // migrates it (Add Spool on the filament page) to get a real, dry-trackable
-      // spool — so the loop over `f.spools` correctly skips legacy rolls.
+      // GH #783: legacy single-spool rows are intentionally NOT added to
+      // dryDue even though they count toward the spool total — a dryDue
+      // entry carries a `spoolId` driving per-spool actions that would 404
+      // on a synthetic legacy id (same reason /inventory renders them
+      // read-only), and a legacy roll has no dryCycles history anyway.
       for (const s of f.spools || []) {
         if (s.retired) continue;
         const cycles = s.dryCycles || [];
-        // GH #887: take the MAX date, not the last element — the dry-cycle POST
-        // honors an arbitrary client `date` and appends with no sort, so a
-        // backdated cycle would otherwise be read as the most-recent dry.
+        // GH #887: take the MAX date, not the last element — the POST honors
+        // an arbitrary client `date` with no sort, so a backdated cycle
+        // would otherwise read as the most-recent dry.
         let lastCycleMs = 0;
         let lastCycle: typeof cycles[number]["date"] | null = null;
         for (const c of cycles) {
@@ -273,18 +242,14 @@ export async function GET() {
         bedTypes: bedTypeCount,
         spools: spoolCount,
         retiredSpools,
-        // Active + retired. The "Active Spools" tile renders `spools`; the
-        // "(N retired)" hint renders when `retiredSpools > 0`. Surfacing
-        // the total here means a future tooltip / breakdown can show it
-        // without re-deriving the sum on the client (GH #166).
+        // Active + retired, surfaced so a client breakdown needn't
+        // re-derive the sum (GH #166).
         totalSpools: spoolCount + retiredSpools,
       },
       totalGrams,
       lowStock,
-      // #1117(b): the list is capped so the panel stays readable, but the
-      // TRUE count rides alongside it. The heading used to render
-      // `dryDue.length` — i.e. the CAP — so any inventory past 20 due spools
-      // permanently read "Dry cycle due (20)" with no sign that more existed.
+      // #1117(b): the list is capped for readability; the TRUE count rides
+      // alongside so a heading can't silently render the cap.
       dryDue: dryDue.slice(0, DRY_DUE_LIMIT),
       dryDueTotal: dryDue.length,
       recentPrintHistory: recentPrintHistory.map((h) => ({
@@ -297,11 +262,9 @@ export async function GET() {
             ? h.startedAt.toISOString()
             : String(h.startedAt),
         source: h.source,
-        // GH #1078: clamp through the shared #1030 sanitizer — a legacy /
-        // sync-fed row carrying a pathological magnitude (e.g. 1e308) used
-        // to overflow this raw sum to Infinity, which JSON.stringify
-        // serializes as `null` while /api/analytics reported the same job
-        // sanely via safeGrams.
+        // GH #1078: clamp through the shared #1030 sanitizer — a sync-fed
+        // pathological magnitude (1e308) overflows a raw sum to Infinity,
+        // which JSON.stringify serializes as `null`.
         totalGrams: sumUsageGrams(h.usage),
       })),
     });

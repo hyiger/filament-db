@@ -89,14 +89,9 @@ export const SPOOL_EXPORT_COLUMNS: { key: keyof SpoolExportRow; header: string }
   // subdocument). Export-only — the importer ignores unknown columns — so the
   // reader can tell a real spool from a filament-level one.
   { key: "legacyRoll", header: "legacyRoll" },
-  // Parent/variant context — matches the filament-level export columns.
-  // GH #515.3: header text aligns with exportFilaments.ts's
-  // "Parent" / "Variant Count" — pre-fix the spool exporter emitted
-  // camelCase headers while filament-export used Title-Case. Schema
-  // keys stay camelCase to match the SpoolExportRow interface; only
-  // the CSV header text shifts. Filament-export tests pin
-  // `parentName` and `variantCount` as object keys but not header
-  // text, so this is shape-safe.
+  // Parent/variant context — header text must align with exportFilaments.ts's
+  // "Parent" / "Variant Count" (GH #515.3); schema keys stay camelCase to
+  // match the SpoolExportRow interface.
   { key: "parentName", header: "Parent" },
   { key: "variantCount", header: "Variant Count" },
 ];
@@ -123,9 +118,8 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
     Location.find({ _deletedAt: null }).lean(),
   ]);
 
-  // Build parent lookup so variants resolve inherited filament-level fields
-  // (vendor, type, spoolWeight, netFilamentWeight). Spool-level fields are
-  // never inherited — they belong to the spool subdoc itself.
+  // Spool-level fields are never inherited — they belong to the spool subdoc
+  // itself; only filament-level fields resolve through the parent.
   const parentMap = new Map<string, (typeof filaments)[number]>();
   for (const f of filaments) {
     if (!f.parentId) {
@@ -133,9 +127,6 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
     }
   }
 
-  // Count variants per parent for the variantCount column. A spool belonging
-  // to a parent that has variants gets the count; variants and standalones
-  // get 0. Built once and looked up by filament id below.
   const variantCountByParent = new Map<string, number>();
   for (const f of filaments) {
     if (f.parentId) {
@@ -213,16 +204,11 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
     }
 
     // GH #1111: a LEGACY single-spool filament — stock tracked on the filament
-    // itself, with no spools[] subdocument — contributed no rows at all, so it
-    // vanished from the export while /inventory, the dashboard and the home
-    // list all counted it. Every other spool surface has this fallback
-    // (inventoryStats, the by-location aggregation, the dashboard); the
-    // exporter was the only holdout.
-    //
-    // It matters more than a missing row: the filament-level export carries no
-    // `totalWeight` column and the filament importer has no `totalWeight`
-    // handling, so before this a legacy roll's remaining weight survived only a
-    // full snapshot. "Export both CSVs, wipe, re-import" lost it silently.
+    // itself, with no spools[] subdocument — must still contribute a row
+    // (every other spool surface has this fallback). It matters more than a
+    // missing row: the filament-level export carries no `totalWeight` column,
+    // so without this a legacy roll's remaining weight survived only a full
+    // snapshot — "export both CSVs, wipe, re-import" lost it silently.
     if ((filament.spools?.length ?? 0) === 0 && typeof filament.totalWeight === "number") {
       rows.push({
         filament: filament.name,
@@ -252,15 +238,10 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
         // #732 Phase-1 carry-over: a legacy roll's durable identity IS the
         // filament's instanceId — it is what its printed label and NFC tag
         // encode. Emitting it keeps those resolving to the exact roll after
-        // the migration, instead of the importer minting a new id and leaving
-        // every label to fall back to the filament with matchedSpool: null.
-        //
-        // Honored on import: `isSpoolInstanceIdTaken` excludes the owning
-        // filament, and a legacy filament has no spool holding the id yet
-        // (pinned by "honors a cell equal to the filament's top-level id on
-        // the CREATE path"). The collision guard only fires once a spool
-        // already carries it — i.e. on a re-import after migration, where a
-        // loud refusal is the correct outcome anyway.
+        // the migration. Honored on import: `isSpoolInstanceIdTaken` excludes
+        // the owning filament, so the collision guard only fires once a spool
+        // already carries it — a re-import after migration, where a loud
+        // refusal is the correct outcome.
         instanceId: filament.instanceId ?? "",
         filamentId: filament._id.toString(),
         // Deliberately empty: there is no spool subdocument, and putting the

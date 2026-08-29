@@ -102,7 +102,7 @@ describe("isCalibrationRowReachable", () => {
   });
 
   it("fails OPEN while the nozzle catalog is still loading", () => {
-    // PR #358 round 2: /api/nozzles is async. Treating an unloaded catalog as
+    // PR #358: /api/nozzles is async. Treating an unloaded catalog as
     // "unreachable" would dump every valid per-printer row into the orphan
     // list and invite the user to delete it.
     expect(
@@ -114,7 +114,7 @@ describe("isCalibrationRowReachable", () => {
   });
 
   it("fails OPEN for a printer-scoped row while /api/printers is still loading", () => {
-    // Codex P2 on PR #1130: the three catalogs load independently, so nozzles
+    // The three catalogs load independently, so nozzles
     // routinely resolves first. Judging a printer-scoped row against an empty
     // printer list would put valid data in the orphan list WITH an active
     // Remove button — one click from real loss.
@@ -148,7 +148,7 @@ describe("isCalibrationRowReachable", () => {
   });
 
   it("treats a FAILED catalog like a pending one", () => {
-    // Codex P2 (round 2) on PR #1130: the form's `finally` clears each loading
+    // The form's `finally` clears each loading
     // flag on failure too, so "settled" is not "loaded". The caller derives
     // these flags from success, and this pins the semantics the lib relies on:
     // a false flag must fail open regardless of WHY it is false.
@@ -167,7 +167,7 @@ describe("isCalibrationRowReachable", () => {
   });
 
   it("a failed nozzle catalog does not short-circuit the bed or printer checks", () => {
-    // Codex P2 (round 4) on PR #1130: with /api/nozzles down but the other two
+    // With /api/nozzles down but the other two
     // catalogs healthy, a row scoped to a deleted bed type (or a printer with
     // no tab) is still demonstrably unrenderable — it must stay in the orphan
     // list rather than vanish for the session.
@@ -179,7 +179,7 @@ describe("isCalibrationRowReachable", () => {
     ).toBe(false);
     // NOT the printer clause, though: the caller derives relevantPrinterIds
     // from the nozzle catalog, so with nozzles down an empty list says nothing
-    // about the printers (Codex P2 round 5).
+    // about the printers.
     expect(
       isCalibrationRowReachable(
         calibrationKey(P1, N1, null),
@@ -189,7 +189,7 @@ describe("isCalibrationRowReachable", () => {
   });
 
   it("an unknown bed catalog does not short-circuit the printer checks", () => {
-    // Codex P2 (round 3) on PR #1130: a blanket `return true` for an unloaded
+    // A blanket `return true` for an unloaded
     // bed catalog hid rows whose PRINTER scope is independently known to be
     // unreachable — invisible AND without the Remove action, for as long as
     // /api/bed-types stayed broken.

@@ -32,6 +32,8 @@
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 | `GET` | `/api/filaments/:id/openprinttag/check` | Diff a linked filament against the current OpenPrintTag material |
 | `POST` | `/api/filaments/:id/openprinttag/sync` | Apply selected OpenPrintTag updates to a linked filament |
+| `POST` | `/api/filaments/:id/openprinttag/link` | Link an existing filament to an OpenPrintTag material |
+| `DELETE` | `/api/filaments/:id/openprinttag/link` | Remove a filament's OpenPrintTag link (values stay untouched) |
 | `GET` | `/api/filaments/:id/calibration` | Get calibration data for a filament and nozzle diameter |
 | `GET` | `/api/filaments/:id/spool-check` | Check if a spool has enough filament for a print job |
 | `POST` | `/api/filaments/:id` | Sync a filament preset back from PrusaSlicer |
@@ -404,6 +406,7 @@ Query parameters:
 - `nozzle_diameter` (required) -- nozzle diameter in mm (e.g. `0.4`)
 - `high_flow` (optional) -- `0` or `1`. When provided, only matches nozzles with the corresponding `highFlow` flag. Disambiguates standard vs high-flow nozzles at the same diameter.
 - `nozzle_type` (optional) -- nozzle type name (e.g. `Diamondback`). Further disambiguates same-diameter nozzles of different type — symmetric with the sync-back route's `filamentdb_nozzle` hint, so a multi-nozzle filament's suffixed per-nozzle preset reads back **its** nozzle's calibration (#872).
+- `printer` (optional) -- printer name or ObjectId (v1.78, #1047). Scopes the lookup to that printer's calibration rows: a 24-hex value is treated as an id and wins outright; otherwise the name is matched verbatim → trimmed → case-insensitively, against **live** printers only. Matching rows are **prioritized, not filtered** — printer-scoped entries are ordered ahead of the generic printer-less entries (which stay behind them as the fallback), so a slicer no longer gets whichever same-nozzle entry happened to sort first, including one tuned for a different machine. Soft throughout: a printer that doesn't match (or names no live printer) falls back to the generic entries rather than turning a working lookup into a 404. Without the parameter, generic (printer-less) entries are preferred first.
 - `bed_type` (optional) -- bed type name or ID. When provided, returns calibration values specific to that bed surface. Falls back to: bed-type-specific match → no-bed-type match → first diameter match.
 - `format` (optional) -- `orcaslicer` returns the calibration with OrcaSlicer key names and array-wrapped values (OrcaSlicer's multi-extruder convention).
 
@@ -558,6 +561,15 @@ Responses:
 - `{ "linked": true, "slug": "…", "filament": { … } }` — link established + the fresh document.
 - `{ "linked": false, "found": false, "slug": "…" }` — the slug is no longer in the OpenPrintTag database.
 - `400` — missing or invalid `slug`.
+
+### DELETE /api/filaments/:id/openprinttag/link
+
+Removes the OpenPrintTag link from a filament (v1.77, #1150) — the exact three paths the POST writes (`settings.openprinttag_slug` / `_uuid` and the `openprinttagSnapshot` provenance), and nothing else: field values the material once offered stay untouched. Same-origin guarded; takes no request body. No upstream fetch is made, so the link is removable even when the material is gone from the OpenPrintTag database (the dead end this endpoint unblocks).
+
+Responses:
+- `{ "unlinked": true, "filament": { … } }` — link removed + the fresh document. Idempotent: unlinking an unlinked filament is still a `200` (`$unset` on absent paths is a no-op), so a double-click or retry is harmless.
+- `400` — the `{id}` is not a valid ObjectId.
+- `404` — no active filament with that id.
 
 ### Spool mutation response shape
 
@@ -888,7 +900,7 @@ Returns `202 Accepted`:
 }
 ```
 
-400 if the body isn't valid JSON, isn't an object, or contains neither a filament match nor any decoded fields (nothing for a consumer to act on).
+400 if the body isn't valid JSON, isn't an object, or contains neither a filament match nor any decoded fields (nothing for a consumer to act on). 413 if the request body exceeds the 64 KB cap (v1.75, #1076) — checked against both the `Content-Length` header and the streamed byte count, since the published event is retained as the replay cache and fanned out to every SSE subscriber.
 
 ---
 
@@ -1313,13 +1325,13 @@ Extracted fields include: name, vendor, type, density, diameter, temperatures (n
 
 Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
 
-Snapshot schema version is `6`. The history: v2 added bed types, v3 locations + print history, v4 shared catalogs (v1.14.0), v5 the top-level `legacyNozzleCleanupComplete` provenance flag, and v6 `Location.desiccantChangedAt`. Older snapshots still restore — collections a v1/v2/v3 file doesn't carry come back as empty. The v5 and v6 bumps exist specifically so an **older** build refuses the file (see the restore guard below) rather than accepting it and silently dropping the field its schema doesn't know about.
+Snapshot schema version is `7`. The history: v2 added bed types, v3 locations + print history, v4 shared catalogs (v1.14.0), v5 the top-level `legacyNozzleCleanupComplete` provenance flag, v6 `Location.desiccantChangedAt`, and v7 `debitedGrams` on both usage ledgers (GH #1074). Older snapshots still restore — collections a v1/v2/v3 file doesn't carry are **left untouched** and reported in a `skipped` array on the restore response (GH #1104); a key present as an explicit **empty array** still empties that collection. The v5, v6 and v7 bumps exist specifically so an **older** build refuses the file (see the restore guard below) rather than accepting it and silently dropping the field its schema doesn't know about — for v7 that field is what prevents a clamped-debit over-refund.
 
 Returns a JSON file with `Content-Disposition: attachment` header.
 
 ### POST /api/snapshot
 
-Restore the database from a previously exported snapshot. This is a destructive operation: all existing snapshot-scoped data is replaced with the snapshot contents.
+Restore the database from a previously exported snapshot. This is a destructive operation **for the collections the file carries**: each of those is wiped and replaced with the snapshot contents. A collection key that is **absent** from the file leaves that collection alone (GH #1104 — wiping on the file's behalf is what used to silently empty Locations/PrintHistory/SharedCatalog when restoring an older-format snapshot); a key present as an explicit empty array still empties that collection. The untouched collections are named in the response's `skipped` array.
 
 Upload via `multipart/form-data` with a `file` field containing the snapshot JSON, or send the JSON directly as the request body.
 
@@ -1339,7 +1351,8 @@ Returns:
     "locations": 4,
     "printHistory": 12,
     "sharedCatalogs": 1
-  }
+  },
+  "skipped": []
 }
 ```
 
@@ -1489,7 +1502,7 @@ Response: the created `PrintHistory` document, `201`.
 
 ### DELETE /api/print-history/{id}
 
-Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then **soft-delete** the `PrintHistory` document by setting `_deletedAt` (instead of a hard `deleteOne`) so peer sync can propagate the delete via the tombstone — a hard delete would let the other peer push the row back on the next sync cycle.
+Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight`, and remove the corresponding `usageHistory` entry. The refund is computed from the **matched ledger entry's `debitedGrams`** — the amount that was *actually* debited, which can be less than the job's `grams` when the POST clamped the debit at the spool's zero floor (v1.75, #1074: a job that ran a 50 g spool "dry" with a 100 g estimate refunds 50 g, not 100 g of phantom inventory). Legacy entries written before #1074 carry no `debitedGrams` and fall back to the full recorded `grams` (as does a corrupt `debitedGrams` exceeding the entry's own `grams`). Then **soft-delete** the `PrintHistory` document by setting `_deletedAt` (instead of a hard `deleteOne`) so peer sync can propagate the delete via the tombstone — a hard delete would let the other peer push the row back on the next sync cycle.
 
 Refund matching is by `usageHistory.jobId === entry._id` — unambiguous, so a manual usage log that happens to share `(grams, date)` with the job is **not** affected. Legacy entries written before `jobId` existed (pre-v1.12.7) fall back to a `(grams, date, source)` match that's still scoped to `source: "job" | "slicer"`, so manual logs survive that path too.
 
@@ -1810,6 +1823,18 @@ Response shape:
 `totalSpools` is the sum of each group's `count` so the page header can show one number without re-summing on the client.
 
 Soft-deleted filaments and their spools are excluded from the aggregation regardless of `includeRetired`.
+
+### GET /api/name-conflicts (v1.77)
+
+Backs the **Settings → Data health** page. Read-only scan (no writes) that lists every row the #1116 name-trim migration refused to repair, classified by the same shared decision the migration uses: rows whose stored name has edge whitespace and either collides with an active row when trimmed, or is whitespace-only. Only **active** conflicts are returned — a tombstoned/purged row's name is unresolvable and invisible.
+
+Returns `{ "conflicts": [...] }`, each entry `{ collection, id, name, trimsTo, reason, active, collidesWith, dependents }`:
+
+- `collection` — `filaments | nozzles | printers | bedtypes | locations`; `id` is the blocked row's `_id` (resolution happens through the ordinary id-addressed PUT/DELETE routes — the row is unreachable by *name* through Mongoose).
+- `name` is stored verbatim (edge whitespace intact); `trimsTo` is what it would trim to (`null` when trimming empties it); `reason` is `"collision"` or `"empty-name"`; `collidesWith` names the active row already holding the trimmed name, when known.
+- `dependents` carries `{ total, breakdown }` counted by the same predicates the entity DELETE guards refuse on — `total === 0` means the row is a plain duplicate, safe to delete; with dependents, a rename frees the canonical spelling without touching a reference.
+
+In hybrid deployments this covers only the database this server talks to; remote-side conflicts are visible only to the desktop sync service.
 
 ### GET /api/embed-check?url=…
 

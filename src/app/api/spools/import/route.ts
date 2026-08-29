@@ -22,12 +22,9 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 
 /**
- * Slack added to the 10 MB cap for the multipart Content-Length preflight, to
- * cover the MIME envelope (boundary lines + per-part headers + CRLFs) so a
- * legitimate ~10 MB file isn't rejected for its framing bytes. The route reads
- * only the `file` field, so a real upload's overhead is a few hundred bytes;
- * 64 KB is generous headroom while still far below the multi-MB abuse this
- * guards against (GH #991). `checkFileSize` enforces the exact 10 MB on the
+ * Slack added to the 10 MB cap for the multipart Content-Length preflight —
+ * covers the MIME envelope so a legitimate ~10 MB file isn't rejected for its
+ * framing bytes (GH #991). `checkFileSize` enforces the exact 10 MB on the
  * file part itself.
  */
 const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
@@ -41,32 +38,21 @@ const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
  *
  * Required columns (case-sensitive):
  *   filament   — matched to Filament.name; vendor can disambiguate
- *   totalWeight — grams (number). An empty cell maps to null (the spool
- *     schema's "weight unknown" state), so a CSV produced by
- *     `/api/spools/export-csv` round-trips for spools created via
- *     `POST /api/filaments/[id]/spools` (which default totalWeight to null).
- *     Codex P2 on PR #141.
+ *   totalWeight — grams (number). An empty cell maps to null ("weight
+ *     unknown") so an export round-trips for spools created with null.
  *
  * Optional columns:
  *   vendor, label, lotNumber, purchaseDate (ISO date), openedDate,
  *   location (name — will create the Location if it doesn't exist),
- *   spoolId — when present and the matching filament already has a spool
- *     with that subdoc _id, the existing spool's mutable fields are
- *     updated instead of appending a new one. This makes the export →
- *     re-import round-trip idempotent (GH #159 — pre-fix re-importing
- *     an export silently doubled inventory).
- *   instanceId — the spool's own id (#732 Phase 5). Honored on the CREATE
- *     path ONLY: stamped on the new spool (validated for charset/length and
- *     uniqueness-checked against other spools' ids, other filaments'
- *     top-level ids, and other rows in this same CSV; auto-generated when
- *     absent; a malformed/duplicate id fails just that row, side-effect-free).
- *     On the UPDATE path (a row whose spoolId matches an existing spool) the
- *     column is informational and IGNORED — the spool keeps its id. See the
- *     CONTRACT note at the parse site for the full rationale.
+ *   spoolId — when it matches an existing subdoc _id, the spool is UPDATED
+ *     instead of appended, making export → re-import idempotent (GH #159 —
+ *     pre-fix a re-import silently doubled inventory).
+ *   instanceId — the spool's own id (#732 Phase 5). Honored on CREATE only;
+ *     on UPDATE the column is informational and IGNORED. See the CONTRACT
+ *     note at the parse site.
  *
- * Returns a per-row result tagged `created | updated` so the client can
- * show granular success/failure. Does not transactionally roll back on
- * partial failure — this is a user bulk-paste, not a critical path.
+ * Returns a per-row result tagged `created | updated`. Does not
+ * transactionally roll back on partial failure.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -74,12 +60,11 @@ export async function POST(request: NextRequest) {
 
   let csvText: string;
 
-  // Branch off the media-type ESSENCE (type/subtype), with parameters stripped.
-  // A substring match on the raw Content-Type let a request like
-  // `application/json; x="multipart/form-data"` read as multipart and skip BOTH
-  // size guards while still entering the JSON branch (Codex P2). Deciding the
-  // branch AND the guard gating from the exact essence closes that bypass;
-  // legitimate `charset=`/`boundary=` parameters are ignored either way.
+  // Branch off the media-type ESSENCE (type/subtype), parameters stripped —
+  // a substring match on the raw Content-Type let
+  // `application/json; x="multipart/form-data"` read as multipart and skip
+  // BOTH size guards while entering the JSON branch. Deciding the branch AND
+  // the guard gating from the exact essence closes that bypass.
   const mediaType = (request.headers.get("content-type") || "")
     .split(";")[0]
     .trim()
@@ -87,23 +72,17 @@ export async function POST(request: NextRequest) {
   const isJson = mediaType === "application/json";
   const isMultipart = mediaType === "multipart/form-data";
 
-  // GH #991: bound the request body BEFORE buffering it, so a large upload
-  // can't drive the server to buffer + parse far more than this small
-  // paste/spreadsheet workflow needs. `next.config.ts` raises
-  // `proxyClientMaxBodySize` to 52 MB for snapshot restores, so without this
-  // guard this endpoint inherits that budget even on the default
-  // unauthenticated local/LAN API. Mirrors the sibling import routes
-  // (prusaslicer, bambustudio, import-csv).
+  // GH #991: bound the request body BEFORE buffering it — without this the
+  // endpoint inherits next.config.ts's 52 MB `proxyClientMaxBodySize` budget
+  // (raised for snapshot restores) on the default unauthenticated local/LAN
+  // API. Mirrors the sibling import routes.
   //
-  // Content-Length preflight for EVERY shape — kept OUTSIDE the try/catch below
-  // so a genuine 413 isn't downgraded into the 400 "Failed to read request
-  // body" path. The multipart branch gets a small envelope-overhead allowance
-  // (boundaries + part headers) so a legitimate ~10 MB file isn't tripped by
-  // its MIME framing, while a huge total body — a big file OR a small file plus
-  // tens of MB of extra fields — is still rejected before `formData()` buffers
-  // it (Codex P2: `checkFileSize` alone runs only AFTER the whole envelope is
-  // parsed and measures only the `file` part). `checkFileSize` below then
-  // enforces the exact 10 MB bound on the file part itself.
+  // Content-Length preflight for EVERY shape — kept OUTSIDE the try/catch
+  // below so a genuine 413 isn't downgraded into the 400 "Failed to read
+  // request body" path. The multipart branch gets the envelope-overhead
+  // allowance; a huge total body is still rejected before `formData()`
+  // buffers it (`checkFileSize` alone runs only AFTER the whole envelope is
+  // parsed and measures only the `file` part).
   const preflight = isMultipart
     ? checkContentLength(request, MAX_UPLOAD_SIZE + MULTIPART_OVERHEAD_ALLOWANCE)
     : checkContentLength(request);
@@ -111,34 +90,26 @@ export async function POST(request: NextRequest) {
 
   try {
     if (isMultipart) {
-      // GH #339: the in-app importer (SpoolCsvImportDialog) reads the file
-      // client-side and POSTs it as raw text/csv, but every other import
-      // route in the app takes a multipart upload. Without this branch a
-      // `-F "file=@..."` curl call would land in the raw-text fallback
-      // below, parse the MIME envelope as CSV, and 400 with the misleading
-      // "CSV is missing required column: filament".
+      // GH #339: without this branch a `-F "file=@..."` curl call lands in
+      // the raw-text fallback, parses the MIME envelope as CSV, and 400s
+      // with a misleading missing-column error.
       const formData = await request.formData();
       const file = formData.get("file");
       if (!(file instanceof File)) {
         return errorResponse("multipart upload must include a 'file' field", 400);
       }
       // GH #991: exact cap on File.size BEFORE file.text() materialises the
-      // whole body into memory (matches /api/filaments/bambustudio). The
-      // Content-Length preflight above already rejected an oversized TOTAL body;
-      // this bounds the file part itself (e.g. a chunked request with no
+      // body — bounds the file part itself (e.g. a chunked request with no
       // Content-Length that slipped past the preflight).
       const sizeError = checkFileSize(file);
       if (sizeError) return sizeError;
       csvText = await file.text();
     } else {
-      // Raw text/csv AND JSON: read the raw body and byte-check the WHOLE
-      // buffered payload BEFORE any JSON.parse. This is the hard cap for a
-      // missing/lying Content-Length (chunked/headerless) that slips past the
-      // preflight and — for JSON — it bounds the full envelope, not just the
-      // decoded `csv` field, so a huge sibling JSON field can't sneak an
-      // oversized body through (Codex P2). Byte length, not String.length
-      // (UTF-16 units): a non-ASCII UTF-8 body can exceed 10 MB of bytes while
-      // under the char count (Codex P2 on PR #685).
+      // Raw text/csv AND JSON: byte-check the WHOLE buffered payload BEFORE
+      // any JSON.parse — the hard cap for a missing/lying Content-Length,
+      // and for JSON it bounds the full envelope (a huge sibling JSON field
+      // can't sneak past). Byte length, not String.length: a non-ASCII UTF-8
+      // body can exceed 10 MB of bytes while under the char count.
       const raw = await request.text();
       if (Buffer.byteLength(raw, "utf8") > MAX_UPLOAD_SIZE) {
         return errorResponse("Request body too large. Maximum is 10 MB.", 413);
@@ -199,18 +170,13 @@ export async function POST(request: NextRequest) {
       if (loc) {
         id = String(loc._id);
       } else {
-        // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than a
-        // genuine absence. `name` carries `trim: true`, and a Mongoose setter
-        // casts QUERY values too, so this findOne cannot select a row whose
-        // stored value is still the raw `"Drybox #1 "` — which is exactly what
-        // survives when `trimEntityNames` had to skip the locations collection
-        // (no protective index) or leave that row alone (a collision).
-        //
-        // Creating here would then succeed: the two raw strings are distinct,
-        // so the unique index does not object, and the user gets a second
-        // location that renders identically while every imported spool attaches
-        // to the twin. That IS the bug this whole change exists to remove, and
-        // this route is its original reproduction path.
+        // GH #1116: the miss may be a LOOKUP failure rather than a genuine
+        // absence — `name` carries `trim: true`, and the setter casts QUERY
+        // values too, so this findOne cannot select a survivor still stored
+        // raw ("Drybox #1 "). Creating here would succeed (distinct raw
+        // strings don't trip the unique index) and mint a second location
+        // that renders identically, with every imported spool attaching to
+        // the twin.
         const survivor = await findByTrimmedName(
           Location.collection as unknown as MinimalNameCollection,
           name,
@@ -236,20 +202,14 @@ export async function POST(request: NextRequest) {
       filament?: string;
     };
 
-    // GH #525.1: cache filament lookups by `name|vendor` so a 50-row paste
-    // of the same material hits the collection once, not 50 times — same
-    // pattern locationCache already uses above. `null` is a cached
-    // negative (filament not found) so repeated missing-filament rows
-    // don't re-query.
+    // GH #525.1: cache filament lookups per (name, vendor); `null` is a
+    // cached negative so repeated missing-filament rows don't re-query.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const filamentCache = new Map<string, any | null>();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async function resolveFilament(name: string, vendor: string): Promise<any | null> {
-      // JSON-encode the (name, vendor) pair for a collision-free cache key.
-      // Both are arbitrary user strings, so no single-character delimiter is
-      // safe. An earlier version used a raw separator that also smuggled a
-      // literal NUL byte into this source file, making git treat the route as
-      // binary (Codex P2 on PR #546).
+      // JSON-encode the pair for a collision-free cache key — both are
+      // arbitrary user strings, so no single-character delimiter is safe.
       const key = JSON.stringify([name, vendor]);
       if (filamentCache.has(key)) return filamentCache.get(key)!;
       const query: Record<string, unknown> = { name, _deletedAt: null };
@@ -259,11 +219,9 @@ export async function POST(request: NextRequest) {
       return doc;
     }
 
-    // Defer save() to once-per-filament after ALL its rows are applied to
-    // the in-memory doc — instead of save()-ing per row, which for N rows
-    // of one filament was N hydrate+save round-trips against (possibly
-    // remote) Atlas. `rowResults` is index-keyed so the per-row order is
-    // preserved even though saves finalize their rows after the loop.
+    // Defer save() to once-per-filament after ALL its rows are applied.
+    // `rowResults` is index-keyed so per-row order is preserved even though
+    // saves finalize their rows after the loop.
     const rowResults: Array<RowResult | null> = new Array(rows.length).fill(null);
     // Per touched filament: the doc + the rows whose outcome depends on
     // that doc's single save() succeeding.
@@ -273,18 +231,16 @@ export async function POST(request: NextRequest) {
       { doc: any; rows: Array<{ index: number; action: "created" | "updated"; name: string }> }
     >();
 
-    // #732 Phase 5: ids explicitly claimed (set/changed) by earlier rows in
-    // THIS CSV. Newly minted/changed ids aren't persisted until the post-loop
-    // save(), so the DB uniqueness check can't see them — this Set catches a
-    // same-id collision between two rows in the same import. Auto-generated
-    // ids aren't tracked (40 bits of entropy; collision is negligible and the
-    // POST /spools route takes the same posture).
+    // #732 Phase 5: ids explicitly claimed by earlier rows in THIS CSV.
+    // Newly minted ids aren't persisted until the post-loop save(), so the
+    // DB uniqueness check can't see them — this Set catches a same-id
+    // collision within one import. Auto-generated ids aren't tracked (40
+    // bits of entropy; same posture as POST /spools).
     const claimedInstanceIds = new Set<string>();
 
-    // GH #605 (codex round 3 sweep): template status per filament id, so a
-    // 50-row paste against one template asks the DB once. Advisory only —
-    // the save loop re-checks INSIDE the per-filament lock before
-    // persisting any bucket that appends spools.
+    // GH #605: cached template status per filament id. Advisory only — the
+    // save loop re-checks INSIDE the per-filament lock before persisting any
+    // bucket that appends spools.
     const templateCache = new Map<string, boolean>();
     async function isTemplate(fid: string): Promise<boolean> {
       let cached = templateCache.get(fid);
@@ -297,10 +253,8 @@ export async function POST(request: NextRequest) {
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      // Strip the formula guard apostrophe (`csvCell` adds `'` in front
-      // of cells starting with =, +, -, @, tab, CR) so a row exported
-      // by `/api/spools/export-csv` round-trips cleanly. Codex P2
-      // follow-up to PR #144.
+      // Strip the formula-guard apostrophe (`csvCell` prefixes cells
+      // starting with =, +, -, @, tab, CR) so an export round-trips cleanly.
       const filamentName = unsanitizeCsvCell((r.filament || "").trim());
       const vendor = unsanitizeCsvCell((r.vendor || "").trim());
       const weightStr = (r.totalWeight || "").trim();
@@ -310,11 +264,9 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Empty cell → preserve null. Importer used to coerce "" → 0 because
-      // Number("") === 0, which broke round-trip parity with the export
-      // (Codex P2 on PR #141: a spool created with totalWeight=null and
-      // re-imported from its own export would land as 0g). A populated cell
-      // still has to be a non-negative finite number.
+      // Empty cell → preserve null — Number("") === 0 would break round-trip
+      // parity (a null-weight spool re-imported from its own export landing
+      // as 0g). A populated cell must be a non-negative finite number.
       let weight: number | null;
       if (weightStr === "") {
         weight = null;
@@ -332,8 +284,6 @@ export async function POST(request: NextRequest) {
       }
 
       // Disambiguate by vendor if provided, otherwise match by name alone.
-      // Cached per (name, vendor) so a 50-row paste of one material doesn't
-      // re-query (GH #525.1).
       const resolved = await resolveFilament(filamentName, vendor);
       if (!resolved) {
         rowResults[i] = {
@@ -346,16 +296,12 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // GH #372 (Codex follow-up): treat ISO-shaped-but-impossible dates
-      // (Feb 29 outside a leap year, etc.) as bad input rather than
-      // silently normalising them to a different day. `new Date(s)` alone
-      // would shift "2025-02-29" to March 1st without warning.
+      // GH #372: reject ISO-shaped-but-impossible dates — `new Date(s)`
+      // silently shifts "2025-02-29" to March 1st.
       //
       // Validate BEFORE `resolveLocationId` — that call auto-creates a
-      // Location row whose name matches the cell, and any row that fails
-      // a later check would otherwise leave behind an orphan location
-      // (Codex P2 on PR #375). Per-row failures must remain side-effect
-      // free so an invalid CSV doesn't dirty the catalog.
+      // Location, and a row failing a later check would leave an orphan
+      // behind. Per-row failures must remain side-effect free.
       const rawPurchase = (r.purchaseDate || "").trim();
       if (rawPurchase && !isValidIsoDateString(rawPurchase)) {
         rowResults[i] = {
@@ -377,12 +323,11 @@ export async function POST(request: NextRequest) {
       const purchaseDate = rawPurchase ? new Date(rawPurchase) : null;
       const openedDate = rawOpened ? new Date(rawOpened) : null;
 
-      // GH #953: cap the free-form spool text fields. The schema `maxlength`
-      // backstops the save, but check here (side-effect-free, before
-      // resolveLocationId auto-creates a Location) so a too-long value fails its
-      // own row with a clean message rather than aborting the whole bucket save
-      // with a misattributed Mongoose ValidationError. Measure the UNSANITIZED
-      // value — that's what persists.
+      // GH #953: cap the free-form text fields here (side-effect-free,
+      // before resolveLocationId) so a too-long value fails its own row
+      // rather than aborting the whole bucket save with a misattributed
+      // ValidationError. Measure the UNSANITIZED value — that's what
+      // persists.
       if (unsanitizeCsvCell(r.label || "").length > MAX_SPOOL_TEXT_LENGTH) {
         rowResults[i] = {
           row: i + 2,
@@ -401,65 +346,49 @@ export async function POST(request: NextRequest) {
       }
 
       // #732 Phase 5: optional `instanceId` column — the spool's own id.
-      // CONTRACT: the column is honored only when CREATING a new spool; on the
-      // UPDATE path (a row whose `spoolId` matches an existing spool) it is
-      // informational and the spool's id is left untouched. Rationale:
-      //   - Pre-Phase-5 exports wrote the FILAMENT-level id into this column for
-      //     EVERY spool row (the bug this phase fixes) AND always emitted
-      //     `spoolId`, so that legacy artifact only ever arrives on an UPDATE
-      //     row. Ignoring it there makes such a CSV round-trip idempotently
-      //     (no id rewritten to the filament id, no within-batch dup) — exactly
-      //     what Codex asked for on PR #742. Keying off the runtime value
-      //     (`rawId === filament.instanceId`) instead was fragile: a legitimate
-      //     carry-over spool's own id EQUALS the filament id, so the value test
-      //     couldn't tell "legacy artifact" from "real id" (two review rounds
-      //     found edge cases). The structural create-vs-update split is exact.
-      //   - A NEW (Phase-5) export round-trips losslessly anyway: an update
-      //     row's spool already holds the id sitting in its (ignored) cell.
-      //   - The spool's id is its stable scan identity; deliberate per-spool id
-      //     edits go through the detail-page editor (PUT /spools/{id}, Phase 4),
-      //     not a bulk-CSV rewrite.
-      // The id resolution/validation/uniqueness runs HERE, before
-      // `resolveLocationId` auto-creates a Location, so a malformed/duplicate id
-      // fails its row side-effect-free (mirrors the date checks above).
+      // CONTRACT: honored only when CREATING a new spool; on the UPDATE path
+      // (a row whose `spoolId` matches an existing spool) it is
+      // informational and the spool keeps its id. Rationale:
+      //   - Pre-Phase-5 exports wrote the FILAMENT-level id into this column
+      //     for EVERY spool row AND always emitted `spoolId`, so that legacy
+      //     artifact only ever arrives on an UPDATE row — ignoring it there
+      //     makes such a CSV round-trip idempotently. A value test
+      //     (`rawId === filament.instanceId`) can't work: a legitimate
+      //     carry-over spool's own id EQUALS the filament id. The structural
+      //     create-vs-update split is exact.
+      //   - Deliberate per-spool id edits go through PUT /spools/{id}, not a
+      //     bulk-CSV rewrite.
+      // The id validation/uniqueness runs HERE, before `resolveLocationId`
+      // auto-creates a Location, so a malformed/duplicate id fails its row
+      // side-effect-free.
       //
-      // Limitation: the DB uniqueness check reads PERSISTED state and the
-      // within-batch Set only tracks ids freshly CLAIMED this run, so two CREATE
-      // rows in one CSV claiming the same explicit id fail the second safely
-      // ("already used") rather than succeeding. Rare for a machine export.
-      //
-      // Known transitional edge: a PRE-Phase-5 export (filament-level id in
-      // every row) imported into a FRESH DB hits the CREATE path for every row,
-      // so a multi-spool filament's rows all carry the same id → the first
-      // creates, the rest fail loudly as within-batch dups. This is NOT the
-      // backup-restore path (full restores go through /api/snapshot/restore,
-      // which preserves spool ids verbatim); spool CSV import is for
-      // incremental bulk-add. Remedy: re-export with the current version (each
-      // row then carries its spool's own id) or drop the instanceId column.
+      // Known transitional edge: a PRE-Phase-5 export imported into a FRESH
+      // DB hits the CREATE path for every row, so a multi-spool filament's
+      // rows all carry the same id → the first creates, the rest fail loudly
+      // as within-batch dups. Full restores go through /api/snapshot/restore
+      // (spool ids preserved verbatim); the remedy here is a re-export with
+      // the current version or dropping the column.
       const incomingSpoolId = (r.spoolId || "").trim();
       let incomingInstanceId: string | undefined;
       if ("instanceId" in r) {
         const rawId = unsanitizeCsvCell((r.instanceId || "").trim());
         if (rawId !== "") {
-          // Determine create-vs-update by locating the spool this row targets.
-          // A pure persisted-existence question (the column only changes
-          // behavior on CREATE), so reading `resolved` is correct regardless of
-          // the #546 dual-instance split — a row can only reference a spool _id
-          // that already exists in the DB, which every instance of the filament
-          // sees identically. The mutation itself still lands on `bucket.doc`
-          // in the update/create branch below.
+          // Determine create-vs-update by locating the spool this row
+          // targets. A pure persisted-existence question, so reading
+          // `resolved` is correct regardless of the #546 dual-instance split
+          // (a row can only reference a spool _id already in the DB). The
+          // mutation itself still lands on `bucket.doc` below.
           const existingSpool = incomingSpoolId
             ? (resolved.spools as unknown as {
                 id(id: string): Record<string, unknown> | null;
               }).id(incomingSpoolId)
             : null;
 
-          // UPDATE path → leave the existing spool's id untouched (see CONTRACT).
-          // CREATE path → honor the supplied id: validate, then uniqueness-check
-          // against other spools, other filaments' top-level ids, and other
-          // rows in this CSV (the Set, since freshly minted ids aren't persisted
-          // until the batched save). `ownFilamentId` permits the legitimate
-          // self-filament carry-over collision.
+          // UPDATE path → id untouched (see CONTRACT). CREATE path →
+          // validate, then uniqueness-check against other spools, other
+          // filaments' top-level ids, and other rows in this CSV;
+          // `ownFilamentId` permits the legitimate self-filament carry-over
+          // collision.
           if (!existingSpool) {
             const idCheck = validateSpoolInstanceId(rawId);
             if (!idCheck.ok) {
@@ -495,19 +424,14 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      // GH #605 (codex round 3 sweep): a row that would CREATE a spool on a
-      // TEMPLATE (a filament with live color variants) fails its row —
+      // GH #605: a row that would CREATE a spool on a TEMPLATE fails —
       // inventory lives on the variants, and a bulk paste can't confirm a
-      // promotion, so it rejects rather than silently attaching (same
-      // contract text as POST /filaments/{id}/spools). UPDATE rows (spoolId
-      // matches an existing spool) stay allowed: a legacy template's
-      // pre-#605 spools remain editable — the enforce-forward posture.
-      // Checked BEFORE resolveLocationId auto-creates a Location so the
-      // failure is side-effect-free (mirrors the date checks above). The
-      // create-vs-update split matches the later `filament.spools.id(...)`
-      // decision: a CSV can only reference persisted subdoc _ids (fresh
-      // in-batch _ids are minted in memory and unknowable to the file), so
-      // probing `resolved` here is equivalent.
+      // promotion (same contract text as POST /filaments/{id}/spools).
+      // UPDATE rows stay allowed: a legacy template's pre-#605 spools remain
+      // editable (enforce-forward posture). Checked BEFORE resolveLocationId
+      // so the failure is side-effect-free. Probing `resolved` is equivalent
+      // to the later `filament.spools.id(...)` decision (a CSV can only
+      // reference persisted subdoc _ids).
       const wouldUpdateExisting = incomingSpoolId
         ? Boolean(
             (resolved.spools as unknown as {
@@ -524,8 +448,7 @@ export async function POST(request: NextRequest) {
         unsanitizeCsvCell((r.location || "").trim()),
       );
 
-      // Build the field set for a NEW spool — defaults fill in for any
-      // optional column the user didn't include.
+      // Field set for a NEW spool — defaults fill in for omitted columns.
       const newSpoolFields = {
         label: unsanitizeCsvCell(r.label || ""),
         totalWeight: weight,
@@ -533,24 +456,18 @@ export async function POST(request: NextRequest) {
         purchaseDate: purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null,
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,
-        // #732 Phase 5: stamp the spool's own id explicitly (user-supplied +
-        // already validated/uniqueness-checked above, or a fresh one) rather
-        // than relying on the subdoc default — matches POST /spools.
+        // #732 Phase 5: stamp the spool's own id explicitly rather than
+        // relying on the subdoc default — matches POST /spools.
         instanceId: incomingInstanceId ?? generateInstanceId(),
       };
 
-      // Codex P1 on PR #546: two rows for the SAME filament can resolve via
-      // different cache keys — e.g. `PLA,800,` (no vendor) then
-      // `PLA,900,Vendor A` (matching vendor) issue two findOne()s and hydrate
-      // two SEPARATE Mongoose document instances for the same _id. The save
-      // loop persists only the instance stored in the bucket, so a spool
-      // pushed onto the other instance would be silently dropped while the
-      // row still reports ok. Resolve (or create) the per-_id bucket here —
-      // AFTER all per-row validation has passed (Codex P2 on PR #547: doing
-      // it before the date checks registered a filament for save() even when
-      // the row then failed validation and contributed no mutation) — and
-      // mutate ONLY `bucket.doc` so every row for a given filament
-      // accumulates onto the one instance that actually gets saved.
+      // Two rows for the SAME filament can resolve via different cache keys
+      // (with/without vendor) and hydrate two SEPARATE document instances
+      // for one _id — the save loop persists only the bucket's instance, so
+      // a spool pushed onto the other would be silently dropped while the
+      // row reports ok. Resolve the per-_id bucket here — AFTER all per-row
+      // validation (earlier, a failing row would still register its filament
+      // for save()) — and mutate ONLY `bucket.doc`.
       const fid = String(resolved._id);
       let bucket = touched.get(fid);
       if (!bucket) {
@@ -559,24 +476,18 @@ export async function POST(request: NextRequest) {
       }
       const filament = bucket.doc;
 
-      // Round-trip dedup: when the CSV row carries a `spoolId` and the
-      // matching filament already has a spool with that subdoc _id,
-      // update the existing entry instead of appending a duplicate.
-      // Without this, exporting and re-importing the same CSV silently
-      // doubles the library's spool count (GH #159).
+      // Round-trip dedup (GH #159): a row whose `spoolId` matches an
+      // existing subdoc updates it instead of appending — otherwise
+      // re-importing an export silently doubles the spool count.
       //
-      // For the UPDATE path, only assign the columns that were actually
-      // present in the CSV header — missing columns must leave existing
-      // metadata untouched. Otherwise a partial-column re-import (e.g.
-      // `filament,totalWeight,spoolId` to bulk-update weights) would
-      // silently null label / lotNumber / dates / location on every
-      // matched spool. Codex P1 on PR #172.
-      // `incomingSpoolId` was parsed during the instanceId check above.
+      // On the UPDATE path, only assign columns actually present in the CSV
+      // header — missing columns must leave existing metadata untouched, or
+      // a partial-column re-import (e.g. bulk-updating weights) would
+      // silently null label / dates / location on every matched spool.
       let action: "created" | "updated" = "created";
       if (incomingSpoolId) {
-        // .id() returns the matching subdoc or null. Cast through unknown
-        // because the inferred subdoc type doesn't expose our extended
-        // fields, the same workaround the push path below uses.
+        // Cast through unknown — the inferred subdoc type doesn't expose our
+        // extended fields (same workaround as the push path below).
         const existing = (filament.spools as unknown as { id(id: string): Record<string, unknown> | null }).id(incomingSpoolId);
         if (existing) {
           // totalWeight is required so it always counts as "present" — its
@@ -591,66 +502,48 @@ export async function POST(request: NextRequest) {
             partialUpdate.openedDate = openedDate && !isNaN(+openedDate) ? openedDate : null;
           }
           if ("location" in r) partialUpdate.locationId = locationId || null;
-          // #732 Phase 5: the spool's id is intentionally NOT updated here — the
-          // `instanceId` column is honored on CREATE only (see the CONTRACT note
-          // where the column is parsed). An existing spool keeps its id.
+          // #732: the spool's id is intentionally NOT updated here — the
+          // `instanceId` column is honored on CREATE only (see CONTRACT).
           Object.assign(existing, partialUpdate);
           action = "updated";
         }
       }
       if (action === "created") {
-        // GH #1111 (Codex P2): appending the FIRST spool to a filament whose
-        // stock still lives on its own top-level `totalWeight` IS the legacy
-        // migration, and it has to clear that field — otherwise the two
-        // records coexist and every helper's `spools.length === 0` fallback
-        // sits there waiting: delete the imported spool later and the old
-        // roll silently reappears with its pre-migration weight.
-        //
-        // The detail page's Add Spool flow already clears it client-side; this
-        // path didn't, which mattered little while legacy rolls were never
-        // exported and matters now that they are. Keyed on the SHAPE rather
-        // than on the export's `legacyRoll` marker, so a hand-written CSV gets
-        // the same treatment — the marker is export-only and the importer
-        // ignores unknown columns by design.
-        // GATED on the export's marker, not merely on "first spool" (Codex P1).
-        // This route also accepts hand-written incremental CSVs, so a row need
-        // not BE the legacy roll — bulk-adding an unrelated spool to a legacy
-        // filament would then have deleted the existing roll's weight instead
-        // of adding alongside it. Only a row this app exported FROM that
-        // legacy roll is the migration.
+        // GH #1111: a row this app exported FROM a legacy roll (the
+        // `legacyRoll` marker + first spool) IS the legacy migration, so it
+        // clears the top-level `totalWeight` — otherwise the two records
+        // coexist and every `spools.length === 0` fallback sits waiting:
+        // delete the imported spool later and the old roll silently
+        // reappears. GATED on the export's marker, not merely on "first
+        // spool": this route also accepts hand-written incremental CSVs, and
+        // bulk-adding an unrelated spool to a legacy filament must add
+        // alongside the roll, not delete its weight.
         const isLegacyMigration =
           filament.spools.length === 0 &&
           String(r.legacyRoll ?? "").trim().toLowerCase() === "true";
-        // Mongoose's subdocument type doesn't include our added fields until
-        // the outer Filament schema is re-inferred — cast to unknown first
-        // to avoid the direct `any` eslint rule while still satisfying the
-        // push signature.
+        // Cast to unknown — the inferred subdoc type doesn't include our
+        // added fields.
         filament.spools.push(newSpoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
         if (isLegacyMigration && filament.totalWeight != null) {
           filament.totalWeight = null;
         }
       }
-      // GH #525.1: don't save() per row. Register this row's outcome against
-      // its filament (bucket resolved above); the doc is saved once after all
-      // rows are applied. The in-memory doc accumulates every row's spool
-      // push / update, so one save persists them all.
+      // Register this row's outcome against its filament; the doc is saved
+      // once after all rows are applied.
       bucket.rows.push({ index: i, action, name: filament.name });
     }
 
-    // GH #525.1 + #370: one save() per touched filament. Filament has
-    // `optimisticConcurrency: true`, so a concurrent writer can make
-    // save() throw VersionError — caught per filament so a conflict on
-    // one material reports against only its rows (not the whole batch),
-    // and the rest of the import still completes with partial results.
+    // GH #525.1 + #370: one save() per touched filament. A VersionError from
+    // a concurrent writer is caught per filament, so a conflict on one
+    // material reports against only its rows and the rest still completes.
     //
-    // GH #605 (codex round 3 sweep): each save runs inside the same
-    // per-filament mutex the promotion/spool routes lock, and a bucket that
-    // APPENDED spools re-checks template status in-lock first — the per-row
-    // check above is check-then-act, so a first-variant promotion landing
-    // mid-import could otherwise have this save() write the (moved) spools
-    // array back onto the freshly-cleared template. A trip fails the whole
-    // bucket (all its rows share the one save), same all-or-nothing posture
-    // as a VersionError.
+    // GH #605: each save runs inside the same per-filament mutex the
+    // promotion/spool routes lock, and a bucket that APPENDED spools
+    // re-checks template status in-lock first — the per-row check is
+    // check-then-act, so a first-variant promotion landing mid-import could
+    // otherwise have this save() write the (moved) spools array back onto
+    // the freshly-cleared template. A trip fails the whole bucket (all its
+    // rows share the one save).
     for (const { doc, rows: bucketRows } of touched.values()) {
       const appendsSpools = bucketRows.some((b) => b.action === "created");
       const failure = await runExclusive(
@@ -678,19 +571,14 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Assemble in original row order (validation failures were filled
-    // in-loop, save outcomes after — rowResults is index-keyed so order
-    // is preserved either way).
     const results = rowResults.filter((r): r is RowResult => r !== null);
 
     const ok = results.filter((r) => r.ok).length;
     const created = results.filter((r) => r.ok && r.action === "created").length;
     const updated = results.filter((r) => r.ok && r.action === "updated").length;
     const failed = results.length - ok;
-    // `imported` is preserved for backwards compatibility with any client
-    // that already reads it; `created`/`updated` are the new breakdown so
-    // a re-import can be reported as "updated 6" rather than misleadingly
-    // "imported 6" (which would imply doubling).
+    // `imported` is preserved for backwards compatibility with clients that
+    // already read it; `created`/`updated` are the breakdown.
     return NextResponse.json({ imported: ok, created, updated, failed, results });
   } catch (err) {
     return errorResponse("Failed to import spools", 500, getErrorMessage(err));

@@ -62,10 +62,9 @@ export default function LocationsPage() {
 
   // Dry-box label printing. This page lists EVERY location — including
   // empty and freshly created dryboxes, which /inventory cannot show (its
-  // groups are built from spools), so this is the entry point that makes a
-  // box printable at exactly the moment you most want to label it: before
-  // it has contents (PR #1043 round 4). The dialog fetches its own
-  // manifest; an empty box prints "(empty)".
+  // groups are built from spools) — so a box is printable before it has
+  // contents. The dialog fetches its own manifest; an empty box prints
+  // "(empty)".
   const [printLocation, setPrintLocation] = useState<Location | null>(null);
 
   const fetchLocations = useCallback(
@@ -113,8 +112,8 @@ export default function LocationsPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("locations.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    // GH #1080: a network-level fetch rejection used to escape the handler
-    // with no toast at all — the row just silently stayed.
+    // GH #1080: a network-level fetch rejection must not escape the handler
+    // with no toast — the row would just silently stay.
     try {
       const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
       if (!res.ok) {
@@ -145,9 +144,9 @@ export default function LocationsPage() {
     const errors: string[] = [];
     try {
       for (const id of selected) {
-        // GH #1080: a mid-loop network failure used to throw out of the
-        // handler, leaving the delete button disabled forever and skipping
-        // the refetch. Record the failure and keep going (GH #640 pattern).
+        // GH #1080: record a mid-loop network failure and keep going (GH #640
+        // pattern) — a throw would leave the delete button disabled forever
+        // and skip the refetch.
         try {
           const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
           if (res.ok) {

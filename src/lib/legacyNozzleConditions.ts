@@ -6,7 +6,7 @@
  * is user-authored by construction, so the export passes every pin through
  * untouched — an export-time purge cannot distinguish the two.
  *
- * Design constraints this shape answers (each a Codex P1 round on #1022):
+ * Design constraints this shape answers:
  *  - PROVENANCE, not syntax: a pure nozzle condition may be a pre-upgrade
  *    USER-authored pin (the old export preserved any non-empty bag value), so
  *    shape alone must not condemn it. A row is cleared only when its stored
@@ -23,7 +23,7 @@
  *    value whose ticks were edited AFTER the round-trip no longer matches and
  *    survives — visible in the settings bag and clearable by hand, strictly
  *    better than silently deleting a pin.
- *  - INGESTION-GUARD companion (Codex P1 r10): cleaning the DB once is not
+ *  - INGESTION-GUARD companion: cleaning the DB once is not
  *    enough — a pre-upgrade fork's sync-back or a pre-upgrade INI re-import
  *    keeps re-sending the stamped machine condition afterwards, and with the
  *    one-shot spent it would re-persist and resurrect the hidden-preset bug.
@@ -121,7 +121,7 @@ export function deriveLegacyNozzleCondition(compatibleNozzles: unknown): string 
 }
 
 /**
- * GH #1021 (Codex P1 r10): the provenance test as a reusable predicate — true
+ * GH #1021: the provenance test as a reusable predicate — true
  * when `value` is exactly the machine grammar AND byte-equals the legacy
  * derivation from `populatedNozzles` (docs carrying numeric `diameter`).
  * Used by the one-shot DB cleanup above and by the INGESTION guard
@@ -279,7 +279,7 @@ export async function clearLegacyNozzleConditionsOnce(
     });
 
     const filaments = db.collection("filaments");
-    // Codex P2 r21: the scan→complete window is itself a race — a candidate
+    // The scan→complete window is itself a race — a candidate
     // written by another client (a pre-#1022 peer on a shared Atlas) after
     // the scan would never be examined, and completion would foreclose it
     // forever. So the scan/record/clear cycle LOOPS until a verification
@@ -287,7 +287,7 @@ export async function clearLegacyNozzleConditionsOnce(
     // cap throws the transient in-progress error instead of completing over
     // unexamined rows. The residual (a row landing between the final empty
     // scan and the completion write) is caught by the hybrid transit strip +
-    // source-side clear on the next sync cycle (r17/r19).
+    // source-side clear on the next sync cycle.
     const MAX_CLEANUP_PASSES = 5;
     for (let pass = 0; ; pass++) {
       if (pass >= MAX_CLEANUP_PASSES) throw new LegacyCleanupInProgressError();
@@ -295,12 +295,11 @@ export async function clearLegacyNozzleConditionsOnce(
       // rows whose stored value byte-equals the legacy derivation from their
       // effective compatibleNozzles (own non-empty list, else the ACTIVE
       // parent's — the same resolution the old exporter saw; a soft-deleted
-      // parent is unresolvable at export, so its ticks derive nothing, Codex P2
-      // r15). A row RECORDED by a prior attempt stays eligible only while its
+      // parent is unresolvable at export, so its ticks derive nothing). A row RECORDED by a prior attempt stays eligible only while its
       // CHILD state is byte-identical to the recorded observation AND its
       // current derivation equals the recorded one (`d`) — a parent tick edit
       // between attempts changes the derivation without touching the child, and
-      // must skip the row rather than re-judge it (Codex P1 r11 / P2 r15).
+      // must skip the row rather than re-judge it.
       const scanned = await filaments
         .find(
           { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
@@ -345,7 +344,7 @@ export async function clearLegacyNozzleConditionsOnce(
       };
 
       // `compatibleNozzles` entries are ObjectId REFS — the exporter populated
-      // them before reading `.diameter` (Codex P1 r7). Reproduce that with one
+      // them before reading `.diameter`. Reproduce that with one
       // indexed join against the nozzles collection (raw BSON values in $in,
       // string-keyed dedupe); a ref that resolves to nothing contributes
       // nothing, exactly like populate yielding null.
@@ -379,10 +378,10 @@ export async function clearLegacyNozzleConditionsOnce(
         observed: string;
         observedUpdatedAt: unknown;
         /** Set when provenance came through the parent — the pre-clear
-         * revalidation re-reads THIS parent's ref list (Codex P2 r15). */
+         * revalidation re-reads THIS parent's ref list. */
         viaParent: unknown;
         /** The effective refs at scan time — the pre-clear revalidation
-         * re-fetches their nozzle DOCS fresh (Codex P2 r16: a nozzle's
+         * re-fetches their nozzle DOCS fresh (a nozzle's
          * diameter edit or purge changes the derivation without touching the
          * filament row, so the child predicate alone can't see it). */
         refs: unknown[];
@@ -407,8 +406,8 @@ export async function clearLegacyNozzleConditionsOnce(
         const rec = processed.get(String(c._id));
         // Resume-eligible ONLY when the current derivation also equals the one
         // recorded at examination time — a parent tick edit between attempts
-        // changes the derivation while the child looks untouched (Codex P2
-        // r15). A recorded entry without `d` cannot be verified → skip.
+        // changes the derivation while the child looks untouched. A recorded
+        // entry without `d` cannot be verified → skip.
         if (derived !== null && stored === derived && rec?.d === derived) {
           toClear.push({
             _id: c._id,
@@ -421,8 +420,7 @@ export async function clearLegacyNozzleConditionsOnce(
       }
 
       // RECORD the observation of every NEWLY examined candidate — matches AND
-      // non-matches — in one fenced write BEFORE any destructive write (Codex
-      // P1 r11: a non-match left unrecorded would be re-judged by a later
+      // non-matches — in one fenced write BEFORE any destructive write (a non-match left unrecorded would be re-judged by a later
       // attempt after e.g. a tick edit made it match, erasing a value the user
       // authored between attempts). Each entry carries the derivation at
       // examination time (`d`) so a resume can detect parent-side drift.
@@ -453,7 +451,7 @@ export async function clearLegacyNozzleConditionsOnce(
       // clear leaves the row recorded: the retry re-attempts it while untouched
       // (identical observation) and skips it the moment anyone saves it.
       for (const entry of toClear) {
-        // Codex P2 r10: re-assert ownership at the destructive-write boundary —
+        // Re-assert ownership at the destructive-write boundary —
         // a takeover in the record→clear window would let the new holder skip
         // this recorded row and complete while our clear lands after. The
         // residual (takeover between this read and the write below) is
@@ -462,9 +460,9 @@ export async function clearLegacyNozzleConditionsOnce(
         // user save in between bumps updatedAt and blocks it.
         const owned = await markers.findOne({ _id: MARKER_ID });
         if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
-        // Codex P2 r15/r16: the conditional filter below can only see CHILD-row
-        // changes — it cannot see a PARENT tick edit (r15) or a referenced
-        // nozzle DOC's diameter edit / purge (r16), neither of which touches
+        // The conditional filter below can only see CHILD-row changes — it
+        // cannot see a PARENT tick edit or a referenced nozzle DOC's diameter
+        // edit / purge, neither of which touches
         // the child's updatedAt. So re-derive immediately before the write:
         // for parent-provenance rows re-read the ACTIVE parent's ref list; for
         // own-tick rows the scan-time ref list still holds (its mutation bumps
@@ -497,7 +495,7 @@ export async function clearLegacyNozzleConditionsOnce(
         cleared += res.modifiedCount;
       }
 
-      // Codex P2 r21: converged only when a whole pass found NOTHING new to
+      // Converged only when a whole pass found NOTHING new to
       // examine and nothing to clear — that empty pass is the verification
       // scan. Otherwise fold this pass's observations into the in-memory map
       // (mirroring the durable record above) and re-scan for rows another
@@ -524,7 +522,7 @@ export async function clearLegacyNozzleConditionsOnce(
   // Fenced completion: if the claim was taken over mid-run, the new holder
   // owns the terminal state — surface the in-progress error instead of
   // reporting a terminal result the marker does not reflect. A TRANSIENT
-  // failure of this write releases the claim (Codex P1 r10) — otherwise a
+  // failure of this write releases the claim — otherwise a
   // one-off error here would leave a live-shaped claim that every dbConnect
   // waits on and fails against until staleMs, an avoidable outage; all row
   // work is recorded, so the released-claim resume just re-runs this

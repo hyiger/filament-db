@@ -146,8 +146,8 @@ interface SpoolPlan {
 function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
   // Unknown mode never derives a weight, but still clears a legacy top-level
   // totalWeight (recorded in the rollback log) so the NFC/OPT export can't keep
-  // reading a stale scale weight after the row gets a weight-unknown spool
-  // (Codex P2). The spool itself stays unweighted per the flag.
+  // reading a stale scale weight after the row gets a weight-unknown spool.
+  // The spool itself stays unweighted per the flag.
   if (WEIGHT_MODE === "unknown") {
     return { gross: null, pinTareZero: false, clearTotalWeight: num(filament.totalWeight) != null };
   }
@@ -191,7 +191,7 @@ async function main() {
   // trashed/purged parents, because the app's filament-list $lookup that
   // resolves a variant's effective net/tare does NOT filter the parent by
   // _deletedAt — so a variant of a trashed parent still inherits in the UI and
-  // the backfill must match that (Codex review F4). Candidates + parent
+  // the backfill must match that. Candidates + parent
   // detection use the LIVE subset only: never backfill a trashed/purged row,
   // and "is a parent" = has a LIVE variant (mirrors the app's hasVariants()).
   const all = (await col.find({}).toArray()) as Doc[];
@@ -286,7 +286,7 @@ async function main() {
   const logPath = path.resolve(process.cwd(), `backfill-spools-${stamp}.json`);
   // Persist whatever has been logged so far. Called from `finally` so a thrown
   // updateOne partway through still leaves a durable, precise rollback log
-  // rather than losing the already-written spool IDs (Codex P2 on #707).
+  // rather than losing the already-written spool IDs (#707).
   const flushLog = () => {
     if (logEntries.length === 0) return;
     fs.writeFileSync(
@@ -317,15 +317,15 @@ async function main() {
       usageHistory: [],
     };
     // $set the whole array rather than $push: $push errors on an explicit
-    // `spools: null` (F3), and the guard already pins us to a spool-less row so
+    // `spools: null`, and the guard already pins us to a spool-less row so
     // there's nothing to append to. Also bump updatedAt — the raw driver
     // bypasses Mongoose timestamps, and the hybrid-sync engine uses updatedAt
-    // for last-write-wins, so without it a peer can ignore the added spool (F5).
+    // for last-write-wins, so without it a peer can ignore the added spool.
     const set: Record<string, unknown> = { spools: [spool], updatedAt: now };
     if (t.plan.pinTareZero) set.spoolWeight = 0;
     // Clear the legacy top-level totalWeight once its value lives on the spool,
     // mirroring the web create migration — else NFC/OPT export reads the stale
-    // value after a spool edit (F6).
+    // value after a spool edit.
     const clearedTotalWeight = t.plan.clearTotalWeight ? num(t.f.totalWeight) : null;
     if (t.plan.clearTotalWeight) set.totalWeight = null;
 
@@ -333,9 +333,9 @@ async function main() {
     // — idempotent, concurrent-safe, re-runnable. Always require spools still
     // empty (missing / [] / null). When pinning the tare, also require
     // spoolWeight unset, so a tare set by a concurrent edit / sync isn't
-    // clobbered with 0 (F1). When clearing the legacy totalWeight, also require
+    // clobbered with 0. When clearing the legacy totalWeight, also require
     // it unchanged, so a newer scale reading written between scan and write
-    // isn't dropped (Codex P2). A non-match counts as skipped; a re-run picks
+    // isn't dropped. A non-match counts as skipped; a re-run picks
     // up the new value.
     const guards: Record<string, unknown>[] = [
       { $or: [{ spools: { $size: 0 } }, { spools: { $exists: false } }, { spools: null }] },

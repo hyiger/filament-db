@@ -28,10 +28,9 @@ export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const manufacturer = searchParams.get("manufacturer");
 
-    // GH #1168 (Codex r12): ?includeTrashed=1 also returns soft-deleted
-    // printers (with their _deletedAt, so callers can label them) — the
-    // /history printer filter needs them because their PrintHistory rows
-    // remain queryable while the default active-only list can't name them.
+    // GH #1168: ?includeTrashed=1 also returns soft-deleted printers (with
+    // _deletedAt, so callers can label them) — the /history printer filter
+    // needs them because their PrintHistory rows remain queryable.
     const includeTrashed = searchParams.get("includeTrashed") === "1";
     const filter: Record<string, unknown> = includeTrashed ? {} : { _deletedAt: null };
     if (manufacturer) filter.manufacturer = manufacturer;
@@ -113,10 +112,8 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Validate that all referenced bed-type IDs exist and are active.
-    // Unlike nozzles, bed types are a shared catalog — a surface like
-    // "Textured PEI" can be on many printers at once — so there is no
-    // conflict check, only an existence check.
+    // Bed types are a shared catalog (a surface can be on many printers at
+    // once), so this is an existence check only — no conflict check.
     if (body.installedBedTypes?.length > 0) {
       const activeBedCount = await BedType.countDocuments({
         _id: { $in: body.installedBedTypes },
@@ -127,10 +124,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // GH #631: amsSlots[].spoolId was written verbatim, bypassing the
-    // checks the dedicated assignment route enforces (spool must exist on
-    // an active filament; retired spools are out of inventory and not
-    // loadable). Validate each non-null slot ref before the create.
+    // GH #631: amsSlots[].spoolId must pass the same checks the dedicated
+    // assignment route enforces (spool on an active filament; retired
+    // spools not loadable) — this route must not be the bypass.
     const slotError =
         (await findInvalidSlotSpoolRef(Filament, body.amsSlots)) ??
         // GH #1114: also reject a slot pointing at a deleted filament, which
@@ -141,12 +137,10 @@ export async function POST(request: NextRequest) {
       return errorResponse(slotError, 400);
     }
 
-    // GH #1116: the partial unique index can no longer answer this. It
-    // compares RAW stored strings, so a submitted "MK4" and a surviving
-    // untrimmed "MK4 " are two different keys and the write succeeds —
-    // manufacturing the indistinguishable pair this change exists to remove.
-    // Ask the trimmed question explicitly, in the same 409 shape
-    // handleDuplicateKeyError produces so the client contract is unchanged.
+    // GH #1116: the partial unique index compares RAW stored strings, so a
+    // submitted "MK4" beside a surviving untrimmed "MK4 " would write an
+    // indistinguishable duplicate. Ask the trimmed question explicitly, in
+    // the same 409 shape handleDuplicateKeyError produces.
     const nameConflict = await survivorNameConflict(
       Printer.collection as unknown as MinimalNameCollection,
       body.name,

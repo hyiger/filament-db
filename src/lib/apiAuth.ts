@@ -1,32 +1,15 @@
 /**
- * Optional API-key gate for the REST API (GH: mobile-scanner Phase 0).
+ * Optional API-key gate for the REST API. When the `FILAMENTDB_API_KEY`
+ * environment variable is set, EVERY `/api/*` request must present
+ * `Authorization: Bearer <key>`; unset (the default) the gate is a no-op.
  *
- * Filament DB ships UNAUTHENTICATED — it's designed for single-user localhost
- * or a trusted LAN, and the README says so. The mobile scanner app talks to it
- * over the network, which widens the trust boundary: anyone who can reach the
- * host can otherwise drive every endpoint.
- *
- * When the `FILAMENTDB_API_KEY` environment variable is set, this gate requires
- * EVERY `/api/*` request to present `Authorization: Bearer <key>`. When it is
- * unset (the default, and how the desktop/Electron app runs) the gate is a
- * no-op and behavior is unchanged.
- *
- * It is deliberately an all-or-nothing bearer gate with NO "same-origin browser
- * is trusted" exemption. An earlier draft tried to let the first-party web UI
- * through keyless by trusting `Sec-Fetch-Site` / `Origin`, but those headers
- * are only unforgeable *from a browser* — the Fetch spec forbids page JS from
- * setting them, the server cannot. The adversary here is a NON-browser client
- * (curl, the mobile app, an attacker's script) that can send any header it
- * likes, so `Sec-Fetch-Site: none` or a spoofed `Origin: <host>` would have
- * bypassed the key completely. Bearer-only is the only header-based scheme that
- * actually authenticates an off-device caller.
- *
+ * Deliberately an all-or-nothing bearer gate with NO "same-origin browser is
+ * trusted" exemption: `Sec-Fetch-Site` / `Origin` are only unforgeable *from a
+ * browser* — the adversary here is a NON-browser client that can send any
+ * header it likes, so trusting them would have bypassed the key completely.
  * Consequence: when the key is set, a browser using the web UI must also send
- * the key, so the key is meant for headless / exposed deployments that the
- * mobile app (or curl / slicer integrations) talk to — NOT for the desktop app
- * serving its own renderer. Giving the browser web UI a keyless session would
- * need a real login/cookie flow, which is out of scope here. See
- * docs/mobile-app-plan.md §4.5.
+ * the key — the key is meant for headless / exposed deployments, NOT for the
+ * desktop app serving its own renderer. See docs/mobile-app-plan.md §4.5.
  *
  * The decision is a pure function of the Authorization header so it can be
  * unit-tested without a server; src/proxy.ts is a thin wrapper.

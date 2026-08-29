@@ -4,8 +4,7 @@ import { isLoopbackHostname, isLoopbackUrl } from "../src/lib/loopbackHost";
 /**
  * Pin every loopback hostname shape we care about, so a future
  * refactor of the label-printer public-URL validator can't silently
- * accept "http://[::1]:3456" again (the Codex P2 round 2 catch on
- * PR #487).
+ * accept "http://[::1]:3456" again.
  */
 
 describe("isLoopbackHostname — should return true for", () => {
@@ -24,8 +23,7 @@ describe("isLoopbackHostname — should return true for", () => {
     // The all-zeros bind address (humans type this to mean "this machine")
     "0.0.0.0",
 
-    // IPv6 unspecified address — the v6 analog of 0.0.0.0 (Codex P2
-    // round 10 on PR #487)
+    // IPv6 unspecified address — the v6 analog of 0.0.0.0
     "::",
     "[::]",
     "0:0:0:0:0:0:0:0",
@@ -44,7 +42,6 @@ describe("isLoopbackHostname — should return true for", () => {
     "::FFFF:127.0.0.1", // mixed case
 
     // IPv4-mapped IPv6 unspecified — the v6-mapped form of 0.0.0.0
-    // (Codex P2 round 12 on PR #487)
     "::ffff:0.0.0.0",
     "[::ffff:0.0.0.0]",
     "::ffff:0:0", // Node's URL parser normalises the dotted form here
@@ -53,7 +50,7 @@ describe("isLoopbackHostname — should return true for", () => {
 
     // DNS absolute-name notation (trailing dot) — same meaning, but
     // URL.hostname preserves it, so any equality-based check has to
-    // strip first. (Codex P2 round 3 on PR #487.)
+    // strip first.
     "localhost.",
     "localhost..", // multiple trailing dots
     "127.0.0.1.",
@@ -113,15 +110,14 @@ describe("isLoopbackHostname — matches the URL.hostname output for common loop
     "http://[::ffff:127.0.0.1]:3456",
     "http://0.0.0.0:3456",
     // DNS absolute-name forms — what a user would paste if they
-    // copy-pasted from a DNS tool or made a typo. (Codex P2 round 3
-    // on PR #487.)
+    // copy-pasted from a DNS tool or made a typo.
     "http://localhost.:3456",
     "https://localhost./",
     "http://127.0.0.1.:3456",
-    // IPv6 unspecified bind address (Codex P2 round 10 on PR #487)
+    // IPv6 unspecified bind address
     "http://[::]:3456",
     "http://[0:0:0:0:0:0:0:0]:3456",
-    // IPv4-mapped IPv6 unspecified (Codex P2 round 12 on PR #487)
+    // IPv4-mapped IPv6 unspecified
     "http://[::ffff:0.0.0.0]:3456",
     "http://[::ffff:0:0]:3456",
   ];

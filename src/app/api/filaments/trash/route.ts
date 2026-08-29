@@ -15,18 +15,12 @@ import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 export async function GET() {
   try {
     await dbConnect();
-    // `_purged: true` is the "delete forever" tombstone — the row is kept
-    // on disk so the hybrid sync engine can propagate the purge to peers,
-    // but it should never appear in the trash UI again.
+    // `_purged: true` is the "delete forever" tombstone — kept on disk so
+    // hybrid sync can propagate the purge, but never shown in trash again.
     //
-    // GH #477: variants inherit `secondaryColors` and `optTags` from
-    // their parent (array-fallback inheritance per resolveFilament). A
-    // trashed variant whose own arrays are empty must still render the
-    // parent's multi-color data — otherwise a deleted variant under a
-    // coextruded parent shows as a gray/solid dot in the trash UI even
-    // though it inherits stripes everywhere else in the app. Mirror the
-    // active list aggregation's `$lookup` + effective-array merge here
-    // so trash agrees with the rest of the app. (Codex P2 on PR #486.)
+    // GH #477: mirror the active list aggregation's effective-array merge
+    // (`$lookup` + own-array-wins) so a trashed variant inheriting its
+    // parent's multi-color data renders the same here as everywhere else.
     const trashed = await Filament.aggregate([
       {
         $match: {

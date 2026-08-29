@@ -34,7 +34,7 @@ import { SORT_KEYS, SORT_DIRS, type SortKey, type SortDir } from "@/lib/sortFila
 import { QUICK_FILTERS, type QuickFilter } from "@/components/QuickFilterChips";
 
 /**
- * Parse a stored preference blob, tolerating corruption (GH #1141, Codex P2).
+ * Parse a stored preference blob, tolerating corruption (GH #1141).
  *
  * The persist effects READ the stored blob before writing, so they can merge
  * per-key over it. Parsing it inline inside their catch-everything try meant a
@@ -78,8 +78,8 @@ export const HOME_FILTER_SPEC = {
   search: { param: "q", fallback: "", ...textParam },
   // Exact keys into stored data, NOT trimmed — the schema does not trim
   // type/vendor and the API compares them with $eq, so a stored "PLA " must
-  // round-trip byte-exact (Codex P2). Search stays `textParam`: it is a
-  // substring query whose live value the debounce canonicalizes the same way.
+  // round-trip byte-exact. Search stays `textParam`: it is a substring query
+  // whose live value the debounce canonicalizes the same way.
   typeFilter: { param: "type", fallback: "", ...exactTextParam },
   vendorFilter: { param: "vendor", fallback: "", ...exactTextParam },
   quickFilter: { param: "quick", fallback: "all" as QuickFilter, parse: oneOf(QUICK_FILTERS) },
@@ -134,13 +134,13 @@ export const INVENTORY_PERSISTED_KEYS = [
 
 export const INVENTORY_FILTER_SPEC = {
   search: { param: "q", fallback: "", ...textParam },
-  // Validated against the SELECTABLE kinds (Codex P2), not free text. The
+  // Validated against the SELECTABLE kinds, not free text. The
   // select renders exactly these five options, so a stale or hand-typed
   // `?kind=garage` would leave React displaying "All kinds" while the hidden
   // state kept filtering — and re-choosing the option already shown may emit
   // no change event, so the filter would be invisible AND unclearable.
   kind: { param: "kind", fallback: "", parse: oneOf(["", ...KNOWN_LOCATION_KINDS]) },
-  // Exact keys, untrimmed — see the home spec's twin comment (Codex P2).
+  // Exact keys, untrimmed — see the home spec's twin comment.
   type: { param: "type", fallback: "", ...exactTextParam },
   vendor: { param: "vendor", fallback: "", ...exactTextParam },
   includeRetired: {

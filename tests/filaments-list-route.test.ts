@@ -126,7 +126,7 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
   });
 
   it("hasCalibrations reflects effective state — a variant with no own calibrations inherits from parent", async () => {
-    // Codex round-3 P2: variants with empty calibrations[] inherit from
+    // Variants with empty calibrations[] inherit from
     // their parent (see resolveFilament). The list projection used to
     // compute hasCalibrations from only the variant's own array, so
     // every inheriting variant was falsely flagged as missing calibration.
@@ -296,7 +296,7 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
   });
 
   it("variants with empty optTags inherit the parent's optTags in the list projection (matches resolveFilament)", async () => {
-    // Codex round-1 P2 on PR #353. Variants inherit array fields from
+    // Variants inherit array fields from
     // the parent when their own array is empty (resolveFilament's
     // INHERIT-WHEN-EMPTY rule for compatibleNozzles / optTags /
     // calibrations / presets). The list aggregation must mirror that
@@ -378,8 +378,8 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
 
   it("includes tdsUrl in the projection so FilamentForm vendor suggestions still work", async () => {
     // FilamentForm calls /api/filaments?vendor=... and reads tdsUrl off
-    // each row to populate vendor-keyed TDS suggestions. Codex flagged
-    // that dropping the field silently empties the suggestion list.
+    // each row to populate vendor-keyed TDS suggestions — dropping
+    // the field silently empties the suggestion list.
     const Filament = (await import("@/models/Filament")).default;
     await Filament.create({
       name: "Has TDS",

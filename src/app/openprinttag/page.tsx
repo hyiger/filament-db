@@ -454,19 +454,15 @@ export default function OpenPrintTagBrowser() {
     async (refresh = false) => {
       setLoading(true);
       setError(null);
-      // #743: a backstop against a truly-stuck request (the real "whole app
-      // hangs" cause — a synchronous parse blocking the event loop — is fixed
-      // server-side). This MUST exceed the server's worst-case window so it
-      // never pre-empts the legitimate slow paths: the server retries only the
-      // GitHub download (3×45s + ~3.2s backoff ≈ 138s), then extracts ONCE
-      // under a 120s pipeline deadline (the YAML parse loop that follows is
-      // unbounded — CPU-bound, yields every 256 files, runs once per cold
-      // load), then serves a stale cached DB (GH #225) — a cached user on a
-      // flaky network must still get that stale data, not a premature timeout
-      // (PR #933 review). 300s (5 min) clears the ~258s server window with
-      // ~42s of margin for the unbounded parse; the single-flight means a
-      // retry after a timeout joins the in-progress load rather than
-      // duplicating it.
+      // #743: a backstop against a truly-stuck request. This MUST exceed the
+      // server's worst-case window so it never pre-empts the legitimate slow
+      // paths: GitHub download retries (3×45s + backoff ≈ 138s), then one
+      // extract under a 120s pipeline deadline (the YAML parse loop after it
+      // is unbounded), then a stale cached DB is served — a cached user on a
+      // flaky network must still get that stale data, not a premature
+      // timeout. 300s clears the ~258s server window with margin for the
+      // unbounded parse; the single-flight means a retry after a timeout
+      // joins the in-progress load rather than duplicating it.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 300_000);
       try {
@@ -558,9 +554,9 @@ export default function OpenPrintTagBrowser() {
     return db.brands.filter((b) => b.name.toLowerCase().includes(q));
   }, [db, brandSearch]);
 
-  // Normalized once per loaded DB, not once per keystroke per row (Codex P2
-  // on PR #1181 — the search filter below runs over ~11.7k materials). Keyed
-  // by object identity: db.materials is stable for the life of the loaded db.
+  // Normalized once per loaded DB, not once per keystroke per row — the
+  // search filter below runs over ~11.7k materials. Keyed by object
+  // identity: db.materials is stable for the life of the loaded db.
   const searchFieldsByMaterial = useMemo(() => {
     const map = new Map<OPTMaterial, string[]>();
     if (db) {
@@ -674,11 +670,11 @@ export default function OpenPrintTagBrowser() {
         });
       let res = await post();
       let data = await res.json();
-      // GH #605 (codex round 3, Finding A): importing the FIRST variant of a
-      // parent that still carries its own color/spools promotes that parent
-      // to a template — the server 409s until the user opts in. Same
-      // ConfirmDialog + retry-with-promoteParent flow (and the same
-      // translated copy) as the New Filament page.
+      // GH #605: importing the FIRST variant of a parent that still carries
+      // its own color/spools promotes that parent to a template — the server
+      // 409s until the user opts in. Same ConfirmDialog +
+      // retry-with-promoteParent flow (and the same translated copy) as the
+      // New Filament page.
       if (res.status === 409 && data?.error === "parent_promotion_required") {
         const ok = await confirm({
           title: t("new.promote.title"),

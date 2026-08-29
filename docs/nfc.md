@@ -145,7 +145,7 @@ The "Loaded" label persists after the tag-read dialog is dismissed (so you can s
 
 The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 
-- **Connection**: Always connects with `SCARD_SHARE_SHARED`. On macOS the built-in `ifd-ccid` driver and Apple's `ifd-acsccid` driver both register an instance of the ACR1552U, but only the ACS driver handles ISO 15693 — the app tries a SHARED connect on each registered reader instance and uses whichever succeeds (it also waits briefly on hot-plug for both driver instances to register).
+- **Connection**: Always connects with `SCARD_SHARE_SHARED`. On macOS Apple's built-in `ifd-ccid` driver and the ACS `ifd-acsccid` driver both register an instance of the ACR1552U, but only the ACS driver handles ISO 15693 — the app tries a SHARED connect on each registered reader instance and uses whichever succeeds (it also waits briefly on hot-plug for both driver instances to register).
 - **Tag detection**: Tries MIFARE Classic read first (Bambu); then NTAG / NFC-Forum Type 2 (OpenTag3D) via `FF B0` READ BINARY; on failure, falls through to ISO 15693 (OpenPrintTag). Read AND write/erase auto-detect the chip the same way.
 - **OpenPrintTag commands**: ACR1552U Pass Through (`FF FB`) wrapping ISO 15693 Read/Write Single Block commands
 - **OpenTag3D commands**: NTAG Type-2 pseudo-APDUs — Read Binary (`FF B0`), Update Binary (`FF D6`, 4-byte pages), and `GET_VERSION` (`60h`) to size a blank tag. The NDEF record is TNF=0x02, type=`application/opentag3d`. Note the NTAG capability container (page 3) is one-time-programmable, which is why NTAG read-only isn't offered (see above).
@@ -275,7 +275,7 @@ These are mapped to the same data model as OpenPrintTag fields, so the matching,
 
 - Ensure the tag is centered on the reader and not moving
 - SLIX2 tags have a small antenna -- position matters
-- On macOS, two driver instances claim the ACR1552U but only Apple's `ifd-acsccid` handles ISO 15693; the app tries a SHARED connect on each reader instance and uses whichever works, so a transient failure on one instance is recovered automatically
+- On macOS, two driver instances claim the ACR1552U but only the ACS `ifd-acsccid` handles ISO 15693; the app tries a SHARED connect on each reader instance and uses whichever works, so a transient failure on one instance is recovered automatically
 
 ### Write fails on last block (SW 640F)
 

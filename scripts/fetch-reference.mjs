@@ -13,8 +13,9 @@
  * fetch, no file-tracing or process.cwd() gotchas).
  *
  * The generated module is committed (the content is the maintainer's own, CC
- * BY-NC-ND) so the feature renders in dev / CI / web; the release workflows
- * re-run this script before the build to refresh the bundled snapshot.
+ * BY-NC-ND) and is the ONLY source every artifact ships from (#853) — release
+ * workflows do NOT re-run this script; refresh via `npm run fetch:reference`
+ * in a PR before tagging (the scheduled reference-drift.yml flags staleness).
  *
  *   node scripts/fetch-reference.mjs            # clone + generate
  *   node scripts/fetch-reference.mjs --stub     # write the empty stub (no network)

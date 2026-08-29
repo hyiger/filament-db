@@ -75,7 +75,7 @@ export function parseCsv(
   const isBlankRow = (r: string[]): boolean =>
     r.length === 0 || r.every((v) => v.trim() === "");
 
-  // Codex P2 round 3 on PR #536: the cap must bound BUFFERED memory, not
+  // The cap must bound BUFFERED memory, not
   // just the emitted-row count. In header mode, blank rows are filtered
   // out of the output (the `trimmed[r].every` skip below), so:
   //   - GH #512: they must NOT count toward maxRows (an Excel paste with
@@ -93,7 +93,7 @@ export function parseCsv(
   // returned (header mode: header + non-blank data; non-header: all),
   // so the emitted-row cap check is just `rows.length > rawRowCap`.
   //
-  // Codex P2 round 4 on PR #536: keep a SEPARATE physical-row cap too.
+  // Keep a SEPARATE physical-row cap too.
   // Because header-mode blank rows are discarded before the emitted cap,
   // a blank / comma-only-line flood ("3 data rows + 10M blank lines")
   // would otherwise make the parser scan the entire input even though
@@ -151,7 +151,7 @@ export function parseCsv(
       // Count line breaks inside the quoted field too, or every later record
       // reports a start line that is too low. Bare CR counts (this parser
       // supports CR-only endings); CRLF must not be counted twice, so the LF
-      // that follows a CR is skipped here (Codex P2).
+      // that follows a CR is skipped here.
       if (ch === "\r") {
         physicalLine++;
       } else if (ch === "\n" && input[i - 1] !== "\r") {
@@ -227,7 +227,7 @@ export function parseCsv(
   if (!opts.header) return trimmed;
 
   // Header mode returns DATA objects only, so the header's own entry has to
-  // come off the line array or every association is off by one (Codex P2).
+  // come off the line array or every association is off by one.
   // Done here rather than in commitRow because that is the only point where
   // "the header has been consumed" is known.
   opts.recordLines?.shift();

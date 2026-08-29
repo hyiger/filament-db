@@ -93,18 +93,16 @@ export function wrapNdefForTag(
 ): Uint8Array {
   const hasUri = !!productUrl;
 
-  // Calculate overhead to determine how much space we can give the OPT payload.
   // The Prusa app expects the aux_region_offset (in the CBOR meta map) to point
-  // to valid CBOR *within* the NDEF record payload. To achieve this, we pad the
-  // CBOR payload with zeros and place the TLV terminator at the very end of
-  // tag memory, filling the OPT record payload to use all remaining space.
+  // to valid CBOR *within* the NDEF record payload, so the CBOR payload is
+  // zero-padded to fill all remaining space and the TLV terminator sits at the
+  // very end of tag memory.
   //
   // Reserve the last block (4 bytes) since SLIX2 block 79 is often write-protected.
   const usableMemory = tagMemorySize - 4;
 
   const typeLen = NDEF_MIME_TYPE_BYTES.length; // 28
 
-  // Build the URI record first (if any) so we know its size
   let uriRecord: Uint8Array | null = null;
   if (hasUri) {
     uriRecord = buildUriRecord(productUrl!, true, false); // MB=1, ME=0
@@ -115,10 +113,8 @@ export function wrapNdefForTag(
   //   OPT record header (2 + payload_len_bytes) + OPT type (28) + terminator (1)
   const uriLen = uriRecord?.length ?? 0;
 
-  // We need to figure out OPT payload size, but it depends on whether SR (short record)
-  // is used, which depends on the payload size. Iterate to find the right fit.
-  // Start by assuming the CBOR fills all remaining space.
-  // Try SR=1 first (payload <= 255), then fall back to SR=0.
+  // The OPT payload size depends on whether SR (short record) is used, which
+  // itself depends on the payload size — try SR=1 first, then fall back to SR=0.
   let paddedPayloadLen: number;
   let isShortRecord: boolean;
 
@@ -333,13 +329,6 @@ export function setCcByteReadOnly(ccByte1: number, readOnly: boolean): number {
 
 // ── NDEF parsing (for reading from tag) ─────────────────────────────
 
-/**
- * Parse raw tag memory and extract the OpenPrintTag CBOR payload.
- *
- * @param raw - Raw tag memory bytes (from reading all blocks)
- * @returns The CBOR payload (meta + main maps)
- * @throws If no valid NDEF record with OpenPrintTag MIME type is found
- */
 /** A parsed NDEF record. For media records (TNF=0x02) `type` is the MIME type. */
 export interface NdefRecord {
   /** TNF (Type Name Format); 0x02 = media / MIME. */

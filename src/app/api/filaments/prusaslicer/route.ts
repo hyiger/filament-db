@@ -42,8 +42,8 @@ export async function GET(request: NextRequest) {
     if (typeFilter) query.type = typeFilter;
     if (vendorFilter) query.vendor = vendorFilter;
     if (idsFilter) {
-      // Validate each id is a real ObjectId before the $in — an invalid value
-      // would otherwise throw a Mongoose CastError and 500 (#677).
+      // Validate each id before the $in — an invalid value would CastError
+      // into a 500 (#677).
       const ids = idsFilter.split(",").map((id) => id.trim()).filter(Boolean);
       const bad = ids.filter((id) => !OBJECT_ID_RE.test(id));
       if (bad.length > 0) {
@@ -54,9 +54,8 @@ export async function GET(request: NextRequest) {
 
     const filaments = await Filament.find(query)
       .sort({ name: 1 })
-      // GH #1005 F2: the INI bundle mapping never reads spools; exclude the
-      // whole array (photoDataUrl blobs + usageHistory ledgers) so a slicer
-      // startup doesn't deserialize hundreds of MB to emit a ~1-2 MB INI.
+      // GH #1005 F2: the bundle mapping never reads spools — exclude the
+      // array so a slicer startup doesn't deserialize photo blobs + ledgers.
       .select("-spools")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
@@ -141,9 +140,9 @@ export async function POST(request: NextRequest) {
     await dbConnect();
 
     const body = await request.text();
-    // Byte length, not String.length (UTF-16 code units) — a non-ASCII UTF-8
-    // body can exceed 10 MB of bytes while staying under the char count when
-    // Content-Length was missing/wrong (Codex P2 on PR #685).
+    // Byte length, not String.length — a non-ASCII UTF-8 body can exceed
+    // 10 MB of bytes while under the char count when Content-Length was
+    // missing/wrong.
     if (Buffer.byteLength(body, "utf8") > MAX_UPLOAD_SIZE) {
       return errorResponse("Request body too large. Maximum is 10 MB.", 413);
     }
@@ -151,12 +150,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Empty request body" }, { status: 400 });
     }
 
-    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
-    // base filament so a bundle round-trip updates the original instead of
-    // spawning "<base> <Ø> <type>" orphan records (Codex P2). NOTE the per-nozzle
-    // calibration model is NOT reconstructed from a flat bundle — a fresh import of
-    // a multi-nozzle export lands the base filament without its baked temps /
-    // calibrations by design; Settings → Backup & Restore is the lossless path.
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into
+    // their base filament so a bundle round-trip updates the original
+    // instead of spawning "<base> <Ø> <type>" orphans. NOTE the per-nozzle
+    // calibration model is NOT reconstructed from a flat bundle — by
+    // design; Settings → Backup & Restore is the lossless path.
     const parsed = collapsePerNozzleImportSections(parseIniFilaments(body));
     if (parsed.length === 0) {
       return NextResponse.json(
@@ -165,8 +163,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // GH #297: cap the bundle size — a huge bundle would otherwise drive
-    // unbounded sequential writes. Mirrors parseCsv's 10k maxRows.
+    // GH #297: cap the bundle size (mirrors parseCsv's 10k maxRows).
     const MAX_IMPORT_FILAMENTS = 10_000;
     if (parsed.length > MAX_IMPORT_FILAMENTS) {
       return NextResponse.json(
@@ -186,22 +183,20 @@ export async function POST(request: NextRequest) {
       // Skip internal/abstract presets (PrusaSlicer uses *name* convention)
       if (f.name.startsWith("*") && f.name.endsWith("*")) continue;
 
-      // GH #872 (Codex P2): wrap each row so one bad section degrades to a per-row
-      // error instead of 500-ing the whole bundle — e.g. a partial per-nozzle
-      // section collapsed without its required vendor/type fails create validation.
-      // Mirrors the /api/filaments/import route's per-row resilience.
+      // GH #872: wrap each row so one bad section degrades to a per-row
+      // error instead of 500-ing the whole bundle (mirrors
+      // /api/filaments/import's per-row resilience).
       try {
-        // GH #951: the three-phase atomic upsert (active → resurrect-trashed →
-        // create/race) lives in `upsertIniFilament`, shared with
-        // POST /api/filaments/import, and preserves variant→parent inheritance
-        // — the export flattens a variant's inherited values through
-        // resolveFilament, so re-importing must NOT pin them as local overrides
-        // (that would sever GH #106 live inheritance). See src/lib/iniImportApply.ts.
+        // GH #951: the three-phase atomic upsert (active → resurrect-trashed
+        // → create/race) lives in `upsertIniFilament`, shared with
+        // POST /api/filaments/import, and preserves variant→parent
+        // inheritance — the export flattens inherited values through
+        // resolveFilament, so re-importing must NOT pin them as local
+        // overrides (severing GH #106 live inheritance).
         const outcome = await upsertIniFilament(f, {
           // GH #605: a name-matched TEMPLATE target had per-variant fields
-          // (color) stripped rather than re-materialized. Reported as a
-          // per-row note through the existing errors channel — the row
-          // itself still imported (matching the atlas importer's posture).
+          // stripped rather than re-materialized — reported as a per-row
+          // note; the row itself still imported.
           onTemplateFieldsStripped: (fields) =>
             errors.push(
               `${f.name}: skipped ${fields.join(", ")} — the local filament is a template (inventory and color live on its variants)`,

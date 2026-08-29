@@ -23,11 +23,9 @@ function parseNozzleSpecs(condition: string | null): NozzleSpec[] {
 
   const specs: NozzleSpec[] = [];
 
-  // Extract nozzle_diameter values
   const diameterMatches = condition.matchAll(/nozzle_diameter\[0\]\s*==\s*([\d.]+)/g);
   for (const match of diameterMatches) {
     const diameter = parseFloat(match[1]);
-    // Check high-flow status
     const hasHighFlow = /nozzle_high_flow\[0\]/.test(condition);
     const isNotHighFlow = /!\s*nozzle_high_flow\[0\]/.test(condition);
 
@@ -80,7 +78,6 @@ async function seed() {
   console.log("Connecting to MongoDB Atlas...");
   await mongoose.connect(MONGODB_URI);
 
-  // Define schemas inline
   const NozzleSchema = new mongoose.Schema(
     {
       name: { type: String, required: true, unique: true, index: true },
@@ -118,7 +115,6 @@ async function seed() {
   const Nozzle = mongoose.models.Nozzle || mongoose.model("Nozzle", NozzleSchema);
   const Filament = mongoose.models.Filament || mongoose.model("Filament", FilamentSchema);
 
-  // Collect all unique nozzle specs from filaments
   const nozzleMap = new Map<string, NozzleSpec>();
   const filamentNozzleMap = new Map<string, string[]>();
 
@@ -134,7 +130,6 @@ async function seed() {
     filamentNozzleMap.set(filament.name, nozzleNames);
   }
 
-  // Upsert nozzles
   console.log(`\nFound ${nozzleMap.size} unique nozzle configurations:`);
   const nozzleIdMap = new Map<string, mongoose.Types.ObjectId>();
 
@@ -148,7 +143,6 @@ async function seed() {
     console.log(`  ✓ ${name} (${spec.diameter}mm, ${spec.highFlow ? "high-flow" : "standard"})`);
   }
 
-  // Upsert filaments with nozzle references
   console.log(`\nImporting filaments:`);
   for (const filament of filaments) {
     const nozzleNames = filamentNozzleMap.get(filament.name) || [];

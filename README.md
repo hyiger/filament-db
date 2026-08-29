@@ -38,7 +38,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ### Sharing & Comparison
 - **Shared catalogs** -- publish a static snapshot of selected filaments (with referenced nozzles/printers/bed-types) under a short public slug so another user or machine can import the set. Atomic view counts. Optional expiry.
 - **Compare view** -- side-by-side comparison of up to 8 filaments: temperatures, cost, density, calibrations, and calculated remaining material
-- **Print history** -- per-job ledger of grams consumed across multi-material prints, filterable by printer or filament, feeds the analytics dashboard
+- **Print history** -- per-job ledger of grams consumed across multi-material prints, feeds the analytics dashboard. Jobs can be logged from a slicer via the API or in-app with the dashboard's **Log print job** dialog (v1.79), and browsed on the **History** page (`/history`): job-label search, printer filter, expandable per-filament breakdowns, delete-with-refund, plus a cross-spool usage-ledger search over every spool's manual/slicer/job/NFC entries
 
 ### Import / Export
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
@@ -60,6 +60,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Cross-platform** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Offline mode** -- embedded local MongoDB; choose cloud-only, hybrid, or fully offline
 - **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution; covers filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, and sharedcatalogs with cross-DB ref remap (calibrations, AMS slots) and soft-delete tombstone propagation
+- **Data health** -- **Settings → Data health** (v1.77) lists name collisions the automatic whitespace-trim cleanup can't repair on its own (rows whose names differ only by invisible edge whitespace), with the whitespace made visible and the two safe resolutions: delete (only when nothing references the row) or rename. In hybrid mode, conflicts found on the *remote* database during sync appear too (v1.78), with a conflict-count link in the header's sync pill
 - **Share on local network** -- a Settings toggle (off by default) binds the embedded server to `0.0.0.0` so the instance is reachable from other devices on your LAN (e.g. the mobile companion app) instead of localhost-only; Settings shows the reachable URL. Pairs with mDNS auto-discovery — the desktop advertises itself as `_filamentdb._tcp` while sharing is on. Secure an exposed instance with the `FILAMENTDB_API_KEY` bearer-token gate
 - **Hardened external URL handling** -- Electron `setWindowOpenHandler` only forwards `http(s)` to the OS shell (not `file:` / `javascript:` / custom protocols); render-time guards on TDS / photo / product links; `tdsUrl` schema-validated to http(s) on every write path; TDS extractor follows redirects manually with per-hop SSRF re-checks (5-redirect cap)
 - **Auto-update** -- in-app banner announces new versions, downloads in the background, and prompts to restart-and-install (localized). macOS builds are Developer ID-signed and notarized (v1.39.1+), so they open without Gatekeeper warnings and auto-update normally; a `merge-mac-metadata` CI job combines both arches into one multi-arch update channel (Apple Silicon → arm64, Intel → x64). On Windows, x64 is the single auto-update channel — arm64 machines auto-update to the emulated x64 build, with a native arm64 installer available for manual download
@@ -125,7 +126,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
 | [NFC Tags](docs/nfc.md) | Reading/writing OpenPrintTag and reading Bambu Lab NFC spool tags with the ACR1552U reader |
 | [Smart Filament Workflow](docs/smart-filament-workflow-guide.md) | End-user walkthrough of the NFC scan → slicer preset → calibration loop, from an empty database to tap-to-load printing (also as a [PDF](docs/smart-filament-workflow-guide.pdf)) |
-| [API Reference](docs/api.md) | REST API endpoints for Filament DB, plus the documented OpenAPI surface used by the [interactive Swagger UI](/api-docs) |
+| [API Reference](docs/api.md) | REST API endpoints for Filament DB, plus the documented OpenAPI surface used by the interactive Swagger UI at `/api-docs` |
 | [Testing](docs/testing.md) | Running tests, coverage thresholds, CI/CD with GitHub Actions |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and solutions |
 
@@ -164,6 +165,7 @@ filament-db/
 │   │   ├── inventory/          # Spool inventory page grouped by location (v1.32)
 │   │   ├── locations/          # Location management pages (v1.11)
 │   │   ├── analytics/          # Usage analytics charts (v1.11)
+│   │   ├── history/            # Print-history / spool-usage browser (v1.79)
 │   │   ├── share/              # Published catalogs list + public view (v1.11)
 │   │   ├── compare/            # Filament comparison view (v1.11)
 │   │   ├── trash/              # Soft-deleted filament recovery (v1.14+)
@@ -187,7 +189,8 @@ filament-db/
 │   ├── release-bump.yml     # Manual version-bump PR (package.json, package-lock.json, openapi.json)
 │   ├── mobile.yml           # CI for packages/mobile (its own lint + typecheck + audit, path-filtered)
 │   ├── eas-build-mobile.yml # Manual Expo EAS build of the mobile companion app
-│   └── reference-drift.yml  # Weekly check that the bundled technical reference matches the live wiki
+│   ├── reference-drift.yml  # Weekly check that the bundled technical reference matches the live wiki
+│   └── wiki-check.yml       # Post-publication wiki validation, triggered by the gollum event on wiki edits
 ├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux x64/arm64)
 └── vitest.config.ts         # Test config with coverage thresholds
 ```

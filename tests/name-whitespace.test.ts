@@ -198,7 +198,7 @@ describe("trimEntityNames against a real database (#1116)", () => {
     expect(res.conflicts).toEqual([
       // `active` distinguishes a conflict that can actually make two hybrid
       // peers disagree about identity from a permanent, harmless one on a
-      // tombstone — only the former gates a sync (GH #1116, Codex P1).
+      // tombstone — only the former gates a sync (GH #1116).
       // GH #1149 enriched the shape with the row identities the resolution
       // surface acts through.
       {
@@ -410,7 +410,7 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
   });
 
   /**
-   * GH #1116 (Codex P2, round 22): a peer upgraded from the pre-#303 schema
+   * GH #1116: a peer upgraded from the pre-#303 schema
    * still carries the LEGACY plain unique `name_1`, which covers DELETED rows
    * too. Two trashed rows named "X" and "X " are perfectly legal under the
    * partial index this repo intends, but collide under that one.
@@ -462,7 +462,7 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
   });
 
   /**
-   * GH #1116 (Codex P2, round 27). The deferred test asks about INDEX
+   * GH #1116. The deferred test asks about INDEX
    * COVERAGE, not schema activeness, and the two disagree on exactly one
    * value: `_deletedAt: ""`.
    *
@@ -503,7 +503,7 @@ describe("filament import matches a legacy untrimmed row (#1116)", () => {
 });
 
 /**
- * GH #1116 (Codex P1, post-split). A legacy NON-unique `name_1` is a
+ * GH #1116. A legacy NON-unique `name_1` is a
  * different case from a duplicate-data refusal, and it is the one that cannot
  * clear on its own: `createIndex` conflicts with it every cycle,
  * `hasUniqueNameIndex` rejects it, and the hybrid REMOTE never runs
@@ -563,7 +563,7 @@ describe("an inadequate legacy name index is converted, not skipped forever", ()
 
 
 /**
- * GH #1116 (Codex round 29) — the WRONG-MATCH and MISSED-COLLISION hazards.
+ * GH #1116 — the WRONG-MATCH and MISSED-COLLISION hazards.
  *
  * Three distinct ways the cast bites, and the earlier work only covered the
  * first:
@@ -864,7 +864,7 @@ describe("the create guard covers the gated variant path and cast names (#1116)"
 
 
 /**
- * GH #1116 (Codex round 33) — GENERATED names need the guard too.
+ * GH #1116 — GENERATED names need the guard too.
  *
  * Both of these compute a name themselves and then create it. Their own
  * "is it taken?" probes are cast queries (an `exists`, an anchored regex),

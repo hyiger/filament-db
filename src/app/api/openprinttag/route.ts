@@ -26,20 +26,13 @@ export async function GET() {
 }
 
 /**
- * POST /api/openprinttag
+ * POST /api/openprinttag — force-refresh the OpenPrintTag cache. A
+ * same-origin POST, not `GET ?refresh=true` — a GET-with-side-effect lets a
+ * cross-origin link thrash the cache (GH #427).
  *
- * Force-refresh the OpenPrintTag cache. Previously this was triggered via
- * `GET ?refresh=true`, which is a GET-with-side-effect (cache mutation) —
- * cross-origin link can thrash the cache, and the verb misleads HTTP
- * intermediaries that assume GET is idempotent. Same-origin-only POST is the
- * right shape (GH #427).
- *
- * #931: this no longer clears the cache up-front. Instead it asks the library
- * to short-circuit the TTL check and run the SHA-aware probe — if upstream's
- * commit hasn't changed since the last parse, we serve cached data and just
- * slide the TTL window forward, skipping the ~3 MB tarball download +
- * ~11k-file extract. Only a moved SHA (or a never-cached fresh install or a
- * probe failure) takes the full tarball path.
+ * #931: does NOT clear the cache up-front — the library runs a SHA-aware
+ * probe, and an unchanged upstream commit just slides the TTL forward,
+ * skipping the ~3 MB tarball download + ~11k-file extract.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);

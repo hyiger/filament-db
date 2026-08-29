@@ -164,7 +164,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
 
     const f = await Filament.findOne({ name: "Prusament PLA Galaxy Black" }).lean();
     expect(f).toBeTruthy();
-    // GH #607 (Codex P2): provenance lives OUTSIDE the settings bag.
+    // GH #607: provenance lives OUTSIDE the settings bag.
     expect(f.settings.openprinttag_snapshot).toBeUndefined();
     const snap = f.openprinttagSnapshot;
     expect(snap).toBeTruthy();
@@ -201,7 +201,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(f.openprinttagSnapshot.temperatures_nozzle).toBe(225);
   });
 
-  // ── detail _hasOwnOptLink (button gating, Codex P2 r4) ───────────────
+  // ── detail _hasOwnOptLink (button gating) ───────────────
 
   it("detail: _hasOwnOptLink true for the linked root, false for an inheriting variant", async () => {
     const parent = await Filament.create({
@@ -499,7 +499,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     // The suppression must distinguish inherited from variant-owned arrays:
     // here the parent has no optTags and the variant owns [99], so clearing
     // the variant's array DOES take ([] resolves to the empty parent) — the
-    // clear must stay offered and apply (Codex P2 round 4).
+    // clear must stay offered and apply.
     const parent = await Filament.create({
       name: "Empty Parent",
       vendor: "Prusament",
@@ -835,7 +835,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect((await res.json()).error).toMatch(/one slug/i);
   });
 
-  // ── GH #605 (codex round 3, Finding A): the promotion gate on the OPT
+  // ── GH #605: the promotion gate on the OPT
   //    variant import — the same contract as POST /api/filaments ──────────
 
   it("import-variant: first variant of a carrying parent → structured 409, nothing created", async () => {

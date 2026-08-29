@@ -133,7 +133,6 @@ async function merge() {
   const Nozzle = mongoose.connection.collection("nozzles");
   const Filament = mongoose.connection.collection("filaments");
 
-  // Build nozzle lookup maps
   const nozzleDocs = (await Nozzle.find().toArray()) as unknown as NozzleDoc[];
   const nozzleByDiameter = new Map<number, NozzleDoc>();
   const nozzleByDiameterHF = new Map<number, NozzleDoc>();
@@ -152,7 +151,6 @@ async function merge() {
     console.log(`  ${n.name} (${n.diameter}mm${n.highFlow ? ", HF" : ""})`);
   }
 
-  // Load all filaments
   const allFilaments = (await Filament.find().toArray()) as unknown as FilamentDoc[];
   console.log(`\nFound ${allFilaments.length} filaments total`);
 
@@ -175,7 +173,6 @@ async function merge() {
     shoreGroups.get(baseName)!.members.push({ filament: f, shore });
   }
 
-  // Only merge groups with >1 member
   const shoreMerges = [...shoreGroups.values()].filter((g) => g.members.length > 1);
 
   for (const group of shoreMerges) {
@@ -184,11 +181,9 @@ async function merge() {
       console.log(`    - ${m.filament.name} (Shore ${m.shore})`);
     }
 
-    // Sort by shore value
     group.members.sort((a, b) => parseInt(a.shore) - parseInt(b.shore));
     const keeper = group.members[0].filament;
 
-    // Build presets from each member
     const presets: NonNullable<FilamentDoc["presets"]> = [];
     const allNozzleIds = new Set<string>();
     const calibrations: FilamentDoc["calibrations"] = [];
@@ -197,7 +192,6 @@ async function merge() {
       const f = m.filament;
       processed.add(f._id.toString());
 
-      // Collect nozzle IDs
       for (const nId of f.compatibleNozzles || []) {
         allNozzleIds.add(nId.toString());
       }
@@ -209,7 +203,6 @@ async function merge() {
         }
       }
 
-      // Build preset
       const em = extractEM(f.settings);
       presets.push({
         label: `Shore ${m.shore}`,
@@ -267,7 +260,6 @@ async function merge() {
     const baseName = f.name.replace(HF_SUFFIX, "");
     const baseFilament = filamentByName.get(baseName);
     if (!baseFilament) {
-      // No matching non-HF filament — just rename by stripping HF (it keeps its HF nozzle refs)
       console.log(`\n  "${f.name}" — standalone HF, skipping (no base "${baseName}" found)`);
       continue;
     }
@@ -282,7 +274,6 @@ async function merge() {
     for (const nId of baseFilament.compatibleNozzles || []) allNozzleIds.add(nId.toString());
     for (const nId of f.compatibleNozzles || []) allNozzleIds.add(nId.toString());
 
-    // Build calibrations from both
     const calibrations: FilamentDoc["calibrations"] = [
       ...(baseFilament.calibrations || []),
     ];
@@ -292,7 +283,6 @@ async function merge() {
       const nozzleDoc = nozzleDocs.find((n) => n._id.toString() === nId.toString());
       if (!nozzleDoc) continue;
 
-      // Check if calibration already exists for this nozzle
       const exists = calibrations.some((c) => c.nozzle.toString() === nId.toString());
       if (exists) continue;
 
@@ -402,12 +392,10 @@ async function merge() {
 
     group.members.sort((a, b) => a.diameter - b.diameter);
 
-    // Keeper is the existing base filament if present, otherwise the first member
     const keeper = existingBase || group.members[0].filament;
     const allNozzleIds = new Set<string>();
     const calibrations: FilamentDoc["calibrations"] = [...(keeper.calibrations || [])];
 
-    // Add keeper's existing nozzles
     for (const nId of keeper.compatibleNozzles || []) {
       allNozzleIds.add(nId.toString());
     }
@@ -416,12 +404,10 @@ async function merge() {
       const f = m.filament;
       processed.add(f._id.toString());
 
-      // Add this member's nozzles
       for (const nId of f.compatibleNozzles || []) {
         allNozzleIds.add(nId.toString());
       }
 
-      // Find the nozzle for this diameter
       const nozzle = nozzleByDiameter.get(m.diameter);
       if (nozzle) {
         allNozzleIds.add(nozzle._id.toString());

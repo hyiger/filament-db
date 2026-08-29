@@ -65,7 +65,7 @@ export default function DevicesSettingsPage() {
   // Re-probe the loaded tag after an action that CHANGES it (erase / read-only
   // toggle). Those mutate the tag in place without a tagPresent/tagUid change, so
   // the detect effect above wouldn't re-run and the card would keep the pre-action
-  // label until the user lifts + replaces the tag (Codex P3 #927).
+  // label until the user lifts + replaces the tag.
   const refreshDetected = useCallback(() => {
     const api = window.electronAPI;
     if (!api?.nfcDetectTag) return;
@@ -79,7 +79,7 @@ export default function DevicesSettingsPage() {
     if (detected.family === "bambu") return t("settings.nfcLoadedBambu");
     if (detected.family === "ntag") {
       if (detected.standard === "opentag3d") return t("settings.nfcLoadedNtagOpenTag3d");
-      // Codex P3 #927: a formatted-but-not-OpenTag3D NTAG (foreign URL/contact
+      // A formatted-but-not-OpenTag3D NTAG (foreign URL/contact
       // NDEF) is distinct from a blank one — don't label it "OpenTag3D".
       return detected.formatted
         ? t("settings.nfcLoadedNtagForeign")
@@ -88,7 +88,7 @@ export default function DevicesSettingsPage() {
     if (detected.family === "slix2") {
       if (detected.standard === "openprinttag") return t("settings.nfcLoadedSlix2OpenPrintTag");
       if (detected.standard === "opentag3d") return t("settings.nfcLoadedSlix2OpenTag3d");
-      // Codex P3 #927: a formatted-but-not-OpenPrintTag SLIX2 (foreign NDEF) is
+      // A formatted-but-not-OpenPrintTag SLIX2 (foreign NDEF) is
       // distinct from a blank one — don't label it "OpenPrintTag".
       return detected.formatted
         ? t("settings.nfcLoadedSlix2Foreign")
@@ -120,7 +120,7 @@ export default function DevicesSettingsPage() {
       else if (raw.includes("NTAG_SIZE_AMBIGUOUS")) message = t("settings.nfcNtagSizeAmbiguous");
       else if (raw.includes("NTAG_WRITE_REFUSED")) {
         // Keep the refused page — it tells the user which portion of the
-        // tag remains uncleared (round 10, Codex P3).
+        // tag remains uncleared.
         const page = raw.match(/at page (\d+)/)?.[1] ?? "?";
         message = t("settings.nfcNtagWriteRefused", { page });
       }

@@ -269,7 +269,7 @@ export function rgbaToHex(rgba: string | undefined | null): string | null {
  * typed as a boolean or a sequence is left as "absent" (null) rather than
  * fabricated — `Number(false)`/`Number([])` are 0, `Number(true)` is 1,
  * `Number([65])` is 65, which would invent a value the downstream optResync
- * guard otherwise skips (Codex P2 on PR #959).
+ * guard otherwise skips.
  */
 export function toOptNumber(v: unknown): number | null {
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
@@ -428,7 +428,7 @@ export function mapToFilamentPayload(
     name: `${m.brandName} ${m.name}`,
     vendor: m.brandName,
     type: m.type,
-    // GH #477 (Codex P2 on PR #484): preserve null primary when the
+    // GH #477: preserve null primary when the
     // material has secondary colors but no primary. The OPT spec says
     // coextruded / rainbow materials have null primary; the old `||
     // "#808080"` fallback would inject a phantom gray as the first
@@ -520,20 +520,9 @@ async function sweepStaleTempDirs(): Promise<void> {
  * Fetch the OpenPrintTag database from GitHub, parse all YAML files,
  * and return the structured result.
  *
- * GH #225 — cold-fetch resilience:
- * - Only the DOWNLOAD is retried (3 attempts, exponential backoff): a
- *   transient TimeoutError or network blip on the first request after
- *   Electron startup is the thing that actually resolves on retry. Most
- *   "OpenPrintTag fetch error: TimeoutError" reports trace to a cold
- *   connection. The extract/parse is deterministic — a retry won't fix a
- *   slow disk — so once the bytes are in hand it runs ONCE under its own
- *   generous deadline (PR #933 review: retrying the extract multiplied the
- *   worst-case wait past the client's timeout, so a cached user never
- *   reached the stale-cache fallback below).
- * - If the download (after retries) or the single extract/parse fails BUT
- *   we have a previously-cached payload (even an expired one), serve the
- *   stale payload instead of throwing. The freshness window is wide enough
- *   that users prefer a one-hour-old brand list to "Failed to load."
+ * GH #225 — cold-fetch resilience: only the DOWNLOAD is retried; the
+ * extract/parse runs once, and any failure falls back to a stale cached
+ * payload when one exists (see runFetchWithRetries for the rationale).
  */
 export async function fetchOpenPrintTagDatabase(
   opts?: { force?: boolean },
@@ -547,23 +536,13 @@ export async function fetchOpenPrintTagDatabase(
     return cachedDatabase;
   }
 
-  // #743 + #931 + PR #937 review (hyiger P2/P3): single-flight EVERYTHING
-  // beyond the fast-path check — the SHA probe AND the tarball fetch.
-  //
-  // Pre-review the probe ran BEFORE the single-flight guard, so N concurrent
-  // forced refreshes each fired their own commits-API request. With the
-  // unauthenticated GitHub quota at 60 req/hr, a user mashing Refresh across
-  // tabs could burn the quota fast; the 403/Retry-After path then 502s the UI
-  // back for an hour. Wrapping the probe alongside the tarball fetch in one
-  // in-flight promise makes concurrent forced refreshes share ONE probe result
-  // AND ONE tarball-fetch decision.
-  //
-  // It also closes the slide-TTL race: pre-review two forced-refresh callers
-  // could overlap on `await fetchUpstreamCommitSha()`, then caller A's
-  // "unchanged" spread would overwrite caller B's newer `cachedDatabase` with
-  // a stale sha (spread captures B's new content but re-stamps A's old sha).
-  // Inside the single-flight guard only ONE caller runs `probeAndFetch` at a
-  // time, so no interleaving is possible.
+  // #743 + #931: single-flight EVERYTHING beyond the fast-path check — the
+  // SHA probe AND the tarball fetch. The probe MUST stay inside the guard:
+  // outside it, N concurrent forced refreshes each fire their own
+  // commits-API request (unauthenticated GitHub quota is 60 req/hr; the
+  // 403/Retry-After path then 502s the UI for an hour), and two overlapping
+  // probes race the slide-TTL — caller A's "unchanged" spread can overwrite
+  // caller B's newer `cachedDatabase` with a stale sha.
   if (inFlightFetch) return inFlightFetch;
   inFlightFetch = probeAndFetch();
   try {
@@ -574,7 +553,7 @@ export async function fetchOpenPrintTagDatabase(
 }
 
 /**
- * #931 + PR #937 review: probe + decide + tarball. Runs INSIDE the single-flight
+ * #931: probe + decide + tarball. Runs INSIDE the single-flight
  * guard, so concurrent forced refreshes share ONE probe call and ONE tarball
  * fetch. Only invoked by `fetchOpenPrintTagDatabase` — not part of the public
  * surface.
@@ -628,7 +607,7 @@ async function probeAndFetch(): Promise<OPTDatabase> {
  * is a malformed / truncated response, and letting a shorter prefix match
  * would silently open us up to a hostile / broken proxy locking the cache
  * on a low-entropy prefix: at 4 chars the random collision rate is 1/65k,
- * at 7 chars it's 1/268M. Post PR #937 review (hyiger P1). Kept as an
+ * at 7 chars it's 1/268M. Kept as an
  * exported constant so `fetchUpstreamCommitSha`'s length guard can't drift
  * from `shasMatch`'s floor.
  */
@@ -668,27 +647,10 @@ export function shasMatch(a: string, b: string): boolean {
  * never wedges a refresh — the probe is pure latency savings.
  *
  * Honours the same proxy dispatcher as `downloadTarballToBuffer` so air-gapped
- * / proxied deployments work the same as the tarball path.
- *
- * Response shape (Codex P2 on PR #937): asks for `application/vnd.github.sha`
- * — the docs-supported media type that makes GitHub return the SHA as
- * text/plain (a bare 40-char string), NOT the full JSON commit blob. Pre-fix
- * the default JSON shape included the commit's changed-file list and could
- * exceed the read cap when the latest upstream commit touched many files,
- * killing the probe on exactly the "big refactor merged" days where the
- * probe path was most valuable. The SHA media type is fixed-size regardless
- * of commit content.
- *
- * Response-size cap (PR #937 review, hyiger P2): body is read via
- * `readBodyCapped` at 4 KB. The SHA-only response is ~40 bytes; 4 KB
- * accommodates any error-body GitHub might still stuff into the response
- * without permitting an OOM from a hostile / misconfigured proxy.
- *
- * Timeout (PR #937 review, hyiger P3): 5s default (was 10s). A 40-byte API
- * call that takes longer than 5s means the connection is dead — fail fast
- * and let the tarball path's existing retry backoff cover it. The full retry
- * budget comment near `runFetchWithRetries` bounds the worst-case wait; a
- * 10s probe eroded ~5s of that budget on a bad-network path.
+ * / proxied deployments work the same as the tarball path. The 5s default
+ * timeout keeps a dead connection from eroding the retry budget documented
+ * near `runFetchWithRetries`; the media-type, size-cap, and SHA-length
+ * guards are explained inline below.
  */
 export async function fetchUpstreamCommitSha(opts?: {
   timeoutMs?: number;
@@ -700,9 +662,11 @@ export async function fetchUpstreamCommitSha(opts?: {
   try {
     const response = await fetch(commitsUrl, {
       headers: {
-        // Codex P2 on PR #937: text/plain SHA rather than the full JSON
-        // commit blob, so the response is fixed-size and can't blow the
-        // read cap on a large commit's file list.
+        // The docs-supported SHA media type returns text/plain (a bare
+        // 40-char string), NOT the full JSON commit blob — the JSON shape
+        // includes the commit's changed-file list and can blow the read
+        // cap on a large commit, killing the probe exactly when upstream
+        // changed most.
         Accept: "application/vnd.github.sha",
         "User-Agent": "filament-db",
       },
@@ -724,7 +688,7 @@ export async function fetchUpstreamCommitSha(opts?: {
     // The SHA media type returns raw text — trim in case of a trailing
     // newline. Reject a shorter-than-`MIN_SHA_PREFIX_LEN` value so a
     // degenerate / hostile response can't lock the cache on a low-entropy
-    // prefix (PR #937 review, hyiger P1). Length is checked against the same
+    // prefix. Length is checked against the same
     // constant `shasMatch` uses, so the two guards can never drift.
     const sha = rawBody.toString("utf-8").trim();
     if (sha.length < MIN_SHA_PREFIX_LEN) {
@@ -751,7 +715,7 @@ async function runFetchWithRetries(): Promise<OPTDatabase> {
     // connection / blip). Once the bytes are in hand, extract + parse runs
     // ONCE: it's deterministic, so a retry wouldn't fix a slow disk, and
     // retrying it would multiply the worst-case wait past the client's
-    // timeout (PR #933 review) — at which point a cached user never reaches
+    // timeout — at which point a cached user never reaches
     // the stale-cache fallback this path exists to serve.
     const tarballBuffer = await downloadWithRetries();
     return await extractParseOnce(tarballBuffer);
@@ -801,7 +765,7 @@ const EXTRACT_TIMEOUT_MS = 120_000;
 // file-count tar-bomb guard still runs during extraction below.)
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
 // Cap the DECOMPRESSED stream during extract. A counting Transform between
-// gunzip and tar.x trips this against bytes actually streamed (not the lyable
+// gunzip and tar.x trips this against bytes actually streamed (not the lying
 // header `size`). Injectable into extractAndParse so the trip can be unit-
 // tested without allocating 256 MB; production uses the default.
 const MAX_TARBALL_EXTRACT_BYTES = 256 * 1024 * 1024;
@@ -948,19 +912,8 @@ export async function extractAndParse(
 ): Promise<OPTDatabase> {
   try {
     // GH #258: bound the extraction so a hostile/compromised tarball (tar
-    // bomb) can't fill the disk. The `filter` rejects absolute paths / `..`
-    // traversal (defence-in-depth over tar's own sanitisation) and caps the
-    // file COUNT. A counting Transform between gunzip and the tar parser caps
-    // the total DECOMPRESSED bytes against bytes actually streamed to disk —
-    // not the attacker-declared header `size`, which a lying header could
-    // under-report (PR #933 follow-up).
-    //
-    // The extract gets its OWN AbortController/timeout, independent of the
-    // network deadline — a slow disk (Windows + antivirus) gets the full
-    // EXTRACT_TIMEOUT_MS budget. Aborting the pipeline rejects with an
-    // AbortError, which relabelTimeoutError recognises so the surfaced message
-    // names the extract phase honestly.
-    //
+    // bomb) can't fill memory — path sanitisation, a file-count cap, and a
+    // decompressed-byte cap (each explained at its own site below).
     // `maxExtractBytes` is injectable so the decompressed-size trip can be
     // unit-tested with a tiny cap — production uses MAX_TARBALL_EXTRACT_BYTES.
     const maxExtractBytes = opts?.maxExtractBytes ?? MAX_TARBALL_EXTRACT_BYTES;
@@ -1014,8 +967,8 @@ export async function extractAndParse(
       // listener attaches — which would leave this promise (and the
       // `Promise.all(pending)` below, hence the whole single-flight fetch) hung
       // FOREVER, with no timeout (the extract timer is already cleared by then).
-      // Resolve immediately; a zero-size entry's content is definitionally ""
-      // (Codex P2 #943). resume() consumes it so the parser advances.
+      // Resolve immediately; a zero-size entry's content is definitionally "".
+      // resume() consumes it so the parser advances.
       if (!entry.size) {
         entry.resume();
         return Promise.resolve("");
@@ -1124,7 +1077,7 @@ export async function extractAndParse(
       // archive or an upstream layout change — throw so runFetchWithRetries
       // fails open to the stale cache instead of caching an empty database and
       // clobbering good data. (The old disk path threw here too: walkDir on a
-      // missing data/materials dir raised ENOENT — Codex P2 on PR #943.)
+      // missing data/materials dir raised ENOENT.)
       throw new Error(
         "OpenPrintTag tarball contained no material files (unexpected layout?)",
       );
@@ -1276,7 +1229,7 @@ let inFlightFetch: Promise<OPTDatabase> | null = null;
  * `fetchOpenPrintTagDatabase({force:true})`, which deliberately KEEPS the
  * cached entry so the SHA-aware probe has a baseline to compare against, #931).
  *
- * #743 (Codex P1): clears ONLY the cached result — NOT `inFlightFetch`. If a
+ * #743: clears ONLY the cached result — NOT `inFlightFetch`. If a
  * cold load is still running, forgetting (not cancelling) the in-flight
  * promise would let a subsequent fetch start a SECOND download+parse instead
  * of joining the running one, and the older load's `finally` could later

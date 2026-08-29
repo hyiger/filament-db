@@ -10,15 +10,14 @@
  * promotes the parent ("Convert to template" on its detail page), a re-import
  * of the same row sails through.
  *
- * Extracted from `src/lib/importFilaments.ts` (GH #1073) because the CSV/XLSX
- * importer was the only bulk path enforcing it: the INI bulk phase-2 resurrect
- * (`src/lib/iniImportApply.ts`) and the Bambu bulk phase-2 resurrect
- * (`POST /api/filaments/bambustudio`) could each revive a TRASHED VARIANT by
- * name — and with the variant trashed, `hasVariants` reads false, so its
- * parent may legitimately have re-acquired spools as a standalone. Reviving
- * the variant would strand that inventory on a template with no confirmation,
- * exactly the state #605 forbids. All three bulk paths now share this one
- * decision.
+ * Shared by all three bulk paths — the CSV/XLSX importer
+ * (`src/lib/importFilaments.ts`), the INI bulk phase-2 resurrect
+ * (`src/lib/iniImportApply.ts`), and the Bambu bulk phase-2 resurrect
+ * (`POST /api/filaments/bambustudio`) — because a phase-2 resurrect can
+ * revive a TRASHED VARIANT by name: with the variant trashed, `hasVariants`
+ * reads false, so its parent may legitimately have re-acquired spools as a
+ * standalone, and reviving the variant would strand that inventory on a
+ * template with no confirmation.
  *
  * The Filament model is INJECTED (the `createVariantGated.ts` /
  * `pushSpoolWithTemplateGuard` posture) — this module carries no model import
@@ -48,7 +47,7 @@
  * write it protects, so the decision and the create/resurrect serialize with
  * the interactive promotion gate and the spool routes on the same key.
  *
- * Round 7 P2 — `orphanedThreshold`: true when the row's write mints the first
+ * `orphanedThreshold`: true when the row's write mints the first
  * variant of a threshold-ONLY parent (`lowStockThreshold` set, nothing that
  * would gate a promotion — see orphansThresholdOnFirstVariant). The row
  * proceeds (nothing to confirm), but the caller must clear the parent's now

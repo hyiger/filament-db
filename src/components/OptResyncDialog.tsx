@@ -192,12 +192,11 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
   const hasConflicts = changes.some((c) => c.kind === "conflict");
   // GH #1150: the link-management actions show whenever the filament IS
   // linked — including the materialGone dead end (linked, found: false),
-  // which is exactly where "remove or re-point the link" is the only remedy.
-  // A FAILED check keeps them too (Codex P2): this dialog only opens from
-  // the "Check for updates" button, which is gated on _hasOwnOptLink, so the
-  // filament is linked by construction — and the DELETE endpoint needs no
-  // upstream fetch, so an unreachable OPT database must not re-create the
-  // very dead end #1150 is about.
+  // which is exactly where "remove or re-point the link" is the only
+  // remedy. A FAILED check keeps them too: this dialog only opens from the
+  // "Check for updates" button, gated on _hasOwnOptLink, so the filament
+  // is linked by construction — and the DELETE endpoint needs no upstream
+  // fetch, so an unreachable OPT database must not re-create the dead end.
   const showLinkActions = !loading && (error !== null || data?.linked === true);
 
   return (

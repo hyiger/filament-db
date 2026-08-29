@@ -10,8 +10,7 @@
 export interface NozzleTemperatureRange {
   // Accept strings too: a non-form API client can send `"300"` as JSON, and
   // the Filament schema's Number paths would cast it on save — so the guard
-  // must coerce before comparing or the inverted range slips through (Codex
-  // P2 on PR #577).
+  // must coerce before comparing or the inverted range slips through.
   nozzleRangeMin?: number | string | null;
   nozzleRangeMax?: number | string | null;
 }
@@ -45,8 +44,7 @@ export function isInvertedNozzleRange(
 
 /**
  * Compute the nozzle range that a PUT body will actually persist, so a
- * partial update can't sneak an inverted range past the guard (Codex P2 on
- * PR #577).
+ * partial update can't sneak an inverted range past the guard.
  *
  * Two update shapes reach `findOneAndUpdate`:
  *   - a full `temperatures` object, which REPLACES the whole subdocument —
@@ -59,7 +57,7 @@ export function isInvertedNozzleRange(
  * Either shape can also arrive wrapped in a Mongo `$set` operator
  * (`{"$set":{"temperatures.nozzleRangeMin":300}}`), which the route forwards
  * to `findOneAndUpdate` verbatim — so both the top level and `$set` are
- * scanned (Codex P2 on PR #577, round 2).
+ * scanned.
  *
  * Returns null when the update touches neither nozzle-range endpoint (no
  * range change to validate).
@@ -111,7 +109,7 @@ export function effectiveNozzleRangeForUpdate(
  * null/undefined (`variant ?? parent`). A variant that sets only one endpoint
  * inherits the other, which can yield an inverted EFFECTIVE range (e.g. own
  * min 300 + inherited parent max 200) the variant renders/exports even though
- * its own body looked like a harmless partial range (Codex P2 r3 on #577).
+ * its own body looked like a harmless partial range.
  *
  * Pass the variant's own (post-update) range as `own` and the parent's range
  * as `parent`; for a standalone (no parent) pass `parent = null` and the own

@@ -33,21 +33,16 @@ const execFileP = promisify(execFile);
 /**
  * Heuristic match for "this device is a Brother PT-series label printer".
  *
- * Deliberately NOT widened to cover the KNAON. The only consumer today is the
- * Brother picker in LabelPrinterSettings, which renders this flag as a
- * "PT-Touch" badge and saves the selection for labelPrinterPrint — whose test
- * job is Brother raster. Badging a Y813BT there would actively invite the user
- * to select it and print raster bytes to a TSPL printer. Per-kind badging
- * belongs with the TSPL picker, alongside a pattern of its own.
+ * Deliberately NOT widened to cover the KNAON: the only consumer is the
+ * Brother picker, whose badge invites selection for labelPrinterPrint —
+ * Brother raster bytes. Badging a Y813BT there would invite sending raster
+ * to a TSPL printer. Per-kind badging belongs with the TSPL picker.
  */
 const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
 
 /**
- * Which label printer a job is bound for.
- *
- * The app drives two physically different printers that never overlap:
- * "brother" is the PT-P710BT on 24mm tape (spool labels, raster bytes) and
- * "tspl" is the KNAON Y813BT on 4x6 stock (dry-box labels, TSPL bytes).
+ * Which label printer a job is bound for: "brother" = PT-P710BT (spool
+ * labels, raster bytes), "tspl" = KNAON Y813BT (dry-box labels, TSPL bytes).
  * The transport itself is byte-agnostic — this only selects which managed
  * queue and description a raw `usb://` device gets bound to.
  */
@@ -199,10 +194,9 @@ async function listCupsPrinters(probeUsb: boolean): Promise<LabelPrinterDevice[]
   const devices: LabelPrinterDevice[] = [];
   const seenUris = new Set<string>();
 
-  // 1. Installed queues (excluding our own managed one). `lpstat -v` lines
-  //    look like: "device for NAME: usb://Brother/PT-P710BT?serial=…".
-  //    This is a plain read of configured queues — it never prompts for
-  //    credentials, so it's safe to run on the passive (mount-time) path.
+  // 1. Installed queues. `lpstat -v` lines look like:
+  //    "device for NAME: usb://Brother/PT-P710BT?serial=…". A plain read —
+  //    never prompts, so safe on the passive (mount-time) path.
   try {
     const stdout = await runCupsTool("lpstat", ["-v"]);
     for (const line of stdout.split("\n")) {
@@ -238,13 +232,8 @@ async function listCupsPrinters(probeUsb: boolean): Promise<LabelPrinterDevice[]
   //    `lpinfo -v` lines look like: "direct usb://Brother/PT-P710BT?serial=…".
   //    `--include-schemes usb` restricts it to the USB backend: a bare
   //    `lpinfo -v` also runs the network backends (snmp/dnssd), which probe
-  //    the LAN and can block ~10-15s — enough to blow the IPC timeout (the
-  //    list-devices handler hung at 15s, GH follow-up). We only parse usb://
-  //    lines anyway, so this is both faster (~0.1s) and strictly correct.
-  //
-  //    GH #771: gated behind `probeUsb`. On macOS `lpinfo` runs the admin-only
-  //    CUPS-Get-Devices op and pops the OS authorization dialog, so this only
-  //    runs on an explicit user action (Refresh), never on Settings mount.
+  //    the LAN ~10-15s — enough to blow the IPC timeout. We only parse
+  //    usb:// lines anyway. Gated behind `probeUsb` (GH #771, see docblock).
   if (!probeUsb) return devices;
   try {
     const stdout = await runCupsTool("lpinfo", ["--include-schemes", "usb", "-v"]);
@@ -280,14 +269,10 @@ function prettifyUsbUri(uri: string): string {
 }
 
 async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
-  // Keep `Get-Printer` as the source of the device list (same printer set +
-  // names as before) and enrich each row with EnableBIDI from Win32_Printer —
-  // `Get-Printer` doesn't surface the bidi flag, but the WMI/CIM class does.
-  // The CIM query is best-effort (wrapped in try/catch in PS): if it fails the
-  // bidi map stays empty and EnableBIDI reports false for every printer, but
-  // the listing itself still works. ConvertTo-Json yields a single object for
-  // one printer and an array for many; @(...) forces an array so the shape is
-  // predictable.
+  // `Get-Printer` is the device list; EnableBIDI comes from Win32_Printer
+  // (Get-Printer doesn't surface it). The CIM query is best-effort — on
+  // failure the listing still works. ConvertTo-Json yields a single object
+  // for one printer; @(...) forces an array so the shape is predictable.
   const script =
     "$bidi=@{}; " +
     "try { Get-CimInstance Win32_Printer -ErrorAction Stop | " +
@@ -351,7 +336,7 @@ function psSingleQuote(s: string): string {
  * escaped literal — there are NO files and NO params: the script reaches the
  * elevated PowerShell via -EncodedCommand (fixed on the command line at process
  * creation), so a same-user process can't swap a temp script before the elevated
- * read — the TOCTOU a -File approach would open (Codex P1). The outcome is the
+ * read — the TOCTOU a -File approach would open. The outcome is the
  * EXIT CODE, the only thing that reliably crosses the RunAs boundary:
  *   0 = disabled + confirmed · 2 = not found · 3 = ambiguous (>1 match)
  *   4 = write didn't take (still on) · 1 = unexpected error
@@ -378,8 +363,8 @@ try {
  * Build the UNELEVATED launcher. It triggers the UAC prompt via Start-Process
  * -Verb RunAs, handing the elevated payload over as a single -EncodedCommand
  * token. Base64 has no spaces, so Start-Process's space-joining of -ArgumentList
- * can't split it, and no file path (with or without spaces) is involved (Codex
- * P2). User-cancel and elevation-unavailable map to the dedicated exit codes
+ * can't split it, and no file path (with or without spaces) is involved.
+ * User-cancel and elevation-unavailable map to the dedicated exit codes
  * above; otherwise the elevated child's own exit code is relayed. The launcher
  * is itself passed to powershell via -Command (also no file) and runs unelevated
  * — not a privilege boundary. `psExe` is the absolute powershell path (GH #623),
@@ -424,18 +409,12 @@ export type DisableBidiResult =
  *
  * Some drivers (the Brother PT-P710BT among them) crash the Print Spooler when
  * the spooler's bidi status query runs at job-schedule time; turning BiDi off
- * is the fix, but it's a system-level printer-config write that needs admin.
- * The unelevated app can't do it in-process, so it shells out to an elevated
- * child via `Start-Process -Verb RunAs`.
- *
- * The elevated payload is delivered via -EncodedCommand (NOT a temp -File), so
- * there's nothing on disk for a same-user process to swap before the elevated
- * read (Codex P1), and no space-bearing args reach Start-Process (Codex P2).
- * The validated printer name is baked into the script as an escaped literal;
- * the outcome crosses the RunAs boundary as an exit code. Returns a STRUCTURED
- * result so the renderer maps it without matching any main-process string. The
- * caller MUST have already validated the name (the IPC handler requires it to
- * be an installed, BiDi-on queue the user was shown).
+ * is the fix, but it needs admin — hence `Start-Process -Verb RunAs`. See
+ * buildDisableBidiScript/-Launcher for the -EncodedCommand delivery rationale.
+ * Returns a STRUCTURED result so the renderer maps it without matching any
+ * main-process string. The caller MUST have already validated the name (the
+ * IPC handler requires it to be an installed, BiDi-on queue the user was
+ * shown).
  */
 export async function disableBidi(printerName: string): Promise<DisableBidiResult> {
   if (process.platform !== "win32") {
@@ -482,7 +461,7 @@ export async function disableBidi(printerName: string): Promise<DisableBidiResul
  * `/dev/tty.*` / `/dev/cu.*` path, a Linux `/dev/rfcomm*`, or a Windows `COMn`.
  * None are valid OS print targets now — and a `/dev/...` path would otherwise
  * be mistaken for a CUPS queue name (which can't even contain `/`) and fail
- * obscurely. Detect them so we can prompt the user to reselect. (Codex P2 #589)
+ * obscurely. Detect them so we can prompt the user to reselect.
  */
 function isLegacySerialTarget(target: string): boolean {
   return /^\/dev\//.test(target) || /^COM\d+$/i.test(target);
@@ -653,11 +632,9 @@ export function mapWindowsPrintError(raw: string): string | null {
 
 async function printWindows(printerName: string, bytes: Uint8Array): Promise<void> {
   // The spooler RAW datatype needs the bytes as a file; pass it + the printer
-  // name to a P/Invoke script that calls winspool WritePrinter. Use a unique
-  // per-call temp dir (mkdtemp) so concurrent prints — e.g. a print + a test
-  // print, or two windows — can't collide on the same path, overwrite each
-  // other's .bin mid-job, or delete a file the other is still reading.
-  // (Codex P2 on PR #589.)
+  // name to a P/Invoke script that calls winspool WritePrinter. A unique
+  // per-call temp dir (mkdtemp) keeps concurrent prints from colliding on
+  // the same path or deleting a file the other is still reading.
   const dir = await mkdtemp(join(tmpdir(), "fdb-label-"));
   const dataPath = join(dir, "label.bin");
   const scriptPath = join(dir, "print.ps1");
@@ -690,16 +667,15 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
  *  `lp -o raw`. Bypasses the driver's rendering so the Brother raster
  *  stream reaches the print head verbatim.
  *
- *  GH #759 — `EndPagePrinter`/`EndDocPrinter` are the calls that COMMIT the
- *  spool job as "printed". The pre-fix code discarded their bool returns, so a
- *  job that physically printed (WritePrinter succeeded) but failed to commit
- *  still exited 0 → the renderer saw success while the spooler held an
- *  uncommitted job that re-spooled on reboot and blocked the next print. We now
- *  check both returns and throw — but ONLY when the protected body succeeded
- *  (`pageOk`/`docOk` guard the throw), so a teardown after a real WritePrinter
- *  failure doesn't mask the original error. EndPage/EndDoc/Close are still
- *  ALWAYS called in their finallys, so a failed write tears the job down
- *  instead of leaking it open. Exported for the regression test. */
+ *  GH #759 — `EndPagePrinter`/`EndDocPrinter` COMMIT the spool job as
+ *  "printed"; ignoring their bool returns lets a physically-printed job exit 0
+ *  while the spooler holds an uncommitted job that re-spools on reboot and
+ *  blocks the next print. Both returns are checked and throw — but ONLY when
+ *  the protected body succeeded (`pageOk`/`docOk` guard the throw), so a
+ *  teardown after a real WritePrinter failure doesn't mask the original error.
+ *  EndPage/EndDoc/Close are still ALWAYS called in their finallys, so a failed
+ *  write tears the job down instead of leaking it open. Exported for the
+ *  regression test. */
 export const WINDOWS_RAW_PRINT_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
       [Parameter(Mandatory=$true)][string]$FilePath)
 $ErrorActionPreference = "Stop"

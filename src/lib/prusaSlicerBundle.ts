@@ -31,7 +31,7 @@ type FilamentDoc = Record<string, any>;
  * neither a primary nor a secondary exists, this returns `null` so the
  * `set()` helper skips the key entirely and the slicer falls back to its
  * own default — rather than emitting a forced `#808080` gray the user
- * never picked (Codex P2 on PR #485).
+ * never picked.
  */
 function slicerExportColor(filament: FilamentDoc): string | null {
   if (filament.color != null && filament.color !== "") return filament.color;
@@ -61,7 +61,7 @@ function slicerExportColor(filament: FilamentDoc): string | null {
  *
  * Returns `undefined` to mean "leave `color` unchanged".
  *
- * GH #913 (Codex P2): a VARIANT that INHERITS its parent's coextruded colors has
+ * GH #913: a VARIANT that INHERITS its parent's coextruded colors has
  * its OWN `secondaryColors` empty (array-fallback inheritance, #477/#106) — the
  * export resolves the parent first, so the slicer gets the PARENT's
  * `secondaryColors[0]`. Pass the resolved `parent` so the guard compares against
@@ -76,7 +76,7 @@ export function resolveSyncBackColor(
   const primary = stored?.color;
   // secondaryColors is array-fallback inheritable: a variant with an empty own
   // array inherits the parent's. Resolve the EFFECTIVE secondaries so an
-  // inherited-coextruded variant is detected (Codex P2 #913).
+  // inherited-coextruded variant is detected (GH #913).
   let secondaries = stored?.secondaryColors;
   if ((!Array.isArray(secondaries) || secondaries.length === 0) && parent) {
     secondaries = parent.secondaryColors;
@@ -270,7 +270,7 @@ export function collapsePerNozzleImportSections(
     seenGroups.add(groupKey);
     const settings = { ...f.settings };
     for (const k of [...PER_NOZZLE_BAKED_SETTING_KEYS, ...SETTINGS_STRIP_KEYS]) {
-      // GH #950 (Codex P2 on PR #968 r3): compatible_printers_condition is
+      // GH #950: compatible_printers_condition is
       // normally "baked" (an auto-derived nozzle_diameter[...] value, different per
       // suffixed section) so it's stripped and re-derived on the next export. But
       // the 950.2 export now also carries a USER PIN (a non-derived restriction) or
@@ -283,7 +283,7 @@ export function collapsePerNozzleImportSections(
       // round-trips there.)
       if (k === "compatible_printers_condition") {
         const v = settings[k];
-        // Codex P2 on PR #968 r4: match ONLY the exact auto-derived shape — one or
+        // Match ONLY the exact auto-derived shape — one or
         // more `nozzle_diameter[<n>]==<number>` terms joined by ` or ` (the
         // calibration bake emits a single term, the non-calibration derivation an
         // ` or `-joined set). A substring test would wrongly strip a legitimate
@@ -319,7 +319,7 @@ export function collapsePerNozzleImportSections(
     // Carry a shared field ONLY when the suffixed section actually SUPPLIED it (the
     // source INI key is present) — otherwise parseIni's defaults (null / "#808080" /
     // 1.75 / "Unknown") would $set over the base filament's real cost/density/color/
-    // diameter/vendor/type on an update (Codex P3). The normal export bakes all of
+    // diameter/vendor/type on an update. The normal export bakes all of
     // these from the base, so they still round-trip; only a partial/hand-crafted
     // section drops them (its fresh-create then fails the required-field validation,
     // surfaced as a per-row error rather than persisting an "Unknown" record).
@@ -386,7 +386,7 @@ export function isMachineDerivedPerNozzleCondition(
  * the diameter-agnostic union used where the writing nozzle is unknown —
  * the bulk-import collapse and the export-time normalization in the bake.
  *
- * INDEX [0] ONLY (PR #1045 round 2): every exporter vintage has only ever
+ * INDEX [0] ONLY (PR #1045): every exporter vintage has only ever
  * written extruder index 0 — the bake, the or-joined derivation, and the
  * #1021 legacy strip all say `[0]`. A user's multi-extruder pin such as
  * `nozzle_diameter[1]==0.4` is NOT a shape we ever emitted, and a `\d+`
@@ -418,16 +418,15 @@ export function filamentToSlicerKeys(
   // PrusaSlicer keys preserved from a previous import
   const keys: Record<string, string | string[] | null> = { ...(filament.settings || {}) };
 
-  // GH #1021 (Codex P1 ×2 on #1022): legacy machine-derived nozzle conditions
+  // GH #1021: legacy machine-derived nozzle conditions
   // (`nozzle_diameter[0]==D [or ...]`, persisted into `settings` by pre-#1021
   // round-trips) are cleared ONCE by the `legacyNozzleConditions` startup
   // migration (src/lib/mongodb.ts), NOT here. Post-migration, any condition in
   // the bag is user-authored by construction — including a pure nozzle-only
   // one — so this export passes every non-empty value through untouched. An
   // export-time purge could not distinguish a user's pure nozzle pin from a
-  // stale machine value (both P1 rounds on #1022 hit opposite sides of that
-  // ambiguity); the one-shot migration resolves it by removing the only
-  // source of machine-written values.
+  // stale machine value; the one-shot migration resolves it by removing the
+  // only source of machine-written values.
 
   // Map structured DB fields → PrusaSlicer INI keys.
   // These override anything in the settings bag.
@@ -529,7 +528,7 @@ export function filamentToSlicerKeys(
       // `nil` inheritance marker (null) must win. Only set when the key is absent
       // or an empty-string "no restriction". `filamentdb_nozzle` stays
       // unconditional — it's a routing hint for THIS nozzle, not a user setting.
-      // PR #1045 review: ALSO re-derive over a MACHINE-SHAPED bag value. The
+      // PR #1045: ALSO re-derive over a MACHINE-SHAPED bag value. The
       // pre-fix tick-less sync leak kept re-polluting the shared bag AFTER
       // the #1021 one-shot cleanup, so "post-cleanup pure nozzle condition =
       // user pin by construction" does not hold on real installs — a stale
@@ -612,7 +611,7 @@ function writeSection(
       // GH #678: a multi-valued bag entry (compatible_printers et al.) emits
       // PrusaSlicer's coStrings form. String(value) would comma-join —
       // which the slicer reads back as ONE value with commas in it.
-      // Round 14 (Codex P2): a SINGLETON array collapses to the scalar
+      // A SINGLETON array collapses to the scalar
       // convention — the strict list grammar needs two elements, so an
       // emitted one-element list would re-import as a quoted wire scalar
       // and garble the next Orca export. Single-element array ≡ scalar is
@@ -633,7 +632,7 @@ function writeSection(
       // single-line value — including already-escaped fork-shaped
       // `"...\n..."` strings — passes through byte-identical.
       // The key scopes the legacy form-wrapper strip to the three keys the
-      // pre-#1070 form actually wrote (Codex P2 r9 — see serializeIniValue).
+      // pre-#1070 form actually wrote (see serializeIniValue).
       lines.push(`${key} = ${serializeIniValue(String(value), key)}`);
     }
   }

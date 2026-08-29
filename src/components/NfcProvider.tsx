@@ -30,14 +30,11 @@ interface NfcContextValue {
   ) => Promise<void>;
   /**
    * Last decoded scan result. Survives dialog dismissal so the dialog's
-   * action buttons (View Filament / Create New / candidate suggestions)
-   * remain usable after the user closes the modal — that's where the
-   * decoded tag data lives. Note that this is intentionally NOT cleared
-   * on tag removal; the dialog should stay actionable even after the
-   * user lifts the tag. The status pill's display name lives in
-   * `loadedTagName` instead, which DOES clear on lift so it doesn't
-   * report a stale filament after the tag is gone (codex P2 on
-   * PR #235).
+   * action buttons remain usable after the user closes the modal.
+   * Intentionally NOT cleared on tag removal; the dialog should stay
+   * actionable even after the user lifts the tag. The status pill's
+   * display name lives in `loadedTagName` instead, which DOES clear on
+   * lift so it doesn't report a stale filament after the tag is gone.
    */
   tagReadResult: NfcTagReadResult | null;
   /**
@@ -52,10 +49,9 @@ interface NfcContextValue {
   dialogOpen: boolean;
   /** Hide the dialog without clearing `tagReadResult`. */
   dismissTagRead: () => void;
-  /** GH #451 follow-up (Codex P2 on PR #475): re-show the dialog after
-   *  it was suppressed because the user was typing, or after they
-   *  manually dismissed it but want a second look. No-op when there's
-   *  no scan to show. The NFC status pill becomes a button while
+  /** Re-show the dialog after it was suppressed because the user was
+   *  typing, or after a manual dismissal. No-op when there's no scan to
+   *  show. The NFC status pill becomes a button while
    *  `tagReadResult != null && !dialogOpen` so this path is reachable
    *  from the global header. */
   reopenTagRead: () => void;
@@ -81,7 +77,7 @@ const NfcContext = createContext<NfcContextValue | null>(null);
  * Fire-and-forget POST to /api/scan/publish so SSE subscribers (the
  * PrusaSlicer / OrcaSlicer FilamentDB module) can react to the scan.
  * Failure is intentionally silent — the user-visible tag dialog must not
- * wait on this, and any error here is logged for diagnostics only.
+ * wait on this.
  */
 function publishScan(
   decoded: DecodedOpenPrintTag,
@@ -92,7 +88,7 @@ function publishScan(
   const body = {
     filament: match,
     candidates,
-    // #732: the spool the scan resolved to (null for a filament-level/heuristic
+    // The spool the scan resolved to (null for a filament-level/heuristic
     // match), so SSE subscribers can act per-spool.
     matchedSpool,
     decoded: {
@@ -145,13 +141,11 @@ function pickLoadedName(result: NfcTagReadResult): string | null {
 /**
  * GH #451: returns true when the currently-focused element is a
  * text-entry surface (input, textarea, or contenteditable). Used to
- * suppress the NFC auto-open dialog mid-typing so we don't steal focus
- * from a user filling out a form when a teammate scans a tag.
+ * suppress the NFC auto-open dialog mid-typing.
  *
  * Duck-typed (`tagName` + attribute reads) rather than `instanceof
  * HTMLInputElement` so it stays unit-testable without a DOM env — the
- * project's vitest config doesn't carry jsdom. Safe to call with `null`
- * (returns false).
+ * project's vitest config doesn't carry jsdom. Safe to call with `null`.
  */
 export function isTypingTarget(
   el: { tagName?: string; getAttribute?: (name: string) => string | null } | null,
@@ -179,44 +173,34 @@ export function isTypingTarget(
 export default function NfcProvider({ children }: { children: ReactNode }) {
   const { isElectron, status, writing, error: writeError, writeTag: rawWriteTag } = useNfc();
   const [tagReadResult, setTagReadResult] = useState<NfcTagReadResult | null>(null);
-  // The dialog and the "current scan" state used to be one flag —
-  // dismissing the dialog cleared tagReadResult and the status pill
-  // lost its "Loaded: <name>" label. Decouple them: tagReadResult
-  // stays put after dismissal so the dialog's action buttons remain
-  // usable; dialogOpen controls the modal independently.
+  // tagReadResult stays put after dismissal so the dialog's action
+  // buttons remain usable; dialogOpen controls the modal independently.
   const [dialogOpen, setDialogOpen] = useState(false);
-  // Pill display name, kept separate from tagReadResult so the pill
-  // can clear immediately when the reader reports no tag present —
-  // codex P2 on PR #235 flagged that an A→B swap would leave the pill
-  // showing "Loaded: <A>" until B's decode landed because the dialog's
-  // tagReadResult lingered intentionally past dismiss. The dialog
-  // doesn't suffer from the same bug because the gate is
-  // `dialogOpen && tagReadResult` — only a fresh scan re-opens it.
+  // Pill display name, kept separate from tagReadResult so the pill can
+  // clear immediately when the reader reports no tag present — an A→B
+  // swap would otherwise leave the pill showing "Loaded: <A>" until B's
+  // decode landed, because tagReadResult intentionally lingers past
+  // dismiss.
   const [loadedTagName, setLoadedTagName] = useState<string | null>(null);
 
   // #571: while a Write NFC is in flight (and briefly after), the always-on
-  // background scanner can pop the read "Found in Database" modal —
-  // pre-empting the write and hiding the Write button's own progress/result.
-  // The main process also schedules a read-back ~2s after a successful write
-  // to refresh the tag data, which would otherwise auto-open the read modal
-  // right on top of the write. Suppress the auto-open during the write and
-  // for a short window after, so the user sees the write flow through. The
-  // pill still updates, and notifyTagWritten flips it to the just-written
-  // filament, so no information is lost.
+  // background scanner can pop the read modal over the write flow — the
+  // main process also schedules a read-back ~2s after a successful write.
+  // Suppress the auto-open during the write and for a short window after;
+  // the pill still updates via notifyTagWritten.
   //
   // `writingRef` is set SYNCHRONOUSLY in the wrapped writeTag below — not
   // derived from the `writing` state via an effect. useNfc.writeTag only
   // enqueues `writing=true`, so an effect-driven ref would lag a render; an
   // nfc-tag-detected event arriving in that gap would snapshot a stale
-  // `false` and still auto-open the modal (Codex P2 on PR #580).
+  // `false` and still auto-open the modal.
   const writingRef = useRef(false);
   const suppressReadModalUntilRef = useRef(0);
-  // Codex P2 on PR #580 (round 1): the modal-suppression decision must be
-  // captured when the raw NFC event ARRIVES, not when createScanMatchHandler
-  // commits — the commit happens after an async /api/filaments/match
-  // round-trip, so a slow match could let the post-write read-back commit
-  // after the suppression window expired and re-pop the modal. This ref holds
-  // the decision snapshot taken synchronously on each raw event.
+  // The modal-suppression decision must be captured when the raw NFC event
+  // ARRIVES, not when createScanMatchHandler commits — the commit happens
+  // after an async /api/filaments/match round-trip, so a slow match could
+  // let the post-write read-back commit after the suppression window
+  // expired and re-pop the modal.
   const eventTimeSuppressedRef = useRef(false);
 
   // Wrap useNfc's writeTag so the write-in-progress flag flips synchronously,
@@ -264,11 +248,8 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
       onResult: (result) => {
         setTagReadResult(result);
         setLoadedTagName(pickLoadedName(result));
-        // #571: don't let a background scan (or the post-write read-back)
-        // pop the read modal over an in-flight / just-completed write.
         // Suppress if the write window was active at EITHER the raw event's
-        // arrival OR now, at commit — two complementary races (Codex P2 on
-        // PR #580):
+        // arrival OR now, at commit — two complementary races:
         //   • arrival-time snapshot catches a read-back that arrives during
         //     the window but whose slow match commits after it expires;
         //   • commit-time check catches a scan that arrived BEFORE the write
@@ -277,13 +258,9 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
           eventTimeSuppressedRef.current ||
           writingRef.current ||
           Date.now() < suppressReadModalUntilRef.current;
-        // GH #451: never steal focus from a user actively typing.
-        // Auto-opening this modal mid-keystroke is jarring on shared
-        // workshop machines where another user might be filling a form
-        // while a teammate scans a tag at the reader. The pill update
-        // (loadedTagName above) still happens; the user can open the
-        // dialog manually from the NFC status if they want to act on
-        // the scan.
+        // GH #451: never steal focus from a user actively typing. The
+        // pill update (loadedTagName above) still happens; the user can
+        // open the dialog manually from the NFC status pill.
         if (!writeSuppressed && !isTypingTarget(document.activeElement)) {
           setDialogOpen(true);
         }
@@ -303,17 +280,13 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   }, [isElectron]);
 
   const dismissTagRead = useCallback(() => setDialogOpen(false), []);
-  // GH #451 follow-up (Codex P2 on PR #475): a typing-suppressed scan
-  // still updates tagReadResult, but `dialogOpen` stays false. Expose a
-  // reopen path so the user can pull the dialog back up — wired to the
-  // NFC pill in the header which becomes clickable while a scan is
-  // dismissable.
+  // A typing-suppressed scan still updates tagReadResult but leaves
+  // `dialogOpen` false; this reopen path pulls the dialog back up.
   const reopenTagRead = useCallback(() => {
     setDialogOpen((prev) => prev); // no-op write — guards against React staleness
     if (tagReadResult != null) setDialogOpen(true);
   }, [tagReadResult]);
 
-  // Called by the filament detail page after a successful Write NFC.
   // Synthesises a `tagReadResult` that mirrors what a fresh read would
   // produce, so the pill flips to "Loaded: <name>" right away rather
   // than waiting for the user to lift + replace the tag.
@@ -325,9 +298,9 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
     // of that workflow would be jarring. The pill update is enough.
   }, []);
 
-  // Called by Settings → Erase Tag after a successful erase. The tag is
-  // now blank, so clear the pill label and the stale read result rather
-  // than reporting the just-erased filament until the user lifts the tag.
+  // The tag is now blank, so clear the pill label and the stale read
+  // result rather than reporting the just-erased filament until the user
+  // lifts the tag.
   const notifyTagErased = useCallback(() => {
     setLoadedTagName(null);
     setTagReadResult(null);

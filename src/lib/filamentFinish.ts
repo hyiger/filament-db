@@ -19,16 +19,10 @@
  * Priority order when multiple finish-relevant tags coexist on one
  * filament:
  *   transparent → translucent → sparkle → silk → glow → matte
- *
- * - Transparent / translucent dominate because they fundamentally change
- *   how the swatch is rendered (real alpha over a checker backdrop) —
- *   nothing else makes sense on top of those.
- * - Sparkle / silk / matte are mutually exclusive in practice but ranked
- *   by visual distinctiveness so the dominant one wins.
- * - Glow ranks below the others because it's an *additive* property
- *   ("this filament also glows") rather than a primary visual finish —
- *   if we ever want to show two chips on a single filament, glow is the
- *   first candidate for a secondary slot. v1 ships single-finish only.
+ * Transparent / translucent dominate because they fundamentally change how
+ * the swatch is rendered (real alpha over a checker backdrop); sparkle /
+ * silk / matte are ranked by visual distinctiveness; glow ranks last
+ * because it's an *additive* property rather than a primary visual finish.
  */
 
 export type Finish =
@@ -76,9 +70,6 @@ const PRIORITY: readonly Finish[] = [
  */
 export function deriveFinish(optTags: readonly number[] | null | undefined): Finish | null {
   if (!optTags || optTags.length === 0) return null;
-  // Collect the finishes that are actually present, then pick the
-  // highest-priority one. Using a Set avoids quadratic work on a filament
-  // with a long tag array.
   const present = new Set<Finish>();
   for (const id of optTags) {
     const f = FINISH_BY_TAG_ID[id];

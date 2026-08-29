@@ -49,13 +49,11 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
 
   // GH #639: read the persisted locale on mount instead of in a lazy
-  // useState initializer. localStorage is undefined during SSR, so the
-  // initializer made the server render `en` while the first client render
-  // produced the stored locale — a React 19 hydration mismatch (console
-  // error + full client re-render) on every page load for a non-default
-  // web user. Mirrors the CollapsibleSection pattern: default during SSR,
-  // one post-hydration sync render; the brief default-locale flash on web
-  // is the accepted trade-off.
+  // useState initializer — the initializer would make the server render
+  // `en` while the first client render produced the stored locale, a
+  // React 19 hydration mismatch. Mirrors the CollapsibleSection pattern:
+  // default during SSR, one post-hydration sync render; the brief
+  // default-locale flash on web is the accepted trade-off.
   useEffect(() => {
     const stored = readStoredLocale();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration sync from localStorage
@@ -77,7 +75,6 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // Update document lang attribute when locale changes
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);

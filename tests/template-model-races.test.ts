@@ -8,7 +8,7 @@ import { POST as promotePOST } from "@/app/api/filaments/[id]/promote/route";
 import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
- * GH #605 review round 2 — the check-then-act races, made DETERMINISTIC by
+ * GH #605 — the check-then-act races, made DETERMINISTIC by
  * the per-filament mutex (src/lib/filamentMutex.ts). Every template-model
  * critical section (spool push, promotion gate + create, /promote,
  * totalWeight strip + write) now serializes on the family's parent id, so
@@ -300,8 +300,6 @@ describe("GH #605 — template-model race serialization", () => {
     });
   }
 
-  // ── round 8 F1: reparent vs first-variant POST ───────────────────────────
-
   it("a reparent landing between the POST's pre-lock validation and the gate: the in-lock re-fetch refuses the grandchild (round 8 F1)", async () => {
     const parent = await seedCarryingParent("Nest Race PLA");
     const grandparent = await Filament.create({
@@ -352,7 +350,7 @@ describe("GH #605 — template-model race serialization", () => {
     expect(lockedKeyCount()).toBe(0);
   });
 
-  // ── round 8 F3: DELETE vs first-variant POST ─────────────────────────────
+  // ── DELETE vs first-variant POST ─────────────────────────────
 
   for (const deleteFirst of [true, false]) {
     it(`soft DELETE vs promoting first-variant POST (${deleteFirst ? "delete" : "variant"} submitted first): never a trashed parent with a live variant`, async () => {

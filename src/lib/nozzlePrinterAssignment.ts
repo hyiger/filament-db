@@ -4,13 +4,10 @@ import mongoose from "mongoose";
  * GH #897 / #912 / #1083 — shared `printerIds` validation for the nozzle
  * create (POST /api/nozzles) and update (PUT /api/nozzles/{id}) routes.
  *
- * A single physical nozzle lives in at most ONE printer (#232). The PUT
- * route enforced that with pre-mutation validation since #897/#912, but the
- * POST route (#1083) accepted an arbitrary array and installed AFTER
- * `Nozzle.create` — so a multi-printer body bypassed the invariant, and a
- * malformed/missing printer id 500'd or no-op'd with a committed nozzle
- * left behind. Both routes now run this ONE check BEFORE any mutation so
- * the two can't drift again.
+ * A single physical nozzle lives in at most ONE printer (#232). Both routes
+ * must run this ONE check BEFORE any mutation — validating after
+ * `Nozzle.create` leaves a committed nozzle behind on failure, and two
+ * hand-rolled copies drift.
  *
  * Order of checks (each is load-bearing):
  *   1. Non-array → `printerIds: undefined` (the caller skips the printer

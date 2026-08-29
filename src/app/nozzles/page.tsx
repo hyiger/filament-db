@@ -71,8 +71,8 @@ export default function NozzlesPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("nozzles.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    // GH #1080: a network-level fetch rejection used to escape the handler
-    // with no toast at all — the row just silently stayed.
+    // GH #1080: a network-level fetch rejection must not escape the handler
+    // with no toast — the row would just silently stay.
     try {
       const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
       if (!res.ok) {
@@ -95,9 +95,9 @@ export default function NozzlesPage() {
     const errors: string[] = [];
     try {
       for (const id of selected) {
-        // GH #1080: a mid-loop network failure used to throw out of the
-        // handler, leaving the delete button disabled forever and skipping
-        // the refetch. Record the failure and keep going (GH #640 pattern).
+        // GH #1080: record a mid-loop network failure and keep going (GH #640
+        // pattern) — a throw would leave the delete button disabled forever
+        // and skip the refetch.
         try {
           const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
           if (res.ok) {

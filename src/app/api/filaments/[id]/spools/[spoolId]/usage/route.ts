@@ -46,27 +46,24 @@ export async function POST(
   if (typeof body.grams !== "number" || !Number.isFinite(body.grams) || body.grams <= 0) {
     return errorResponse("grams must be a positive number", 400);
   }
-  // GH #1030: bound the MAGNITUDE too. `Number.isFinite` only excludes
-  // Infinity/NaN, so 1e308 passed here, cast, and persisted — and once a day's
-  // analytics sum overflows to Infinity the per-day apportionment yields NaN
-  // for EVERY segment of that day, so unrelated filaments that printed the same
-  // day also serialize as JSON null. See MAX_USAGE_GRAMS for the bound's derivation.
+  // GH #1030: bound the MAGNITUDE too — `Number.isFinite` only excludes
+  // Infinity/NaN, and a persisted 1e308 overflows a day's analytics sum to
+  // Infinity, turning EVERY segment of that day into JSON null. Kept in
+  // lockstep with the print-history POST's identical cap.
   if (body.grams > MAX_USAGE_GRAMS) {
     return errorResponse(
       `grams must be no greater than ${MAX_USAGE_GRAMS}`,
       400,
     );
   }
-  // Label + notes length bounds keep pathological input from bloating the
-  // subdocument. 200 is generous for any realistic job name.
+  // Length bound keeps pathological input from bloating the subdocument.
   if (typeof body.jobLabel === "string" && body.jobLabel.length > 200) {
     return errorResponse("jobLabel must be 200 characters or fewer", 400);
   }
   const jobLabel = typeof body.jobLabel === "string" ? body.jobLabel : "";
   const date = body.date ? new Date(body.date) : new Date();
-  // Reject an unparseable date with a clean 400 rather than letting the
-  // Invalid Date reach the subdocument and surface as a raw Mongoose cast
-  // error (#675; matches the print-history POST date guard).
+  // Reject an unparseable date with a clean 400 rather than a raw Mongoose
+  // cast error (#675; matches the print-history POST date guard).
   if (Number.isNaN(date.getTime())) {
     return errorResponse("date is not a valid date", 400);
   }
@@ -74,19 +71,14 @@ export async function POST(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
-    // GH #605 round 11 (F1): the read-modify-save sequence mutates an
-    // existing spool subdocument, so it runs under the same per-filament
-    // mutex the promotion paths hold. Unserialized, the save could land
-    // between a promotion's snapshot and its clearing write and the
-    // 201-acknowledged debit/ledger entry would exist on neither document.
-    // (The promotion's completing write $incs __v, so an interleaved save
-    // would actually surface as the 409 VersionError below — with the lock
-    // the in-process case can't happen at all; the version guard stays for
-    // out-of-process writers.) In-lock, either this POST runs first (the
-    // fresh snapshot moves the updated spool onto the variant) or the
-    // promotion runs first and the findOne misses — post-promotion
-    // staleness already 404s (round 4); the lock adds mid-promotion
-    // atomicity. Single key, no nested lock inside.
+    // GH #605: the read-modify-save mutates a spool subdocument, so it runs
+    // under the same per-filament mutex the promotion paths hold —
+    // unserialized, the save could land between a promotion's snapshot and
+    // its clearing write and the 201-acknowledged debit/ledger entry would
+    // exist on neither document. (The promotion's completing write $incs
+    // __v, so an interleaved save surfaces as the 409 VersionError below —
+    // the lock removes the in-process case; the version guard stays for
+    // out-of-process writers.) Single key, no nested lock inside.
     return await runExclusive(filamentLockKey(id), async () => {
       const filament = await Filament.findOne({
         _id: id,
@@ -96,9 +88,8 @@ export async function POST(
       if (!filament) {
         return errorResponse("Filament or spool not found", 404);
       }
-      // Array.find keeps the lookup strictly typed against our ISpool[]
-      // interface; Mongoose's runtime DocumentArray also exposes .id() but
-      // that's untyped in the interface and would need a cast to use.
+      // Array.find keeps the lookup strictly typed against ISpool[]
+      // (DocumentArray.id() is untyped in the interface).
       const spool = filament.spools.find((s) => String(s._id) === spoolId);
       if (!spool) {
         return errorResponse("Spool not found", 404);
@@ -114,30 +105,25 @@ export async function POST(
         source: "manual",
         // No PrintHistory record backs a direct spool-UI usage log — the
         // print-history undo path keys off this being null to skip the
-        // entry. Required by the IUsageEntry interface so the field is
-        // explicit at every call site.
+        // entry.
         jobId: null,
       });
-      // GH #304 / #954 finding #6: roll off the oldest entries once the cap is
-      // reached so the embedded array can't grow the filament document unbounded.
-      // Undo-aware (capUsageHistory) rather than a plain `slice(-N)`: a manual log
-      // must not evict a still-live `source:"job"` entry, whose later
-      // DELETE /api/print-history refund keys off the entry still being present
-      // (GH #621). Manual/nfc entries are evicted first; job/slicer only as a last
-      // resort when the array is entirely undo-relevant.
+      // GH #304 / #954: cap the array so it can't grow the document
+      // unbounded. Undo-aware (capUsageHistory) rather than a plain
+      // `slice(-N)`: a manual log must not evict a still-live `source:"job"`
+      // entry, whose later DELETE refund keys off the entry still being
+      // present (GH #621); manual/nfc entries are evicted first.
       if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
         spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
       }
-      // GH #905: usage logging only mutates this spool — validate modified paths
-      // only so a legacy out-of-range field elsewhere can't block the log/debit.
+      // GH #905: validate modified paths only so a legacy out-of-range
+      // field elsewhere can't block the log/debit.
       await filament.save({ validateModifiedOnly: true });
       // GH #1027: pick the affected spool out of the same toObject()
-      // serialization the default path uses — the in-memory doc reflects the
-      // just-saved state (this route mutates and saves, no re-fetch). The
-      // mobile weight refresh reads `spool.totalWeight` off this — it must
-      // stay the GROSS post-decrement value (tare-inclusive), which it is:
-      // the decrement above writes totalWeight directly. The null guard is
-      // unreachable-in-practice (the subdoc was found above, pre-save).
+      // serialization the default path uses. The mobile weight refresh
+      // reads `spool.totalWeight` off this — it must stay the GROSS
+      // post-decrement value (tare-inclusive), which it is. The null guard
+      // is unreachable-in-practice.
       if (shape === "spool") {
         const spoolObj = findSpoolById(filament.toObject().spools, spoolId);
         if (!spoolObj) {
@@ -148,9 +134,8 @@ export async function POST(
       return NextResponse.json(filament.toObject(), { status: 201 });
     });
   } catch (err) {
-    // GH #504: surface optimistic-concurrency conflicts as 409 with a
-    // retry hint so a SpoolCard logging usage while a slicer concurrently
-    // posts print-history doesn't see a misleading 500.
+    // GH #504: surface optimistic-concurrency conflicts as 409 (retryable),
+    // not a misleading 500.
     const conflict = handleVersionError(err);
     if (conflict) return conflict;
     return errorResponseFromCaught(err, "Failed to log usage");

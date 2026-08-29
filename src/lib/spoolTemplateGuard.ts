@@ -46,10 +46,10 @@ export type GuardedSpoolPushResult =
 
 /**
  * The exact 400 body every spool-attach route returns when the target is a
- * template — shared (codex round 3, Finding B) so POST /filaments/{id}/spools
- * and the Prusament importer answer byte-identically and a client can handle
- * both the same way. Machine-readable `error` code, human `message` — the
- * shape the other structured rejections use (name_id_mismatch).
+ * template — shared so POST /filaments/{id}/spools and the Prusament importer
+ * answer byte-identically and a client can handle both the same way.
+ * Machine-readable `error` code, human `message` — the shape the other
+ * structured rejections use (name_id_mismatch).
  */
 export const TEMPLATE_NO_SPOOLS_BODY = {
   error: "template_no_spools",
@@ -72,7 +72,7 @@ export const TEMPLATE_NO_SPOOLS_BODY = {
  * A push error propagates to the caller unchanged (the route's catch maps
  * it), with nothing to compensate — the failed `$push` wrote nothing.
  *
- * `options.extraFilter` (codex round 3, Finding B) merges additional
+ * `options.extraFilter` merges additional
  * conditions into the atomic push's filter — the Prusament importer needs
  * its per-filament spool cap (`$expr` on the spools size) and, on the
  * match-by-name fallbacks, a `name` pin enforced in the SAME atomic write

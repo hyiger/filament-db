@@ -51,7 +51,7 @@ export interface ValidateOpts {
 /**
  * Verify a string names a real ISO 8601 calendar date.
  *
- * GH #372 (Codex follow-up): the original implementation used only
+ * GH #372: the original implementation used only
  * `isNaN(new Date(s).getTime())`, which silently *normalises* out-of-range
  * inputs — `new Date("2025-02-29")` becomes March 1st rather than failing,
  * so a user typo on a non-leap-year date persisted as a shifted day. Match
@@ -80,9 +80,9 @@ export function isValidIsoDateString(s: string): boolean {
   // `setUTCFullYear` is used instead of `Date.UTC(year, ...)` because
   // Date.UTC has a legacy 2-digit-year remap: years 0-99 are silently
   // shifted to 1900-1999, so `Date.UTC(99, 11, 31)` returns 1999-12-31
-  // and the regex-matched input `"0099-12-31"` would be wrongly rejected
-  // (Codex P3 on PR #375). `setUTCFullYear(year, month, day)` takes the
-  // year verbatim regardless of magnitude.
+  // and the regex-matched input `"0099-12-31"` would be wrongly rejected.
+  // `setUTCFullYear(year, month, day)` takes the year verbatim regardless
+  // of magnitude.
   const reconstructed = new Date(0);
   reconstructed.setUTCFullYear(year, month - 1, day);
   if (
@@ -239,13 +239,8 @@ export function validateSpoolBody(
   }
 
   // Date fields — string-typed at the API surface (Mongoose casts on save)
-  // but the string has to name a real ISO 8601 calendar date. GH #372:
-  // pre-fix accepted any string at all, so a bad client could persist
-  // "Invalid Date" which then broke downstream consumers (analytics,
-  // dashboards, CSV export, sync). Codex follow-up: `new Date(s)` alone
-  // also accepts impossible days by silently normalising (Feb 29 in a
-  // non-leap year → March 1), so use `isValidIsoDateString` which round-
-  // trips the components through Date.UTC.
+  // but the string has to name a real ISO 8601 calendar date (GH #372 —
+  // see isValidIsoDateString's docblock for the silent-normalisation trap).
   for (const field of ["purchaseDate", "openedDate"] as const) {
     if (b[field] !== undefined) {
       if (b[field] === null) {

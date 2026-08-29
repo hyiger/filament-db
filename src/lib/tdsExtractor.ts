@@ -259,8 +259,8 @@ const GEMINI_MODEL = "gemini-3.1-flash";
  *  SHA-256 of the API key — discovery is key-dependent (each key sees its
  *  own model roster and billing tier) and the POST route accepts a
  *  different key per request, so a process-wide cache would hand key B
- *  whatever key A discovered (Codex P2 #1185 r3). Digest-keyed and
- *  size-bounded (r5) so a long-lived multi-user deployment neither retains
+ *  whatever key A discovered. Digest-keyed and
+ *  size-bounded so a long-lived multi-user deployment neither retains
  *  caller secrets in plaintext for heap dumps nor grows without bound;
  *  insertion-order eviction (Map preserves it) drops the oldest entry.
  *  Module-private, in-memory only, never serialized. */
@@ -350,7 +350,7 @@ export function isGeminiModelGoneError(status: number, body: string): boolean {
 }
 
 /** Ask ListModels for a replacement model; null on any failure. Follows
- *  nextPageToken to the end (Codex P2 #1185 r4/r6): pageSize=1000 (the
+ *  nextPageToken to the end: pageSize=1000 (the
  *  API's maximum, default 50) makes one page virtually always sufficient,
  *  and the generous page cap exists ONLY as a runaway guard against a
  *  buggy/hostile server that returns a token forever — 50 pages x 1000
@@ -460,7 +460,7 @@ async function callGemini(
         // Cache at DISCOVERY time, not first success: if the replacement's
         // first call is rate-limited, withRetry re-enters callGemini — which
         // must go straight to the replacement rather than repeating the
-        // doomed default + discovery every backoff round (Codex P2 #1185).
+        // doomed default + discovery every backoff round.
         // A wrong cache self-corrects: a cached-but-gone model re-triggers
         // this same discovery on the next entry.
         cacheDiscoveredModel(keyDigest, replacement);

@@ -243,8 +243,7 @@ export function dotsToMm(dots: number, dpi: number = DPI_203): number {
  * Transliteration table for characters outside 7-bit ASCII.
  *
  * WHY TRANSLITERATE — SETTLED ON HARDWARE 2026-07-28
- *   Originally a safe default pending a codepage probe. The probe has now
- *   run on the Y813BT and the answer is stronger than expected: THERE IS
+ *   The codepage probe ran on the Y813BT: THERE IS
  *   NO CODEPAGE TO SWITCH TO, and a raw high byte is DESTRUCTIVE.
  *
  *   A stage-05 probe printed `°`, `³`, `²`, `ä` and `ß` at both their

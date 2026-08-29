@@ -43,11 +43,9 @@ export async function GET(request: NextRequest) {
         .populate("usage.filamentId", "name vendor cost parentId color secondaryColors")
         .lean(),
       // GH #1005 F1: select only spools.usageHistory — the sole spool
-      // subfield this handler reads (the manual-entries loop). The whole
-      // `spools` array carries base64 photoDataUrl (up to 5 MB each) +
-      // dryCycles that were fetched and discarded on every request; the
-      // Mongoose sub-path select keeps `f.spools[].usageHistory` iterable.
-      // Mirrors the #517 dashboard fix.
+      // subfield this handler reads; the whole array carries photo blobs +
+      // dryCycles it never uses. The sub-path select keeps
+      // `f.spools[].usageHistory` iterable.
       Filament.find({ _deletedAt: null })
         .select("name vendor cost parentId color secondaryColors spools.usageHistory")
         .lean(),
@@ -278,18 +276,15 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Emit each day with its per-filament breakdown for the stacked
-    // chart. Two invariants (#934, #936):
-    //   1. `day.grams === Math.round(rawDaySum)` — sub-0.5g entries
-    //      that round to 0 individually still contribute to the day
-    //      total, so the no-data check can't hide them.
+    // Emit each day with its per-filament breakdown. Two invariants (#934,
+    // #936):
+    //   1. `day.grams === Math.round(rawDaySum)` — sub-0.5g entries that
+    //      round to 0 individually still contribute to the day total.
     //   2. `day.grams === Σ byFilament[].grams` — Hamilton's
-    //      largest-remainder method distributes the day total to the
-    //      segments so their sum matches by construction, even in the
-    //      pathological 4×0.49g → day=2g / segments=[1,1,0,0] case.
-    //  Tie-break: largest fractional remainder, then largest raw grams.
-    //  byFilament pre-sorted DESC so the largest contributor renders
-    //  at the bottom of the stack; client doesn't re-sort.
+    //      largest-remainder apportionment makes the segment sum match by
+    //      construction. Tie-break: largest fractional remainder, then
+    //      largest raw grams.
+    // byFilament pre-sorted DESC so the client doesn't re-sort.
     const usageByDay = Array.from(byDayFilament.entries())
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([date, dayBucket]) => {
@@ -319,13 +314,12 @@ export async function GET(request: NextRequest) {
         return { date, grams: dayGrams, byFilament: byFil };
       });
 
-    // Top-N rankings — round-of-sum over the window so a filament that
-    // used 30.4g reads as 30g regardless of daily rounding luck. These
-    // can drift by up to N/2g from Σ across days of that fid's chart
-    // segments in the sub-0.5g/day pathological case (documented
-    // trade-off #936: ranking accuracy vs cross-day segment-sum parity).
-    // byPrinter excludes jobs without a `printerId` by design — "how
-    // much did each printer print" ≠ "how much did all jobs use".
+    // Top-N rankings — round-of-sum over the window. These can drift by up
+    // to N/2g from Σ of that fid's chart segments in the sub-0.5g/day case
+    // (documented trade-off #936: ranking accuracy vs cross-day
+    // segment-sum parity). byPrinter excludes jobs without a `printerId`
+    // by design — "how much did each printer print" ≠ "how much did all
+    // jobs use".
     const byFilamentArr = Array.from(byFilament.entries())
       .map(([id, v]) => ({ _id: id, ...v, grams: Math.round(v.grams) }))
       .sort((a, b) => b.grams - a.grams);
@@ -357,7 +351,6 @@ export async function GET(request: NextRequest) {
   }
 }
 
-// GH #1030 ingestion sanitizer (`safeGrams`) + the usage summer now live in
-// `src/lib/capUsageHistory.ts` (GH #1078) so the dashboard route clamps its
-// `recentPrintHistory[].totalGrams` through the SAME code path. See the
-// docblocks there for the overflow/NaN rationale.
+// The GH #1030 ingestion sanitizer (`safeGrams`) + usage summer live in
+// `src/lib/capUsageHistory.ts` so the dashboard route clamps through the
+// SAME code path (GH #1078).

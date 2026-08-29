@@ -17,9 +17,7 @@
  *   node scripts/audit-gate.mjs                                # repo root
  *   node scripts/audit-gate.mjs --dir packages/mobile --omit-dev
  *
- * The pure helpers are exported for tests (tests/auditGate.test.ts); the CLI
- * entry is guarded behind an import.meta check like
- * scripts/merge-mac-latest-yml.mjs so importing this module runs nothing.
+ * The pure helpers are exported for tests (tests/auditGate.test.ts).
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
@@ -30,7 +28,7 @@ const SEVERITIES = ["moderate", "high", "critical"];
 
 /**
  * The allowlist Map key: the (GHSA id, package) COMPOUND pair. A single GHSA
- * can cover multiple npm packages (Codex P2 on #1023), and the justification/
+ * can cover multiple npm packages (#1023), and the justification/
  * exposure analysis in an allowlist entry applies to one specific package
  * only — so the same GHSA may legitimately need one entry PER package.
  * GH #1082: keying the Map on the id alone made two such entries collide
@@ -45,7 +43,7 @@ export function allowlistKey(id, pkg) {
 }
 
 /**
- * Codex P2 on #1023: enforce the allowlist's stated MUSTs before any entry
+ * #1023: enforce the allowlist's stated MUSTs before any entry
  * can activate an exception — otherwise an entry missing its justification or
  * carrying an invalid reviewBy date silently becomes a PERMANENT exception
  * (an invalid date never compares as past, so the expiry nudge never fires).
@@ -139,7 +137,7 @@ export function classifyAdvisories(vulnerabilities, allowed) {
     // objects of its own and is judged by its children's entries).
     const advisories = (vuln.via ?? []).filter((v) => typeof v === "object" && v !== null);
     for (const adv of advisories) {
-      // Codex P2 on #1023: judge each advisory by ITS OWN severity, not the
+      // #1023: judge each advisory by ITS OWN severity, not the
       // package's aggregate (`vuln.severity` is the max across advisories, and
       // --audit-level does not filter the report) — otherwise a below-threshold
       // advisory on a package that also carries an allowlisted high one would
@@ -147,7 +145,7 @@ export function classifyAdvisories(vulnerabilities, allowed) {
       if (!SEVERITIES.includes(adv.severity)) continue;
       const id = (adv.url ?? "").split("/").pop() ?? "";
       const label = `${name} [${adv.severity}] ${id}: ${adv.title}`;
-      // Codex P2 on #1023: the exception binds to the reviewed PACKAGE too —
+      // The exception binds to the reviewed PACKAGE too —
       // the compound Map key enforces the pair match by construction.
       const entry = allowed.get(allowlistKey(id, name));
       if (entry) tolerated.push({ label, entry });
@@ -221,7 +219,7 @@ function main() {
     process.exit(1);
   }
 
-  // Codex P1 on #1023: fail CLOSED on an audit-service error. When the registry
+  // #1023: fail CLOSED on an audit-service error. When the registry
   // audit endpoint errors (403, outage), npm exits nonzero but still writes a
   // valid JSON *error object* to stdout — no `vulnerabilities` key at all. The
   // old `report.vulnerabilities ?? {}` default read that as "no advisories" and

@@ -464,7 +464,7 @@ describe("/api/printers", () => {
       expect(String(fresh.amsSlots[0].spoolId)).toBe(spoolId);
     });
 
-    // Codex P2 on #646: the same active spool in two slots of one printer
+    // #646: the same active spool in two slots of one printer
     // payload would pass per-slot validation, and clearSpoolsFromOtherPrinters
     // excludes the current printer so it wouldn't self-heal — violating the
     // one-spool-one-slot invariant.
@@ -486,7 +486,7 @@ describe("/api/printers", () => {
       expect(await Printer.countDocuments({ name: "AMS Printer" })).toBe(0);
     });
 
-    // Codex P2 round 2 on #646: ObjectId hex is case-insensitive and
+    // #646: ObjectId hex is case-insensitive and
     // Mongoose casts both casings to the same spool, so the duplicate
     // check must normalize before comparing — a raw-string Set would miss
     // the same id sent lowercase in one slot and uppercase in another.

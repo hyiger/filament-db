@@ -11,22 +11,19 @@ interface FilamentSwatchProps {
    *  null per OpenPrintTag spec key 19 (coextruded / rainbow filaments
    *  have no single primary — colors live in `secondaryColors`). */
   color: string | null | undefined;
-  /** GH #477: additional color hexes mirroring OpenPrintTag spec keys
-   *  20–24. When `arrangement` is `"coextruded"` or `"gradient"` and this
-   *  array has ≥1 entry, the swatch renders the full multi-color
-   *  treatment; otherwise it falls back to single-color rendering of
-   *  the primary. */
+  /** Additional color hexes mirroring OpenPrintTag spec keys 20–24.
+   *  Multi-color treatment renders only when `arrangement` is set and
+   *  this array has ≥1 entry; otherwise single-color rendering of the
+   *  primary. */
   secondaryColors?: string[];
-  /** GH #477: derived from `optTags` via `deriveArrangement()`. Drives
-   *  multi-color rendering mode:
+  /** Derived from `optTags` via `deriveArrangement()`:
    *   - "coextruded": equal-width vertical stripes
    *   - "gradient": linear-gradient left→right
    *   - "solid" (default): primary color only, ignoring `secondaryColors`
-   *  Ignored when `isParent` is true (parents always render hatched).
-   *  Finish overlays (matte/silk/sparkle/glow) compose on top of the
-   *  multi-color base. `transparent`/`translucent` still use the checker
-   *  backdrop and apply alpha to the primary only (multi-color +
-   *  translucent isn't a meaningful real-world combination). */
+   *  Ignored when `isParent` is true. Finish overlays compose on top of
+   *  the multi-color base; `transparent`/`translucent` apply to the
+   *  primary only (multi-color + translucent isn't a meaningful
+   *  real-world combination). */
   arrangement?: ColorArrangement;
   /**
    * True when this filament currently has ≥1 variant pointing at it. A
@@ -37,30 +34,24 @@ interface FilamentSwatchProps {
    */
   isParent?: boolean;
   /**
-   * GH #597: the colors of this parent's variants (and the parent's own
-   * color rides in via `color`). When `isParent` is true and at least one
-   * valid color is known, the swatch renders a composite of the group's
-   * colors instead of the neutral cross-hatch — so a parent shows the
-   * actual colors it groups. Falls back to the cross-hatch when empty /
-   * omitted. Ignored when `isParent` is false.
+   * GH #597: the colors of this parent's variants (the parent's own color
+   * rides in via `color`). When `isParent` is true and at least one valid
+   * color is known, the swatch renders a composite of the group's colors
+   * instead of the neutral cross-hatch. Falls back to the cross-hatch when
+   * empty / omitted. Ignored when `isParent` is false.
    */
   variantColors?: ReadonlyArray<string | null | undefined>;
   /**
-   * Visual finish derived from the filament's optTags. Drives a texture
-   * treatment on top of the color: matte = flat fill, silk = sheen
-   * gradient, sparkle = speckles, glow = inner halo, translucent /
-   * transparent = real alpha over a checker backdrop. Ignored when
-   * `isParent` is true (parents are finish-agnostic). Callers should run
-   * `deriveFinish(filament.optTags)` from `src/lib/filamentFinish.ts` to
-   * compute this; the helper returns `null` for plain solid fills.
+   * Visual finish derived from the filament's optTags (callers run
+   * `deriveFinish()` from `src/lib/filamentFinish.ts`; null = plain
+   * solid fill). Ignored when `isParent` is true (parents are
+   * finish-agnostic).
    */
   finish?: Finish | null;
   /** Pixel size for both width and height. Defaults to 20px (w-5 h-5). */
   size?: number;
-  /** GH #1050: outer shape. "circle" (default) keeps the classic round
-   *  dot; "square" renders a rounded square, which shows noticeably more
-   *  color area at the same footprint — the /inventory rows use it so a
-   *  color can be judged at a glance. */
+  /** Outer shape. "square" shows noticeably more color area at the same
+   *  footprint — the /inventory rows use it. */
   shape?: "circle" | "square";
   /** Optional extra class names (border styling, ring, etc.). */
   className?: string;
@@ -71,14 +62,9 @@ interface FilamentSwatchProps {
 }
 
 /**
- * Renders a filament color swatch. Variants and standalones get a solid
- * fill from `color` (optionally with a finish texture on top); parents
- * (filaments with one or more variants) get a cross-hatched fill — they
- * don't have a single canonical color of their own.
- *
- * Centralised so the cross-hatch + finish renders are consistent across
- * the inventory list, detail page, parent picker, and any dialog that
- * shows a color swatch.
+ * Renders a filament color swatch. Centralised so the parent-composite /
+ * cross-hatch + finish renders are consistent across the inventory list,
+ * detail page, parent picker, and dialogs.
  */
 export default function FilamentSwatch({
   color,
@@ -93,14 +79,12 @@ export default function FilamentSwatch({
   title,
   ariaLabel,
 }: FilamentSwatchProps) {
-  // GH #1050: every render path below shares the same outer rounding, so
-  // the shape resolves once here. `rounded-md` (not `-lg`/`-xl`) keeps the
-  // square clearly square at the 16–32px sizes callers actually use.
+  // `rounded-md` (not `-lg`/`-xl`) keeps the square clearly square at the
+  // 16–32px sizes callers actually use.
   const roundedClass = shape === "square" ? "rounded-md" : "rounded-full";
-  // GH #638: the fallback labels were hardcoded English, so German SR
-  // users heard "Color swatch: …" — translate through the shared catalog
-  // (the context carries an en-based default, so the component still
-  // works when rendered outside the provider).
+  // GH #638: fallback labels go through the shared catalog so SR users
+  // hear them localized (the context carries an en-based default, so the
+  // component still works outside the provider).
   const { t } = useTranslation();
   const dimensionStyle: CSSProperties = {
     width: `${size}px`,
@@ -108,11 +92,10 @@ export default function FilamentSwatch({
   };
 
   // Parents render a composite of the group's actual colors (GH #597):
-  // the parent's own color first, then each variant's. We only do this when
-  // the caller actually supplied the variants' colors — otherwise (e.g. the
-  // FilamentForm parent picker, or the filtered flat-row path, which set
-  // isParent from hasVariants without colors) we keep the neutral cross-hatch
-  // so the "this is a color group" cue isn't lost (Codex P2 #600, round 3).
+  // the parent's own color first, then each variant's. Only when the
+  // caller actually supplied the variants' colors — otherwise (e.g. the
+  // FilamentForm parent picker, which sets isParent without colors) keep
+  // the neutral cross-hatch so the "this is a color group" cue isn't lost.
   if (isParent) {
     // Gate on the variants contributing ≥1 valid color — "group colors
     // known". Without that, the parent's own color alone would render a plain
@@ -179,12 +162,10 @@ export default function FilamentSwatch({
     );
   }
 
-  // GH #477: gather every non-null color for multi-color modes.
-  // `allColors` returns primary first (or skips if null) then each
-  // non-empty secondary. We render multi-color when the user actually
-  // has more than one color to show AND has set an arrangement —
-  // single-color filaments and misconfigured "arrangement without
-  // secondaries" cases both fall through to the single-color path.
+  // Multi-color renders only when there's more than one color to show AND
+  // an arrangement is set — single-color filaments and misconfigured
+  // "arrangement without secondaries" cases both fall through to the
+  // single-color path.
   const colorList = allColors({ color, secondaryColors });
   const isMultiColorMode =
     arrangement !== "solid" && colorList.length >= 2;
@@ -192,9 +173,8 @@ export default function FilamentSwatch({
   const baseColor = color ?? colorList[0] ?? "#808080";
   const rgb = hexToRgb(baseColor);
 
-  // GH #477: a multi-color filament's aria-label and tooltip should
-  // describe the arrangement + every color, not just the (possibly
-  // null) primary. e.g. "Coextruded: #FF0000 / #00FF00 / #0000FF".
+  // A multi-color filament's aria-label and tooltip describe the
+  // arrangement + every color, not just the (possibly null) primary.
   const multiColorDescription = isMultiColorMode
     ? t(
         arrangement === "coextruded"
@@ -216,36 +196,24 @@ export default function FilamentSwatch({
       : title;
 
   // Transparent / translucent: actual color as the base + a diagonal
-  // cross-hatch overlay as the "see-through" cue. The earlier treatment
-  // (real alpha over a light-grey checker) washed dark colors into
-  // mid-grey — a translucent smoky-black PVB rendered as the same
-  // neutral gray as the parent "color group" swatch (user feedback,
-  // 2026-06). The hatch overlay keeps the see-through reading while
-  // letting the underlying color stay recognisable.
+  // cross-hatch overlay as the "see-through" cue. Do NOT revert to real
+  // alpha over a light-grey checker — that washed dark colors into
+  // mid-grey (a translucent smoky-black PVB rendered like the parent
+  // "color group" swatch).
   //
   // Hatch line color is picked from the base color's luminance so the
-  // pattern reads on both dark (white-ish hatch) and light (dark-grey
-  // hatch) fills. Translucent uses a denser/heavier hatch; transparent
-  // uses a sparser/lighter one so the two finishes stay visually
-  // distinct (translucent reads more "milky", transparent more "airy").
+  // pattern reads on both dark and light fills. Translucent uses a
+  // denser/heavier hatch than transparent so the two finishes stay
+  // visually distinct.
   //
-  // Falls back to the prior checker treatment if we couldn't parse the
-  // hex — that path is unreachable in practice (every caller validates)
-  // but keeps belt-and-braces behaviour on bad input.
+  // Falls back to the checker treatment if we couldn't parse the hex —
+  // unreachable in practice (every caller validates) but belt-and-braces.
   if ((finish === "transparent" || finish === "translucent") && rgb) {
     const isDark = relativeLuminance(rgb) < 0.5;
-    // Line colors:
-    //   dark fill → light hatch (whiteish)
-    //   light fill → dark hatch (slate-grey)
-    // Translucent has higher opacity → reads as a denser milky texture.
-    // Transparent is half that opacity + slightly thinner repeat →
-    // reads as a lighter, more see-through texture.
     const hatchOpacity = finish === "translucent" ? 0.55 : 0.3;
     const lineRgba = isDark
       ? `rgba(255, 255, 255, ${hatchOpacity})`
       : `rgba(31, 41, 55, ${hatchOpacity})`;
-    // Translucent: 2px line every 6px, both diagonals (denser cross-hatch).
-    // Transparent: 1px line every 7px, both diagonals (sparser).
     const lineWidth = finish === "translucent" ? 2 : 1;
     const gap = finish === "translucent" ? 6 : 7;
     return (
@@ -257,9 +225,7 @@ export default function FilamentSwatch({
         role="img"
         data-finish={finish}
       >
-        {/* Diagonal cross-hatch overlay — the see-through cue, riding
-            on top of the filament's actual color rather than replacing
-            it with a wash. Mirrors the parent "color group" hatch
+        {/* See-through cue; mirrors the parent "color group" hatch
             geometry so the visual vocabulary is consistent. */}
         <div
           aria-hidden="true"
@@ -276,24 +242,18 @@ export default function FilamentSwatch({
     );
   }
 
-  // GH #477: multi-color modes — base layer is the multi-color treatment
-  // (stripes or gradient), finish overlay composes on top per usual.
+  // Multi-color modes — base layer is stripes or gradient, finish overlay
+  // composes on top per usual.
   if (isMultiColorMode) {
     const baseStyle: CSSProperties =
       arrangement === "gradient"
         ? {
             ...dimensionStyle,
-            // linear-gradient(to right, c0, c1, c2, …): smooth gradient
-            // across the swatch. Matches how a rainbow / color-change
-            // filament unspools — color shifts along the length.
             backgroundImage: `linear-gradient(to right, ${colorList.join(", ")})`,
           }
         : {
             ...dimensionStyle,
-            // Coextruded: equal-width vertical stripes via a single
-            // linear-gradient with hard stops at each color boundary.
-            // For N colors, slot K spans (K/N × 100%) → ((K+1)/N × 100%).
-            // Matches how a coextruded filament's cross-section reads.
+            // Coextruded: equal-width vertical stripes with hard stops.
             backgroundImage: `linear-gradient(to right, ${colorList
               .map((c, i) => {
                 const start = ((i / colorList.length) * 100).toFixed(2);
@@ -369,10 +329,9 @@ function solidFinishOverlay(
   }
 
   if (finish === "sparkle") {
-    // Four tiny dots positioned around the swatch. Speckle color flips
-    // based on the fill's luminance so the effect reads on white silk
-    // and black sparkle alike. mix-blend-mode is intentionally NOT used
-    // here — empirically it disappears on near-grey fills.
+    // Speckle color flips on the fill's luminance so the effect reads on
+    // light and dark fills alike. mix-blend-mode is intentionally NOT
+    // used here — empirically it disappears on near-grey fills.
     const isDark = rgb ? relativeLuminance(rgb) < 0.5 : true;
     const dot = isDark ? "rgba(255,255,255,0.9)" : "rgba(31,41,55,0.55)";
     return {

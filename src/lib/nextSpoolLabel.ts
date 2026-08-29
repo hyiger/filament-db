@@ -29,7 +29,7 @@ export interface NextSpoolLabel {
  * the number 42).
  *
  * Acceptance is judged by VALUE — `Number.isSafeInteger` — not by digit
- * count (PR #1061 review). A digit-count cap made the generator and the
+ * count. A digit-count cap made the generator and the
  * parser disagree at the boundary: with max 999999999999999 the suggestion
  * was the 16-digit 1000000000000000, which the 15-digit guard then REJECTED
  * on the next request — so after creating that spool the same number was

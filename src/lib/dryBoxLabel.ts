@@ -10,12 +10,10 @@
  * keep their proven geometry, while the contents list reflows to fill the
  * sheet instead of being three hardcoded rows.
  *
- * WHY THE MANIFEST CARRIES AN "AS OF" STAMP
- *   A printed contents list is a point-in-time snapshot and spools move. The
- *   app already made this call for Brother spool labels — no remaining-grams
- *   field, because a printed amount goes stale — and the same reasoning
- *   applies here, except that for a dry box the manifest IS the point of the
- *   label. So it prints, dated, and the QR resolves the live view.
+ * WHY THE MANIFEST CARRIES AN "AS OF" STAMP: a printed contents list is a
+ * point-in-time snapshot and spools move (same reasoning as the Brother spool
+ * labels' no-remaining-grams rule), so it prints dated and the QR resolves
+ * the live view.
  */
 
 import {
@@ -73,8 +71,7 @@ export interface FittedQr {
  * Prefers the STRONGEST error correction that still prints at a scannable
  * module size — a dry-box label gets handled, smudged and scanned in a
  * workshop, so ECC earns its space — and steps down only when geometry
- * forces it. That is the trade-off the handoff spec calls for ("beyond ~60
- * characters, drop to ECC M and document the tradeoff").
+ * forces it.
  */
 export function fitQr(payload: string, maxDots: number): FittedQr {
   for (const ecc of ["H", "Q", "M", "L"] as const) {
@@ -138,9 +135,8 @@ export function fitRowText(text: string, maxChars: number): string {
 const CODE128_FIXED_MODULES = 35;
 /** Each encoded character is 11 modules wide. */
 const CODE128_MODULES_PER_CHAR = 11;
-/** Clear modules required on EACH side of a Code 128 symbol. The QR fix one
- *  commit ago reserved the 2D quiet zone and left this one unreserved — same
- *  defect, sibling symbology. */
+/** Clear modules required on EACH side of a Code 128 symbol — must be
+ *  reserved like the QR quiet zone (same defect class, sibling symbology). */
 const CODE128_QUIET_ZONE_MODULES = 10;
 
 /**

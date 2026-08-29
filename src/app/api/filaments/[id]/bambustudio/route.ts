@@ -23,27 +23,18 @@ import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
- * GET /api/filaments/{id}/bambustudio
+ * GET /api/filaments/{id}/bambustudio — download one filament as a Bambu
+ * Studio filament-preset (`.json`).
  *
- * Download a single filament as a Bambu Studio filament-preset (`.json`).
+ * OrcaSlicer and Bambu Studio share the filament-preset JSON schema, so
+ * this reuses the OrcaSlicer profile generator with one Bambu-specific
+ * tweak: `from` → "User" (Bambu Studio classifies presets by `from`, and
+ * the Orca generator's "filament_db" marker isn't recognised as a user
+ * preset).
  *
- * OrcaSlicer is a fork of Bambu Studio and the two share the filament-
- * preset JSON schema (same keys, same single-element-array value
- * convention). So this route reuses the OrcaSlicer profile generator and
- * applies the one meaningful Bambu-specific tweak:
- *
- *   `from` → "User"
- *
- * Bambu Studio classifies presets by their `from` field — "User" marks a
- * user-created preset (which is what an exported filament is). The
- * OrcaSlicer generator stamps a custom "filament_db" marker there, which
- * Bambu Studio doesn't recognise as a user preset.
- *
- * No `inherits` is set: that would have to name a base system preset
- * present in *this user's* Bambu Studio install, which the server can't
- * know. The exported preset is therefore standalone — it imports fine
- * via Bambu Studio's custom-filament import, the user just won't get
- * system-preset inheritance.
+ * No `inherits` is set: it would have to name a base system preset present
+ * in *this user's* install, which the server can't know — the exported
+ * preset is standalone.
  */
 export async function GET(
   _request: NextRequest,
@@ -58,11 +49,10 @@ export async function GET(
       return errorResponse("Filament not found", 404);
     }
 
-    // bakeCalibration: stock Bambu Studio has no dynamic calibration module, so
-    // bake the representative calibration into this single preset (GH #950.4 / #969 r5).
+    // bakeCalibration: stock Bambu Studio has no dynamic calibration module,
+    // so bake the representative calibration into this single preset
+    // (GH #950.4).
     const profile = generateOrcaSlicerProfiles([filament], { bakeCalibration: true })[0];
-    // Bambu-specific: mark as a user preset so Bambu Studio files it
-    // under the user's custom filaments on import.
     profile.from = "User";
 
     const stem = exportFilenameStem(filament.name);
@@ -79,25 +69,14 @@ export async function GET(
 }
 
 /**
- * POST /api/filaments/{id}/bambustudio
+ * POST /api/filaments/{id}/bambustudio — sync a Bambu Studio
+ * filament-preset (`.json`) INTO this specific filament. The bulk
+ * companion (`POST /api/filaments/bambustudio`) upserts by name; this
+ * variant pins the target by id, so a renamed preset still updates the
+ * right record — the parsed `name` is intentionally ignored.
  *
- * Sync a Bambu Studio filament-preset (`.json`) INTO this specific
- * filament — the bulk companion is `POST /api/filaments/bambustudio`,
- * which upserts by name; this variant pins the target by id so a UI
- * "Sync from Bambu Studio" button on the filament detail page can
- * update the filament the user is already looking at, even if the
- * Bambu file's `filament_settings_id` doesn't match (renamed in the
- * slicer, lost the link to the app's record, etc.).
- *
- * Body: multipart/form-data with a `file` field, OR application/json
- * with the Bambu profile directly. The handler:
- *   1. Parses the profile (shared parser with the bulk route).
- *   2. Applies structured fields, settings-bag passthrough, and
- *      calibration hints to the EXISTING filament identified by id.
- *      The parsed `name` field is intentionally ignored — pinning is
- *      by id, not by name.
- *   3. Returns the same response shape as the bulk route so the UI
- *      can render either outcome uniformly.
+ * Body: multipart/form-data with a `file` field, OR application/json with
+ * the profile directly. Returns the same response shape as the bulk route.
  */
 export async function POST(
   request: NextRequest,
@@ -122,9 +101,8 @@ export async function POST(
     if (!(file instanceof File)) {
       return errorResponse("multipart upload must include a 'file' field", 400);
     }
-    // Codex P2 on PR #387 round 2: cap upload size before `file.text()`
-    // materialises the body in memory. Same 10 MB cap as the bulk route
-    // and the existing /api/filaments/import* family.
+    // Cap upload size before `file.text()` materialises the body in memory
+    // (same 10 MB cap as the bulk route).
     const sizeErr = checkFileSize(file);
     if (sizeErr) return sizeErr;
     const text = await file.text();
@@ -168,9 +146,8 @@ export async function POST(
     }
 
     // GH #403: when `existing` is a variant, load its parent so
-    // `buildStructuredUpdate` can detect inheritable scalars whose
-    // parsed value already matches the parent and skip writing them
-    // (preserves inheritance). Lookup is a no-op for root filaments.
+    // `buildStructuredUpdate` can skip writing inheritable scalars whose
+    // parsed value already matches the parent (preserves inheritance).
     let parent: Record<string, unknown> | null = null;
     if (existing.parentId) {
       parent = (await Filament.findOne({
@@ -180,10 +157,9 @@ export async function POST(
     }
 
     const existingWithParent = {
-      // Codex P1 on PR #473 round 2: inheritable scalars MUST ride
-      // along so `buildStructuredUpdate` can detect a stale variant
-      // override and emit $unset. Pre-fix these were stripped, leaving
-      // the unset branch unreachable in this route.
+      // Inheritable scalars MUST ride along so `buildStructuredUpdate` can
+      // detect a stale variant override and emit $unset — stripping them
+      // makes the unset branch unreachable.
       type: existing.type ?? null,
       vendor: existing.vendor ?? null,
       // GH #883: color + secondaryColors let resolveSyncBackColor detect the
@@ -207,16 +183,15 @@ export async function POST(
       parent,
     };
 
-    // GH #893: use the shared prepareBambuUpdate (structured projection +
-    // settings merge + calibration resolve) instead of re-inlining the pipeline,
-    // so this route can't drift from the bulk route / helper.
+    // GH #893: the shared prepareBambuUpdate keeps this route from drifting
+    // from the bulk route / helper.
     const { update, unsetKeys, settingsResult, calibrationOutcome, nozzleRangeInverted } =
       await prepareBambuUpdate(parsed, existingWithParent);
     if (settingsResult.error) {
       return errorResponse(settingsResult.error, 400);
     }
-    // GH #892: reject an inverted nozzle range (min > max) the way the
-    // OrcaSlicer sync route does — the per-field 0–600 validators can't.
+    // GH #892: reject an inverted nozzle range (min > max) like the
+    // OrcaSlicer sync route — the per-field validators can't.
     if (nozzleRangeInverted) {
       return errorResponse(
         "Nozzle range minimum temperature must be less than or equal to the maximum",
@@ -224,36 +199,28 @@ export async function POST(
       );
     }
 
-    // Never touch spool subdocs on a sync — that's strictly inventory
-    // state and not in the Bambu file.
+    // Never touch spool subdocs on a sync — strictly inventory state, not
+    // in the Bambu file.
     delete (update as Record<string, unknown>).spools;
 
-    // Codex P1 on PR #473: when the import value equals the parent's
-    // value AND the variant carries a diverging local override, unset
-    // that field so the variant returns to inheriting. `$unset` payload
-    // value is conventionally the empty string in Mongo.
+    // When the import value equals the parent's AND the variant carries a
+    // diverging local override, unset that field so the variant returns to
+    // inheriting.
     const mongoUpdate: Record<string, unknown> = { $set: update };
     if (unsetKeys.length > 0) {
       mongoUpdate.$unset = Object.fromEntries(unsetKeys.map((k) => [k, ""]));
     }
 
-    // Codex P2 on PR #387: `runValidators` so the new numeric range
-    // validators (#337) actually fire on a Bambu sync.
+    // `runValidators` so the numeric range validators fire on a Bambu sync.
+    // `_deletedAt: null` in the filter so a concurrent soft-delete between
+    // the findOne and this write can't quietly mutate a tombstoned row —
+    // matchedCount 0 → 404.
     //
-    // Codex P2 on PR #387 round 6: also include `_deletedAt: null` in
-    // the filter so a concurrent soft-delete between the findOne above
-    // and this write doesn't quietly mutate a tombstoned row and
-    // return updated:true. Check matchedCount and 404 if the row was
-    // removed in the race.
-    //
-    // GH #605 (codex P2, slicer-sync sweep): a TEMPLATE (≥1 live variant)
-    // must not re-acquire per-variant color/inventory, but the Bambu
-    // preset carries `filament_colour` — syncing it into a template would
-    // re-materialize `color` (the form-echo failure mode the PUT strips).
-    // Apply the SAME strip (shared helper; non-null only, explicit nulls
-    // pass), decided + written inside the per-id mutex the promotion paths
-    // lock (PUT review P1-c). `update` IS mongoUpdate.$set, so the in-place
-    // strip reaches the write.
+    // GH #605: a TEMPLATE must not re-acquire per-variant color/inventory,
+    // but the Bambu preset carries `filament_colour`. Apply the SAME strip
+    // as the PUT (shared helper; non-null only, explicit nulls pass),
+    // decided + written inside the per-id mutex the promotion paths lock.
+    // `update` IS mongoUpdate.$set, so the in-place strip reaches the write.
     let strippedTemplateFields: string[] = [];
     let updateRes: { matchedCount: number };
     try {
@@ -291,8 +258,8 @@ export async function POST(
       calibrationUnresolved: calibrationOutcome.unresolved || undefined,
       calibrationContext: calibrationOutcome.context || undefined,
       settingsAdded: settingsResult.added,
-      // GH #605: per-variant fields the template guard refused to apply —
-      // same reporting key the PUT uses, so clients can surface one warning.
+      // Per-variant fields the template guard refused to apply — same
+      // reporting key the PUT uses.
       ...(strippedTemplateFields.length > 0
         ? { _strippedTemplateFields: strippedTemplateFields }
         : {}),

@@ -7,32 +7,24 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * GET /api/spools/usage-search — cross-spool usage-ledger search (GH #1168).
- *
- * Manual usage entries (`source: "manual"`, `jobId: null`) exist ONLY inside
- * `Filament.spools[].usageHistory[]` — no other endpoint unwinds that array
- * across spools, so a jobLabel written on a manual entry had no surface where
- * it could ever be recalled. This aggregation unwinds every spool's ledger
- * into flat rows for the /history page's "Spool usage ledger" tab.
+ * Manual usage entries exist ONLY inside `Filament.spools[].usageHistory[]`;
+ * this aggregation unwinds every spool's ledger into flat rows.
  *
  * Query params:
- *   - label:  case-insensitive substring of the entry's jobLabel
- *             (escapeRegex + the GH #513 128-char cap — same posture as
- *             /api/filaments/match, the other regex-compiling GET).
- *   - source: manual | slicer | job | nfc — the tab defaults to "manual",
- *             the entries that exist nowhere else; job/slicer entries are
- *             projections of PrintHistory rows (docs/api.md's jobs-vs-manual
- *             separation), so a merged default would double-show every job.
+ *   - label:  case-insensitive jobLabel substring (escapeRegex + the
+ *             GH #513 128-char cap, same posture as /api/filaments/match).
+ *   - source: manual | slicer | job | nfc. job/slicer entries are
+ *             projections of PrintHistory rows, so a merged default would
+ *             double-show every job.
  *   - limit:  1..1000, default 100.
  *
- * Projection is strict per the GH #1005 posture — spools carry multi-MB
- * photoDataUrl blobs that must never ride a query that doesn't render them.
- * Read-only GET ⇒ no assertSameOriginRequest (the guard covers mutating
- * verbs, GH #360); the optional FILAMENTDB_API_KEY gate applies via proxy.
+ * Projection is strict per the GH #1005 posture (photo blobs must never
+ * ride a query that doesn't render them). Read-only GET ⇒ no
+ * assertSameOriginRequest (the guard covers mutating verbs, GH #360).
  *
- * Completeness caveat surfaced to the UI: per-spool ledgers are capped at
- * MAX_SPOOL_HISTORY (1000) entries with manual/nfc entries evicted FIRST
- * (src/lib/capUsageHistory.ts), so very old entries may be absent — the
- * page footnotes this rather than pretending the ledger is total.
+ * Completeness caveat: per-spool ledgers are capped at MAX_SPOOL_HISTORY
+ * with manual/nfc entries evicted FIRST, so very old entries may be absent
+ * — the page footnotes this.
  */
 
 const VALID_SOURCES = new Set(["manual", "slicer", "job", "nfc"]);
@@ -115,10 +107,10 @@ export async function GET(request: NextRequest) {
       },
     ]);
 
-    // Sanitize at the boundary (the GH #1030/#1078 posture): a snapshot-
-    // restored or raw-driver-synced ledger can hold Infinity (which JSON
-    // serializes to null, breaking the documented numeric shape), negative,
-    // or oversized values — clamp through safeGrams like Analytics does.
+    // Sanitize at the boundary (GH #1030/#1078 posture): a
+    // snapshot-restored or raw-driver-synced ledger can hold Infinity
+    // (JSON-serialized as null), negative, or oversized values — clamp
+    // through safeGrams like Analytics does.
     const entries = rows.map((row) => ({ ...row, grams: safeGrams(row.grams) }));
     return NextResponse.json({ entries, limit });
   } catch (err) {

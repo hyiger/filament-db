@@ -230,8 +230,8 @@ export function decodeOpenTag3D(payload: Uint8Array): Ot3dDecoded {
   // The fixed Core map (0x00–0x6F) is ALWAYS present on a real OpenTag3D tag, so
   // a payload shorter than that is truncated/corrupt — reject it rather than
   // returning a "successful" decode with required identity fields (material,
-  // manufacturer, colors) silently skipped because they fall past payload.length
-  // (Codex P2 on PR #865).
+  // manufacturer, colors) silently skipped because they fall past
+  // payload.length.
   if (payload.length < OPENTAG3D_CORE_SIZE) {
     throw new Error(
       `OpenTag3D payload too short: ${payload.length} bytes, need at least the ${OPENTAG3D_CORE_SIZE}-byte Core map`,

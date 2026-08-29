@@ -52,7 +52,7 @@ Wenn die Filament-ID in der URL nicht existiert, zeigt die Seite „Filament nic
 
 ## Im INI-Export fehlen einige Filamente
 
-Jedes Filament wird unabhängig von seinen Kalibrierungen als einzelner `[filament:Name]`-Abschnitt exportiert. Kalibrierungswerte (EM, Pressure Advance, max. Volumetric Speed, Retraction) werden **nicht** in die INI eingebrannt — sie werden zur Druckzeit dynamisch über den Endpunkt `/api/filaments/{id}/calibration` angewandt (verwendet von PrusaSlicer Filament Edition). Wenn ein Filament im Export fehlt, prüfe, ob es einen Namen hat und nicht soft-gelöscht ist.
+Ein Filament mit null oder einer Düsen-Kalibrierung wird als einzelner `[filament:Name]`-Abschnitt exportiert; seine Kalibrierungswerte (EM, Pressure Advance, max. Volumetric Speed, Retraction) werden nicht in die INI eingebrannt — sie werden zur Druckzeit dynamisch über den Endpunkt `/api/filaments/{id}/calibration` angewandt (verwendet von PrusaSlicer Filament Edition). Ein für **zwei oder mehr unterschiedliche Düsen** kalibriertes Filament exportiert stattdessen einen Abschnitt pro Düse, mit der Düse im Namenssuffix (z. B. `[filament:PLA 0.4 Brass]`) und den filament-bezogenen Kalibrierungswerten dieser Düse eingebrannt (Pressure Advance bleibt dynamisch über die Kalibrierungs-API) — „zusätzliche" suffigierte Abschnitte im Bundle sind also erwartet, keine Duplikate. Wenn ein Filament ganz im Export fehlt, prüfe, ob es einen Namen hat und nicht soft-gelöscht ist.
 
 ## „Blocked cross-origin request" im Dev-Modus
 

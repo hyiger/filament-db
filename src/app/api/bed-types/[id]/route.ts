@@ -98,23 +98,18 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
-    // Load the target up front: we need its name to match against the
-    // free-text `bedTypeTemps[].bedType` keys below, and a clean 404 when
-    // it's already gone.
+    // Load the target up front — its name is needed to match the free-text
+    // `bedTypeTemps[].bedType` keys below.
     const bedType = await BedType.findOne({ _id: id, _deletedAt: null }).lean();
     if (!bedType) {
       return errorResponse("Not found", 404);
     }
 
-    // Prevent deleting a bed type that is referenced by any filament
-    // calibration.
-    //
-    // GH #629: trashed filaments count too — a filament in the trash can be
-    // restored, which would resurrect a dangling calibration bedType ref if
-    // the bed type were deleted in the meantime. Only `_purged` tombstones
-    // are gone forever and don't block.
-    // Predicate shared with GH #1149's dependents counter — see
-    // src/lib/entityDependents.ts; the two must not drift.
+    // Prevent deleting a bed type referenced by any filament calibration.
+    // GH #629: trashed filaments count too (a restore would resurrect a
+    // dangling ref); only `_purged` tombstones don't block. Predicate
+    // shared with the dependents counter (src/lib/entityDependents.ts) —
+    // the two must not drift.
     const referencingCount = await Filament.countDocuments(bedTypeCalibrationRefFilter(id));
     if (referencingCount > 0) {
       return errorResponse(
@@ -123,16 +118,12 @@ export async function DELETE(
       );
     }
 
-    // Prevent deleting a bed type that is installed on any printer.
-    // `installedBedTypes` was added when bed types became printer-
-    // attachable — without this guard the bed type could be soft-deleted
-    // while printers still hold its ObjectId, leaving dangling refs that
-    // the populate(..., match: { _deletedAt: null }) silently drops.
-    // Mirrors the printer-reference guard in the nozzle DELETE handler.
-    // Keeps the `_deletedAt: null` term (unlike the filament guards):
-    // printers have no trash/restore loop, so a soft-deleted printer's
-    // refs can never resurrect — and counting them would block the delete
-    // with no way for the user to clear the reference.
+    // Prevent deleting a bed type installed on any printer (dangling refs
+    // are silently dropped by populate's `_deletedAt: null` match). Keeps
+    // the `_deletedAt: null` term (unlike the filament guards): printers
+    // have no trash/restore loop, so a soft-deleted printer's refs can
+    // never resurrect — counting them would block the delete with no way
+    // for the user to clear the reference.
     const printerCount = await Printer.countDocuments(bedTypePrinterRefFilter(id));
     if (printerCount > 0) {
       return errorResponse(
@@ -142,15 +133,11 @@ export async function DELETE(
     }
 
     // GH #557: filaments also name a bed surface by NAME via the free-text
-    // `bedTypeTemps[].bedType` key — a slicer surface string that is
-    // deliberately NOT a BedType ObjectId ref (see the docblock in
-    // src/models/Filament.ts). Without this guard, deleting a catalog bed
-    // type whose name a filament's per-surface temperature table still uses
-    // silently removes a selectable surface that existing filament data
-    // depends on, leaving the user unable to re-pick it. Match by name to
-    // mirror the calibration/printer guards above and the nozzle/location
-    // delete guards elsewhere. GH #629: trashed filaments count here too
-    // (restore would resurrect the dependency); `_purged` tombstones don't.
+    // `bedTypeTemps[].bedType` key — deliberately NOT a BedType ObjectId
+    // ref (see src/models/Filament.ts). Deleting a catalog bed type whose
+    // name a per-surface temperature table still uses would silently remove
+    // a selectable surface existing data depends on. GH #629: trashed
+    // filaments count here too; `_purged` tombstones don't.
     const bedTempCount = await Filament.countDocuments(bedTypeTempRefFilter(bedType.name));
     if (bedTempCount > 0) {
       return errorResponse(

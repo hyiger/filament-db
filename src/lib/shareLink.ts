@@ -13,9 +13,8 @@ import { isLoopbackUrl } from "@/lib/loopbackHost";
  * We deliberately do NOT rewrite the link to the host's LAN IP: the
  * `/share/<slug>` page's "Import" action issues same-origin writes, so a
  * recipient opening a publisher-hosted LAN link would write into the
- * publisher's database rather than their own (Codex P2 on PR #784). Surfacing
- * the situation — not auto-generating a write-capable cross-instance link — is
- * the safe behaviour.
+ * publisher's database rather than their own. Surfacing the situation — not
+ * auto-generating a write-capable cross-instance link — is the safe behaviour.
  *
  * A real (non-loopback) origin — e.g. a web/Docker deployment the user browsed
  * to via a LAN or public address — returns false and is never warned. An empty

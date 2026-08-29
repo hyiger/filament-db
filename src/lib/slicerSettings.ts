@@ -41,35 +41,8 @@ export interface SettingsMergeResult {
 }
 
 /**
- * Keys that must NEVER persist in the settings bag, regardless of the caller's
- * `structuredKeys`: `filament_settings_id` is re-derived from the filament's
- * CURRENT name on export, and `filamentdb_id`/`filamentdb_nozzle` are pure routing
- * hints. A STALE copy of any of these in `existing` shadows the re-derived value
- * on the next export (the 950.5 leak), so they are purged from the seeded bag.
- *
- * This is DELIBERATELY narrower than `structuredKeys`. GH #950 Codex r8: the Prusa
- * per-id calibration sync adds context-only keys (`extrusion_multiplier`,
- * retraction, fan speeds) to its `structuredKeys` — but those have NO top-level
- * filament home and can legitimately live in the bag as shared filament-wide
- * defaults, so purging the whole `structuredKeys` set erased them on every
- * per-nozzle sync. Purge ONLY the truly never-baggable keys here; the other
- * structured keys either have a top-level field that overrides any stale bag
- * shadow on export (harmless) or are legit shared defaults (must survive).
- */
-/**
- * GH #678 round 4 — the ONE array-aware boolean derivation for "1"/"0"
- * flag settings (filament_abrasive / filament_soluble / filament_wipe /
- * activate_air_filtration). A multi-element value is an Orca per-extruder
- * array; deriving from the FIRST element reproduces the pre-#678 read
- * behaviour byte-for-byte (the old unwrap() collapse read element 0), so
- * preserving the array cannot flip any flag that used to read as on.
- * Every reader — form seeds, the form's unedited-restore mirror, the
- * detail page, the OpenPrintTag tag writers — must go through this, or a
- * "1;1" array reads as off in one place and on in another.
- */
-/**
- * GH #678 round 7 — value equality for settings-bag entries, in ONE place.
- * Bag values may be ARRAYS now, and `!==` never equates two arrays, so an
+ * GH #678 — value equality for settings-bag entries, in ONE place.
+ * Bag values may be ARRAYS, and `!==` never equates two arrays, so an
  * identity compare silently classifies a parent-equal multi-value key as
  * divergent — pinning it as a variant override and severing GH #106 live
  * inheritance. Three sites made this exact mistake independently
@@ -82,15 +55,42 @@ export function settingValuesEqual(a: unknown, b: unknown): boolean {
     : a === b;
 }
 
+/**
+ * GH #678 — the ONE array-aware boolean derivation for "1"/"0"
+ * flag settings (filament_abrasive / filament_soluble / filament_wipe /
+ * activate_air_filtration). A multi-element value is an Orca per-extruder
+ * array; deriving from the FIRST element reproduces the pre-#678 read
+ * behaviour byte-for-byte (the old unwrap() collapse read element 0), so
+ * preserving the array cannot flip any flag that used to read as on.
+ * Every reader — form seeds, the form's unedited-restore mirror, the
+ * detail page, the OpenPrintTag tag writers — must go through this, or a
+ * "1;1" array reads as off in one place and on in another.
+ */
 export function settingFlagIsOn(value: unknown): boolean {
   const scalar = Array.isArray(value) ? value[0] : value;
-  // Round 15: String-coerce for parity with pre-#678's unwrap(), which did
+  // String-coerce for parity with pre-#678's unwrap(), which did
   // String(value[0]) — the Mixed bag can hold a numeric 1 from the generic
   // API, and a bare === "1" would read it as OFF where the old collapse
   // read it as ON.
   return scalar == null ? false : String(scalar) === "1";
 }
 
+/**
+ * Keys that must NEVER persist in the settings bag, regardless of the caller's
+ * `structuredKeys`: `filament_settings_id` is re-derived from the filament's
+ * CURRENT name on export, and `filamentdb_id`/`filamentdb_nozzle` are pure routing
+ * hints. A STALE copy of any of these in `existing` shadows the re-derived value
+ * on the next export (the 950.5 leak), so they are purged from the seeded bag.
+ *
+ * This is DELIBERATELY narrower than `structuredKeys` (GH #950): the Prusa
+ * per-id calibration sync adds context-only keys (`extrusion_multiplier`,
+ * retraction, fan speeds) to its `structuredKeys` — but those have NO top-level
+ * filament home and can legitimately live in the bag as shared filament-wide
+ * defaults, so purging the whole `structuredKeys` set erased them on every
+ * per-nozzle sync. Purge ONLY the truly never-baggable keys here; the other
+ * structured keys either have a top-level field that overrides any stale bag
+ * shadow on export (harmless) or are legit shared defaults (must survive).
+ */
 export const NEVER_BAGGED_KEYS = new Set([
   "filament_settings_id",
   "filamentdb_id",
@@ -109,14 +109,12 @@ export function mergeSlicerSettings(
   structuredKeys: Set<string>,
 ): SettingsMergeResult {
   const settings: Record<string, unknown> = { ...existing };
-  // GH #950 (sweep + Codex r8): purge only the truly never-baggable keys
-  // ({@link NEVER_BAGGED_KEYS}) from the seeded `existing` bag — a stale copy of
-  // those shadows the re-derived export value. Report them in `removed` so a
-  // caller that only conditionally writes update.settings (the OrcaSlicer per-id
-  // sync gates on `added`) still persists the purge. Crucially this does NOT strip
-  // the whole `structuredKeys` set: per-id calibration syncs list context keys
-  // (extrusion_multiplier / retraction / fans) there which can be legit shared
-  // bag defaults and must survive.
+  // GH #950: purge only the truly never-baggable keys ({@link NEVER_BAGGED_KEYS}
+  // — see its docblock for why NOT the whole `structuredKeys` set) from the
+  // seeded `existing` bag — a stale copy of those shadows the re-derived export
+  // value. Report them in `removed` so a caller that only conditionally writes
+  // update.settings (the OrcaSlicer per-id sync gates on `added`) still
+  // persists the purge.
   const removed: string[] = [];
   for (const key of NEVER_BAGGED_KEYS) {
     if (key in settings) {
@@ -127,26 +125,23 @@ export function mergeSlicerSettings(
   const added: string[] = [];
 
   for (const [key, value] of Object.entries(incoming)) {
-    // Skip caller-structured keys AND the never-baggable keys (GH #950 Codex r9):
+    // Skip caller-structured keys AND the never-baggable keys (GH #950):
     // purging them only from `existing` is not enough — a caller whose
     // structuredKeys omits e.g. `filament_settings_id` (the OrcaSlicer per-id sync)
     // would otherwise re-add an incoming copy to the bag, re-shadowing the
     // re-derived export value. Keeping them out of BOTH sources makes the
     // never-baggable guarantee hold regardless of the caller's structured set.
     if (structuredKeys.has(key) || NEVER_BAGGED_KEYS.has(key)) continue;
-    // GH #1070 / Codex P2 round 6 on PR #1086: the settings bag is
-    // WIRE-CANONICAL (src/lib/parseIni.ts codec docblock). A raw multi-line
-    // string can only arrive from a JSON-sourced sync — the Orca per-id
-    // route round-trips decodeMultilineWireValue's real newlines straight
-    // back; INI-sourced bodies are line-based and can't carry one, and the
-    // Bambu parser already wraps at its own ingestion (a wrapped value
-    // holds escapes, not raw terminators, so this never double-wraps).
-    // Wrapping HERE makes the invariant hold at every merge boundary — and
-    // restores splitInheritedImportSet's strict per-key equality against a
-    // parent's stored wire value, so an unchanged Orca sync of an inherited
+    // GH #1070: the settings bag is
+    // WIRE-CANONICAL (src/lib/parseIni.ts codec docblock), so a raw
+    // multi-line string (only a JSON-sourced sync can carry one) is wrapped
+    // HERE, making the invariant hold at every merge boundary — and keeping
+    // splitInheritedImportSet's strict per-key equality against a parent's
+    // stored wire value, so an unchanged Orca sync of an inherited
     // multi-line setting keeps inheriting instead of pinning a variant
-    // override that severs GH #106 live inheritance.
-    // GH #678 round 2: ARRAYS pass through untouched — elements stay RAW.
+    // override that severs GH #106 live inheritance. Idempotent: a wrapped
+    // value holds escapes, not raw terminators, so this never double-wraps.
+    // GH #678: ARRAYS pass through untouched — elements stay RAW.
     // They never ride the scalar INI path (serializeIniValueList escapes at
     // the PrusaSlicer emit; Orca emits arrays natively), and wrapping
     // elements here double-encoded them. Scalar rule below unchanged.
@@ -178,22 +173,7 @@ export function mergeSlicerSettings(
 }
 
 /**
- * GH #1072 (item 2): validate a client-supplied whole `settings` bag against
- * the GH #266 caps. `mergeSlicerSettings` enforces them on the slicer sync
- * routes, but the generic `POST /api/filaments` and `PUT /api/filaments/{id}`
- * forward `body.settings` (a `Schema.Types.Mixed` field — `runValidators` is
- * a no-op for it) straight into create/findOneAndUpdate, so an unbounded bag
- * persisted and then rode every subsequent read of the filament (list
- * aggregation, detail page, all three slicer exports, snapshot, hybrid-sync
- * copies) — exactly the degradation GH #266 closed on the sync family only.
- *
- * Returns an error string for the route to 400 with, or `null` when valid.
- * `null`/`undefined` pass (nothing to validate; `settings: null` clears the
- * bag). Non-object shapes are rejected — Mixed would happily persist a
- * string/array bag that every reader expects to be a plain object.
- */
-/**
- * GH #1070 / Codex P2 round 7 on PR #1086: the generic filament POST/PUT
+ * GH #1070: the generic filament POST/PUT
  * accept a whole `settings` bag (and dotted `settings.<key>` update paths)
  * and persist them verbatim — they don't pass through mergeSlicerSettings,
  * so they were the one remaining writer that could land a NEW raw
@@ -212,8 +192,8 @@ export function mergeSlicerSettings(
  * apply to the WRAPPED value (same posture as mergeSlicerSettings).
  * Idempotent: a wrapped value holds escapes, not raw terminators.
  *
- * Legacy-vs-fresh is decided by STORED-BYTE EQUALITY, not by key alone
- * (Codex P1 round 10 + P2 round 11): the form's wireOrEdited is the only
+ * Legacy-vs-fresh is decided by STORED-BYTE EQUALITY, not by key alone:
+ * the form's wireOrEdited is the only
  * writer that deliberately echoes a pre-#1070 raw wrap byte-identically,
  * and it only ever echoes the CURRENTLY-STORED value — so an incoming
  * value strictly equal to `storedSettings[key]` is provably an echo and
@@ -270,6 +250,21 @@ export function bodyHasRawMultilineSettings(body: Record<string, unknown>): bool
   return false;
 }
 
+/**
+ * GH #1072: validate a client-supplied whole `settings` bag against
+ * the GH #266 caps. `mergeSlicerSettings` enforces them on the slicer sync
+ * routes, but the generic `POST /api/filaments` and `PUT /api/filaments/{id}`
+ * forward `body.settings` (a `Schema.Types.Mixed` field — `runValidators` is
+ * a no-op for it) straight into create/findOneAndUpdate, so an unbounded bag
+ * persisted and then rode every subsequent read of the filament (list
+ * aggregation, detail page, all three slicer exports, snapshot, hybrid-sync
+ * copies) — exactly the degradation GH #266 closed on the sync family only.
+ *
+ * Returns an error string for the route to 400 with, or `null` when valid.
+ * `null`/`undefined` pass (nothing to validate; `settings: null` clears the
+ * bag). Non-object shapes are rejected — Mixed would happily persist a
+ * string/array bag that every reader expects to be a plain object.
+ */
 export function validateSettingsBag(settings: unknown): string | null {
   if (settings === undefined || settings === null) return null;
   if (typeof settings !== "object" || Array.isArray(settings)) {
@@ -298,8 +293,8 @@ export function validateSettingsBag(settings: unknown): string | null {
  * grow it past MAX_SETTINGS_KEYS incrementally). Pass `[]` for a create
  * (no stored bag yet).
  *
- * NESTED dotted paths (`settings.<key>.<sub>`) are rejected outright (Codex
- * P1 on PR #1089): the bag is FLAT by contract (slicer key → scalar value —
+ * NESTED dotted paths (`settings.<key>.<sub>`) are rejected outright:
+ * the bag is FLAT by contract (slicer key → scalar value —
  * every writer, reader, exporter and the detail-page settings table assume
  * it), and Mongoose MERGES a nested path into the stored value. Counting
  * `settings.bucket.k1`, `settings.bucket.k2`, … as one `bucket` key while

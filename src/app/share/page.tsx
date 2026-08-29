@@ -72,9 +72,9 @@ export default function ShareManagementPage() {
 
   // GH #780/#784: warn when the link is loopback-only. We do NOT rewrite the
   // link to the host's LAN IP — the /share/<slug> Import action writes to the
-  // serving origin, so a publisher-hosted LAN link would let a recipient write
-  // into the publisher's DB (Codex P2 on PR #784). The link stays the local
-  // origin; the warning points the user to the Share-on-LAN toggle.
+  // serving origin, so a publisher-hosted LAN link would let a recipient
+  // write into the publisher's DB. The link stays the local origin; the
+  // warning points the user to the Share-on-LAN toggle.
   const linkLocalOnly = isShareLinkLocalOnly(origin);
 
   // GH #640: never throws — a failed refresh keeps the existing list in

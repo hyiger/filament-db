@@ -40,14 +40,11 @@ import { useSearchParams } from "next/navigation";
  * wrote, and CONSUMES that record when it matches. This component reports
  * every post-mount change and makes no judgement about who caused it.
  *
- * An earlier version took an `ownWrite` prop and advanced its own "last seen"
- * value to it, to compensate for a raw `history.replaceState` that the router
- * never observed. That is now unnecessary — the page writes through
- * `router.replace`, so `useSearchParams` sees it — and it was actively
- * harmful: advancing `seen` ahead of the router update meant the page's own
- * write never came back through here, so the marker was never consumed and
- * went stale, which is exactly the Back-restores-nothing bug it was meant to
- * prevent.
+ * Do NOT add an `ownWrite` prop that advances this component's "last seen"
+ * value: advancing `seen` ahead of the router update means the page's own
+ * write never comes back through here, so the page's marker is never
+ * consumed and goes stale — the Back-restores-nothing bug. (The page
+ * writes through `router.replace`, so `useSearchParams` sees its writes.)
  */
 export default function SearchParamsSync({
   onExternalChange,

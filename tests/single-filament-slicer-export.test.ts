@@ -182,7 +182,7 @@ describe("single-filament slicer export routes", () => {
   // ── Lookup by name with special characters ────────────────────────
 
   it("exports a filament whose name contains a literal '%' (no double-decode)", async () => {
-    // Codex P2 on PR #247: Next.js route params are already URL-decoded,
+    // PR #247: Next.js route params are already URL-decoded,
     // so a name like "ABS 100%" arrives decoded. A second
     // decodeURIComponent would throw URIError on the dangling '%' and
     // 500 the request. Look the filament up by its (already-decoded)

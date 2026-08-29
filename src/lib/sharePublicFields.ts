@@ -39,7 +39,7 @@ import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
 
 /**
  * Settings-bag keys that must never be published, even though the bag itself
- * is (GH #1122, Codex P1).
+ * is (GH #1122).
  *
  * The bag is arbitrary passthrough, so an allow-list on top-level fields alone
  * isn't enough: a filament imported by older INI code can still carry a

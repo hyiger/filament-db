@@ -154,7 +154,7 @@ export async function assertExternalUrl(url: string): Promise<URL> {
     // TDS redirect-resolver in src/lib/tdsExtractor.ts) also throws
     // "Invalid URL" when an upstream Location header is malformed; that
     // case is an upstream/bad-gateway condition, not user input, so it
-    // must NOT be mapped to 400 (Codex review on PR #167).
+    // must NOT be mapped to 400.
     throw new Error(`Invalid URL: ${url}`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
@@ -227,12 +227,12 @@ function ssrfValidatingLookup(
  * that validated IP — so `fetch(url, { dispatcher: ssrfDispatcher })`
  * cannot be rebound onto a private address between guard and connect.
  *
- * GH #258 (Codex P1): `maxItems` bounds the interceptor's per-hostname
- * DNS cache. It defaults to `Infinity`, and this is a process-wide
- * singleton fed user-controlled hosts (embed-check / TDS) — so without
- * a cap an attacker could trigger endless distinct lookups and grow
- * the cache until the process is OOM-killed. 256 is far above any
- * legitimate working set; `maxTTL` (10s default) also ages entries out.
+ * GH #258: `maxItems` bounds the interceptor's per-hostname DNS cache. It
+ * defaults to `Infinity`, and this is a process-wide singleton fed
+ * user-controlled hosts — without a cap an attacker could trigger endless
+ * distinct lookups and grow the cache until the process is OOM-killed. 256
+ * is far above any legitimate working set; `maxTTL` (10s default) also ages
+ * entries out.
  *
  * The `lookup` cast bridges a known undici quirk: at runtime the
  * interceptor invokes `lookup` with an origin OBJECT (it reads

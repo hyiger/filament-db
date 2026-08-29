@@ -13,52 +13,42 @@ import mongoose, { Schema, Document, Model } from "mongoose";
  */
 export interface IPrintHistory extends Document {
   /**
-   * Stable cross-DB identifier used by the hybrid-sync engine to pair
-   * print-history rows between local + Atlas. Mirrors the same field
-   * on every other synced collection (filaments, nozzles, printers,
-   * locations, bedtypes, sharedcatalogs). Issue #361: the snapshot
-   * restore handler now inserts through Mongoose schemas in strict
-   * mode, which silently strips unknown keys — without declaring
-   * `syncId` here, a restored row loses the value and the next sync
-   * treats it as new/unpaired. Sparse-unique index matches siblings.
+   * Stable cross-DB identifier the hybrid-sync engine uses to pair rows
+   * between local + Atlas; mirrors the same field on every other synced
+   * collection. Must be DECLARED: snapshot restore inserts through
+   * Mongoose schemas in strict mode, which silently strips unknown keys —
+   * an undeclared `syncId` would be lost on restore and the next sync
+   * would treat the row as new/unpaired (#361). Sparse-unique index
+   * matches siblings.
    */
   syncId: string | null;
   /** Human-friendly job label — typically the .3mf/.gcode filename. */
   jobLabel: string;
-  /** Which printer this ran on, if known. */
   printerId: mongoose.Types.ObjectId | null;
-  /** Per-filament consumption entries for this job. */
   usage: {
     filamentId: mongoose.Types.ObjectId;
     spoolId: mongoose.Types.ObjectId | null;
     grams: number;
     /**
      * GH #1074: grams ACTUALLY removed from the spool at debit time —
-     * `min(spool.totalWeight, grams)` when the spool tracked a weight, else
-     * `grams`. The debit clamps at zero, so when the spool held fewer grams
-     * than the job consumed, the shortfall was silently absorbed; the DELETE
-     * refund used to restore the full requested `grams` and mint phantom
-     * inventory. The refund now pays back this value. `grams` stays the
-     * requested/consumed amount so analytics totals are unchanged. Null on
-     * rows created before the field existed — the refund falls back to
-     * `grams` for those (accepted residual: legacy rows keep the old
-     * full-refund behavior).
+     * `min(spool.totalWeight, grams)` when the spool tracked a weight,
+     * else `grams` (the debit clamps at zero). The DELETE refund pays back
+     * this value — refunding the full requested `grams` would mint phantom
+     * inventory when the spool held less than the job consumed. `grams`
+     * stays the requested/consumed amount so analytics totals are
+     * unchanged. Null on rows created before the field existed — the
+     * refund falls back to `grams` for those.
      */
     debitedGrams?: number | null;
   }[];
-  /** When the job was sliced / started. */
   startedAt: Date;
-  /** Originator of this record. */
   source: "manual" | "prusaslicer" | "orcaslicer" | "bambu" | "other";
-  /** Optional notes — success/fail, material issues, etc. */
   notes: string;
   _deletedAt: Date | null;
-  /** GH #524.5: "delete forever" tombstone, mirroring Filament. A
-   * permanent purge marker that the hybrid-sync engine's generic
-   * `_purged` branch propagates to the peer so the row stays gone on
-   * both sides. Physically deleting instead would let the sync engine
-   * treat "remote has it, local doesn't" as a fresh insert and
-   * resurrect it. */
+  /** "Delete forever" tombstone, mirroring Filament — the hybrid-sync
+   * engine propagates the flag so the row stays gone on both sides.
+   * Physically deleting instead would let the sync engine treat "remote
+   * has it, local doesn't" as a fresh insert and resurrect it. */
   _purged: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -72,22 +62,19 @@ const PrintHistorySchema = new Schema<IPrintHistory>(
     usage: [
       {
         filamentId: { type: Schema.Types.ObjectId, ref: "Filament", required: true },
-        // GH #280: `spoolId` is intentionally ref-less — a spool is a
-        // subdocument of a Filament, not a top-level collection, so it
-        // cannot be a Mongoose `ref`. Existence is validated at write
-        // time by the POST /api/print-history handler (pass 1 confirms
-        // an explicit spoolId belongs to the filament before any
-        // mutation); the hybrid-sync engine nulls it on cross-side
-        // remap. All writes funnel through that route.
+        // `spoolId` is intentionally ref-less — a spool is a subdocument
+        // of a Filament, not a top-level collection, so it cannot be a
+        // Mongoose `ref`. Existence is validated at write time by the
+        // POST /api/print-history handler; the hybrid-sync engine nulls
+        // it on cross-side remap.
         spoolId: { type: Schema.Types.ObjectId, default: null },
         grams: { type: Number, required: true, min: 0 },
-        // GH #1074: grams actually removed from the spool (see IPrintHistory).
-        // Declared for real — strict mode would silently strip it from
-        // snapshot-restored rows otherwise (same reasoning as syncId, #361).
-        // No `min: 0`: the value is server-computed, and a schema validator
-        // would brick saves of legacy docs carrying unexpected values that
-        // arrived through paths bypassing the routes (hybrid sync, restore) —
-        // the DELETE refund guards the value at read time instead.
+        // See IPrintHistory. Declared for real — strict mode would
+        // silently strip it from snapshot-restored rows (same reasoning
+        // as syncId). No `min: 0`: server-computed, and a validator would
+        // brick saves of legacy docs that arrived through paths bypassing
+        // the routes (hybrid sync, restore) — the DELETE refund guards
+        // the value at read time instead.
         debitedGrams: { type: Number, default: null },
       },
     ],

@@ -10,23 +10,16 @@ import {
  * Thin wrapper around electron-updater that ships silently while the app is
  * running and surfaces a download-and-restart prompt when an update is ready.
  *
- * Notes on signing:
- * - On macOS, auto-update works now that builds are Developer ID-signed +
- *   notarized (v1.39.1+) AND the release ships per-arch `.zip` artifacts with a
- *   merged multi-arch `latest-mac.yml`: electron-updater requires a `.zip`
- *   (throws "ZIP file not provided" for a dmg-only release) and filters the
- *   yml's `files` by the running arch, so it downloads the NATIVE build. The
- *   "View release" link stays as a manual fallback (e.g. if a download fails).
- * - On Windows, unsigned NSIS installers work fine with auto-update (the
- *   user just sees an SmartScreen warning on launch).
- * - On Linux, AppImage updates work when the app was launched via
- *   AppImageLauncher or a similar integration. deb updates are NOT handled
- *   here — package managers should be used.
- *
- * The release workflow produces `latest-mac.yml` (multi-arch, merged from the
- * arm64 + x64 jobs), `latest-linux.yml`, `latest-linux-arm64.yml`, and
- * `latest.yml` (Windows x64) for each v* tag — what electron-updater reads from
- * the GitHub release.
+ * Signing / channel notes:
+ * - macOS: works because builds are Developer ID-signed + notarized (v1.39.1+)
+ *   AND the release ships per-arch `.zip` artifacts with a merged multi-arch
+ *   `latest-mac.yml` (release.yml's merge-mac-metadata job): electron-updater
+ *   requires a `.zip` (throws "ZIP file not provided" for a dmg-only release)
+ *   and filters the yml's `files` by the running arch.
+ * - Windows: unsigned NSIS installers auto-update fine (SmartScreen warning
+ *   on launch only). The update channel is x64-only (`latest.yml`, GH #586).
+ * - Linux: AppImage updates only, and only when launched via an integration
+ *   like AppImageLauncher; deb goes through the package manager.
  */
 
 interface UpdateInfo {
@@ -34,20 +27,19 @@ interface UpdateInfo {
   version?: string;
   releaseNotes?: string;
   progress?: { percent: number; bytesPerSecond: number };
-  /** GH #946: short, stack-free detail (a tooltip / fallback), NOT the raw
-   *  multi-line electron-updater blob. The renderer shows a localized message
-   *  keyed off `errorKind`; this is supplementary. */
+  /** Short, stack-free detail — NOT the raw multi-line electron-updater blob.
+   *  The renderer shows a localized message keyed off `errorKind` (GH #946). */
   error?: string;
-  /** GH #946: cause of the failure, mapped to a localized banner message. */
+  /** Cause of the failure, mapped to a localized banner message. */
   errorKind?: UpdateErrorKind;
 }
 
 let mainWindow: BrowserWindow | null = null;
 let currentState: UpdateInfo = { state: "idle" };
-/** GH #946 (Codex): main.ts's `diag`, injected via initAutoUpdater so update
- *  errors reach main.log. A plain console.* in the main process is NOT
- *  mirrored to main.log (only the embedded server's stdout is). Falls back to
- *  console.error when absent (unit tests / older callers). */
+/** main.ts's `diag`, injected via initAutoUpdater so update errors reach
+ *  main.log — a plain console.* in the main process is NOT mirrored to
+ *  main.log (only the embedded server's stdout is). Falls back to
+ *  console.error when absent. */
 let diagLog: ((message: string) => void) | null = null;
 /** Tracks whether initAutoUpdater has done its one-time setup (IPC handlers,
  * autoUpdater listeners, periodic-check timers) for this process. The
@@ -74,16 +66,12 @@ function emit(update: Partial<UpdateInfo>) {
 }
 
 /**
- * GH #946: emit an error state with a mapped `errorKind` (so the renderer can
- * show a friendly, localized line) and a short stack-free `detail`, while the
- * FULL raw error goes to the log for debugging. Returns the detail so the IPC
- * handlers can pass it back to their caller.
+ * Emit an error state with a mapped `errorKind` + short stack-free `detail`;
+ * the FULL raw error goes to main.log (GH #946). Returns the detail for the
+ * IPC handlers to pass back.
  */
 function emitError(err: unknown): string {
   const { kind, detail } = classifyUpdateError(err);
-  // Full raw error (incl. stack) → main.log via the injected diag logger, so a
-  // packaged user's support log keeps it. The user only ever sees `detail` +
-  // the localized message keyed on `kind`.
   const raw = err instanceof Error ? (err.stack ?? err.message) : String(err);
   (diagLog ?? ((m: string) => console.error(m)))(
     `[auto-updater] update error [${kind}]: ${raw}`,
@@ -97,50 +85,38 @@ export function initAutoUpdater(
   log?: (message: string) => void,
 ) {
   // Always refresh the window reference — the previous window may have
-  // been closed and the renderer for the new window needs to receive
-  // future status events.
+  // been closed and the new window needs future status events.
   mainWindow = win;
-  // GH #946: capture the diagnostic logger (main.ts's `diag`) so update errors
-  // land in main.log. Refreshed on every call; harmless if unchanged.
   if (log) diagLog = log;
 
   if (initialized) {
-    // Re-emit the current state into the new window so the renderer's
-    // initial getSyncStatus() / status listener attaches to a fresh value
-    // instead of waiting for the next tick.
+    // Re-emit current state into the new window so its renderer doesn't
+    // wait for the next tick.
     emit({});
     return;
   }
   initialized = true;
 
   // IPC surface is registered unconditionally so the dev-mode renderer can
-  // still call update-get-status (and friends) without crashing with
-  // "No handler registered". In dev, the mutating handlers short-circuit
-  // with a "dev-mode" error instead of touching the real updater, which
-  // electron-updater refuses to run when app.isPackaged is false.
-  // GH #623: read-only, but gated like its siblings (#434) — the state
-  // carries version/release-notes/error text, and an open getter was an
-  // undocumented asymmetry vs. the trusted-sender posture everywhere else.
+  // still call update-get-status (and friends) without "No handler
+  // registered". In dev, the mutating handlers short-circuit with a
+  // "dev-mode" error — electron-updater refuses to run when app.isPackaged
+  // is false. Read-only, but sender-gated like its siblings (GH #623).
   ipcMain.handle("update-get-status", (event) => {
     assertTrustedSender(event, "update-get-status");
     return currentState;
   });
 
-  // GH #434: update-check and update-download were gated only on
-  // `app.isPackaged`. In a release build a sub-frame could drive
-  // both unconditionally — checking is free but `update-download`
-  // pulls the full installer payload, which is bandwidth abuse
-  // against the user. Defence-in-depth: trust only the top-level
-  // app frame, same as the install handler.
+  // GH #434: a sub-frame must not drive check/download — `update-download`
+  // pulls the full installer payload (bandwidth abuse against the user).
+  // Trust only the top-level app frame, same as the install handler.
   ipcMain.handle("update-check", async (event) => {
     assertTrustedSender(event, "update-check");
     if (!app.isPackaged) return { ok: false, error: "dev-mode" };
-    // GH #433: don't re-check while a download is in flight or an
-    // update is sitting ready to install. `autoUpdater.checkForUpdates()`
-    // re-emits `update-available` / `update-not-available`, which would
-    // overwrite the in-progress `downloading` / `ready` state in
-    // `currentState` and blow away the progress UI. The download itself
-    // continues internally but the renderer briefly sees a stale state.
+    // GH #433: don't re-check while downloading or ready —
+    // `checkForUpdates()` re-emits `update-available` /
+    // `update-not-available`, overwriting the in-progress state and
+    // blowing away the progress UI.
     if (currentState.state === "downloading" || currentState.state === "ready") {
       return { ok: true, skipped: currentState.state };
     }
@@ -171,17 +147,16 @@ export function initAutoUpdater(
     installButton?: string;
     laterButton?: string;
   }) => {
-    // GH #299: update-install restarts the app — only the app's own
-    // top-level frame may invoke it.
+    // update-install restarts the app — only the app's own top-level
+    // frame may invoke it (GH #299).
     assertTrustedSender(evt, "update-install");
     if (!app.isPackaged) return { ok: false, error: "dev-mode" };
     if (currentState.state !== "ready") {
       return { ok: false, error: "No update ready to install" };
     }
-    // Strings are optionally passed from the renderer so the OS-native
-    // dialog can honour the user's current locale. The renderer owns the
-    // i18n catalog; this module has no access to it. English defaults
-    // apply when no strings are provided (unit tests, older renderers).
+    // Strings come from the renderer (which owns the i18n catalog) so the
+    // OS-native dialog honours the user's locale; English defaults apply
+    // when absent.
     const version = currentState.version ?? "";
     const message = (strings?.message ?? `Install Filament DB v{version}?`).replace(
       "{version}",
@@ -214,12 +189,9 @@ export function initAutoUpdater(
     return { ok: true };
   });
 
-  // Opens the GitHub release page — useful for macOS where unsigned auto-
-  // install is blocked by Gatekeeper and the user has to download manually.
-  // GH #434: shell.openExternal opens the user's default browser. The URL
-  // is built from a server-supplied version string (`currentState.version`)
-  // so injection risk is low, but a sub-frame triggering arbitrary tab
-  // opens is still a phishing surface — gate on the top-level frame.
+  // Opens the GitHub release page (manual-download fallback). A sub-frame
+  // triggering browser tab opens is a phishing surface — gate on the
+  // top-level frame (GH #434).
   ipcMain.handle("update-open-release-page", async (event) => {
     assertTrustedSender(event, "update-open-release-page");
     const version = currentState.version;
@@ -230,9 +202,8 @@ export function initAutoUpdater(
     return { ok: true };
   });
 
-  // In dev, electron-updater throws when app.isPackaged is false. Skip the
-  // listener + polling setup; the stub handlers above keep the renderer
-  // happy without touching the real updater.
+  // In dev, electron-updater throws when app.isPackaged is false — skip the
+  // listener + polling setup; the stub handlers above cover the renderer.
   if (!app.isPackaged) {
     emit({ state: "idle" });
     return;
@@ -264,13 +235,8 @@ export function initAutoUpdater(
     emitError(err);
   });
 
-  // Check once shortly after startup, then every 6 hours while running.
-  // A short initial delay avoids hammering the API while the window is still
-  // mounting and lets the user see the app first.
-  //
-  // GH #433: skip when an update is downloading or ready — re-checking
-  // would overwrite the progress state. The IPC `update-check` handler
-  // has the same guard.
+  // Check once shortly after startup, then every 6 hours. Skip while
+  // downloading/ready — same GH #433 guard as the IPC handler.
   const checkUnlessBusy = () => {
     if (currentState.state === "downloading" || currentState.state === "ready") {
       return;

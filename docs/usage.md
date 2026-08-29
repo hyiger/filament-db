@@ -85,12 +85,13 @@ Nothing is restructured behind your back. When an action would give a filament i
 
 Confirm with **Convert and create** and the app creates that variant, moves the parent's color, color name, spools, total weight and low-stock threshold onto it, and leaves the parent colorless and inventory-free. Cancel and nothing at all is written — no filament is created, no data is touched.
 
-The same confirmation guards four entry points, with the wording matched to the action:
+The same confirmation guards three entry points, with the wording matched to the action:
 
 - **"Create variant"** or **Duplicate** on the detail page, and `/filaments/new` with a parent picked — *"This is the first variant of…"*, **Convert and create**
 - **Edit → Parent Filament** on an existing filament — *"Saving makes this filament the first variant of…"*, **Convert and save**
-- **Restore** from the trash — *"Restoring makes this filament the first variant of…"*, **Convert and restore**
 - **Import as variant** in the OpenPrintTag browser (select one material, pick a **Parent filament** instead of "No parent (standalone)", and the import button switches to that label) — same wording as the create flow
+
+**Restore** from the trash is deliberately *not* one of them: restoring a variant whose parent still carries its own color or spools is refused outright, with a message pointing at **Convert to template** on the parent — convert once for the whole family, then restore. See [Restoring or permanently deleting from the trash](#restoring-or-permanently-deleting-from-the-trash).
 
 The new variant is named `<parent name> — <color name>`, or `<parent name> — Original` when the parent had no color name (with a ` (2)` / ` (3)` suffix if that name is already taken). Everything that pointed at the moved spools follows them: print history entries, printer AMS slot assignments, and already-printed QR labels — scanning an old label resolves the spool's current owner and takes you there.
 
@@ -315,6 +316,17 @@ Each printer has:
 - **Notes**
 
 Printers cannot be deleted if they are referenced by any filament calibrations. The error message tells you how many filaments reference the printer.
+
+---
+
+## Data Health *(v1.77)*
+
+**Settings → Data health** surfaces name conflicts the automatic cleanup can't repair on its own: pairs of rows (filaments, nozzles, printers, bed types, locations) whose names differ only by invisible edge whitespace — `"Drybox 1"` vs `"Drybox 1 "` — usually left behind by old imports or raw database writes. The page lists every such conflict with the whitespace made visible, shows what still references each row, and offers the two safe resolutions:
+
+- **Delete** — only available when nothing references the row (a plain duplicate).
+- **Rename** — frees the canonical spelling without touching a single reference.
+
+A healthy database shows an empty list. In hybrid mode the page scans the database the app is connected to; since v1.78 (#1164) conflicts found on the **remote** database during sync also appear here in a read-only "on the remote" section, and the header's sync pill carries a conflict count linking straight to the page.
 
 ---
 
@@ -676,6 +688,8 @@ Tick the changes you want and click **"Apply"**. Only identity stays put -- name
 
 If the dialog says the filament is **up to date**, there's nothing new upstream. If it says the material is **no longer in the database**, the entry was renamed or removed on the OpenPrintTag side.
 
+**Removing or changing the link** *(v1.77, #1150)*: the same dialog carries **Change link…** and **Remove link** buttons — both also available when the linked material has vanished from the OpenPrintTag database, which used to be a dead end. **Remove link** never touches your values: only the link and its update tracking are removed, and you can re-link at any time. **Change link…** re-opens the material picker so update tracking is rebuilt against the new material while your edited fields stay yours.
+
 ---
 
 ## PrusaSlicer Integration
@@ -715,7 +729,7 @@ The **Dashboard** page at `/dashboard` is the home of your inventory at a glance
 - **Totals** — filament count, spool count, grams on hand, plus printer / nozzle / bed-type counts
 - **Low-stock warnings** — any filament whose aggregate remaining is under its per-filament `lowStockThreshold`. Clicking a row jumps to the filament detail.
 - **Needs drying** — spools whose most recent dry cycle is older than 30 days (configurable in settings later), grouped by filament type
-- **Recent print history** — the most recently logged print jobs
+- **Recent print history** — the most recently logged print jobs, with a **View all →** link to the [History page](#print-history-browser-v179) and a **Log print job** button *(v1.79, #1167)* that opens an in-app dialog — job label, printer, date, notes, and one or more filament/spool/grams rows — posting through the same `/api/print-history` machinery the slicer integrations use, so spool debits and validation behave identically. Templates are excluded from the filament picker, and a row whose filament has no active spool says so before you submit (the job is then recorded without debiting inventory).
 
 Low-stock thresholds are set per filament on the edit page under **Stock settings → Low-stock threshold (g)**. A filament with no threshold is never flagged.
 
@@ -764,12 +778,24 @@ The importer reports per-row success / failure, so a handful of typos won't abor
 
 ## Print History *(v1.11)*
 
-When a slicer (or a user) posts a print job to `/api/print-history`, two things happen:
+When a print job is recorded — by a slicer posting to `/api/print-history`, or in-app via the dashboard's **Log print job** dialog *(v1.79)* — two things happen:
 
 1. A `PrintHistory` document is created — the canonical record of what ran, on which printer, how many grams of each filament.
 2. Each referenced spool's `totalWeight` is decremented and a `usageHistory` entry is appended tagged `source: "job"`.
 
 These writes run inside a MongoDB transaction when the deployment supports it (Atlas replicas, hybrid mode) so a mid-write failure can't leave inventory out of sync with the history ledger.
+
+## Print History Browser *(v1.79)*
+
+The **History** page at `/history` (in the top nav, between Analytics and Share) browses everything the ledgers above record, in two deliberately separate tabs:
+
+- **Print jobs** — the `PrintHistory` records: search by job label *within the loaded window* (see the caveat below), filter by printer (including trashed printers whose jobs remain), expand a job for its per-filament breakdown with deep links to each filament, and **Delete** a job with refund — the debited grams are returned to the spools the job drew from, up to each spool's capacity (grams debited from a since-deleted filament or spool stay deducted).
+- **Spool usage ledger** — a cross-spool search over every spool's `usageHistory` entries (backed by `GET /api/spools/usage-search`): search by entry label, filter by source (`manual`, `slicer`, `job`, `nfc`). It defaults to **manual** entries — the ones that exist nowhere else — because job- and slicer-tagged entries are projections of PrintHistory rows already shown on the Print jobs tab; a merged list would double-show every print. This is the first surface where a *manual* entry's job label can be recalled across spools.
+
+Completeness caveats, both surfaced on the page itself:
+
+- **Print jobs** loads only the newest 200 jobs ("Showing the most recent 200 jobs." appears once that limit is hit), and the label search filters *that* window rather than querying the server — so a matching older job won't appear. The printer filter *is* server-side, so narrowing to the printer that ran the job re-queries and brings its newest 200 into reach.
+- **Spool usage ledger** is bounded twice over. By *storage*: each spool keeps at most 1,000 usage entries, with the oldest manual entries dropped first, so very old entries may be absent entirely. And by *result window*: the page requests 200 entries, and the search runs server-side but sorts newest-first before applying that limit — so a query matching more than 200 entries shows the newest 200 and silently omits older matches. Narrow by source (or by a more specific label) to bring older entries into the window.
 
 ## Usage Analytics *(v1.11)*
 

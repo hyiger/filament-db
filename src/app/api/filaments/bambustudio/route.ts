@@ -26,10 +26,10 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * Per-phase validation gate for a prepared Bambu update: the settings-bag
- * size-cap error AND the GH #892 inverted-nozzle-range guard (min > max, which
- * the per-field 0–600 schema validators can't express — matching the OrcaSlicer
- * sync route). Returns a 400 response, or null when the payload is clean. Used
- * at every upsert phase so the guard can't be dropped from one of them.
+ * size-cap error AND the GH #892 inverted-nozzle-range guard (min > max —
+ * inexpressible by the per-field schema validators; matches the OrcaSlicer
+ * sync route). Used at every upsert phase so the guard can't be dropped from
+ * one of them.
  */
 function bambuPayloadError(payload: BambuUpdatePayload): NextResponse | null {
   if (payload.settingsResult.error) {
@@ -45,37 +45,21 @@ function bambuPayloadError(payload: BambuUpdatePayload): NextResponse | null {
 }
 
 /**
- * POST /api/filaments/bambustudio
+ * POST /api/filaments/bambustudio — import a Bambu Studio filament-preset
+ * (`.json`). Accepts `multipart/form-data` (file= field) or
+ * `application/json` (profile as body).
  *
- * Import a Bambu Studio filament-preset (`.json`). Companion to the
- * existing per-id export at `GET /api/filaments/{id}/bambustudio`; the
- * pair gives Bambu users a full round-trip (export from the app, edit
- * + calibrate in Bambu Studio, re-import the calibrated values).
+ * Upsert key is the filament name, from `filament_settings_id` (preferred)
+ * or top-level `name`. Spool data, usageHistory and dryCycles on an
+ * existing filament are NEVER touched.
  *
- * The route accepts the file two ways:
- *   - `multipart/form-data` with a `file` field (UI flow)
- *   - `application/json` with the Bambu profile as the body (script flow)
+ * Calibration: a Printer doc matching the `printer_settings_id` hint with a
+ * unique nozzle at the hinted diameter gets a tagged calibrations[] row;
+ * otherwise maxVolumetricSpeed still applies top-level and the response
+ * carries `calibrationUnresolved` so the caller can surface a nudge.
  *
- * Upsert key is the filament name, derived from `filament_settings_id`
- * (preferred — that's what the slicer treats as the preset name) or
- * top-level `name` (matches the export-side filename stem). Existing
- * filaments are updated; missing ones are created. Spool data,
- * usageHistory and dryCycles on an existing filament are NEVER touched.
- *
- * Calibration handling (the design decision from the import discussion):
- *   1. Parse the Bambu JSON for calibration values + a printer hint
- *      (`printer_settings_id`, format roughly "Vendor Model 0.4 nozzle").
- *   2. If a Printer doc matches that hint AND has a unique nozzle at the
- *      hinted diameter, write the values to a calibrations[] row tagged
- *      with that (printer, nozzle) pair.
- *   3. Otherwise the maxVolumetricSpeed lift carries through as a top-
- *      level update and the per-nozzle-only values are skipped with a
- *      `calibrationUnresolved` flag on the response, so the caller knows
- *      to surface a nudge.
- *
- * Returns: `{ created, updated, filamentId, calibrationApplied,
- *   calibrationUnresolved?, settingsAdded }` so the UI can show a clear
- * outcome instead of a vague "imported".
+ * Returns `{ created, updated, filamentId, calibrationApplied,
+ * calibrationUnresolved?, settingsAdded }`.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -97,11 +81,9 @@ export async function POST(request: NextRequest) {
     if (!(file instanceof File)) {
       return errorResponse("multipart upload must include a 'file' field", 400);
     }
-    // Codex P2 on PR #387 round 2: cap upload size BEFORE reading.
-    // `file.text()` materialises the entire body into memory; without
-    // this guard a multi-GB upload would happily exhaust the server.
-    // Matches the existing 10 MB cap used by /api/filaments/import* and
-    // /api/filaments/parse-ini.
+    // Cap upload size BEFORE reading — `file.text()` materialises the
+    // entire body into memory. Matches the 10 MB cap on the sibling
+    // importers.
     const sizeErr = checkFileSize(file);
     if (sizeErr) return sizeErr;
     const text = await file.text();
@@ -143,15 +125,11 @@ export async function POST(request: NextRequest) {
     //   3. create — handling the E11000 race against a concurrent create
     //
     // Each phase uses an atomic `findOneAndUpdate` guarded by the doc's
-    // `_id` (and the soft-delete state at the time it was read) so a
-    // concurrent soft-delete / purge / restore can't slip through the
-    // findOne→write window. `runValidators: true` so the GH #337 numeric
-    // validators fire on every write path (Codex P2 round 2).
-    //
-    // The merge logic in `prepareBambuUpdate` depends on the existing
-    // doc (settings carry-over + calibration row dedup), so we have to
-    // recompute the payload per phase against whatever `existing` we
-    // resolved.
+    // `_id` + the soft-delete state at read time, so a concurrent
+    // soft-delete / purge / restore can't slip through the findOne→write
+    // window. `runValidators: true` so the numeric validators fire on every
+    // write path. The merge logic in `prepareBambuUpdate` depends on the
+    // existing doc, so the payload is recomputed per phase.
 
     // Phase 1 — active update.
     let existingActive = await Filament.findOne({
@@ -159,9 +137,9 @@ export async function POST(request: NextRequest) {
       _deletedAt: null,
     });
     if (!existingActive) {
-      // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
-      // absence — the setter casts this query, so it cannot select a row whose
-      // stored name is still raw. See src/lib/trimmedNameLookup.ts.
+      // GH #1116: the miss may be a LOOKUP failure — the setter casts this
+      // query, so it cannot select a row whose stored name is still raw. See
+      // src/lib/trimmedNameLookup.ts.
       const survivorId = await findSurvivorId(
         Filament.collection as unknown as MinimalNameCollection,
         name,
@@ -179,14 +157,12 @@ export async function POST(request: NextRequest) {
       if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
-        // GH #605 (codex P2, slicer-sync sweep): the name-matched target may
-        // be a TEMPLATE (≥1 live variant) — strip the per-variant fields the
-        // preset echoes (color; the shared list) instead of re-materializing
-        // them, with the SAME semantics as the PUT (non-null only, explicit
-        // nulls pass). Decision + write share the per-id mutex the promotion
-        // paths lock (PUT review P1-c). The strip must not fail the row —
-        // the rest of the preset still applies — and is reported through the
-        // response envelope below, matching the atlas importer's posture.
+        // GH #605: the name-matched target may be a TEMPLATE — strip the
+        // per-variant fields the preset echoes with the SAME semantics as
+        // the PUT (non-null only, explicit nulls pass). Decision + write
+        // share the per-id mutex the promotion paths lock. The strip must
+        // not fail the row — the rest of the preset still applies — and is
+        // reported through the response envelope.
         let strippedTemplateFields: string[] = [];
         const updated = await runExclusive(
           filamentLockKey(existingActive._id),
@@ -217,18 +193,15 @@ export async function POST(request: NextRequest) {
     }
 
     // Phase 2 — resurrect a trashed (non-purged) row of the same name
-    // rather than creating a duplicate that would strand the trashed
-    // record (its restore would 409 forever on the name conflict).
-    // (Codex P1 on PR #387 round 5.)
+    // rather than creating a duplicate that would strand the trashed record
+    // (its restore would 409 forever on the name conflict).
     let existingTrashed = await Filament.findOne({
       name,
       _deletedAt: { $ne: null },
       _purged: { $ne: true },
     });
     if (!existingTrashed) {
-      // GH #1116 (Codex P1): the miss may be a LOOKUP failure rather than an
-      // absence — the setter casts this query, so it cannot select a row whose
-      // stored name is still raw. See src/lib/trimmedNameLookup.ts.
+      // GH #1116: same survivor blind spot as phase 1.
       const survivorId = await findSurvivorId(
         Filament.collection as unknown as MinimalNameCollection,
         name,
@@ -250,27 +223,22 @@ export async function POST(request: NextRequest) {
       if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
-        // GH #605: no template strip on the resurrect — a TRASHED doc cannot
-        // have live variants (soft-deleting a parent with variants is
-        // refused, in-lock with the trash write since round 8 F3 — the same
-        // per-filament mutex the first-variant gates lock, so the check
-        // can't be raced by a mid-flight first variant; restoring a variant
-        // under a trashed parent is refused; variant creation requires an
-        // ACTIVE parent), so the revived row is never a TEMPLATE at this
-        // write. But that only covers one direction — the revived row may
-        // itself be a VARIANT (GH #1073): with it trashed, `hasVariants`
-        // reads false, so its parent may legitimately have re-acquired
-        // spools/inventory as a standalone. Reviving the row would surface
-        // the FIRST live variant of an inventory-carrying parent — the
-        // stranded-inventory state #605 forbids — so the resurrect runs
+        // GH #605: no template strip on the resurrect — a TRASHED doc
+        // cannot have live variants (soft-deleting a parent with variants
+        // is refused under the same mutex the first-variant gates lock;
+        // restoring a variant under a trashed parent is refused; variant
+        // creation requires an ACTIVE parent). But that only covers one
+        // direction — the revived row may itself be a VARIANT (GH #1073):
+        // with it trashed, `hasVariants` reads false, so its parent may
+        // have re-acquired inventory as a standalone, and reviving would
+        // surface the FIRST live variant of an inventory-carrying parent —
+        // the stranded-inventory state #605 forbids. So the resurrect runs
         // through the same adoption gate the bulk importers use
         // (firstVariantGateInfo), inside the parent's mutex; a gated import
-        // fails with a 409 naming the fix instead of resurrecting (a bulk
-        // import can't confirm a promotion).
+        // 409s naming the fix (a bulk import can't confirm a promotion).
         //
         // Splice `_deletedAt: null` into the $set body so the resurrect
-        // atomic also drops the tombstone; $unset (if any) for stale
-        // variant overrides composes alongside.
+        // atomic also drops the tombstone.
         const resurrectUpdate = composeMongoUpdate(payload);
         resurrectUpdate.$set = {
           ...(resurrectUpdate.$set as Record<string, unknown>),
@@ -298,13 +266,12 @@ export async function POST(request: NextRequest) {
               return null;
             }
             const doc = await doResurrect();
-            // Round 7 P2 parity with the CSV importer: an ungated first
-            // variant of a threshold-ONLY parent just surfaced — clear the
-            // parent's now-dead lowStockThreshold AFTER the write (parent
-            // state change last), still inside the per-parent lock.
-            // Re-checking hasVariants (rather than trusting the pre-write
-            // snapshot) covers a resurrect that missed its filter (purged /
-            // restored mid-window) — no variant surfaced, the threshold stays.
+            // An ungated first variant of a threshold-ONLY parent just
+            // surfaced — clear the parent's now-dead lowStockThreshold
+            // AFTER the write (parent state change last), still in-lock.
+            // Re-checking hasVariants covers a resurrect that missed its
+            // filter (purged / restored mid-window) — no variant surfaced,
+            // the threshold stays.
             if (gate.orphanedThreshold && (await hasVariants(Filament, parentKey))) {
               await clearOrphanedParentThreshold(Filament, existingTrashed.parentId);
             }
@@ -352,11 +319,10 @@ export async function POST(request: NextRequest) {
       });
       return importResponse(created, true, createPayload);
     } catch (createErr) {
-      // Codex P2 on PR #387 round 5: another concurrent import created
-      // a row with the same name between our phase-1 findOne and our
-      // create. Recompute the payload against THAT row (its settings
-      // and calibrations[] differ from the null baseline used above)
-      // and update it as if we'd taken the phase-1 path.
+      // A concurrent import created the same name between our phase-1
+      // findOne and this create. Recompute the payload against THAT row
+      // (its settings and calibrations[] differ from the null baseline) and
+      // update it as if we'd taken the phase-1 path.
       if (!isDuplicateKeyError(createErr)) {
         return errorResponseFromCaught(createErr, "Failed to create filament");
       }
@@ -376,8 +342,7 @@ export async function POST(request: NextRequest) {
       delete (racePayload.update as Record<string, unknown>).spools;
       try {
         // GH #605: the racing row is an ACTIVE existing doc — same template
-        // strip as phase 1 (a concurrent import may have landed a parent
-        // that already has variants).
+        // strip as phase 1.
         let strippedTemplateFields: string[] = [];
         const merged = await runExclusive(filamentLockKey(racing._id), async () => {
           strippedTemplateFields = await stripTemplateFieldsForWrite(
@@ -425,12 +390,10 @@ async function augmentExistingWithParent(existing: {
     }).lean()) as Record<string, unknown> | null;
   }
   return {
-    // Codex P1 on PR #473 round 2: inheritable scalars MUST ride along
-    // so `buildStructuredUpdate` can detect a stale variant override
-    // (variant=1.30, parent=1.24, import=1.24 → emit $unset). Pre-fix
-    // these were stripped, making the $unset branch unreachable in
-    // the actual route even though unit tests passed against a richer
-    // shape.
+    // Inheritable scalars MUST ride along so `buildStructuredUpdate` can
+    // detect a stale variant override (variant=1.30, parent=1.24,
+    // import=1.24 → emit $unset) — stripping them makes the $unset branch
+    // unreachable.
     type: existing.type ?? null,
     vendor: existing.vendor ?? null,
     // GH #883: ride color + secondaryColors along so resolveSyncBackColor can
@@ -455,11 +418,9 @@ async function augmentExistingWithParent(existing: {
   };
 }
 
-/** Codex P1 on PR #473: when the parsed Bambu value equals the parent
- *  and the variant carries a stale local override, `prepareBambuUpdate`
- *  flags those fields in `unsetKeys` so they can be cleared. Compose a
- *  Mongo update body that carries both `$set` and (when needed) `$unset`
- *  in one atomic write — the resurrection branch then splices
+/** Compose a Mongo update body carrying both `$set` and (when needed)
+ *  `$unset` in one atomic write — `prepareBambuUpdate` flags stale variant
+ *  overrides in `unsetKeys`; the resurrection branch splices
  *  `_deletedAt: null` into the `$set` portion. */
 function composeMongoUpdate(
   payload: Awaited<ReturnType<typeof prepareBambuUpdate>>,

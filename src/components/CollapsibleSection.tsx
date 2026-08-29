@@ -7,30 +7,23 @@ interface Props {
    * relationship between header and panel, and the localStorage key for
    * persisted open/closed state. Use a kebab-case slug. */
   id: string;
-  /** Header label rendered as the legend. */
   title: string;
-  /** Optional one-line subtitle shown to the right of the title in muted text. */
   subtitle?: string;
-  /** Whether this section starts open on first mount when no localStorage
-   * preference has been written yet. Default false. */
+  /** Open state on first mount when no localStorage preference has been
+   * written yet. Default false. */
   defaultOpen?: boolean;
   /** Optional badge content rendered after the title — e.g. a red pill when
    * a section contains validation errors. */
   badge?: ReactNode;
-  /** Body of the section. Lazy-mounted: not rendered until the section has
-   * been opened at least once. Once opened, stays mounted (so React/form
-   * state survives subsequent collapse + re-expand). */
   children: ReactNode;
 }
 
-/** Storage key for a section's open/closed state. */
 function storageKey(id: string): string {
   return `filamentdb-form-section-${id}`;
 }
 
-/** Read the persisted open/closed flag for a section. SSR-safe (returns the
- * caller's default during server render) and survives a missing/disabled
- * localStorage. */
+/** SSR-safe (returns the caller's default during server render) and
+ * survives a missing/disabled localStorage. */
 function readStoredOpen(id: string, defaultOpen: boolean): boolean {
   if (typeof window === "undefined") return defaultOpen;
   try {
@@ -44,30 +37,22 @@ function readStoredOpen(id: string, defaultOpen: boolean): boolean {
 }
 
 /**
- * Collapsible section wrapper used to chunk the long Edit Filament form into
- * skimmable groups without hiding their existence (Cmd+F still works once a
- * section is opened, and the FormToc sidebar lists every section regardless
- * of state).
+ * Collapsible section wrapper used to chunk the long Edit Filament form
+ * into skimmable groups.
  *
- * Design choices:
+ * - Skips rendering the body when collapsed — avoids expensive sub-trees
+ *   (the calibration grid in particular) running on every form re-render.
+ *   Re-opening re-mounts the body; that's fine because every input in
+ *   FilamentForm reads/writes the parent's `form` state, so there's no
+ *   local component state to lose.
+ * - Open/closed persists per-section in localStorage.
+ * - Imperative open via the exported expandAndScrollToSection helper
+ *   ("open the offending section + scroll" on validation error) without
+ *   lifting state to the parent.
  *
- * - **Skip rendering the body when collapsed.** Avoids expensive sub-trees
- *   (the calibration grid in particular) running on every form re-render
- *   while collapsed. The trade-off is that re-opening re-mounts the body —
- *   that's fine here because every input in FilamentForm reads/writes the
- *   parent's `form` state, so there's no local component state to lose.
- * - **Persist open/closed per-section in localStorage** so power users can
- *   curate their own default shape across sessions.
- * - **Imperative open** via the exported expandAndScrollToSection helper.
- *   Useful for "open the offending section + scroll" on validation error
- *   without lifting state to the parent.
- *
- * SSR note: localStorage is unavailable on the server. The lazy initializer
- * returns `defaultOpen` during SSR, then the post-mount effect re-reads the
- * persisted value. With `suppressHydrationWarning` on the wrapping section
- * we avoid a console warning when the persisted value differs from the
- * default. The `hidden` attribute changes nothing visible during the
- * brief flicker because the body is hidden either way until first open.
+ * SSR: `defaultOpen` during SSR, post-mount effect re-reads the persisted
+ * value; `suppressHydrationWarning` on the wrapping section covers the
+ * case where the persisted value differs from the default.
  */
 export default function CollapsibleSection({
   id,
@@ -90,7 +75,6 @@ export default function CollapsibleSection({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Persist whenever the user toggles.
   useEffect(() => {
     try {
       localStorage.setItem(storageKey(id), String(open));
@@ -154,8 +138,7 @@ export default function CollapsibleSection({
         hidden={!open}
         className="px-4 pb-4 pt-1"
       >
-        {/* Don't render the body when collapsed. See the design note in the
-         *  component header for why we accept the re-mount on re-open. */}
+        {/* Body not rendered when collapsed — see the component header. */}
         {open && children}
       </div>
     </section>
@@ -183,12 +166,10 @@ export function expandAndScrollToSection(id: string) {
       newValue: "true",
     }),
   );
-  // GH #284: the section body is conditionally rendered (`{open &&
-  // children}`), so on the tick the storage event is dispatched it has
-  // not laid out yet — scrolling now lands on the still-collapsed header
-  // and leaves the erroring field below the fold. A double rAF waits for
-  // React to commit the expanded body and the browser to lay it out, so
-  // the offending field is actually brought into view.
+  // GH #284: the body is conditionally rendered, so on the tick the
+  // storage event is dispatched it has not laid out yet — scrolling now
+  // would land on the still-collapsed header. A double rAF waits for
+  // React to commit the expanded body and the browser to lay it out.
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       const el = document.getElementById(id);

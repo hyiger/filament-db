@@ -76,7 +76,7 @@ export default function DataHealthPage() {
   const [busy, setBusy] = useState(false);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
-  // ticket may write (Codex P2). The mount scan and a completion-triggered
+  // ticket may write. The mount scan and a completion-triggered
   // refetch are independent requests with no ordering: mounting while a sync
   // finishes, the mount request can capture the PRE-copy database and resolve
   // LAST, overwriting the post-copy list — the newly copied conflict then
@@ -135,14 +135,14 @@ export default function DataHealthPage() {
     if (!api?.getSyncStatus) return;
     let cancelled = false;
     // A COMPLETED cycle can copy a remote-only conflict INTO the local
-    // database (Codex P2) — after which the pair belongs in the actionable
+    // database — after which the pair belongs in the actionable
     // list above, not the read-only remote section whose copy says "resolve
     // it above". The local scan is a mount-time snapshot, so refetch it
     // whenever a cycle finishes. `lastSyncAt` changing is exactly that
     // signal; progress ticks during a cycle carry the same value and are
     // ignored, so this cannot loop.
     // The "did a cycle end?" rule lives in a pure, unit-tested module
-    // (Codex P2): this page has no test harness, and that rule has been
+    //: this page has no test harness, and that rule has been
     // wrong three separate ways, each time leaving the actionable list
     // silently stale.
     const watcher = createSyncCycleWatcher();
@@ -152,7 +152,7 @@ export default function DataHealthPage() {
       state?: string;
     };
     // The rendered list needs the same yield-to-live rule as the watcher's
-    // baseline (Codex P2): a live event can beat this promise, and installing
+    // baseline: a live event can beat this promise, and installing
     // the older snapshot's conflicts afterwards would drop a remote-only
     // conflict from the page until some later status arrived.
     let sawLiveStatus = false;
@@ -260,7 +260,7 @@ export default function DataHealthPage() {
       {!loading && error && (
         <p className="text-sm text-red-500">{t("health.error")}</p>
       )}
-      {/* GH #1164 (Codex P2): the all-clear must account for BOTH databases.
+      {/* GH #1164: the all-clear must account for BOTH databases.
           With a clean local scan and a remote-only conflict — the primary
           case this PR adds — the page otherwise rendered "your data is
           healthy" directly above an amber conflict list. */}

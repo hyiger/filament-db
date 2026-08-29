@@ -114,10 +114,12 @@ git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
-Then create a release on GitHub:
+Pushing the tag is the only manual step — the workflow itself creates the GitHub release, so don't run `gh release create` first: that would publish an asset-less release ahead of the builds.
+
+**The release is public from the first upload, not when the last one lands.** The upload steps use `softprops/action-gh-release@v2` without `draft: true` and nothing publishes it later, so whichever matrix job finishes first creates the release and the remaining platforms' installers appear as their jobs complete. During that window the release is visible with only some assets — and on macOS the multi-arch `latest-mac.yml` arrives later still, from the separate `merge-mac-metadata` job. So treat the **workflow run**, not the release-created notification, as the signal that a release is done. To attach release notes afterwards:
 
 ```bash
-gh release create v1.0.0 --title "v1.0.0" --generate-notes
+gh release edit v1.0.0 --notes-file release-notes.md
 ```
 
 The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel — six jobs in total, since macOS (arm64 + x64), Windows (x64 + arm64), and Linux (x64 + arm64) each build both architectures (the second arch cross-compiled). Each platform's installers are uploaded to the GitHub Release automatically.
@@ -183,7 +185,7 @@ In **development mode**: Electron loads `http://localhost:3456` (Next.js dev ser
 
 In **production mode**: Electron uses `utilityProcess.fork()` to run the standalone Next.js server on `http://localhost:3456`, then loads it in the BrowserWindow. If the server crashes unexpectedly, the app automatically attempts to restart it and reload the window. If restart fails, an error dialog is shown.
 
-IPC calls to NFC operations and sync have a 15-second timeout to prevent the UI from hanging if an operation becomes unresponsive.
+IPC calls to NFC operations (and other wrapped handlers) have a 15-second timeout to prevent the UI from hanging if an operation becomes unresponsive. Sync is deliberately **not** wrapped (GH #279): abandoning the IPC race wouldn't stop the sync engine, which would keep mutating both databases while the renderer was told it "timed out" — so `trigger-sync` runs to completion and progress is reported through the separate sync-status polling channel instead.
 
 ## Resetting Configuration
 

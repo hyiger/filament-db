@@ -196,7 +196,7 @@ describe("GH #1072 — generic filament route validation", () => {
   });
 
   it("POST/PUT wire-normalize raw multi-line settings strings (#1070 r7)", async () => {
-    // Codex P2 round 7 on PR #1086: the generic routes bypass
+    // The generic routes bypass
     // mergeSlicerSettings, so a raw multi-line value whose content is
     // quote-bounded used to persist verbatim — and serializeIniValue's
     // legacy-wrapper heuristic then stripped the GENUINE content quotes at
@@ -209,7 +209,7 @@ describe("GH #1072 — generic filament route validation", () => {
         vendor: "V",
         type: "PLA",
         // custom_note is NOT a legacy form key — its boundary quotes are
-        // CONTENT and must survive (r7/r9 semantics).
+        // CONTENT and must survive.
         settings: { custom_note: rawQuoted, single: "one line" },
       }),
     );

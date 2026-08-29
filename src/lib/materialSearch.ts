@@ -49,8 +49,8 @@ export function normalizeSearchFields(
  * SEARCH, not once per ROW: both UI callers filter the ~11.7k-material OPT
  * list per keystroke inside useMemo, where re-tokenizing the query (and
  * re-normalizing every row's fields) 11.7k times per keystroke measurably
- * blocks input (Codex P2 on PR #1181). Tokenize the query once per search
- * and cache normalizeSearchFields per row keyed on the loaded list.
+ * blocks input. Tokenize the query once per search and cache
+ * normalizeSearchFields per row keyed on the loaded list.
  */
 export function matchesSearchTokens(
   normalizedFields: ReadonlyArray<string>,

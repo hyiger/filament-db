@@ -16,7 +16,7 @@ export interface FilamentData {
   };
   maxVolumetricSpeed: number | null;
   inherits: string | null;
-  // GH #951 (Codex): spool weight + shrinkage are lifted to top-level (like
+  // GH #951: spool weight + shrinkage are lifted to top-level (like
   // cost/density) so their settings-bag shadow can be stripped without data
   // loss. OPTIONAL and set ONLY when the source INI key is present — an omitted
   // key must not become `$set: null` and clobber an existing value on a root
@@ -28,23 +28,12 @@ export interface FilamentData {
 }
 
 /**
- * GH #951 (Codex): the INI keys that `flushFilament` below lifts into a
- * TOP-LEVEL `FilamentData` field (rather than leaving only in the `settings`
- * passthrough bag). The bulk INI importers strip these from the stored
- * `settings` bag so a variant that inherits one of them doesn't keep a stale
- * shadow copy that leaks back into exports (`filamentToSlicerKeys` seeds `keys`
- * from `settings`, so a shadow survives when the resolved top-level value is
- * null). Every key here round-trips via its top-level field, so stripping loses
- * nothing. Keep this in lockstep with the `currentSettings.*` reads in
- * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
- */
-/**
- * GH #678 rounds 8+13: keys whose INI value is ALWAYS one scalar and must
- * never list-parse — the single-expression condition (round 5) and
- * `inherits`. The gcode/notes wire texts left this set in round 13: under
+ * GH #678: keys whose INI value is ALWAYS one scalar and must
+ * never list-parse — the single-expression condition and `inherits`.
+ * The gcode/notes wire texts are deliberately NOT in this set: under
  * the strict all-quoted grammar a bare semicolon in their content can no
  * longer be mistaken for a separator, so our own exported multi-element
- * gcode/notes arrays round-trip again. The accepted residual, stated: a
+ * gcode/notes arrays round-trip. The accepted residual, stated: a
  * LEGACY raw-wrapped note whose content happens to contain a
  * quote-aligned `";"` sequence could false-match the grammar — a shape no
  * canonical writer produces and no real note has been observed to hold.
@@ -54,6 +43,17 @@ export const SCALAR_ONLY_INI_KEYS = new Set([
   "inherits",
 ]);
 
+/**
+ * GH #951: the INI keys that `flushFilament` below lifts into a
+ * TOP-LEVEL `FilamentData` field (rather than leaving only in the `settings`
+ * passthrough bag). The bulk INI importers strip these from the stored
+ * `settings` bag so a variant that inherits one of them doesn't keep a stale
+ * shadow copy that leaks back into exports (`filamentToSlicerKeys` seeds `keys`
+ * from `settings`, so a shadow survives when the resolved top-level value is
+ * null). Every key here round-trips via its top-level field, so stripping loses
+ * nothing. Keep this in lockstep with the `currentSettings.*` reads in
+ * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
+ */
 export const INI_TOP_LEVEL_SETTING_KEYS = [
   "filament_vendor",
   "filament_type",
@@ -85,7 +85,7 @@ export const INI_TOP_LEVEL_SETTING_KEYS = [
  * gcode arrives as a quoted string with LITERAL `\n` escape sequences, not
  * raw newlines), the form escapes via `wrapIniString` on save, and the bulk
  * INI import below stores the trimmed wire bytes VERBATIM. That last point
- * is deliberate (Codex P2s on PR #1086): an earlier revision unescaped
+ * is deliberate: an earlier revision unescaped
  * cleanly-quoted values on import, which (a) flipped a literal quoted
  * `"nil"` into the bare `nil` inheritance marker on the next export,
  * (b) stripped literal boundary quotes/whitespace the quoting existed to
@@ -118,8 +118,8 @@ function escapeIniValueContent(content: string): string {
  * escaped character is taken verbatim (`\"` → `"`, `\\` → `\`, `\x` → `x`).
  * A trailing lone backslash is preserved as-is.
  *
- * `\t` is deliberately NOT decoded as a tab (Codex P2 round 8 suggested
- * it): upstream's unescape_string_cstyle (prusa3d/PrusaSlicer,
+ * `\t` is deliberately NOT decoded as a tab: upstream's
+ * unescape_string_cstyle (prusa3d/PrusaSlicer,
  * src/libslic3r/Config.cpp) special-cases ONLY `r` and `n` — every other
  * escaped char is emitted verbatim, so PrusaSlicer itself reads `\t` as
  * the letter `t` — and escape_string_cstyle never PRODUCES `\t` (a real
@@ -157,15 +157,7 @@ export function wrapIniString(content: string): string {
 }
 
 /**
- * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
- * matching escape_strings_cstyle's coStrings convention: elements joined
- * with `;`, an element quoted-escaped when it contains whitespace, `;`,
- * a quote, a backslash, or is empty — a bare simple token rides unquoted.
- * A comma-join (what String(array) would do) is NOT a list to PrusaSlicer;
- * it reads back as one value with commas in it.
- */
-/**
- * Inverse of {@link serializeIniValueList} (GH #678 round 6): split a
+ * Inverse of {@link serializeIniValueList} (GH #678): split a
  * coStrings RHS into its elements — `;` separates, a quoted element is
  * unescaped C-style. A scalar with no top-level `;` returns a single
  * element. Used by the INI importer to reconstruct list-typed settings
@@ -177,10 +169,10 @@ export function wrapIniString(content: string): string {
 export function parseIniValueList(value: string): string[] {
   const out: string[] = [];
   let i = 0;
-  // Not a well-formed list → the whole value is ONE element. Round 18: a
+  // Not a well-formed list → the whole value is ONE element. A
   // hand-formatted `"A" ; "B"` used to yield ["A", " ", " \"B\""] — three
-  // bogus printer names, two matching nothing. (The reported infinite loop
-  // does not occur: every branch either advances or breaks, verified
+  // bogus printer names, two matching nothing. (No infinite loop is
+  // possible: every branch either advances or breaks, verified
   // empirically over the malformed shapes; the progress assertion below
   // makes that structural rather than incidental.)
   const whole = (): string[] => [value];
@@ -232,12 +224,11 @@ export function parseIniValueList(value: string): string[] {
 /**
  * Serialize a MULTI-VALUED setting for a PrusaSlicer INI line (GH #678),
  * matching escape_strings_cstyle's coStrings convention. Elements are
- * joined with `;`; EVERY element is quoted (round 12) so an emitted list
- * is self-describing and cannot be confused with scalar content that
- * merely contains a semicolon.
+ * joined with `;`. A comma-join (what String(array) would do) is NOT a
+ * list to PrusaSlicer; it reads back as one value with commas in it.
  */
 export function serializeIniValueList(values: readonly unknown[]): string {
-  // Round 12 (Codex P2): EVERY element is quoted, unconditionally — this
+  // EVERY element is quoted, unconditionally — this
   // makes an emitted list SELF-DESCRIBING. A scalar's canonical wire form
   // escapes interior quotes (\"), so an unescaped `";"` separator between
   // quoted elements cannot occur inside one, and the strict all-quoted
@@ -245,7 +236,7 @@ export function serializeIniValueList(values: readonly unknown[]): string {
   // is indistinguishable from a scalar that legitimately CONTAINS a
   // semicolon (filament_vendor = ACME;Labs) — re-importing that mangled
   // the vendor to its first "element".
-  // Round 15 (Codex P2): elements are String-coerced HERE, at the single
+  // Elements are String-coerced HERE, at the single
   // enforcement point. The bag is a Mixed field — the generic create/PUT
   // API and slicer syncs can legitimately store [1, 2] — and passing a
   // number to the string-only escapeIniValueContent threw
@@ -268,7 +259,7 @@ export function isQuotedIniList(value: string): boolean {
 /**
  * Lenient inverse of `wrapIniString` for OUR OWN stored bag values: if the
  * value is quote-wrapped, strip the outer quotes and unescape; an UNQUOTED
- * single-line value with canonical escapes decodes too (r12 — it is wire,
+ * single-line value with canonical escapes decodes too (it is wire,
  * and PrusaSlicer reads its escapes with or without quotes); everything
  * else returns verbatim (raw legacy values / non-canonical escapes).
  * Lenient on purpose — pre-#1070 FilamentForm hand-wrapped `"..."` around
@@ -281,7 +272,7 @@ export function isQuotedIniList(value: string): boolean {
 export function unwrapIniString(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     const inner = value.slice(1, -1);
-    // Codex P2 round 5: pre-#1070 the form wrapped `"${raw}"` WITHOUT
+    // Pre-#1070 the form wrapped `"${raw}"` WITHOUT
     // escaping, so a legacy value may hold literal backslashes (a Windows
     // path in a note). A backslash starting a NON-canonical sequence
     // (`\t`, a trailing lone `\`) can only come from such a raw wrap —
@@ -295,7 +286,7 @@ export function unwrapIniString(value: string): string {
     // matching what PrusaSlicer itself reads from those bytes.
     return hasOnlyCanonicalEscapes(inner) ? unescapeIniValueContent(inner) : inner;
   }
-  // Codex P1 round 12: an UNQUOTED single-line value with canonical escapes
+  // An UNQUOTED single-line value with canonical escapes
   // is wire too — PrusaSlicer's unescape_string_cstyle processes escapes
   // with or without surrounding quotes, so `; setup\nM572 S0.04` reads as
   // two commands in the slicer. Decode it for display (WYSIWYG) so an
@@ -347,7 +338,7 @@ function isCleanQuotedString(value: string): boolean {
 }
 
 /**
- * GH #1070 / Codex P2 round 3 on PR #1086: decode ONE bag value for the
+ * GH #1070: decode ONE bag value for the
  * Orca/Bambu JSON exporters. The bag is wire-canonical (see the codec
  * docblock above), but JSON carries real newlines natively — emitting Prusa
  * INI wire syntax there hands Orca literal wrapper quotes and backslash
@@ -359,7 +350,7 @@ function isCleanQuotedString(value: string): boolean {
  * actually contains a line terminator. Single-line quoted values stay
  * verbatim, so their Orca round-trip remains byte-identical to main.
  *
- * ACCEPTED RESIDUE (Codex P2 round 8, stated in both directions): a JSON
+ * ACCEPTED RESIDUE, stated in both directions: a JSON
  * profile whose value is the LITERAL text `"a\nb"` — boundary quotes and
  * backslash as visible characters — is byte-identical to Prusa wire and
  * decodes as wire here, losing those characters on the JSON export. The
@@ -376,8 +367,8 @@ function isCleanQuotedString(value: string): boolean {
 export function decodeMultilineWireValue(value: string): string {
   if (!isCleanQuotedString(value)) return value;
   const inner = value.slice(1, -1);
-  // Codex P2 round 10: the same legacy-vs-canonical distinction the form's
-  // unwrapIniString applies (round 5). A backslash starting a non-canonical
+  // The same legacy-vs-canonical distinction the form's
+  // unwrapIniString applies. A backslash starting a non-canonical
   // sequence proves a pre-#1070 raw wrap — its `\n` is literal content
   // (`C:\new\tool`), not an escape — so decoding would corrupt it exactly
   // the way the form display used to. Return the bytes verbatim; the
@@ -404,7 +395,7 @@ export function decodeMultilineWireValue(value: string): string {
  * content, so they are stripped before escaping — otherwise literal quotes
  * would leak into the preset's text.
  *
- * The wrapper strip is KEY-SCOPED (Codex P2 round 9 on PR #1086): the
+ * The wrapper strip is KEY-SCOPED: the
  * pre-#1070 form only ever hand-wrapped {@link LEGACY_FORM_WRAPPED_KEYS},
  * so a quote-bounded raw multi-line value on any OTHER key can't be a
  * form wrap — its quotes are genuine content from a pre-upgrade
@@ -455,7 +446,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
         if (!val || val === "nil") return null;
         return val;
       };
-      // GH #678 round 6: the bag can hold arrays now (compatible_printers),
+      // GH #678: the bag can hold arrays now (compatible_printers),
       // but every TOP-LEVEL field below is scalar-typed and its key is never
       // stored as an array — this narrows for the type system (first element
       // defensively, matching the read convention everywhere else).
@@ -482,7 +473,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
         inherits: nilOrVal(scalar(currentSettings.inherits)),
         settings: { ...currentSettings },
       };
-      // GH #951 (Codex): lift spool weight + shrinkage to top-level ONLY when the
+      // GH #951: lift spool weight + shrinkage to top-level ONLY when the
       // source key is present, so an INI that omits them leaves the field
       // `undefined` (→ omitted from the importer's `$set`) rather than nulling a
       // value already on the row. See the FilamentData comment above.
@@ -538,20 +529,20 @@ export function parseIniFilaments(content: string): FilamentData[] {
         // and stays verbatim like everything else.
         let value: string | null = trimmed.substring(eqIndex + 1).trim();
         if (value === "nil") value = null;
-        // GH #678 rounds 6-8: our own exporter (writeSection) serializes
+        // GH #678: our own exporter (writeSection) serializes
         // EVERY array-valued bag entry as a coStrings list, so the importer
         // must invert for every key a list can reach — gated to only
         // compatible_printers, a Bambu → Prusa-INI → Orca round trip turned
-        // filament_soluble ["1","0"] into the scalar "1;0" (round 8).
+        // filament_soluble ["1","0"] into the scalar "1;0".
         //
         // The gate is a TOP-LEVEL `;` (outside quotes): the ambiguity risk
         // is a scalar value legitimately containing a raw semicolon, and
         // the keys where that genuinely occurs are the wire-value texts —
         // gcode/notes (whose legacy raw wraps can even hold unescaped inner
         // quotes that would defeat the element parser) and the condition
-        // expression (one expression by definition, round 5). Those are
+        // expression (one expression by definition). Those are
         // SCALAR_ONLY and always verbatim. compatible_printers additionally
-        // unquotes its SINGLETON (round 7 — the quotes must not become part
+        // unquotes its SINGLETON (the quotes must not become part
         // of the printer name on an Orca export); other keys' singletons
         // stay verbatim, since a quoted scalar there is a wire value that
         // must round-trip byte-identically.
@@ -560,7 +551,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
           value !== "" &&
           !SCALAR_ONLY_INI_KEYS.has(key)
         ) {
-          // Round 12 (Codex P2): a GENERIC key list-parses ONLY when the
+          // A GENERIC key list-parses ONLY when the
           // value matches the strict all-quoted grammar our exporter emits
           // — a bare `ACME;Labs` is scalar content (a vendor with a
           // semicolon), not a list, and splitting it corrupted the field.

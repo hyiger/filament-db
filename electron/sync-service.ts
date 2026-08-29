@@ -39,7 +39,7 @@ import {
   type MinimalZombieCollection,
 } from "../src/lib/purgedZombies";
 
-/** GH #1021 r25/r26: one pending legacy-condition transit clear — direction,
+/** GH #1021: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
  * and the provenance to revalidate on every attempt (own refs, else the
  * source parentId). Persisted in the local `_migrations` queue. */
@@ -72,19 +72,17 @@ interface RenameStagingRestoreEntry extends RenameStagingRestoreKey {
 
 /**
  * How old a restore entry must be before another pass's sweep may act on it
- * (GH #1153, Codex P2). Two services can share one database — the desktop
- * client and a Docker instance against the same Atlas is the documented
- * GH #439 reality — and an entry is durable BEFORE its row is staged. In that
- * enqueue-to-update window the row still holds its original name, so a
- * concurrent sweep read the record as resolved and DRAINED it; the owning
- * pass then staged and could crash without the durable record this queue
- * exists to guarantee. The same blindness let a sweep restore a placeholder
- * an active pass was still using. Age is the discriminator: a pass's own
- * staging-to-settlement span is seconds, so an entry older than this bound
- * belongs to a DEAD pass. Fifteen minutes dwarfs both any plausible pass and
- * cross-service clock skew (the stamp is written by one service's clock and
- * compared by another's); the cost is that a genuine stranding waits one
- * bound before healing — it already waited at least a full cycle.
+ * (GH #1153). Two services can share one database (desktop + Docker against
+ * the same Atlas, GH #439), and an entry is durable BEFORE its row is
+ * staged. In that enqueue-to-update window the row still holds its original
+ * name, so a concurrent sweep would read the record as resolved and DRAIN
+ * it — the owning pass then stages and could crash without the durable
+ * record this queue exists to guarantee. The same blindness would let a
+ * sweep restore a placeholder an active pass is still using. Age is the
+ * discriminator: a pass's staging-to-settlement span is seconds, so an
+ * entry older than this bound belongs to a DEAD pass. Fifteen minutes
+ * dwarfs both any plausible pass and cross-service clock skew; the cost is
+ * that a genuine stranding waits one bound before healing.
  */
 const SWEEP_MIN_AGE_MS = 15 * 60 * 1000;
 
@@ -113,22 +111,13 @@ function isRestoreEntry(value: unknown): value is RenameStagingRestoreEntry {
  * so the local-only push / pull paths can treat a concurrent peer
  * winning that race as a no-op (GH #439).
  *
- * Codex follow-up on PR #464: an earlier version accepted ANY
- * E11000 and silently swallowed real conflicts. Every synced
- * collection also has unique indexes on at least one other field
- * — filament `name` / `instanceId`, nozzle `name`, etc. A real
- * collision on those would have left the doc unsynced forever
- * while the cycle still reported success.
- *
- * The MongoDB driver decorates the error with:
- *   - `code: 11000`
- *   - `keyPattern: { <indexedField>: 1 }`  (which index conflicted)
- *   - `keyValue`: { <indexedField>: <colliding value> }
- * Constrain to the `syncId` case by checking `keyPattern.syncId` —
- * a key in the pattern means the violation involved that index.
- * Without a keyPattern (some driver versions surface a bare code on
- * older error shapes), err on the side of NOT swallowing so the
- * cycle still surfaces the conflict.
+ * Do NOT widen this to ANY E11000: every synced collection also has
+ * unique indexes on other fields (filament `name` / `instanceId`, nozzle
+ * `name`, …), and swallowing a real collision on those leaves the doc
+ * unsynced forever while the cycle reports success (#464). The driver
+ * decorates the error with `code: 11000` + `keyPattern: {<field>: 1}`;
+ * constrain to `keyPattern.syncId`. Without a keyPattern (older error
+ * shapes), err on the side of NOT swallowing.
  */
 export function isDuplicateKeyError(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
@@ -157,24 +146,15 @@ export function isNameDuplicateKeyError(err: unknown): boolean {
 /**
  * Extract the database name from a MongoDB connection URI.
  *
- * The DB name is the path segment after the authority:
- *   mongodb+srv://user:pass@cluster.mongodb.net/my-db?retryWrites=true
- *                                                └─ "my-db"
- *
  * Falls back to "filament-db" if the URI has no explicit DB path, matching
- * the app's historical default so upgrading users keep working against the
- * same database.
+ * the app's historical default.
  *
- * GH #1071: parse with the driver's own `ConnectionString` (from
- * `mongodb-connection-string-url`, a direct dependency of `mongodb`),
- * NOT `new URL()` on a scheme-swapped string. A standard multi-host URI
- * (`mongodb://u:p@h1:27017,h2:27017/mydb?replicaSet=rs0` — a self-hosted
- * replica set, or Atlas's non-SRV form) has a comma in the authority,
- * which made the WHATWG URL parser throw — so the old implementation
- * silently fell back to "filament-db" and hybrid sync targeted the WRONG
- * database (the connectivity check is db-agnostic, so it still reported
- * success). ConnectionString handles multi-host, SRV, percent-encoded
- * credentials and query strings identically to MongoClient. The
+ * GH #1071: parse with the driver's own `ConnectionString`, NOT `new URL()`
+ * on a scheme-swapped string — a standard multi-host URI
+ * (`mongodb://u:p@h1:27017,h2:27017/mydb?replicaSet=rs0`) has a comma in
+ * the authority that makes the WHATWG parser throw, silently falling back
+ * to "filament-db" so hybrid sync targeted the WRONG database (the
+ * connectivity check is db-agnostic and still reported success). The
  * try/catch stays for genuinely malformed URIs.
  */
 export function getDbNameFromUri(uri: string): string {
@@ -188,34 +168,21 @@ export function getDbNameFromUri(uri: string): string {
 
 /**
  * Wrap a sync error into a user-facing message, redacting connection
- * strings. When the error is the MongoDB driver's "Unauthorized" shape
- * (raised when the Atlas user lacks `readWrite`), swap the raw driver
- * text for an actionable hint that points the user at the fix —
- * regenerating the connection string from a writable Atlas user.
- *
- * Detects the auth shape by structured code first (GH #1154): a present
- * numeric code is authoritative — 13 is mongod's Unauthorized, whose message
- * never matches the regex anyway — and the message regex decides only for
- * code-less errors and for AtlasError 8000, whose shared-tier proxy authors
- * the "user is not allowed to do action" text itself. Any OTHER numeric code
- * suppresses the regex, because value-echoing server errors (E11000 and
- * friends) quote stored data verbatim, and stored data must not be able to
- * steer this message. See GH #143 for the hint itself.
+ * strings. The MongoDB "Unauthorized" shape (Atlas user lacks `readWrite`)
+ * is swapped for an actionable hint (GH #143). Auth detection is
+ * code-first (GH #1154) — see the inline comment at the decision.
  *
  * ## Composed errors: classify the CAUSE, re-attach the notice (GH #1142)
  *
- * Two things break when a caller wraps a driver error in its own Error, which
- * `strandedPlaceholderError` does:
+ * When a caller wraps a driver error in its own Error (as
+ * `strandedPlaceholderError` does):
  *
- *  1. `new Error(msg, {cause})` does NOT inherit `code`, so the "more reliable
- *     signal" above silently disappears — a genuine `code: 13` whose text does
- *     not match the regex used to produce the hint and now produces nothing.
- *     So classification reads through `cause` when there is one.
+ *  1. `new Error(msg, {cause})` does NOT inherit `code` — so classification
+ *     reads through `cause` when there is one.
  *  2. The auth branch REPLACES the whole message, discarding anything the
- *     caller put in it. Ordering cannot save a composed message — the function
- *     never reads the original. So a stranding notice is re-attached at the
- *     END, outside the auth/redact decision, where no present or future
- *     rewriting branch can drop it.
+ *     caller put in it — so a stranding notice is re-attached at the END,
+ *     outside the auth/redact decision, where no rewriting branch can drop
+ *     it.
  *
  * The notice is cause-free by construction (see `strandedPlaceholderNotice`),
  * so re-attaching it cannot itself trip the regex on the next pass.
@@ -231,20 +198,17 @@ export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
       ? (cause as { code: unknown }).code
       : undefined;
 
-  // A present NUMERIC code is authoritative; the regex decides only for
-  // code-less errors and for AtlasError 8000 (GH #1154). The old `regex ||
-  // code` sniffed a string that already contains user-controlled data — an
-  // E11000 echoes the offending value verbatim, so a row literally named
-  // "user is not allowed to do action" turned a name collision into the
-  // Atlas-permissions hint. Every value-echoing server error carries a
-  // numeric code (11000, BadValue, FailedToParse…), so gating the regex on
-  // the code being absent-or-8000 removes the only route by which stored
-  // data can steer the message. The 8000 allowance is load-bearing: Atlas's
+  // A present NUMERIC code is authoritative (13 = mongod Unauthorized); the
+  // regex decides only for code-less errors and AtlasError 8000 (GH #1154).
+  // A bare `regex || code` sniffed user-controlled data — an E11000 echoes
+  // the offending value verbatim, so a row literally named "user is not
+  // allowed to do action" turned a name collision into the Atlas-permissions
+  // hint. Every value-echoing server error carries a numeric code, so gating
+  // the regex on absent-or-8000 removes the only route by which stored data
+  // can steer the message. The 8000 allowance is load-bearing: Atlas's
   // shared-tier proxy raises unauthorized writes as AtlasError 8000 with a
-  // message IT authors (never echoing document values), so a literal
-  // "code-first, regex only when absent" would silently drop the hint
-  // exactly where GH #143 needed it — and CI would stay green, because the
-  // existing tests model auth errors as code-less.
+  // message IT authors (never echoing document values) — dropping it would
+  // silently lose the hint exactly where GH #143 needed it.
   const numericCode = typeof code === "number" ? code : null;
   const isAuthError =
     numericCode === 13 ||
@@ -280,8 +244,7 @@ export interface SyncStatus {
    * failed in the same cycle. Distinct from "error" — which is reserved
    * for cycle-level failures (connect timeout, post-sync repair throw,
    * every collection failed) — so the renderer can surface partial
-   * convergence as recoverable rather than the all-or-nothing red pill
-   * the pre-fix code showed.
+   * convergence as recoverable rather than an all-or-nothing red pill.
    */
   state: "idle" | "syncing" | "error" | "offline" | "partial";
   lastSyncAt: string | null;
@@ -341,15 +304,11 @@ interface SyncResult {
  * per-spool attribution is dropped pending a spool-syncId migration.
  *
  * GH #438: the SAME caveat applies to OTHER subdoc `_id`s — every
- * `calibrations[]._id` on a Filament and every `amsSlots[]._id` on a
- * Printer is freshly minted by `insertOne`/`$set` on each cross-side
- * write because the subdocs don't carry a stable `syncId`. Today nothing
- * in the codebase references these subdoc ids across sync (URL deep-
- * links, ledger entries, etc. all key by parent doc + offset), so this
- * is documented as a constraint on future features rather than fixed
- * by adding subdoc syncIds. If you add a feature that needs stable
- * cross-side subdoc identity, the fix is to mint a `syncId` on the
- * subdoc and preserve it through `stripForTransfer`.
+ * `calibrations[]._id` / `amsSlots[]._id` is freshly minted on each
+ * cross-side write (no stable subdoc `syncId`). Nothing currently
+ * references these subdoc ids across sync; a future feature that needs
+ * stable cross-side subdoc identity must mint a `syncId` on the subdoc
+ * and preserve it through `stripForTransfer`.
  */
 export class SyncService extends EventEmitter {
   private localUri: string;
@@ -363,7 +322,7 @@ export class SyncService extends EventEmitter {
   };
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
-  /** GH #1021 r26: candidates whose durable enqueue failed — carried across
+  /** GH #1021: candidates whose durable enqueue failed — carried across
    * cycles in memory so the enqueue is retried until it lands (an
    * equal-timestamp pair never re-copies, so the transform alone cannot
    * rediscover them). Cleared once the batch enqueue succeeds. */
@@ -413,7 +372,6 @@ export class SyncService extends EventEmitter {
    */
   startPeriodicSync(intervalMs = 5 * 60 * 1000) {
     this.stopPeriodicSync();
-    // Run immediately, then on interval
     this.sync().catch((err) => console.error("Periodic sync failed:", err));
     this.intervalId = setInterval(() => {
       this.sync().catch((err) => console.error("Periodic sync failed:", err));
@@ -448,12 +406,10 @@ export class SyncService extends EventEmitter {
     // errored SyncResult instead of throwing all the way out and discarding
     // the partial-success state from earlier collections.
     //
-    // GH #369 (Codex follow-up): dependent collections are SKIPPED rather
-    // than run with stale syncId maps. Without this guard a transient
-    // nozzle/bedtype failure would let `printers`/`filaments` run anyway —
-    // remapPrinterRefs and buildFilamentRefsTransform drop unresolved
-    // references to null, so a transient upstream failure became permanent
-    // reference loss in downstream documents (Feb 29 of sync bugs). The
+    // Dependent collections are SKIPPED rather than run with stale syncId
+    // maps: remapPrinterRefs and buildFilamentRefsTransform drop unresolved
+    // references to null, so a transient upstream failure would otherwise
+    // become permanent reference loss in downstream documents. The
     // dependency graph mirrors the explicit "syncs before X" ordering
     // comments throughout this method:
     //   nozzles      → no deps
@@ -516,13 +472,12 @@ export class SyncService extends EventEmitter {
     // Declared outside the try so the catch below can publish them: a cycle
     // that dies after the trim passes still knows what those passes saw.
     const trimConflicts: SyncNameConflict[] = [];
-    // Which `side:collection` pairs the trim actually LOOKED at (Codex P2
-    // round 6). Publishability is per pair, not global: the snapshot is
-    // authoritative about what it scanned and silent about the rest, so a
-    // single skip must not suppress a fresh conflict another collection just
-    // found — that hid it indefinitely whenever the skip and the failure both
-    // repeated. A pair the pass skipped, or a side it threw on, keeps
-    // whatever the previous status said.
+    // Which `side:collection` pairs the trim actually LOOKED at.
+    // Publishability is per pair, not global: the snapshot is authoritative
+    // about what it scanned and silent about the rest, so a single skip must
+    // not suppress a fresh conflict another collection just found. A pair
+    // the pass skipped, or a side it threw on, keeps whatever the previous
+    // status said.
     const scannedPairs = new Set<string>();
     const pairKey = (side: string, collection: string) => `${side}:${collection}`;
     /** Fresh rows for scanned pairs; the previous status for everything else. */
@@ -540,22 +495,18 @@ export class SyncService extends EventEmitter {
       const localDb = local.db(getDbNameFromUri(this.localUri));
       const remoteDb = remote.db(getDbNameFromUri(this.atlasUri));
 
-      // GH #1021 (Codex P1 ×2 on #1022): neither database can be assumed clean
-      // here. The REMOTE never runs dbConnect at all, and the LOCAL one may not
-      // have either — resolveMongoUri() starts this sync via initSyncService()
-      // BEFORE the Next server (and its dbConnect migrations) comes up. If a
-      // legacy machine-derived nozzle condition rides a NEWER doc on either
-      // side, LWW copies it over the cleaned side, and since the cleanup
-      // preserves updatedAt the divergence then sticks at equal timestamps
-      // forever. So: run the marker-guarded cleanup on BOTH DBs before any
-      // collection sync, and treat a failure as a PREREQUISITE failure — abort
-      // the cycle (throw → the outer catch reports it; the next cycle retries)
-      // rather than syncing stale values around the one-shot cleanup.
-      // Codex P2 r18/r19: destroy() can land while the two clients were still
-      // connecting — or while the FIRST side's cleanup is awaiting — so the
-      // abort flag is re-checked before EACH side's destructive cleanup,
-      // matching the mode-switch contract every later step honors (the
-      // abandoned databases must not be touched by any subsequent operation).
+      // GH #1021: neither database can be assumed clean here. The REMOTE
+      // never runs dbConnect at all, and the LOCAL one may not have either —
+      // resolveMongoUri() starts this sync BEFORE the Next server (and its
+      // dbConnect migrations) comes up. If a legacy machine-derived nozzle
+      // condition rides a NEWER doc on either side, LWW copies it over the
+      // cleaned side, and since the cleanup preserves updatedAt the
+      // divergence sticks at equal timestamps forever. So: run the
+      // marker-guarded cleanup on BOTH DBs before any collection sync, and
+      // treat a failure as a PREREQUISITE failure (throw → the next cycle
+      // retries). The abort flag is re-checked before EACH side's
+      // destructive cleanup — destroy() can land while the clients are still
+      // connecting or the first side's cleanup is awaiting.
       for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
         if (this.aborted) break;
         const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
@@ -570,46 +521,35 @@ export class SyncService extends EventEmitter {
        * Collections where a name couldn't be trimmed on one side or the
        * other, so the two peers may now disagree about identity.
        *
-       * This gates `reconcileByName` ONLY — deliberately NOT `syncCollection`
-       * (adversarial audit, and the narrower reading of the original P1).
-       * `reconcileByName` is the sole path that matches on the raw `name`
-       * string, so it is the sole path that can stamp one record's syncId
-       * onto another and fuse two distinct rows; that is the outcome worth
-       * blocking. `syncCollection` is purely syncId-keyed.
-       *
+       * This gates `reconcileByName` ONLY — deliberately NOT
+       * `syncCollection`. `reconcileByName` is the sole path that matches on
+       * the raw `name` string, so it is the sole path that can stamp one
+       * record's syncId onto another and fuse two distinct rows; that is the
+       * outcome worth blocking. `syncCollection` is purely syncId-keyed.
        * Blocking the COPY as well made the guard self-perpetuating: in
-       * hybrid mode the app writes only to the LOCAL database, so a user who
-       * does exactly what the error says — rename the duplicate — clears the
-       * local conflict while the REMOTE pair stays active, and the union
-       * below still names the collection on every later cycle. Locations,
-       * filaments and print history would never sync again, and the one
-       * thing that could have propagated the fix (a syncId-keyed LWW copy of
-       * the renamed row onto Atlas) was the thing being blocked.
-       *
-       * The residual case the copy gate did cover — one side trimmed, the
-       * other not, distinct syncIds, so an INSERT hits the unique index — now
-       * surfaces as an E11000 through `trySync`: loud, per-collection,
-       * retried every cycle, and cleared by the next successful trim. A
+       * hybrid mode the app writes only to the LOCAL database, so renaming
+       * the duplicate (exactly what the error says) clears the local
+       * conflict while the REMOTE pair stays active — locations, filaments
+       * and print history then never sync again, and the syncId-keyed LWW
+       * copy that could have propagated the fix was the thing being blocked.
+       * The residual case (one side trimmed, the other not, distinct
+       * syncIds → INSERT hits the unique index) surfaces as an E11000
+       * through `trySync`: loud, per-collection, retried every cycle. A
        * recoverable failure beats a permanent one.
        */
       const conflictedCollections = new Set<string>();
       /**
        * Per-collection set of NAMES that must not be paired by name.
        *
-       * The gate used to be keyed by COLLECTION while the conflicts are
-       * per-ROW, so one untrimmable whitespace pair disabled
-       * `reconcileByName` for every name in the collection — including a
-       * genuinely unpaired same-name row created independently on both peers,
-       * which is the v1.11.3 case that helper exists to fix. That row's
-       * insert then hit the unique name index, and because the module's
-       * `isDuplicateKeyError` only recognizes a `syncId` violation, the
-       * failure propagated: locations errored, filaments and print history
-       * cascade-skipped, every cycle, with the surfaced error naming the
-       * INNOCENT row. A second audit reproduced it end to end against two
-       * live databases.
-       *
-       * The fusion hazard is confined to the conflicting name and its
-       * trimmed form, so that is what gets blocked.
+       * Keyed by NAME, not collection: a collection-wide gate let one
+       * untrimmable whitespace pair disable `reconcileByName` for every
+       * name — including a genuinely unpaired same-name row created
+       * independently on both peers (the v1.11.3 case the helper exists
+       * for), whose insert then hit the unique name index; that E11000 isn't
+       * a syncId violation, so locations errored and filaments/print history
+       * cascade-skipped every cycle, naming the INNOCENT row. The fusion
+       * hazard is confined to the conflicting name and its trimmed form, so
+       * that is what gets blocked.
        */
       const conflictedNames = new Map<string, Set<string>>();
 
@@ -636,29 +576,24 @@ export class SyncService extends EventEmitter {
       // different and aborts, for the reason in the loop below.
       for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
         if (this.aborted) break;
-        // A THROW here aborts the cycle (Codex P1). Swallowing it and syncing
-        // anyway is the worst outcome available: the two spellings are still
+        // A THROW here aborts the cycle. Swallowing it and syncing anyway is
+        // the worst outcome available: the two spellings are still
         // different, so `reconcileByName` doesn't pair them, `syncCollection`
-        // copies BOTH to BOTH databases, and the next cycle's trim then finds
-        // a genuine collision on each side and leaves the duplicate
-        // permanently. Failing the cycle costs one retry; continuing costs a
-        // pair of rows a human has to merge by hand. (Per-row conflicts are
-        // still non-fatal — those are REPORTED, not thrown; see
-        // `trimEntityNames`.)
-        // BEFORE the trim, on BOTH peers (GH #1116, Codex P1). A purge zombie
-        // (`_purged: true` with `_deletedAt: null`) is ACTIVE as far as
-        // MongoDB is concerned, so it OCCUPIES the partial unique name index —
-        // and nothing else ever repairs it on the remote, which never runs
-        // `dbConnect` and whose both-purged sync branch is a documented no-op.
+        // copies BOTH to BOTH databases, and the next cycle's trim finds a
+        // genuine collision on each side — a permanent duplicate. Failing
+        // the cycle costs one retry. (Per-row conflicts are still non-fatal
+        // — REPORTED, not thrown; see `trimEntityNames`.)
         //
-        // The trim deliberately refuses to let a hidden zombie GATE a sync (a
-        // user cannot resolve a row the UI does not show), so a local `"X "`
-        // is free to become `"X"` while a remote zombie still holds `"X"` —
-        // after which every `replaceOne` of that filament onto the remote
-        // fails E11000, permanently, taking filaments and print-history with
-        // it down the dependency chain. Suppressing the gate was only half the
-        // answer; this is the other half, and it puts the row into the state
-        // it should have been in all along.
+        // Zombie repair BEFORE the trim, on BOTH peers (GH #1116). A purge
+        // zombie (`_purged: true` with `_deletedAt: null`) is ACTIVE as far
+        // as MongoDB is concerned, so it OCCUPIES the partial unique name
+        // index — and nothing else ever repairs it on the remote, which
+        // never runs `dbConnect`. The trim deliberately refuses to let a
+        // hidden zombie GATE a sync (a user cannot resolve a row the UI
+        // does not show), so a local `"X "` is free to become `"X"` while a
+        // remote zombie still holds `"X"` — after which every `replaceOne`
+        // of that filament onto the remote fails E11000, permanently,
+        // taking filaments and print-history down the dependency chain.
         const zombies = await retombstonePurgedZombies(
           dbHandle.collection("filaments") as unknown as MinimalZombieCollection,
         );
@@ -676,10 +611,9 @@ export class SyncService extends EventEmitter {
         // a filaments-only concept. Epoch stamp: LWW-arithmetic-preserving —
         // see the helper's docblock for why NOT `new Date()` and NOT null.
         for (const collectionName of TOMBSTONE_COLLECTIONS) {
-          // Re-checked per iteration (Codex P2): destroy() can flip `aborted`
-          // while an awaited repair is in flight, and the service contract is
-          // that only the operation already in flight may finish — not six
-          // more repairs against a database the user just switched away from.
+          // Re-checked per iteration: destroy() can flip `aborted` while an
+          // awaited repair is in flight, and only the operation already in
+          // flight may finish.
           if (this.aborted) break;
           const healed = await repairMalformedTombstones(
             dbHandle.collection(collectionName) as unknown as MinimalTombstoneCollection,
@@ -690,45 +624,38 @@ export class SyncService extends EventEmitter {
             );
           }
         }
-        // Re-check AFTER the zombie repair (Codex P2). `destroy()` can set
-        // `aborted` while that await is in flight, and the trim is a SEPARATE
-        // destructive migration — it creates indexes and rewrites names across
-        // five collections. Resuming into it would work on a database the user
-        // just abandoned by switching connection mode, contrary to the
-        // surrounding contract that only the operation already in flight may
-        // finish.
+        // Re-check AFTER the zombie repair: the trim is a SEPARATE
+        // destructive migration (creates indexes, rewrites names across five
+        // collections) and must not resume into a database the user just
+        // abandoned by switching connection mode.
         if (this.aborted) break;
         const trimResult = await trimEntityNames(dbHandle as unknown as MinimalTrimDb);
         const line = describeTrimResult(trimResult);
         if (line) console.log(`[sync] ${side}: ${line}`);
-        // A per-row conflict is non-fatal for the CYCLE but it is fatal for
-        // ITS OWN COLLECTION (Codex P1). One side can succeed where the other
-        // couldn't — local holds A="X" and B="X " so B can't be trimmed,
-        // while the remote holds only B and trims it to "X". The two sides
-        // now disagree about which row "X" is, and `reconcileByName` would
-        // pair remote B with local A by NAME and stamp A's syncId onto B:
-        // two distinct records fused into one, after which LWW overwrites
-        // one with the other. Record the affected collections and refuse to
-        // reconcile or sync them until a human separates the pair.
-        // ACTIVE conflicts only (Codex P1). An untrimmable name on a
-        // soft-deleted row is permanent, can't collide in the partial index
-        // and is never seen by `reconcileByName` — gating on it would block
-        // that collection's sync forever with no user-accessible fix, since a
-        // purged filament isn't even visible in the trash. It still gets
-        // logged; it just doesn't stop anything.
+        // A per-row conflict is non-fatal for the CYCLE but fatal for ITS
+        // OWN COLLECTION's name-pairing. One side can succeed where the
+        // other couldn't — local holds A="X" and B="X " so B can't be
+        // trimmed, while the remote holds only B and trims it to "X". The
+        // sides now disagree about which row "X" is, and `reconcileByName`
+        // would pair remote B with local A by NAME and stamp A's syncId onto
+        // B: two distinct records fused into one, after which LWW overwrites
+        // one with the other.
+        // ACTIVE conflicts only: an untrimmable name on a soft-deleted row
+        // is permanent, can't collide in the partial index and is never seen
+        // by `reconcileByName` — gating on it would block that collection's
+        // sync forever with no user-accessible fix (a purged filament isn't
+        // even visible in the trash). Logged, but stops nothing.
         for (const c of trimResult.conflicts) {
           if (!c.active) continue;
-          // Keep a copy for the ERROR path (Codex P2 round 3). The published
-          // list normally comes from the post-copy rescan at the end of the
-          // cycle, but a cycle that throws between here and there never
-          // reaches it — and the outer catch would then leave the PREVIOUS
-          // list standing. That silently loses every remote-only conflict:
-          // the health page's own scan reads the local database, which by
-          // definition has no copy of one.
+          // Keep a copy for the ERROR path: the published list normally
+          // comes from the post-copy rescan at the end of the cycle, but a
+          // cycle that throws before then would leave the PREVIOUS list
+          // standing — silently losing every remote-only conflict (the
+          // health page's own scan reads only the local database).
           trimConflicts.push({ ...c, side });
-          // Block the NAMES, not the collection (second adversarial audit).
-          // Both spellings: the stored one and the trimmed one it would have
-          // become — a pairing can be attempted under either.
+          // Block the NAMES, not the collection. Both spellings: the stored
+          // one and the trimmed one it would have become — a pairing can be
+          // attempted under either.
           const set = conflictedNames.get(c.collection) ?? new Set<string>();
           set.add(c.name);
           set.add(c.name.trim());
@@ -736,33 +663,31 @@ export class SyncService extends EventEmitter {
         }
         // A collection the pass SKIPPED has un-normalized names by
         // definition, and it doesn't know WHICH — so that one really is
-        // collection-wide.
-        // A skip means the pass never looked at that collection's rows at all
-        // — it gave up before querying any candidate (Codex P2 round 4). The
-        // snapshot is therefore silent about it rather than clean, so record
-        // only what was really scanned; everything else keeps the previous
-        // status's rows. A side this loop THROWS on records nothing, since
-        // the throw discards whatever it had found so far.
+        // collection-wide. A skip means the pass never looked at that
+        // collection's rows at all, so the snapshot is silent about it
+        // rather than clean: record only what was really scanned; everything
+        // else keeps the previous status's rows. A side this loop THROWS on
+        // records nothing.
         const skippedHere = new Set(trimResult.skipped.map((sk) => sk.collection));
         for (const sk of trimResult.skipped) conflictedCollections.add(sk.collection);
         for (const collection of TRIMMABLE_COLLECTIONS) {
           if (!skippedHere.has(collection)) scannedPairs.add(pairKey(side, collection));
         }
       }
-      // (GH #1164 round 2: the conflict list is published AFTER the
-      // collection copies — see the rescan near the end of the cycle. This
-      // pre-copy point is too early: a conflict the user resolved locally
-      // is propagated to the peer by THIS cycle's copy, so publishing here
-      // reported a row that no longer exists until the next cycle.)
+      // (GH #1164: the conflict list is published AFTER the collection
+      // copies — see the rescan near the end of the cycle. This pre-copy
+      // point is too early: a conflict the user resolved locally is
+      // propagated to the peer by THIS cycle's copy, so publishing here
+      // would report a row that no longer exists.)
 
-      // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
-      // transit-clear queues on BOTH databases (a failed local enqueue falls
-      // back to the remote queue, r27). A prior cycle's pair-clear that
-      // failed halfway left its entry queued; re-attempt it every cycle and
-      // dequeue once neither side matches the observed state. Every replay
-      // REVALIDATES the provenance persisted with the entry (r26) —
-      // parent/nozzle drift since the enqueue drops the entry after
-      // reconciling any partial clear (r27) rather than replaying blind.
+      // GH #1021: drain the durable transit-clear queues on BOTH databases
+      // (a failed local enqueue falls back to the remote queue). A prior
+      // cycle's pair-clear that failed halfway left its entry queued;
+      // re-attempt it every cycle and dequeue once neither side matches the
+      // observed state. Every replay REVALIDATES the provenance persisted
+      // with the entry — parent/nozzle drift since the enqueue drops the
+      // entry after reconciling any partial clear rather than replaying
+      // blind.
       if (!this.aborted) {
         for (const queueDb of [localDb, remoteDb]) {
           if (this.aborted) break;
@@ -817,17 +742,13 @@ export class SyncService extends EventEmitter {
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
-      // GH #1116 (Codex P1): reconcile by name FIRST, like bedtypes,
-      // locations and filaments already do. Nozzle and Printer carry the same
-      // partial-unique `name` index, and the trim above can make two rows
-      // NEWLY equal — one peer's `"0.4 "` and the other's `"0.4"` normalize to
-      // the same name under different syncIds. Without reconciliation
-      // syncCollection treats them as two rows and inserts one beside the
-      // other, straight into the index; that E11000 is not a syncId collision
-      // so it isn't swallowed, and the nozzle failure cascade-skips printers,
-      // filaments and print history on EVERY cycle. Independent creation of
-      // the same nozzle on two desktops has the same shape and was already
-      // possible — the trim just makes it reachable without a typo.
+      // GH #1116: reconcile by name FIRST, like bedtypes/locations/filaments.
+      // Nozzle and Printer carry the same partial-unique `name` index, and
+      // the trim above can make two rows NEWLY equal (`"0.4 "` vs `"0.4"`)
+      // under different syncIds — syncCollection would then insert one
+      // beside the other straight into the index; that E11000 is not a
+      // syncId collision so it isn't swallowed, and the nozzle failure
+      // cascade-skips printers, filaments and print history on EVERY cycle.
       if (!this.aborted && !conflictedCollections.has("nozzles")) {
         await this.reconcileNozzlesByName(localDb, remoteDb, conflictedNames.get("nozzles"));
       }
@@ -843,19 +764,15 @@ export class SyncService extends EventEmitter {
       const localNozzleBySyncId = new Map(localNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
       const remoteNozzleBySyncId = new Map(remoteNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
 
-      // Sync bedtypes before printers AND before filaments: printers now
-      // carry installedBedTypes refs (and filament calibrations carry
+      // Sync bedtypes before printers AND before filaments: printers carry
+      // installedBedTypes refs (and filament calibrations carry
       // calibrations[].bedType), so the bedType docs + syncId maps must
-      // exist before either of those collections is remapped. BedType has
-      // no outgoing references of its own, so it's safe to sync this
-      // early. Same partial-unique-name index trap as locations — bed
-      // types existed before sync was added to this collection set, and
-      // duplicate names on first sync would E11000 the cycle. Reconcile
-      // by name first to unify the syncIds.
+      // exist before either of those collections is remapped. BedType has no
+      // outgoing references of its own, so it's safe to sync this early.
       this.updateStatus({ progress: "Syncing bed types..." });
-      // GH #904: gate the inline reconcile on the abort flag, like trySync and
-      // the repair passes — after a #823 abort it must stop writing syncId
-      // metadata to the about-to-be-abandoned DB.
+      // GH #904: gate the inline reconcile on the abort flag, like trySync
+      // and the repair passes — after a #823 abort it must stop writing
+      // syncId metadata to the about-to-be-abandoned DB.
       if (!this.aborted && !conflictedCollections.has("bedtypes")) {
         await this.reconcileBedTypesByName(localDb, remoteDb, conflictedNames.get("bedtypes"));
       }
@@ -873,7 +790,7 @@ export class SyncService extends EventEmitter {
       // Sync printers (filament calibrations reference them; printers
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
-      // GH #1116 (Codex P1): same reasoning as nozzles above.
+      // GH #1116: same reasoning as nozzles above.
       if (!this.aborted && !conflictedCollections.has("printers")) {
         await this.reconcilePrintersByName(localDb, remoteDb, conflictedNames.get("printers"));
       }
@@ -896,17 +813,9 @@ export class SyncService extends EventEmitter {
       const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
       const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
-      // Sync locations before filaments so spool.locationId can be remapped.
-      // Locations are referenced from filaments[].spools[].locationId — a
-      // missing remap would either drop the reference or, worse, point at a
+      // Sync locations before filaments so spool.locationId can be remapped
+      // — a missing remap would drop the reference or, worse, point at a
       // wrong location on the target DB (GH #116).
-      //
-      // Reconcile by name first: locations existed on both sides before sync
-      // was added (v1.11.3). On the very first sync each side has its own
-      // locally-minted syncId, so a naive push would `insertOne` a row whose
-      // name collides with the partial-unique index on Location and abort
-      // the entire sync cycle. Pairing matching-name rows and unifying their
-      // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
       if (!this.aborted && !conflictedCollections.has("locations")) {
         await this.reconcileLocationsByName(localDb, remoteDb, conflictedNames.get("locations")); // GH #904
@@ -922,23 +831,14 @@ export class SyncService extends EventEmitter {
       const localLocationBySyncId = new Map(localLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
       const remoteLocationBySyncId = new Map(remoteLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
 
-      // Repair dangling spool.locationId references left behind by pre-#116
-      // sync cycles. Filaments synced before the locationId remap landed
-      // carry spools[].locationId values that point at the *other side's*
-      // ObjectId (which obviously doesn't exist on this side). The normal
-      // filament sync path can't fix them: those filaments often have equal
-      // updatedAt on both sides, so syncCollection's last-write-wins skip
-      // never re-runs the transform on them. Patch them in-place using the
-      // freshly-built location maps; bumps updatedAt so subsequent syncs
-      // notice the rewrite.
+      // Repair dangling spool.locationId refs left by pre-#116 sync cycles,
+      // using the freshly-built location maps — see the method's docblock.
       //
-      // GH #369 (Codex P1 follow-up): gate on locations succeeding AND
-      // wrap in try/catch. Pre-fix the repair ran unconditionally with
-      // potentially-stale location maps and on failure threw all the way
-      // to the outer catch — collapsing the cycle's partial-success
-      // results to [] and the state to "error". Now: skip if upstream
-      // failed; swallow + log if the repair itself misbehaves
-      // (documented as best-effort).
+      // GH #369: gate on locations succeeding AND wrap in try/catch — a
+      // repair failure escaping to the outer catch would collapse the
+      // cycle's partial-success results to [] and the state to "error".
+      // Skip if upstream failed; swallow + log if the repair itself
+      // misbehaves (best-effort).
       const collectionErrored = (name: string): boolean =>
         results.find(r => r.collection === name)?.error != null;
       if (!this.aborted && !collectionErrored("locations")) {
@@ -958,17 +858,10 @@ export class SyncService extends EventEmitter {
         await this.backfillSyncIds(remoteDb.collection("filaments"));
       }
 
-      // Reconcile same-name filaments across DBs before building the
-      // syncId maps. Same first-sync trap as locations + bedtypes — two
-      // sides that independently created "PC Blend" carry distinct
-      // syncIds, so syncCollection's last-write-wins path tries to
-      // updateOne the name into the partial-unique-on-non-deleted
-      // `name` index and E11000s the whole cycle (cascading to
-      // printhistories via the trySync prerequisite chain). Must run
-      // AFTER backfill (reconcileByName trusts existing syncIds when
-      // present and only mints when both sides are missing one) and
-      // BEFORE the maps below so parentId remapping sees the unified
-      // syncId on both sides.
+      // Reconcile same-name filaments before building the syncId maps. Must
+      // run AFTER backfill (reconcileByName trusts existing syncIds and only
+      // mints when both sides are missing one) and BEFORE the maps below so
+      // parentId remapping sees the unified syncId on both sides.
       if (!this.aborted && !conflictedCollections.has("filaments")) {
         await this.reconcileFilamentsByName(localDb, remoteDb, conflictedNames.get("filaments")); // GH #904
       }
@@ -985,16 +878,15 @@ export class SyncService extends EventEmitter {
 
       // Snapshot each side's pre-existing filaments as `_id → updatedAt(ms)`
       // so the post-sync repair pass can tell whether THIS sync cycle wrote
-      // each row. Two shapes both qualify as "fair game to repair":
+      // each row. Two shapes qualify as "fair game to repair":
       //   (a) row not in snapshot at all → freshly inserted by this pull
       //       (the GH #128 fresh-install shape);
-      //   (b) row in snapshot but updatedAt has changed → rewritten by
-      //       this cycle's syncCollection update (the Codex P1 shape on
-      //       PR #131: pre-existing variant whose parentId got nulled
-      //       because the in-line transform's target map missed the parent
-      //       that's about to be inserted later in the same cycle).
+      //   (b) row in snapshot but updatedAt changed → rewritten by this
+      //       cycle's update (#131: a pre-existing variant whose parentId
+      //       got nulled because the in-line transform's target map missed
+      //       a parent inserted later in the same cycle).
       // Anything else is a row this sync didn't touch — user territory,
-      // leave alone (Codex P2 on PR #130 / v1.12.1).
+      // leave alone.
       const localFilamentSnapshot = new Map<string, number | null>();
       for (const f of localFilaments) {
         const t = SyncService.readUpdatedAt(f);
@@ -1009,12 +901,12 @@ export class SyncService extends EventEmitter {
       // Sync filaments with nozzle, printer, parent, spool-location, and
       // bedType remapping
       this.updateStatus({ progress: "Syncing filaments..." });
-      // GH #1021 r22/r25: legacy-condition candidates are NOT stripped in
-      // transit at all — the transform only RECORDS them (a parent row lives
-      // in the very collection being synced, so any pre-fetched provenance
-      // can go stale mid-pass; and own-tick nozzle docs are re-read fresh
-      // later for the same reason, r16). Everything is judged AFTER the
-      // collection sync against the CURRENT source-side state (see below).
+      // GH #1021: legacy-condition candidates are NOT stripped in transit at
+      // all — the transform only RECORDS them (a parent row lives in the
+      // very collection being synced, so any pre-fetched provenance can go
+      // stale mid-pass; own-tick nozzle docs are re-read fresh later for the
+      // same reason). Everything is judged AFTER the collection sync against
+      // the CURRENT source-side state (see below).
       const deferredLegacyChecks: Array<{
         direction: "toLocal" | "toRemote";
         syncId: string;
@@ -1044,32 +936,29 @@ export class SyncService extends EventEmitter {
           ),
       ));
 
-      // GH #1021 (Codex r17–r25): the LWW copy is itself an ingestion
-      // boundary — a pre-#1022 peer can push a NEWER doc carrying the
-      // stamped machine condition after both one-shot markers completed,
-      // with no migration left to catch it. The remedy is FIELD-LEVEL and
-      // timestamp-honest (r25): both sides of the pair get a CONDITIONAL
-      // single-field clear (exact syncId + exact condition + exact
-      // updatedAt → set the condition to "" and NOTHING else, timestamps
-      // untouched). No synthetic stamp ever makes the copied snapshot
-      // authoritative (r24) and no tie with a genuine later edit can exist
-      // (r25) — a user edit on either side bumps that row's updatedAt, its
-      // filter simply misses, and normal LWW propagates the edit over the
-      // cleared side. Partial completion (r23 P2) is handled by a DURABLE
-      // queue: the pending pair is recorded in the local `_migrations`
-      // collection BEFORE the clears and dequeued only once NEITHER side
-      // matches the observed state anymore; every later cycle re-drains the
-      // queue (see the top of sync()), so a transient failure of either
-      // write can never freeze the pair at equal timestamps.
-      // Codex P2 r26: no destructive write before DURABLE intent. All of this
-      // cycle's candidates — merged with any carried over from a cycle whose
-      // enqueue failed — are written to the queue in ONE batch first. If that
-      // single write fails, every clear is SKIPPED this cycle and the
-      // candidates are kept in memory (`pendingLegacyCandidates`) so the next
-      // cycle retries the enqueue: an equal-timestamp pair never re-copies,
-      // so the transform alone could not rediscover a candidate an enqueue
-      // failure dropped. Each queue entry persists its PROVENANCE (own refs /
-      // parentId) so every later attempt — this cycle's or a drain replay —
+      // GH #1021: the LWW copy is itself an ingestion boundary — a pre-#1022
+      // peer can push a NEWER doc carrying the stamped machine condition
+      // after both one-shot markers completed, with no migration left to
+      // catch it. The remedy is FIELD-LEVEL and timestamp-honest: both sides
+      // of the pair get a CONDITIONAL single-field clear (exact syncId +
+      // exact condition + exact updatedAt → set the condition to "" and
+      // NOTHING else, timestamps untouched). No synthetic stamp ever makes
+      // the copied snapshot authoritative, and no tie with a genuine later
+      // edit can exist — a user edit bumps that row's updatedAt, its filter
+      // misses, and normal LWW propagates the edit over the cleared side.
+      // Partial completion is handled by a DURABLE queue: the pending pair
+      // is recorded in `_migrations` BEFORE the clears and dequeued only
+      // once NEITHER side matches the observed state; every later cycle
+      // re-drains the queue, so a transient failure of either write can
+      // never freeze the pair at equal timestamps.
+      // No destructive write before DURABLE intent: all of this cycle's
+      // candidates — merged with any carried over from a cycle whose enqueue
+      // failed — are written to the queue in ONE batch first. If that write
+      // fails, every clear is SKIPPED this cycle and the candidates stay in
+      // memory (`pendingLegacyCandidates`) for the next cycle's retry — an
+      // equal-timestamp pair never re-copies, so the transform alone could
+      // not rediscover a candidate a failed enqueue dropped. Each entry
+      // persists its PROVENANCE (own refs / parentId) so every later attempt
       // revalidates before clearing.
       const candidateEntries: LegacyTransitEntry[] = deferredLegacyChecks.map((entry) => ({
         d: entry.direction,
@@ -1088,19 +977,18 @@ export class SyncService extends EventEmitter {
       const toEnqueue = Array.from(merged.values());
       let enqueued = toEnqueue.length === 0;
       let queueDbUsed: Db = localDb;
-      // Codex P2 r28: the enqueue is deliberately NOT abort-gated. It
-      // persists the cleanup INTENT for copies the (already completed)
-      // filament sync made this cycle — skipping it on a late destroy()
-      // would strand equal-timestamp pairs that no replacement service could
-      // ever rediscover through LWW. Only the destructive CLEARS below honor
-      // the abort; this is bookkeeping for writes that already happened.
+      // The enqueue is deliberately NOT abort-gated: it persists the cleanup
+      // INTENT for copies the (already completed) filament sync made this
+      // cycle — skipping it on a late destroy() would strand equal-timestamp
+      // pairs no replacement service could rediscover through LWW. Only the
+      // destructive CLEARS below honor the abort.
       if (toEnqueue.length > 0) {
-        // Codex P2 r27: durable intent must survive SERVICE RECREATION, not
-        // just this process — try the local queue, then fall back to the
-        // REMOTE db's queue (the drain reads both). Only when BOTH databases
-        // refuse the write do the candidates stay in memory — and both DBs
-        // just accepted the whole collection sync moments earlier, so a
-        // double refusal means the cycle itself is failing.
+        // Durable intent must survive SERVICE RECREATION, not just this
+        // process — try the local queue, then fall back to the REMOTE db's
+        // queue (the drain reads both). Only when BOTH databases refuse the
+        // write do the candidates stay in memory — and both just accepted
+        // the whole collection sync, so a double refusal means the cycle
+        // itself is failing.
         for (const dbh of [localDb, remoteDb]) {
           try {
             await dbh.collection("_migrations").updateOne(
@@ -1143,18 +1031,10 @@ export class SyncService extends EventEmitter {
       }
 
       // Repair filaments whose parentId was dropped (or stale) when the
-      // syncCollection transform ran. The transform builds its target id
-      // map BEFORE the sync inserts — so on a fresh install the local map
-      // is empty and every variant's parentId gets nulled on first pull
-      // (GH #128). Same shape can also happen for any newly-created
-      // parent+variant pair pulled in the same cycle. This pass projects
-      // the truth from the *other* side via syncId maps that are now
-      // built against the post-sync state of both DBs.
-      //
-      // GH #369 (Codex P1 follow-up): gate on filaments succeeding AND
-      // wrap in try/catch — the repair does updateOne writes and a
-      // permissions/transient failure would have escaped to the outer
-      // catch, discarding the cycle's partial-success results.
+      // syncCollection transform ran — see repairFilamentParentIds (GH #128).
+      // GH #369: gate on filaments succeeding AND wrap in try/catch — a
+      // transient failure escaping to the outer catch would discard the
+      // cycle's partial-success results.
       if (!this.aborted && !collectionErrored("filaments")) {
         try {
           await this.repairFilamentParentIds(
@@ -1176,21 +1056,14 @@ export class SyncService extends EventEmitter {
       const localFilPostBySyncId = new Map(lFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilPostBySyncId = new Map(rFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
-      // Repair printer amsSlots[].filamentId refs. Printers sync runs
-      // BEFORE filaments to break the calibrations[].printer ↔
-      // amsSlots[].filamentId cycle, but that means the printer transform
-      // can't remap amsSlots into filament ids that don't yet exist on
-      // the target side. Patch them in-place now via the post-sync
-      // filament syncId maps. amsSlots[].spoolId can't be remapped at
-      // all without spool syncIds (a separate schema migration); it gets
-      // cleared if the parent filamentId reference itself can't be
-      // resolved, otherwise left alone.
-      //
-      // GH #369 (Codex P1 follow-up): needs BOTH printers and filaments
-      // to have synced — the amsSlots[].filamentId remap reads from the
-      // freshly-rebuilt filament map (so filaments must be current) and
-      // writes to printer documents (so a broken-printer-sync state
-      // shouldn't be further mutated).
+      // Repair printer amsSlots[].filamentId refs — printers sync BEFORE
+      // filaments (to break the calibrations[].printer ↔ amsSlots[]
+      // .filamentId cycle), so the printer transform couldn't remap into
+      // filament ids that didn't yet exist. See repairPrinterAmsSlots.
+      // GH #369: needs BOTH printers and filaments to have synced — the
+      // remap reads the freshly-rebuilt filament map and writes printer
+      // documents, and a broken-printer-sync state shouldn't be further
+      // mutated.
       if (!this.aborted && !collectionErrored("printers") && !collectionErrored("filaments")) {
         try {
           await this.repairPrinterAmsSlots(
@@ -1202,11 +1075,8 @@ export class SyncService extends EventEmitter {
         }
       }
 
-      // Sync print history. Top-level job ledger that references
-      // printerId + usage[].filamentId. usage[].spoolId can't be remapped
-      // (no spool syncIds) and is cleared on insert — the job total still
-      // reconciles via filamentId + grams; the per-spool attribution is
-      // dropped pending the spool-syncId migration.
+      // Sync print history — see buildPrintHistoryTransform for the
+      // usage[].spoolId clearing caveat.
       this.updateStatus({ progress: "Syncing print history..." });
       const printHistoryTransform = this.buildPrintHistoryTransform(
         localPrinterBySyncId, remotePrinterBySyncId,
@@ -1236,25 +1106,13 @@ export class SyncService extends EventEmitter {
       // GH #369: decide the cycle-level state from the per-collection
       // breakdown. All-clean → idle; some-but-not-all errored → partial
       // (recoverable, renderer shows amber); every collection errored →
-      // error (likely cycle-level, e.g. auth failure that fired on every
-      // collection identically). The `error` field summarises which
-      // collections failed so the user knows what to re-run without
-      // expanding the tooltip.
-      // GH #369 (Codex follow-up): the summary must carry the underlying
-      // failure message, not just the collection-name list. The auth-error
-      // case (Atlas user missing readWrite) hits every collection with the
-      // *same* wrapped, actionable message — dropping it to a count would
-      // strand the user with "7 collections failed: ..." and no hint to
-      // re-enter the connection string in Settings → Connection.
-      //
-      // Group errors by message so a homogeneous failure (every collection
-      // returning the same wrapped text — auth, network drop, etc.) shows
-      // the actionable text ONCE prefixed by all affected collections;
-      // heterogeneous failures (one collection broke + others cascade-
-      // skipped with prerequisite-named messages) list each group on its
-      // own. " | " is the separator because the renderer renders status
-      // .error with `break-words` and a single character keeps copy/paste
-      // clean for bug reports.
+      // error (likely cycle-level, e.g. auth). The summary must carry the
+      // underlying failure message, not just the collection-name list — the
+      // auth case hits every collection with the SAME wrapped, actionable
+      // message, and dropping it to a count strands the user with no hint.
+      // Group errors by message so a homogeneous failure shows the text ONCE
+      // prefixed by all affected collections; heterogeneous failures list
+      // each group on its own, " | "-separated.
       const erroredResults = results.filter(r => r.error);
       const erroredAll = erroredResults.length === results.length;
       const erroredSome = erroredResults.length > 0;
@@ -1271,13 +1129,11 @@ export class SyncService extends EventEmitter {
           .join(" | ");
       }
 
-      // GH #1164 round 2 (Codex P2): rescan AFTER the collection copies.
-      // The trim pass runs at the top of the cycle, but the copies below it
-      // propagate a locally-resolved rename to the peer — so a pre-copy
-      // snapshot reported conflicts this very cycle had just fixed. The
-      // rescan is READ-ONLY (scanTrimConflicts, #1149: no index build, no
-      // writes) and classifies identically to the migration, so the list
-      // reflects post-sync reality. Best-effort: a rescan failure leaves
+      // GH #1164: rescan AFTER the collection copies — the copies propagate
+      // a locally-resolved rename to the peer, so a pre-copy snapshot would
+      // report conflicts this very cycle just fixed. The rescan is READ-ONLY
+      // (scanTrimConflicts, #1149: no index build, no writes) and classifies
+      // identically to the migration. Best-effort: a rescan failure leaves
       // the previous list rather than failing an otherwise-good cycle.
       const nameConflicts: SyncNameConflict[] = [];
       let rescanned = false;
@@ -1353,22 +1209,19 @@ export class SyncService extends EventEmitter {
       targetSpoolIds?: (string | undefined)[],
     ) => Document,
     /**
-     * GH #1116 (Codex P1): restrict this collection to syncIds present on BOTH
-     * peers, skipping every unpaired INSERT.
+     * GH #1116: restrict this collection to syncIds present on BOTH peers,
+     * skipping every unpaired INSERT.
      *
      * Set when the trim pass SKIPPED the collection — no protective unique
      * name index could be established, so nothing was normalized. In that
      * state `reconcileByName` is also disabled (it compares raw names and
-     * would fuse two records that merely look alike), and disabling it WITHOUT
-     * restricting the copy is worse than not gating at all: the pairing that
-     * used to fuse an identically-named pair no longer happens, and the
-     * unpaired inserts below then manufacture the duplicate on the target.
+     * would fuse two records that merely look alike), and disabling it
+     * WITHOUT restricting the copy is worse than not gating at all: the
+     * unpaired inserts would manufacture the duplicate on the target.
      *
      * Paired updates still flow, so repairs — including a later successful
-     * trim — propagate normally. That is what keeps this from becoming the
-     * self-perpetuating freeze an earlier revision hit by blocking the copy
-     * outright, which would have stalled locations, filaments and print
-     * history permanently.
+     * trim — propagate normally; blocking the copy outright would freeze
+     * locations, filaments and print history permanently.
      */
     pairedOnly = false,
   ): Promise<SyncResult> {
@@ -1379,63 +1232,45 @@ export class SyncService extends EventEmitter {
     await this.backfillSyncIds(localCol);
     await this.backfillSyncIds(remoteCol);
 
-    // GH #511: fetch only the fields the diff loop below actually reads —
-    // syncId, _deletedAt, _purged, updatedAt (+ the always-present _id).
-    // The full document body (which for the filaments collection includes
-    // base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[],
-    // etc.) is pulled across the wire ONLY for the docs that actually need
-    // to transfer, via the hydrateLocal/hydrateRemote helpers below.
-    // Pre-fix `find({})` streamed every full doc on both sides every
-    // cycle (default every 5 min) just to compare four metadata fields —
-    // on an Atlas hybrid install with photo-attached spools that's tens
-    // to hundreds of MB of metered egress per cycle.
-    // GH #1142 adds `name`: the rename-staging predicate has to know whether a
-    // blocker's own copy would rewrite its name on THIS side, which means
-    // comparing the two sides' names. It is a short string, so it does not
-    // reopen the GH #511 egress problem — that was about pulling full bodies
-    // (base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[])
-    // for every row on every cycle, which the hydrate helpers still avoid.
+    // GH #511: fetch only the fields the diff loop below actually reads.
+    // The full document body (for filaments: base64 photoDataUrl blobs,
+    // unbounded usageHistory[], calibrations[]) is pulled across the wire
+    // ONLY for docs that actually transfer, via the hydrateLocal/
+    // hydrateRemote helpers — a bare `find({})` streamed every full doc on
+    // both sides every cycle just to compare four metadata fields: tens to
+    // hundreds of MB of metered Atlas egress per 5-minute cycle.
+    // GH #1142 adds `name`: the rename-staging predicate must compare the
+    // two sides' names. A short string — it does not reopen the GH #511
+    // egress problem.
     // ── GH #1153: sweep leftover placeholders BEFORE the pass reads names ──
     //
-    // Three histories leave a row named `__sync-staging-…` past its own cycle:
-    // settlement's `taken` branch, settlement's catch, and a process death
-    // between staging and settlement. The durable queue written at staging
-    // time carries the original name; this sweep restores it once the name is
-    // free again — BEFORE the slim reads below, so a restored name
-    // participates in this pass's LWW graph and staging plan rather than the
-    // placeholder doing so.
-    //
-    // A stranding that STILL cannot be restored (name permanently taken) is
-    // counted and named every cycle, and — per the #1142 posture, "a
-    // reported, recoverable stall beats an invisible one" — fails the
-    // collection below, cascade-skipping its dependents until a human
-    // renames one of the two rows.
-    //
-    // The GRAMMAR BACKSTOP covers rows with no queue entry (pre-#1153
-    // strandings, and placeholders a pre-#1142 copy propagated to the other
-    // peer): the restore target is derived from the syncId-paired peer's
-    // name, which is what the staged row's own write would have delivered.
-    // `placeholderRestoreTarget` (pure, tested) owns that decision table; a
-    // row it cannot answer for is reported, never guessed — inventing a name
-    // is a product decision this machinery is not allowed to make.
+    // Three histories leave a row named `__sync-staging-…` past its own
+    // cycle: settlement's `taken` branch, settlement's catch, and a process
+    // death between staging and settlement. The durable queue written at
+    // staging time carries the original name; this sweep restores it once
+    // the name is free again — BEFORE the slim reads below, so the restored
+    // name (not the placeholder) participates in this pass's LWW graph. A
+    // stranding that STILL cannot be restored is named every cycle and fails
+    // the collection below. The GRAMMAR BACKSTOP covers rows with no queue
+    // entry: the restore target is derived from the syncId-paired peer's
+    // name via `placeholderRestoreTarget` (pure, tested); a row it cannot
+    // answer for is reported, never guessed.
     const sweptConflicts: string[] = [];
-    /** Informational one-cycle HOLD-BACKS (Codex P2) — the window quarantines
-     * over rows holding their real names. Distinct from `sweptConflicts`,
-     * which is for genuine strandings: these carry no name contention, so
-     * they must not ride the nameConflicts channel and earn the false "two
-     * rows want the same name … Rename one of them" preamble. They still
-     * FAIL the collection (dependents must not run over a held-back pair);
-     * they just say the truth. */
+    /** Informational one-cycle HOLD-BACKS — the window quarantines over rows
+     * holding their real names. Distinct from `sweptConflicts`, which is for
+     * genuine strandings: these carry no name contention, so they must not
+     * ride the nameConflicts channel and earn the false "two rows want the
+     * same name … Rename one of them" preamble. They still FAIL the
+     * collection (dependents must not run over a held-back pair). */
     const sweptHoldbacks: string[] = [];
-    /** SyncIds of rows left holding an UNRESOLVED placeholder (Codex P2).
-     * Reporting is not enough: the row still entered the row loop, and a user
-     * edit bumping its `updatedAt` while stranded made the placeholder the
-     * LWW winner — copying `__sync-staging-…` over the peer's legitimate
-     * name. A stranded row is QUARANTINED from this cycle's transfer instead:
-     * its syncId is skipped entirely (both directions — copying the peer's
-     * side inward is equally wrong while the local truth is a placeholder),
-     * and the pair converges on the first cycle after the placeholder
-     * resolves. */
+    /** SyncIds of rows left holding an UNRESOLVED placeholder. Reporting is
+     * not enough: the row still enters the row loop, and a user edit bumping
+     * its `updatedAt` while stranded makes the placeholder the LWW winner —
+     * copying `__sync-staging-…` over the peer's legitimate name. A stranded
+     * row is QUARANTINED from this cycle's transfer instead: its syncId is
+     * skipped entirely (both directions — copying the peer's side inward is
+     * equally wrong while the local truth is a placeholder), and the pair
+     * converges on the first cycle after the placeholder resolves. */
     const quarantinedSyncIds = new Set<string>();
     const sweepSide = async (
       db: Db,
@@ -1443,13 +1278,11 @@ export class SyncService extends EventEmitter {
       peerCol: ReturnType<Db["collection"]>,
     ): Promise<void> => {
       const migrations = db.collection("_migrations");
-      // A failed read THROWS (Codex P2, and its sibling one page down): the
-      // sweep's whole contract is "no unresolved placeholder syncs", and a
-      // read converted to an empty result silently waives it — queued
-      // placeholders would go unquarantined into the LWW loop while the
-      // cycle reads green. A throw fails the collection through trySync,
-      // dependents cascade-skip, and the next cycle retries: the same
-      // thrown-failure posture the trim established.
+      // A failed read THROWS: the sweep's contract is "no unresolved
+      // placeholder syncs", and a read converted to an empty result silently
+      // waives it — queued placeholders would go unquarantined into the LWW
+      // loop while the cycle reads green. A throw fails the collection
+      // through trySync, dependents cascade-skip, the next cycle retries.
       const queueDoc = await migrations.findOne({
         _id: RESTORE_QUEUE_ID as unknown as ObjectId,
       });
@@ -1460,12 +1293,11 @@ export class SyncService extends EventEmitter {
       for (const bad of rawEntries.filter(
         (e) => !isRestoreEntry(e) && (e as RenameStagingRestoreEntry)?.c === collectionName,
       )) {
-        // `$eq`, the literal-safety rule in $pull position (Codex P2): a bare
-        // document operand is a MATCH CONDITION, so a malformed subset like
+        // `$eq`, the literal-safety rule in $pull position: a bare document
+        // operand is a MATCH CONDITION, so a malformed subset like
         // `{c: "bedtypes"}` would pull every valid entry for the collection
-        // along with itself — discarding the authoritative original names and
-        // demoting their rows to the peer-name backstop. `$eq` removes only
-        // elements wholly equal to the malformed value.
+        // along with itself — discarding the authoritative original names.
+        // `$eq` removes only elements wholly equal to the malformed value.
         await migrations
           .updateOne(
             { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
@@ -1476,9 +1308,8 @@ export class SyncService extends EventEmitter {
 
       const coveredIds = new Set(entries.map((e) => e.i));
       for (const entry of entries) {
-        // STRUCTURE, not discipline (Codex P1 ×7 — rounds 4 through 17 of
-        // this PR each found one more branch that forgot an obligation).
-        // The two obligations are therefore HOISTED so a branch cannot skip
+        // STRUCTURE, not discipline — branch after branch forgot one of
+        // these obligations, so both are HOISTED where a branch cannot skip
         // them:
         //   1. QUARANTINE at recognition — any live observed row with a
         //      pending record holds its pair for the cycle, whatever the
@@ -1516,11 +1347,9 @@ export class SyncService extends EventEmitter {
             // the trash is cosmetic, and the owner's staging filter
             // (`_deletedAt: null`) can never re-placeholder this row. Drain
             // once aged; a young entry defers to its owner. The drain result
-            // is DELIBERATELY unchecked here and in the gone-branch below
-            // (Codex P2, round 21 audited all six sites): these branches
-            // report nothing a failed drain could contradict, the row's own
-            // sync behaviour is already correct, and the entry simply retries
-            // on the next aged cycle (dequeueRestoreOn logs its own warning).
+            // is DELIBERATELY unchecked here and in the gone-branch below:
+            // these branches report nothing a failed drain could contradict,
+            // and the entry simply retries on the next aged cycle.
             if (!young) await dequeueRestoreOn(migrations, entry, entry.at);
           } else if (!row) {
             // Gone entirely — nothing to hold; drain once aged (versioned on
@@ -1562,10 +1391,10 @@ export class SyncService extends EventEmitter {
               }
             } else if (young) {
               // Holding, but the entry is fresh — usually a healthy owner
-              // between staging and settlement, resolving in seconds (Codex
-              // P2, round 18: the stranding text told the user to rename a
-              // row the owner was about to fix). A crash-stranded row ages
-              // into the real stranding report at the bound. Touch nothing.
+              // between staging and settlement, resolving in seconds (the
+              // stranding text must not tell the user to rename a row the
+              // owner is about to fix). A crash-stranded row ages into the
+              // real stranding report at the bound. Touch nothing.
               notice = {
                 hold: true,
                 text:
@@ -1593,10 +1422,10 @@ export class SyncService extends EventEmitter {
                   { _id: row._id, name: entry.p },
                   { $set: { name: entry.o } },
                 );
-                // Same clearance composition as the aged-mismatch branch
-                // (Codex P2, round 21): a restore whose record failed to
-                // drain must SAY so, or the leftover entry's next-cycle
-                // holdback reads as an unexplained new rename.
+                // Same clearance composition as the aged-mismatch branch: a
+                // restore whose record failed to drain must SAY so, or the
+                // leftover entry's next-cycle holdback reads as an
+                // unexplained new rename.
                 const drain = await dequeueRestoreOn(migrations, entry, entry.at);
                 const cleared = drain.accepted && drain.modified > 0;
                 notice = restored.modifiedCount
@@ -1675,9 +1504,8 @@ export class SyncService extends EventEmitter {
         // Tombstoned = resolved by deletion — let the tombstone sync.
         if (stray._deletedAt != null || stray._purged === true) continue;
         if (coveredIds.has(String(stray._id))) continue; // queue already handled it
-        // Same hoisted structure as the queue path (Codex P1 ×7, including
-        // the backstop's own restore attempt): a recognized live stray holds
-        // its pair for the cycle no matter which branch runs — another
+        // Same hoisted structure as the queue path: a recognized live stray
+        // holds its pair for the cycle no matter which branch runs — another
         // service can enqueue and stage this row after the re-check below,
         // or replace a just-healed name, and coveredIds/the finished scan
         // would never look again this pass. One notice per stray, one push
@@ -1702,8 +1530,8 @@ export class SyncService extends EventEmitter {
           );
           if (lateEntry) {
             // Enqueued after the snapshot — by definition FRESH, an active
-            // owner mid-pass (Codex P2, round 18's named analog): defer the
-            // ACTION to it, hold the pair, and say mid-flight, not stranded.
+            // owner mid-pass: defer the ACTION to it, hold the pair, and say
+            // mid-flight, not stranded.
             notice = {
               hold: true,
               text:
@@ -1792,7 +1620,7 @@ export class SyncService extends EventEmitter {
     };
     /** `$pull` one entry from an already-resolved migrations collection.
      *
-     * Two drain modes, and the asymmetry is the point (Codex P2):
+     * Two drain modes, and the asymmetry is the point:
      *  - the OWNER (settlement, the zero-match branch) drains by KEY alone —
      *    it owns the row's fate, and the re-assert may have refreshed the
      *    stamp it never tracked, so a versioned drain would leak the entry;
@@ -1814,9 +1642,9 @@ export class SyncService extends EventEmitter {
           { _id: RESTORE_QUEUE_ID as unknown as ObjectId },
           { $pull: { entries: match } as Document },
         );
-        // Acceptance and effect are DIFFERENT facts (Codex P2). For the
-        // owner's unversioned drains, an accepted zero-match means the entry
-        // is already gone — clearance either way. For the sweep's VERSIONED
+        // Acceptance and effect are DIFFERENT facts. For the owner's
+        // unversioned drains, an accepted zero-match means the entry is
+        // already gone — clearance either way. For the sweep's VERSIONED
         // drain, an accepted zero-match can mean a re-asserted twin with a
         // fresh stamp survived the pull — the record is still queued, and a
         // notice claiming clearance would lie. The caller composes its claim
@@ -1839,9 +1667,8 @@ export class SyncService extends EventEmitter {
 
     /** A LIVE row currently named by the staging grammar. Strict grammar (a
      * user's prefix-shaped name never matches); tombstoned/purged rows are
-     * excluded per the round-24 rule — deletion must propagate and a trash
-     * name is cosmetic. Shared by the round-25 snapshot scan below and the
-     * hydrate guard here. */
+     * excluded — deletion must propagate and a trash name is cosmetic.
+     * Shared by the pre-copy snapshot scan below and the hydrate guard. */
     const isLivePlaceholder = (d: Document | null | undefined): d is Document =>
       d != null &&
       typeof d.name === "string" &&
@@ -1851,12 +1678,12 @@ export class SyncService extends EventEmitter {
 
     // Hydrate the full document only when a branch actually needs the body
     // (push / pull / update / resurrect). Returns null when the doc vanished
-    // between the slim read and now, AND (round 26, Codex P1) when the
-    // hydrated body is a LIVE staging placeholder: another service can stage
-    // a row between the slim reads above and this hydrate, so the round-25
-    // scan saw the real name while the body now carries the temporary one —
-    // and every name-carrying write below copies the hydrated body verbatim
-    // to the peer. One enforcement point: every consumer's existing
+    // between the slim read and now, AND when the hydrated body is a LIVE
+    // staging placeholder: another service can stage a row between the slim
+    // reads above and this hydrate, so the pre-copy scan saw the real name
+    // while the body now carries the temporary one — and every
+    // name-carrying write below copies the hydrated body verbatim to the
+    // peer. One enforcement point: every consumer's existing
     // `if (!full) continue;` skips the pair, with the hold-back reported
     // here. Our OWN staged blockers can never trip this — staging only
     // stages a blocker whose pending copy runs TOWARD the col it was staged
@@ -1933,76 +1760,51 @@ export class SyncService extends EventEmitter {
     /**
      * SyncIds whose loop iteration has started (and, since iterations are
      * sequential, has finished for every id but the current one). The one
-     * fact about a blocker that neither the plan nor any name can encode
-     * (Codex P1, seventh pass): whether its write is still COMING. Names
-     * cannot, because a third party renaming the target after the iteration
-     * completed breaks the equality that detects a landed write — the fresh
-     * source still differs from the perturbed target, staging looks
-     * legitimate, and no write remains to replace the placeholder.
+     * fact about a blocker that neither the plan nor any name can encode:
+     * whether its write is still COMING. Names cannot, because a third party
+     * renaming the target after the iteration completed breaks the equality
+     * that detects a landed write — the fresh source still differs from the
+     * perturbed target, staging looks legitimate, and no write remains to
+     * replace the placeholder.
      */
     const processedSyncIds = new Set<string>();
     const stagingNonce = new ObjectId().toHexString().slice(-8);
 
-    /**
-     * Run a write that sets `name`; on a name collision, move the blocking row
-     * aside and retry ONCE.
-     *
-     * Staging is legitimate ONLY when the blocker's own LWW outcome writes to
-     * THIS target with a different name — then its real name lands moments
-     * later. Anything else is the unsatisfiable case: report it and leave both
-     * peers alone rather than clobbering a record the user still wants.
-     *
-     * "Paired" is NOT that condition, and the gap is the whole hazard (Codex
-     * P1). A paired row's LWW can copy in the OPPOSITE direction, or do
-     * nothing on an equal timestamp — in either case nothing rewrites its name
-     * on this target, so the placeholder is stranded, and a later copy in the
-     * other direction can propagate `__sync-staging-…` to the other peer. By
-     * then cleanup cannot restore it either, because the row it made way for
-     * owns its original name.
-     */
     /**
      * The name this pass will write for `syncId` on `col`, or null when it
      * writes nothing there.
      *
      * Re-derives only the DIRECTION of the LWW decision — a small, total
      * comparison — rather than the whole branch tree, which is what would
-     * drift. Deliberately conservative: every branch it cannot model (a purge,
-     * a delete, a resurrect, an equal timestamp, a missing side) answers null,
-     * which downgrades the case to "unsatisfiable, reported" rather than
-     * risking a stranded placeholder.
+     * drift. Deliberately conservative: every branch it cannot model answers
+     * null, which downgrades the case to "unsatisfiable, reported" rather
+     * than risking a stranded placeholder.
      *
-     * ## The property this actually has (Codex P1, second pass; GH #1151)
+     * ## The property this actually has (GH #1151)
      *
-     * Not "it mirrors the loop exactly" — it does not, and claiming so is how
-     * the previous version drifted. The true, scoped claim: for a row LIVE on
-     * `col`, the only branch that rewrites its name is the both-active LWW
-     * one (purge and delete-propagation write flags only); and for a row
-     * DELETED on `col`, the only name-writing branch is the resurrect — the
-     * live peer's body replacing the tombstoned one when the deletion
-     * strictly loses (the complement of the loop's GH #317 `>=` delete-wins
-     * rule). Both are modeled; everything else answers null. The deleted-side
-     * answer feeds `stageableOn`'s REQUESTER intents (`holdsName: false`),
-     * never its holders.
+     * Not "it mirrors the loop exactly". The true, scoped claim: for a row
+     * LIVE on `col`, the only branch that rewrites its name is the
+     * both-active LWW one (purge and delete-propagation write flags only);
+     * for a row DELETED on `col`, the only name-writing branch is the
+     * resurrect — the live peer's body replacing the tombstoned one when
+     * the deletion strictly loses (the complement of the loop's GH #317
+     * `>=` delete-wins rule). Both are modeled; everything else answers
+     * null. The deleted-side answer feeds `stageableOn`'s REQUESTER intents
+     * (`holdsName: false`), never its holders.
      *
-     * The guards below therefore have to use the LOOP's classifications, not
-     * lookalikes: `_purged === true` and `_deletedAt != null`, matching the
-     * `localPurged`/`localDeleted` derivations further down. Truthiness
-     * disagrees with `!= null` on exactly one stored value — the empty string,
-     * which the driver writes verbatim and Mongoose never casts — and there
-     * the loop takes the DELETE branch (resurrecting on the other side) while
-     * the predictor was claiming a rename on this one. The blocker was then
-     * staged for a write that never came, and the fresh `hydrateRemote` read
-     * could copy `__sync-staging-…` to the other peer before settlement ever
-     * noticed.
+     * The guards below MUST use the LOOP's classifications, not lookalikes:
+     * `_purged === true` and `_deletedAt != null`. Truthiness disagrees with
+     * `!= null` on exactly one stored value — the empty string, which the
+     * driver writes verbatim — and there the loop takes the DELETE branch
+     * while the predictor would claim a rename: the blocker gets staged for
+     * a write that never comes, and a fresh hydrate could copy
+     * `__sync-staging-…` to the other peer.
      *
-     * The cost of being wrong in the safe direction is one reported cycle: a
-     * delete or purge frees the name in the same pass without renaming, so
-     * treating that pair as a permanent holder stalls the collection once
-     * (and cascade-skips its dependents) before converging cleanly. That is
-     * the trade this function was always making; it is not free. (The
-     * delete-PROPAGATION arm — a live holder about to be tombstoned,
-     * vacating its name without a rename — remains deliberately unmodeled:
-     * staging bets on a pending WRITE, and a tombstone has none.)
+     * The cost of being wrong in the safe direction is one reported cycle
+     * before converging cleanly. (The delete-PROPAGATION arm — a live holder
+     * about to be tombstoned, vacating its name without a rename — remains
+     * deliberately unmodeled: staging bets on a pending WRITE, and a
+     * tombstone has none.)
      */
     const desiredNameOn = (col: typeof localCol, syncId: string): string | null => {
       const localDoc = localBySyncId.get(syncId);
@@ -2046,13 +1848,13 @@ export class SyncService extends EventEmitter {
      * Which rows may be moved aside on `col`, computed ONCE per target.
      *
      * Delegated to the pure planner because the answer needs the whole rename
-     * GRAPH, not one hop (Codex P1). Checking only that the immediate blocker
-     * will be rewritten strands it whenever its own destination is itself
-     * blocked: with A->B, B->C and C standing still, A takes B's name and B can
-     * then never take C — and settlement cannot restore B, because A owns its
-     * original name. The planner runs unsatisfiability backwards to a fixpoint,
-     * so a blocked far end refuses the whole chain while a true cycle still
-     * resolves.
+     * GRAPH, not one hop. Checking only that the immediate blocker will be
+     * rewritten strands it whenever its own destination is itself blocked:
+     * with A->B, B->C and C standing still, A takes B's name and B can then
+     * never take C — and settlement cannot restore B, because A owns its
+     * original name. The planner runs unsatisfiability backwards to a
+     * fixpoint, so a blocked far end refuses the whole chain while a true
+     * cycle still resolves.
      */
     const stagingPlans = new Map<typeof localCol, Set<string>>();
     const stageableOn = (col: typeof localCol): Set<string> => {
@@ -2064,11 +1866,11 @@ export class SyncService extends EventEmitter {
         .flatMap((d) => {
           const syncId = typeof d.syncId === "string" ? d.syncId : null;
           const desired = syncId ? desiredNameOn(col, syncId) : null;
-          // Round 23 (Codex P1): a QUARANTINED row's name-carrying write is
-          // blocked at the row-loop gate this cycle, so the plan must not
-          // bet on it — for either role.
+          // A QUARANTINED row's name-carrying write is blocked at the
+          // row-loop gate this cycle, so the plan must not bet on it — for
+          // either role.
           const blocked = syncId !== null && quarantinedSyncIds.has(syncId);
-          // The HOLDER role is scoped to INDEXED rows only (Codex P1, twice).
+          // The HOLDER role is scoped to INDEXED rows only.
           // The unique index is partial on `_deletedAt: null`, so a trashed
           // row named "X" does NOT occupy that slot — GH #213 name reuse
           // depends on it. Letting one in as a holder made it win the
@@ -2112,6 +1914,20 @@ export class SyncService extends EventEmitter {
       return ids;
     };
 
+    /**
+     * Run a write that sets `name`; on a name collision, move the blocking
+     * row aside and retry ONCE.
+     *
+     * Staging is legitimate ONLY when the blocker's own LWW outcome writes
+     * to THIS target with a different name — then its real name lands
+     * moments later. Anything else is the unsatisfiable case: report it and
+     * leave both peers alone rather than clobbering a record the user still
+     * wants. "Paired" is NOT that condition: a paired row's LWW can copy in
+     * the OPPOSITE direction, or do nothing on an equal timestamp — nothing
+     * then rewrites its name on this target, the placeholder is stranded,
+     * and a later copy in the other direction can propagate
+     * `__sync-staging-…` to the other peer.
+     */
     const writeWithRenameStaging = async (
       col: typeof localCol,
       targetId: ObjectId,
@@ -2144,35 +1960,30 @@ export class SyncService extends EventEmitter {
           !blockerSyncId ||
           !blockerName ||
           !stageableOn(col).has(String(blocker._id)) ||
-          // The blocker's own iteration must still be AHEAD (Codex P1). Once
-          // it has run, no write remains this pass, and the name checks below
-          // can no longer prove it: a third party renaming the target
-          // afterwards re-opens the gap between fresh source and fresh target
-          // that normally means "rename pending". Set membership is the only
+          // The blocker's own iteration must still be AHEAD. Once it has
+          // run, no write remains this pass, and the name checks below can
+          // no longer prove it: a third party renaming the target afterwards
+          // re-opens the gap between fresh source and fresh target that
+          // normally means "rename pending". Set membership is the only
           // signal that survives arbitrary concurrent renames.
           processedSyncIds.has(blockerSyncId)
         ) {
           return refuseStaging();
         }
 
-        // The plan is a SNAPSHOT; staging additionally needs FRESH proof that
-        // the blocker's own pending write will rename it away (Codex P1, twice
-        // over). The first version of this check compared the blocker's fresh
-        // name against its SNAPSHOT desired name — half-fresh, and the half
-        // matters: the pending write hydrates the CURRENT source document at
-        // write time, so a source renamed after the snapshot (a user reverting
-        // a name mid-pass) diverges from `desiredNameOn`, and staging was
-        // authorized for a rename that was no longer coming. Settlement could
-        // not restore the placeholder, because the name it would restore had
-        // been taken by the retry this staging enabled.
-        //
-        // So read the SAME document the pending write will hydrate — the
-        // blocker's source-side pair, by the `_id` the snapshot map carries —
-        // and judge against what it says NOW. The decision table (landed
-        // write, no-op rename, mid-pass revert, vanished source, placeholder
-        // contagion) lives in `pendingRenameCanFreeName`, pure and tested.
-        // This also subsumes the previous check: a landed write makes the
-        // fresh source name equal the blocker's fresh name. The planner still
+        // The plan is a SNAPSHOT; staging additionally needs FRESH proof
+        // that the blocker's own pending write will rename it away. Do NOT
+        // judge against the SNAPSHOT desired name: the pending write
+        // hydrates the CURRENT source document at write time, so a source
+        // renamed after the snapshot (a user reverting a name mid-pass)
+        // diverges from `desiredNameOn` — staging would be authorized for a
+        // rename that is no longer coming, and settlement could not restore
+        // the placeholder because the retry took the name. So read the SAME
+        // document the pending write will hydrate — the blocker's
+        // source-side pair — and judge against what it says NOW. The
+        // decision table (landed write, no-op rename, mid-pass revert,
+        // vanished source, placeholder contagion) lives in
+        // `pendingRenameCanFreeName`, pure and tested. The planner still
         // covers what only IT can see (contested destinations, immovable
         // chains); this covers what only fresh state can.
         const sourceSnap = (col === remoteCol ? localBySyncId : remoteBySyncId).get(
@@ -2221,13 +2032,13 @@ export class SyncService extends EventEmitter {
           return refuseStaging();
         }
 
-        // CONDITIONAL on what was observed (Codex P1). Between the findOne and
-        // this update another app or syncer can rename or delete the blocker;
-        // an `_id`-only filter would overwrite that concurrent change with a
-        // placeholder, the retry would then take a name its owner had just
-        // released, and cleanup could never restore the original because it is
-        // now occupied. A zero-match means the world moved — report rather
-        // than force.
+        // CONDITIONAL on what was observed. Between the findOne and this
+        // update another app or syncer can rename or delete the blocker; an
+        // `_id`-only filter would overwrite that concurrent change with a
+        // placeholder, the retry would take a name its owner had just
+        // released, and cleanup could never restore the original because it
+        // is now occupied. A zero-match means the world moved — report
+        // rather than force.
         const staged = await col.updateOne(
           { _id: blocker._id, name: blockerName, _deletedAt: null },
           { $set: { name: placeholder } },
@@ -2235,11 +2046,11 @@ export class SyncService extends EventEmitter {
         if (!staged.modifiedCount) {
           // Nothing was written, and settlement never sees this row (it is
           // pushed to `stagedRenames` only below) — so the entry comes out
-          // HERE. A failed dequeue is NOT silently harmless (Codex P2, round
-          // 21): the young leftover record makes later sweeps hold this pair
-          // back as "being renamed" until it ages out — so name the real
-          // cause now. Owner drains are unversioned: an accepted zero-match
-          // means the entry is already gone, which is clearance too.
+          // HERE. A failed dequeue is NOT silently harmless: the young
+          // leftover record makes later sweeps hold this pair back as
+          // "being renamed" until it ages out — so name the real cause now.
+          // Owner drains are unversioned: an accepted zero-match means the
+          // entry is already gone, which is clearance too.
           const drain = await dequeueRestoreOn(sideDb.collection("_migrations"), entry);
           if (!drain.accepted) {
             sweptHoldbacks.push(
@@ -2254,20 +2065,19 @@ export class SyncService extends EventEmitter {
           );
           return false;
         }
-        // RE-ASSERT the record now that the placeholder actually EXISTS
-        // (Codex P2). Age alone cannot distinguish a dead pass from a
-        // SUSPENDED one: a laptop sleeping fifteen minutes between the
-        // enqueue above and this point lets another service's sweep read the
-        // aged entry against a row still holding its original name, judge it
-        // resolved, and drain it — after which this resumed pass would stage
-        // without the durable protection the queue exists to give. So the
-        // record is refreshed the moment the vulnerable state begins: drop
-        // any surviving copy, push a fresh one stamped NOW, which also
-        // restarts the sweep's age window at the moment it matters. A crash
-        // between the two writes leaves a placeholder with no record — the
-        // grammar backstop's case, covered. A refresh failure is logged and
-        // tolerated: the subsequent copy write shares the same connection
-        // and will surface the real problem itself.
+        // RE-ASSERT the record now that the placeholder actually EXISTS.
+        // Age alone cannot distinguish a dead pass from a SUSPENDED one: a
+        // laptop sleeping fifteen minutes between the enqueue above and this
+        // point lets another service's sweep read the aged entry against a
+        // row still holding its original name, judge it resolved, and drain
+        // it — after which this resumed pass would stage without the durable
+        // protection the queue exists to give. So the record is refreshed
+        // the moment the vulnerable state begins: drop any surviving copy,
+        // push a fresh one stamped NOW (which also restarts the sweep's age
+        // window). A crash between the two writes leaves a placeholder with
+        // no record — the grammar backstop's case, covered. A refresh
+        // failure is logged and tolerated: the subsequent copy write shares
+        // the same connection and will surface the real problem itself.
         try {
           await sideDb
             .collection("_migrations")
@@ -2301,17 +2111,15 @@ export class SyncService extends EventEmitter {
         try {
           await write();
         } catch (retryErr) {
-          // ROLL BACK IMMEDIATELY (Codex P2). A throw here used to exit
-          // `syncCollection` through `trySync`, skipping settlement entirely,
-          // so the row would keep the temporary name indefinitely. Settlement
-          // now runs on that path too (see the loop's catch), which makes this
-          // the fast path rather than the only chance.
+          // ROLL BACK IMMEDIATELY. A throw here exits `syncCollection`
+          // through `trySync`; settlement also runs on that path (see the
+          // loop's catch), making this the fast path rather than the only
+          // chance to shed the temporary name.
           //
-          // Deliberately NOT composing a stranding message here. The blocker is
-          // still in `stagedRenames`, and settlement is the SINGLE place that
-          // reports what it could not restore — reporting in both named the
-          // same row twice, and named only this row while a late failure
-          // strands every row moved aside earlier in the pass as well.
+          // Deliberately NOT composing a stranding message here: the blocker
+          // is still in `stagedRenames`, and settlement is the SINGLE place
+          // that reports what it could not restore — reporting in both would
+          // name the same row twice.
           await col
             .updateOne({ _id: blocker._id, name: placeholder }, { $set: { name: blockerName } })
             .catch((rollbackErr: unknown) => {
@@ -2334,14 +2142,14 @@ export class SyncService extends EventEmitter {
     // one). The notices are already seeded into `strandedNotices` above, so
     // they ride the same rendering as a fresh stranding.
     // Sweep strandings are SELF-DESCRIBING and are NOT counted into
-    // nameConflicts (Codex P2, round 18): that counter feeds the "two rows
-    // want the same name … Rename one of them" preamble, which is the row
-    // loop's real-collision diagnosis — false for a placeholder stranding,
+    // nameConflicts: that counter feeds the "two rows want the same name …
+    // Rename one of them" preamble, which is the row loop's real-collision
+    // diagnosis — false for a placeholder stranding,
     // whose own notice already says exactly what to do. The notices still
     // FAIL the collection through the strandedNotices rendering below.
     // Hold-backs FAIL the collection without the collision preamble — they
     // carry no name contention, so "Rename one of them" would be a false
-    // diagnosis for a pair that converges by itself next cycle (Codex P2).
+    // diagnosis for a pair that converges by itself next cycle.
     // Rendered at the end with the other additive messages.
 
     // GH #1142: settle any placeholder whose real write never landed.
@@ -2354,11 +2162,10 @@ export class SyncService extends EventEmitter {
     // again; if it is not, leave the placeholder and report, because
     // overwriting the row that took it would destroy real data.
     //
-    // A FUNCTION, called on EVERY exit from the row loop (Codex P1). Inline
-    // after the loop, it was skipped entirely whenever the loop threw — and
-    // `stagedRenames` accumulates ACROSS iterations, so one late failure
-    // abandoned every row moved aside earlier in the pass, silently and with
-    // no later-cycle sweep to catch it.
+    // A FUNCTION, called on EVERY exit from the row loop — inline after the
+    // loop it would be skipped whenever the loop threw, and `stagedRenames`
+    // accumulates ACROSS iterations, so one late failure would abandon every
+    // row moved aside earlier in the pass.
     const settleStagedRenames = async (): Promise<void> => {
       // Drained, so a second call cannot re-report or re-restore.
       const pending = stagedRenames.splice(0, stagedRenames.length);
@@ -2386,11 +2193,10 @@ export class SyncService extends EventEmitter {
           if (!row || !isStagingPlaceholder(row.name)) {
             // Its write landed (or a rollback restored it, or a human renamed
             // it) — no placeholder remains, nothing to recover later. The
-            // drain result MUST be checked (Codex P2, round 21): ignored, a
-            // failed cleanup reported success this cycle while the live
-            // entry made every later cycle fail as "being renamed" — for
-            // fifteen minutes, or forever if _migrations keeps failing.
-            // Unversioned owner drain: accepted zero-match = already gone.
+            // drain result MUST be checked: ignored, a failed cleanup would
+            // report success this cycle while the live entry made every
+            // later cycle fail as "being renamed". Unversioned owner drain:
+            // accepted zero-match = already gone.
             const drain = await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
             if (!drain.accepted) {
               sweptHoldbacks.push(
@@ -2405,11 +2211,10 @@ export class SyncService extends EventEmitter {
             { projection: { _id: 1 } },
           );
           if (taken) {
-            // NAME the row, do not just count it (Codex P1). This branch and the
-            // catch below are the two REACHABLE producers of a permanent
-            // placeholder — no race, no privilege change — and until now their
-            // only trace was a console line plus a counter whose rendering could
-            // be overwritten entirely (see the `heldBack` note at the end).
+            // NAME the row, do not just count it. This branch and the catch
+            // below are the two REACHABLE producers of a permanent
+            // placeholder — a console line plus a counter is not enough (the
+            // counter's rendering can be overwritten; see `heldBack`).
             result.nameConflicts = (result.nameConflicts ?? 0) + 1;
             strandedNotices.push(
               strandedPlaceholderNotice({
@@ -2425,19 +2230,19 @@ export class SyncService extends EventEmitter {
             );
             continue;
           }
-          // CONDITIONAL on the placeholder we actually put there (Codex P1).
-          // Another app or syncer can write this row between the read above and
-          // here; an `_id`-only filter would overwrite that newer real name with
-          // the old one — and because the concurrent write may already have
-          // copied its `updatedAt`, the peers could end up with different names
-          // at an EQUAL timestamp, which LWW then never repairs.
+          // CONDITIONAL on the placeholder we actually put there. Another
+          // app or syncer can write this row between the read above and
+          // here; an `_id`-only filter would overwrite that newer real name
+          // with the old one — and because the concurrent write may already
+          // have copied its `updatedAt`, the peers could end up with
+          // different names at an EQUAL timestamp, which LWW never repairs.
           const restored = await staged.col.updateOne(
             { _id: staged.id, name: staged.placeholderName },
             { $set: { name: staged.originalName } },
           );
           // Restored, or someone else moved it on — either way no placeholder
           // remains under this entry's name, so it drains — checked, same as
-          // the landed-write branch above (Codex P2, round 21).
+          // the landed-write branch above.
           const drain = await dequeueRestoreOn(stagedDb.collection("_migrations"), stagedEntry);
           if (!drain.accepted) {
             sweptHoldbacks.push(
@@ -2447,11 +2252,10 @@ export class SyncService extends EventEmitter {
           }
           if (!restored.modifiedCount) continue;
         } catch (settleErr) {
-          // SURFACE it (Codex P1). Swallowing left the collection reporting
-          // success with a placeholder still stored, and nothing scans for stale
-          // placeholders on a later cycle — worse, a row staged after its own
-          // write landed shares its source's `updatedAt`, so LWW does no copy
-          // and never repairs it either.
+          // SURFACE it. Swallowing would report success with a placeholder
+          // still stored — and a row staged after its own write landed
+          // shares its source's `updatedAt`, so LWW does no copy and never
+          // repairs it either.
           result.nameConflicts = (result.nameConflicts ?? 0) + 1;
           strandedNotices.push(
             strandedPlaceholderNotice({
@@ -2472,14 +2276,14 @@ export class SyncService extends EventEmitter {
 
     // Process all unique syncIds from both sides — BOTH-SIDES ROWS FIRST.
     //
-    // GH #1116 (Codex P1): an INSERT can collide on the partial unique name
-    // index with a row whose own UPDATE would have freed that name. Concrete
-    // shape: local A "X" and local B "Y" (B was just renamed), remote holds
-    // only B, still named "X". Reaching A first inserts "X" beside remote B's
-    // "X" and E11000s, aborting the collection before B's rename is copied —
-    // and the same ordering repeats every cycle, so locations never converge
-    // and filaments + print history stay cascade-skipped. Copying B's rename
-    // first frees the name and A inserts cleanly.
+    // GH #1116: an INSERT can collide on the partial unique name index with
+    // a row whose own UPDATE would have freed that name. Concrete shape:
+    // local A "X" and local B "Y" (B just renamed), remote holds only B,
+    // still named "X". Reaching A first inserts "X" beside remote B's "X"
+    // and E11000s, aborting the collection before B's rename is copied —
+    // repeating every cycle, so locations never converge and filaments +
+    // print history stay cascade-skipped. Copying B's rename first frees the
+    // name and A inserts cleanly.
     //
     // Ordering only: each row's own LWW decision is unchanged, and the two
     // groups are independent of each other.
@@ -2498,19 +2302,16 @@ export class SyncService extends EventEmitter {
       );
     }
 
-    // Round 22 (Codex P1), HOISTED in round 25: a staging by ANOTHER service
-    // can land in the window between the sweep's scans and the slim reads —
-    // such a placeholder is invisible to the sweep's quarantine, and if its
-    // row is edited so its timestamp wins LWW while the owner stalls, this
-    // pass would copy the temporary name to the peer. The scan runs HERE,
-    // over the complete slim snapshot, BEFORE any pair can invoke rename
-    // staging — discovered at the pair's own loop turn (the original shape),
-    // an earlier pair could still stage the pair's real-named side aside and
-    // manufacture the round-23 stranding all over again for guard-time
-    // quarantines. Strict grammar only (a user's prefix-shaped name never
-    // holds), LIVE rows only (round 24: a tombstoned placeholder is resolved
-    // by deletion, and for an unpaired one the insert branch is the only
-    // path that propagates the tombstone — the trashed name is cosmetic).
+    // A staging by ANOTHER service can land in the window between the
+    // sweep's scans and the slim reads — such a placeholder is invisible to
+    // the sweep's quarantine, and if its row is edited so its timestamp wins
+    // LWW while the owner stalls, this pass would copy the temporary name to
+    // the peer. The scan runs HERE, over the complete slim snapshot, BEFORE
+    // any pair can invoke rename staging — discovered at the pair's own loop
+    // turn, an earlier pair could still stage the pair's real-named side
+    // aside and manufacture a stranding. Strict grammar only (a user's
+    // prefix-shaped name never holds), LIVE rows only (a tombstoned
+    // placeholder is resolved by deletion — the trashed name is cosmetic).
     // Our OWN staged rows can't trip this: the slim snapshot predates every
     // staging this pass performs, so it still carries their original names.
     for (const syncId of allSyncIds) {
@@ -2527,27 +2328,26 @@ export class SyncService extends EventEmitter {
         );
       }
     }
-    // Round 23 (Codex P1): mark EVERY quarantine — sweep-time and the
-    // scan-window ones found just above — as processed BEFORE any pair runs.
-    // `processedSyncIds` means "no name write coming" to the blocker check,
-    // and for a quarantined row that is the truth from the cycle's start —
-    // not from its own loop turn. Deferred, an EARLIER pair could still
-    // stage it aside (the plan exclusion is the first line; this is the
-    // write-time backstop) and take a name its skipped write could never
-    // reclaim.
+    // Mark EVERY quarantine — sweep-time and the scan-window ones found just
+    // above — as processed BEFORE any pair runs. `processedSyncIds` means
+    // "no name write coming" to the blocker check, and for a quarantined row
+    // that is the truth from the cycle's start — not from its own loop turn.
+    // Deferred, an EARLIER pair could still stage it aside (the plan
+    // exclusion is the first line; this is the write-time backstop) and take
+    // a name its skipped write could never reclaim.
     for (const q of quarantinedSyncIds) processedSyncIds.add(q);
 
-    // Round 22: quarantine means "names must not transfer", not "nothing may
-    // happen". The classifier below answers whether a pair's branch writes
-    // ONLY tombstone/purge flags — those never carry a name, and blocking
-    // them left a deleted peer unable to resolve its own stranding: with the
+    // Quarantine means "names must not transfer", not "nothing may happen".
+    // The classifier below answers whether a pair's branch writes ONLY
+    // tombstone/purge flags — those never carry a name, and blocking them
+    // left a deleted peer unable to resolve its own stranding: with the
     // original name taken, every cycle re-quarantined the pair and the
-    // deletion never propagated (Codex P2). It MUST mirror the row loop's
-    // branch ladder below — purge arms and the delete-wins arms (GH #317
-    // `>=` tie rule, NaN-safe `?? 0`) are `$set` flag writes; both-deleted
-    // and both-purged are no-ops; everything else (insert, resurrect,
-    // both-active LWW) is a replaceOne/insert that carries a name. Drift
-    // between this predicate and the ladder reopens one bug or the other.
+    // deletion never propagated. It MUST mirror the row loop's branch ladder
+    // below — purge arms and the delete-wins arms (GH #317 `>=` tie rule,
+    // NaN-safe `?? 0`) are `$set` flag writes; both-deleted and both-purged
+    // are no-ops; everything else (insert, resurrect, both-active LWW) is a
+    // replaceOne/insert that carries a name. Drift between this predicate
+    // and the ladder reopens one bug or the other.
     const pairWritesFlagsOnly = (l: Document, r: Document): boolean => {
       if (l._purged === true || r._purged === true) return true;
       const lDel = l._deletedAt != null;
@@ -2568,16 +2368,15 @@ export class SyncService extends EventEmitter {
       return false;
     };
 
-    // Wrapped so SETTLEMENT ALWAYS RUNS (Codex P1) — see the note above it.
+    // Wrapped so SETTLEMENT ALWAYS RUNS — see the note above it.
     try {
       for (const syncId of allSyncIds) {
-        // GH #1153 (Codex P2): a row the sweep left holding an unresolved
-        // placeholder is excluded from NAME transfer this cycle — see the
-        // quarantine set's docblock. Flag-only outcomes still run (round 22:
-        // tombstone/purge propagation is what RESOLVES a stranding whose
-        // peer was deleted — see pairWritesFlagsOnly above). Marked
-        // processed anyway, so a blocker check treats it as "no name write
-        // coming", which is the truth on both paths.
+        // GH #1153: a row the sweep left holding an unresolved placeholder
+        // is excluded from NAME transfer this cycle — see the quarantine
+        // set's docblock. Flag-only outcomes still run (tombstone/purge
+        // propagation is what RESOLVES a stranding whose peer was deleted —
+        // see pairWritesFlagsOnly). Marked processed anyway, so a blocker
+        // check treats it as "no name write coming" on both paths.
         if (quarantinedSyncIds.has(syncId)) {
           const lQ = localBySyncId.get(syncId);
           const rQ = remoteBySyncId.get(syncId);
@@ -2835,11 +2634,11 @@ export class SyncService extends EventEmitter {
     } catch (loopErr) {
       await settleStagedRenames();
       // `trySync` discards this result object and keeps only the message, so
-      // on THIS path everything has to ride the error instead — BOTH channels
-      // (Codex P2, round 20): the hold-backs render only in the post-loop
-      // block this throw never reaches, so carrying strandings alone dropped
-      // a quarantined pair's report whenever an unrelated transfer threw
-      // later in the same cycle.
+      // on THIS path everything has to ride the error instead — BOTH
+      // channels: the hold-backs render only in the post-loop block this
+      // throw never reaches, so carrying strandings alone would drop a
+      // quarantined pair's report whenever an unrelated transfer threw later
+      // in the same cycle.
       const carried = [...strandedNotices, ...sweptHoldbacks];
       if (carried.length > 0) {
         throw withStrandingNotice(loopErr, carried.join(" "));
@@ -2849,32 +2648,24 @@ export class SyncService extends EventEmitter {
 
     await settleStagedRenames();
 
-    // GH #1116 (Codex P1): a HELD-BACK collection must read as a FAILED
-    // prerequisite, or `trySync` lets its dependents run against a partial
-    // mapping. Concretely: hold back an unpaired location, and
+    // GH #1116: a HELD-BACK collection must read as a FAILED prerequisite,
+    // or `trySync` lets its dependents run against a partial mapping.
+    // Concretely: hold back an unpaired location, and
     // `buildFilamentRefsTransform` cannot resolve a referencing spool's
     // `locationId` on the target, writes null, and stamps the copy with the
     // SOURCE timestamp — after which the repair pass (which ignores null
-    // refs) never restores it. Syncing that location on a later cycle does
-    // not undo the loss. A blocked, reported cycle is recoverable; a nulled
-    // reference is not.
+    // refs) never restores it. A blocked, reported cycle is recoverable; a
+    // nulled reference is not. The counts above stay real — the paired
+    // copies DID happen; only the dependents wait.
     //
-    // The counts above stay real — the paired copies DID happen, so a user's
-    // rename still propagates and the collection can converge. Only the
-    // dependents wait.
-    // GH #1142 (Codex P1): a name conflict has to reach the user.
-    //
-    // Incrementing a counter nothing reads left `trySync` treating the
-    // collection as successful and the cycle reporting `idle`, while a
-    // whole-document update was silently skipped and would fail identically
-    // every cycle — permanent divergence with no signal at all.
-    //
-    // This is deliberately stricter than the paired/unpaired split agreed for
-    // the SWAP case: a swap now RESOLVES, so anything still counted here is
-    // the unsatisfiable kind — a row that will never sync until a human
-    // renames one of the two. Cascade-skipping dependents is over-strict for
-    // that (both rows exist on both peers, so refs still resolve), but a
-    // reported, recoverable stall beats an invisible one.
+    // GH #1142: a name conflict has to reach the user — a counter nothing
+    // reads left `trySync` treating the collection as successful while a
+    // whole-document update was silently skipped identically every cycle:
+    // permanent divergence with no signal. Anything counted here is the
+    // unsatisfiable kind (a swap resolves via staging), a row that will
+    // never sync until a human renames one of the two. Cascade-skipping
+    // dependents is over-strict for that, but a reported, recoverable stall
+    // beats an invisible one.
     if ((result.nameConflicts ?? 0) > 0 && !result.error) {
       result.error =
         `${result.nameConflicts} name conflict(s) could not be applied — two rows want ` +
@@ -2891,15 +2682,14 @@ export class SyncService extends EventEmitter {
     if (sweptHoldbacks.length > 0) {
       // Informational, additive, and still a FAILURE: dependents must not run
       // over a held-back pair, but the user must not be told to rename
-      // anything (Codex P2 — these are not collisions).
+      // anything — these are not collisions.
       result.error = `${result.error ? `${result.error} ` : ""}${sweptHoldbacks.join(" ")}`;
     }
 
     if (heldBack > 0) {
-      // APPEND (Codex P1). This used to ASSIGN, so a held-back collection that
-      // also stranded a placeholder reported only the hold-back — and that text
-      // blames the trim pass, sending the user somewhere the actual problem is
-      // not. Both facts are true at once and both need saying.
+      // APPEND, never assign — a held-back collection that also stranded a
+      // placeholder must report both facts, not just the hold-back (whose
+      // text blames the trim pass, sending the user to the wrong place).
       const held =
         `held back ${heldBack} unpaired record(s) — the trim pass skipped this ` +
         `collection, so its names cannot be matched safely yet`;
@@ -2930,7 +2720,7 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * GH #1021 r25: attempt the FIELD-LEVEL, timestamp-honest clear of one
+   * GH #1021: attempt the FIELD-LEVEL, timestamp-honest clear of one
    * legacy-condition pair on both databases. Each write's filter re-asserts
    * the exact syncId + condition + updatedAt the transit observed and sets
    * ONLY the condition to "" — a row the user has since edited misses its
@@ -2945,12 +2735,12 @@ export class SyncService extends EventEmitter {
   ): Promise<boolean> {
     const sourceDb = entry.d === "toLocal" ? remoteDb : localDb;
     const targetDb = entry.d === "toLocal" ? localDb : remoteDb;
-    // Codex P2 r26: REVALIDATE the provenance persisted with the entry on
-    // EVERY attempt — including drain-time replays. A parent tick edit or a
-    // referenced nozzle's diameter edit between the enqueue and this replay
-    // leaves the child row byte-identical (filters would still match) while
-    // a fresh derivation now classifies the value as a user pin. Unverifiable
-    // or drifted provenance DROPS the entry without touching either row —
+    // REVALIDATE the provenance persisted with the entry on EVERY attempt —
+    // including drain-time replays. A parent tick edit or a referenced
+    // nozzle's diameter edit between the enqueue and this replay leaves the
+    // child row byte-identical (filters would still match) while a fresh
+    // derivation now classifies the value as a user pin. Unverifiable or
+    // drifted provenance DROPS the entry without touching either row —
     // whatever value still sits there is preserved as a possible pin.
     let refs: unknown[] | null = Array.isArray(entry.r) && entry.r.length > 0 ? entry.r : null;
     if (!refs && entry.p != null) {
@@ -2963,7 +2753,7 @@ export class SyncService extends EventEmitter {
         : null;
     }
     if (!refs || refs.length === 0) {
-      // Nothing provable → drop, but reconcile a partial clear first (r27).
+      // Nothing provable → drop, but reconcile a partial clear first.
       await this.reconcilePartialTransitPair(sourceDb, targetDb, entry);
       return true;
     }
@@ -2990,7 +2780,7 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * GH #1021 r27: before DROPPING a queue entry whose provenance is now
+   * GH #1021: before DROPPING a queue entry whose provenance is now
    * unverifiable or drifted, undo any PARTIAL clear an earlier attempt left:
    * one side cleared ("" at exactly the observed updatedAt — our clears
    * preserve timestamps, so this is our own signature) while the other still
@@ -3034,28 +2824,7 @@ export class SyncService extends EventEmitter {
     return rest;
   }
 
-  /**
-   * Pair locations by name across DBs and unify their syncIds before the
-   * collection sync runs. Without this step the very first sync after the
-   * GH #116 fix lands hits Location's partial unique-name index whenever a
-   * user has independently created the same location ("Drybox #1") on a
-   * desktop and on Docker — both rows have local-only syncIds, so the
-   * insertOne in syncCollection's "local-only" branch raises E11000 and
-   * aborts the whole cycle.
-   *
-   * Tie-break for picking the surviving syncId, in order:
-   *   1. Both already share a syncId → no-op.
-   *   2. Exactly one side has a syncId → propagate to the other.
-   *   3. Neither has a syncId → mint a fresh UUID, assign to both.
-   *   4. Both have syncIds and they differ → keep local's, overwrite remote's.
-   *      (Local wins so the owning desktop's sync history stays intact;
-   *      remote rows get re-keyed onto the local id.)
-   *
-   * Defensive in case 2/4: if the chosen syncId is already in use by a
-   * *different* doc on the target side, skip the pair and log — this
-   * indicates pre-existing corruption that needs human attention rather
-   * than another silent overwrite.
-   */
+  /** See reconcileByName. */
   private async reconcileLocationsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
@@ -3064,12 +2833,7 @@ export class SyncService extends EventEmitter {
     await this.reconcileByName(localDb, remoteDb, "locations", blockedNames);
   }
 
-  /**
-   * Same name-collision resolver used for locations, applied to bedtypes.
-   * BedType has a partial-unique index on `name` (non-deleted only), so two
-   * desktops that independently created "Textured PEI" before bedtype sync
-   * existed would E11000 on the very first sync push.
-   */
+  /** See reconcileByName. */
   private async reconcileBedTypesByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
@@ -3078,17 +2842,7 @@ export class SyncService extends EventEmitter {
     await this.reconcileByName(localDb, remoteDb, "bedtypes", blockedNames);
   }
 
-  /**
-   * Same name-collision resolver, applied to filaments. Filament has the
-   * partial-unique-on-non-deleted `name` index too, and the same
-   * independent-creation shape ("PC Blend" minted on both desktop and
-   * Atlas before they ever talked) lands as different local syncIds —
-   * syncCollection then treats them as two rows and either insertOne or
-   * updateOne walks into the index and E11000s, aborting the cycle (and
-   * cascading-skipping printhistories via the `trySync` prerequisite
-   * chain added in #369). Unifying the syncIds here turns the pair into
-   * a normal last-write-wins merge.
-   */
+  /** See reconcileByName. */
   private async reconcileFilamentsByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
@@ -3097,13 +2851,7 @@ export class SyncService extends EventEmitter {
     await this.reconcileByName(localDb, remoteDb, "filaments", blockedNames);
   }
 
-  /**
-   * Same name-collision resolver, applied to nozzles (GH #1116). Nozzle has
-   * the partial-unique-on-non-deleted `name` index, and the entity-name trim
-   * that now runs before every cycle can make two independently-created rows
-   * NEWLY equal — so this has to run before the nozzle sync, or the insert
-   * walks into the index and the failure cascade-skips everything downstream.
-   */
+  /** See reconcileByName (GH #1116 for nozzles/printers). */
   private async reconcileNozzlesByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
@@ -3112,7 +2860,7 @@ export class SyncService extends EventEmitter {
     await this.reconcileByName(localDb, remoteDb, "nozzles", blockedNames);
   }
 
-  /** Same, for printers — identical index and identical exposure. */
+  /** See reconcileByName (GH #1116 for nozzles/printers). */
   private async reconcilePrintersByName(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
@@ -3122,10 +2870,24 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Generic name-keyed syncId reconciliation. Used for any collection
-   * with a partial-unique-name index where the same logical row may have
-   * been created independently on both sides before sync was added —
-   * locations (v1.11.3) and bedtypes (this PR).
+   * Generic name-keyed syncId reconciliation, for every collection with a
+   * partial-unique-on-non-deleted `name` index. The same logical row created
+   * independently on both sides before sync covered the collection carries
+   * two local-only syncIds; syncCollection then treats them as two rows and
+   * insertOne/updateOne walks into the unique index and E11000s the cycle
+   * (cascade-skipping dependents via trySync). Unifying the syncIds turns
+   * the pair into a normal last-write-wins merge.
+   *
+   * Tie-break for the surviving syncId, in order:
+   *   1. Both already share a syncId → no-op.
+   *   2. Exactly one side has a syncId → propagate to the other.
+   *   3. Neither has one → mint a fresh UUID, assign to both.
+   *   4. Both differ → keep local's (the owning desktop's sync history
+   *      stays intact), re-key remote's.
+   *
+   * Defensive in case 2/4: if the chosen syncId is already in use by a
+   * *different* doc on the target side, skip the pair and log — pre-existing
+   * corruption needs human attention, not another silent overwrite.
    */
   private async reconcileByName(
     localDb: ReturnType<MongoClient["db"]>,
@@ -3153,22 +2915,17 @@ export class SyncService extends EventEmitter {
 
       if (localSyncId && remoteSyncId && localSyncId === remoteSyncId) continue;
 
-      // GH #1116 (Codex P1): a row whose syncId ALREADY resolves on the other
+      // GH #1116: a row whose syncId ALREADY resolves on the other
       // peer is paired, and a name match must never override that.
       //
       // This helper exists for rows created INDEPENDENTLY on the two sides
       // before sync reached the collection — neither has a counterpart, so
       // matching by name is the only way to pair them. Once a counterpart
       // exists, the name is transient: it can differ simply because the last
-      // rename hasn't been copied across yet. That is exactly what the trim
-      // work makes reachable — local A "X" and local B renamed to "Y", while
-      // remote B still carries the trimmed "X". Pairing by name then hands A
-      // and B the same syncId and LWW overwrites one with the other; spool
-      // locationId maps would resolve to the wrong row on top of that.
-      //
-      // Cheap to check, and it strictly narrows the helper to its own stated
-      // purpose: the first-sync case has no counterparts on either side and
-      // is unaffected.
+      // rename hasn't been copied across yet (local A "X" and local B
+      // renamed to "Y", while remote B still carries "X"). Pairing by name
+      // then hands A and B the same syncId and LWW overwrites one with the
+      // other. The first-sync case has no counterparts and is unaffected.
       if (localSyncId && (await remoteCol.findOne({ syncId: localSyncId, _id: { $ne: remote._id } }))) {
         console.warn(
           `reconcileByName(${collectionName}): "${local.name}" already has a remote counterpart by syncId — not pairing by name`,
@@ -3415,7 +3172,7 @@ export class SyncService extends EventEmitter {
         // Null parentId where projection says it should be set, and this
         // row was created or rewritten by this cycle. Covers both the
         // fresh-install pull (#128) and the pre-existing-variant-updated
-        // -before-its-parent shape (Codex P1 on PR #131).
+        // -before-its-parent shape (#131).
         (currentParentIdStr == null && expected != null && wasTouchedThisCycle) ||
         // Stale id pointing at nothing on this side. Always broken state,
         // repair regardless of when the row was inserted.
@@ -3456,10 +3213,10 @@ export class SyncService extends EventEmitter {
    * as "epoch", not NaN.
    */
   private static readTimestamp(value: unknown): number | undefined {
-    // GH #317 (Codex review): only `null`/`undefined` counts as
-    // "missing". A `!value` check also swallowed a numeric `0` — a
-    // legitimate epoch timestamp — making an `updatedAt: 0` row look
-    // untimed and altering conflict resolution.
+    // GH #317: only `null`/`undefined` counts as "missing". A `!value`
+    // check also swallows a numeric `0` — a legitimate epoch timestamp —
+    // making an `updatedAt: 0` row look untimed and altering conflict
+    // resolution.
     if (value == null) return undefined;
     if (value instanceof Date) {
       const t = value.getTime();
@@ -3592,23 +3349,18 @@ export class SyncService extends EventEmitter {
       const sourceBedTypeIdToSyncId = direction === "toLocal" ? remoteBedTypeIdToSyncId : localBedTypeIdToSyncId;
       const targetBedTypeMap = direction === "toLocal" ? localBedTypeBySyncId : remoteBedTypeBySyncId;
 
-      // GH #1021 (Codex P1 r17): the LWW copy is itself an INGESTION boundary.
-      // A pre-#1022 peer in a mixed-version hybrid pair can push a NEWER doc
-      // still carrying the stamped machine condition AFTER both sides'
-      // one-shot markers completed — and the copy would replicate it verbatim,
-      // resurrecting the hidden-preset bug with no migration left to run. So
-      // every copied filament gets the same provenance-matched treatment as
-      // the slicer/import boundaries, resolved against the SOURCE side (whose
-      // ticks are the world the stamp was made in). Runs BEFORE the ref remap
-      // below (it needs the source-side ids). Missing provenance (dangling
-      // refs, no parent) strips nothing — the conservative direction.
-      //
-      // GH #1021 r25: NOTHING is stripped in transit — the copy rides
-      // verbatim (honest timestamps, the snapshot is never authoritative).
-      // The transform only RECORDS syntactic candidates, capturing the
-      // source-side provenance ids BEFORE the remaps below; sync() judges
-      // them after the collection sync against fresh source-side state and
-      // applies field-level conditional clears to both sides.
+      // GH #1021: the LWW copy is itself an INGESTION boundary — a pre-#1022
+      // peer in a mixed-version hybrid pair can push a NEWER doc still
+      // carrying the stamped machine condition AFTER both sides' one-shot
+      // markers completed, resurrecting the hidden-preset bug with no
+      // migration left to run. NOTHING is stripped in transit — the copy
+      // rides verbatim (honest timestamps, the snapshot is never
+      // authoritative). The transform only RECORDS syntactic candidates,
+      // capturing the source-side provenance ids BEFORE the remaps below;
+      // sync() judges them after the collection sync against fresh
+      // source-side state and applies field-level conditional clears to both
+      // sides. Missing provenance (dangling refs, no parent) records
+      // nothing — the conservative direction.
       const condition = (doc.settings as Record<string, unknown> | undefined)?.compatible_printers_condition;
       if (
         typeof condition === "string" &&
@@ -3684,27 +3436,19 @@ export class SyncService extends EventEmitter {
         doc.parentId = targetParentId || null;
       }
 
-      // Remap spools[].locationId. Locations sync as their own collection but
-      // the ObjectIds differ across DBs, so each spool's locationId must be
-      // translated through the syncId map. Unknown locations clear to null
-      // rather than pointing at a wrong location on the target side.
+      // Remap spools[].locationId through the syncId map; unknown locations
+      // clear to null rather than pointing at a wrong location.
       //
       // GH #732: also normalize spools[].instanceId. Synced docs are written
-      // with raw insertOne/updateOne, which bypass BOTH the Mongoose schema
-      // default and the dbConnect() backfill — so a spool pulled from a
-      // pre-#732 peer would otherwise arrive with no instanceId, leaving the
-      // "every spool has a 5-byte hex id" invariant false on the hybrid-sync
-      // path. Existing ids are preserved; only missing/empty ones are minted.
-      //
-      // The minted id is DERIVED from the source spool's `_id` (not random) so
-      // it is STABLE across re-syncs of the same spool: if the id-less peer
-      // wins a later last-write-wins cycle, re-normalizing yields the SAME id
-      // rather than rotating it — which would otherwise invalidate any
-      // label/NFC/match that saved the prior value. Full cross-side
-      // convergence (both peers agreeing on one id for the same physical spool)
-      // still requires stable cross-side spool identity — the deferred
-      // spool-syncId migration, the same limitation that clears
-      // amsSlots[].spoolId / usage[].spoolId on cross-side remap.
+      // with raw insertOne/updateOne, bypassing BOTH the Mongoose schema
+      // default and the dbConnect() backfill — a spool pulled from a
+      // pre-#732 peer would arrive with no instanceId. Existing ids are
+      // preserved; only missing/empty ones are minted, DERIVED from the
+      // source spool's `_id` (not random) so a re-sync yields the SAME id
+      // rather than rotating one a label/NFC/match may have saved. Full
+      // cross-side convergence still requires the deferred spool-syncId
+      // migration — the same limitation that clears amsSlots[].spoolId /
+      // usage[].spoolId on cross-side remap.
       if (Array.isArray(doc.spools)) {
         doc.spools = doc.spools.map((spool: Document, idx: number) => {
           // Precedence: the source spool's own id wins (it's the authoritative

@@ -4,8 +4,8 @@ import { isShareLinkLocalOnly } from "@/lib/shareLink";
 /**
  * GH #780 — the share page warns when a catalog link is only reachable on the
  * local machine (loopback origin). We deliberately don't rewrite the link to a
- * LAN IP (that would hand a publisher-hosted write link to LAN recipients —
- * Codex P2 on PR #784), so this is purely a loopback-origin check.
+ * LAN IP (that would hand a publisher-hosted write link to LAN recipients),
+ * so this is purely a loopback-origin check.
  */
 describe("isShareLinkLocalOnly", () => {
   it("is true for loopback origins (desktop install)", () => {

@@ -166,7 +166,7 @@ describe("POST /api/scan/publish", () => {
     });
     const res = await publish(req);
     expect(res.status).toBe(413);
-    // Codex P2 on PR #1090: the shared checkContentLength used to format the
+    // PR #1090: the shared checkContentLength used to format the
     // limit in MB with toFixed(0), rendering this route's 64 KB cap as the
     // nonsensical "Maximum is 0 MB." — pin the corrected KB label.
     expect((await res.json()).error).toMatch(/Maximum is 64 KB\./);

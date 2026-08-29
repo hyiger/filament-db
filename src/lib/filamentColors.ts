@@ -18,16 +18,11 @@
 import { BLANK_COLOR_HEX, isIncompleteColorHex } from "./cssNamedColors";
 
 /**
- * OpenPrintTag tag IDs that describe color arrangement.
- *
- * GH #507: pre-fix this file declared TAG_COEXTRUDED = 29 and
- * TAG_GRADUAL_COLOR_CHANGE = 28 — contradicting the project's
- * canonical OPT_TAG enum at `src/lib/openprinttag.ts:163-165` AND the
- * OPT browser importer at `src/lib/openprinttagBrowser.ts:132-134`,
- * which both encode 27 = gradient, 28 = dual_color, 29 = triple_color
- * matching the upstream OpenPrintTag YAML. The mismatch made imported
- * dual-color OPT materials render as a smooth gradient and imported
- * gradient materials render as solid. Aligned here.
+ * OpenPrintTag tag IDs that describe color arrangement. GH #507: these MUST
+ * match the canonical OPT_TAG enum in `src/lib/openprinttag.ts` and the OPT
+ * browser importer in `src/lib/openprinttagBrowser.ts` (27 = gradient,
+ * 28 = dual_color, 29 = triple_color, per the upstream OpenPrintTag YAML) —
+ * a mismatch here mis-renders every imported multi-color material.
  */
 const TAG_GRADIENT = 27;
 const TAG_DUAL_COLOR = 28;
@@ -40,17 +35,10 @@ const TAG_TRIPLE_COLOR = 29;
 export type ColorArrangement = "solid" | "coextruded" | "gradient";
 
 /**
- * Derive the arrangement from an `optTags` array.
- *
- * Priority order if both tags are present:
- *   coextruded > gradient
- *
- * Rationale: coextruded is the more structural property (about the
- * physical cross-section of the strand), while gradient describes
- * change-over-time. A "coextruded gradient" — where the strand has
- * multiple parallel colors AND those colors change along the length —
- * is theoretically possible per spec, but the rendering UI can only
- * pick one mode, so coextruded wins.
+ * Derive the arrangement from an `optTags` array. Priority when both tags
+ * are present: coextruded > gradient — a "coextruded gradient" is possible
+ * per spec, but the rendering UI can only pick one mode, and coextruded is
+ * the more structural property.
  */
 export function deriveArrangement(
   optTags: number[] | null | undefined,
@@ -132,9 +120,7 @@ export function displayColor(
  * a coextruded swatch should render them. Filters out the empty / null
  * primary so consumers don't have to.
  *
- * Used by `<FilamentSwatch>` (Phase 2) to lay out the stripes /
- * gradient stops without each call-site re-implementing the same
- * concat-and-filter dance.
+ * Used by `<FilamentSwatch>` to lay out the stripes / gradient stops.
  */
 export function allColors(
   filament: {
@@ -162,9 +148,9 @@ export function allColors(
  * Takes a single ordered list of candidate colors — the caller is
  * responsible for ordering (typically the parent's own color +
  * secondaryColors first, then each variant's color + secondaryColors).
- * Passing every color source (not just the primary `color`) matters for
- * coextruded / gradient members whose primary is `null` and whose colors
- * live entirely in `secondaryColors` — Codex P2 on PR #600.
+ * Callers MUST pass every color source (not just the primary `color`):
+ * coextruded / gradient members have a `null` primary and their colors live
+ * entirely in `secondaryColors`.
  *
  * - Only valid `#rgb` / `#rrggbb` strings survive (null/empty/garbage dropped).
  * - Dedupe is case-insensitive, keeping the first occurrence's casing.

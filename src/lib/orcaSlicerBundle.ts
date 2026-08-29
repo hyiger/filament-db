@@ -26,7 +26,7 @@ type FilamentDoc = Record<string, any>;
  * filament. When neither a primary nor a secondary exists this returns
  * `null` so the `set()` helper skips the key entirely and OrcaSlicer
  * falls back to its own default — rather than emitting a forced
- * `#808080` gray the user never picked (Codex P2 on PR #485).
+ * `#808080` gray the user never picked.
  */
 function slicerExportColor(filament: FilamentDoc): string | null {
   if (filament.color != null && filament.color !== "") return filament.color;
@@ -74,7 +74,7 @@ export function filamentToOrcaSlicerKeys(
 
   // Pull in settings bag first (passthrough for OrcaSlicer-specific keys).
   // Settings bag values may be plain strings or already arrays.
-  // GH #1070 / Codex P2 r3: the bag is WIRE-CANONICAL (Prusa INI escaping),
+  // GH #1070: the bag is WIRE-CANONICAL (Prusa INI escaping),
   // but JSON carries real newlines natively — decode multi-line wire values
   // (narrowly: clean-quoted + decoded content has a line terminator) so a
   // Bambu/Orca import → export round-trip restores the original multiline
@@ -152,7 +152,7 @@ export function filamentToOrcaSlicerKeys(
   // no shrink), whereas the DB stores 0-based shrinkage (0% = none) — the same
   // convention as PrusaSlicer's `filament_shrinkage_compensation_xy`. Convert at
   // the boundary: emit `100 - shrinkageXY`. A 0 emits Orca's EXPLICIT no-shrink
-  // value `100%` (Codex P2 on #1016): the Bambu importer only sets shrinkageXY
+  // value `100%`: the Bambu importer only sets shrinkageXY
   // when the key is present, and buildStructuredUpdate skips undefined — so an
   // absent key on a no-shrink export would leave a stale non-zero value in
   // place when re-imported over an existing filament, making zero shrinkage
@@ -235,7 +235,7 @@ export function pickRepresentativeCalibration(filament: FilamentDoc): Record<str
 }
 
 /**
- * GH #950.4 / #969 (Codex round 3): how many calibrations the single Orca/Bambu
+ * GH #950.4 / #969: how many calibrations the single Orca/Bambu
  * .json export will DROP. `pickRepresentativeCalibration` bakes exactly one, so
  * every other calibration is lost — regardless of whether it's on a different
  * nozzle OR the SAME nozzle with a different bed type / printer. The detail page
@@ -250,9 +250,8 @@ export function droppedCalibrationCount(filament: FilamentDoc): number {
 /**
  * Generate an array of OrcaSlicer-format filament profile objects
  * from resolved Filament DB documents.
- */
-/**
- * GH #950.4 / #969 (Codex round 5): `bakeCalibration` is OPT-IN and defaults to
+ *
+ * GH #950.4 / #969: `bakeCalibration` is OPT-IN and defaults to
  * false. Baking is only correct for the SINGLE-preset download paths
  * (`GET /api/filaments/{id}/{orcaslicer,bambustudio}`), which are manual imports
  * with no dynamic calibration module. The BULK bundle (`GET /api/filaments/orcaslicer`)

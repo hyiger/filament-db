@@ -1,11 +1,8 @@
 /**
  * A caller-supplied "come back here when you're done" path (GH #1117 item h).
  *
- * The spool move-to dropdowns on the filament list and the inventory page now
- * offer "+ New location…". Without a return path that option is a one-way
- * trip: the user is deep in a list, opens a spool panel, goes to create the
- * location they actually need, and is dropped on `/locations` with their place
- * gone — which is a worse experience than the missing affordance was.
+ * Used by the spool move-to dropdowns' "+ New location…" option so the user
+ * gets back to where they were after creating the location.
  *
  * The value arrives in a query string, so it is attacker-influenceable in the
  * ordinary sense (anyone can hand someone a link). It is therefore validated

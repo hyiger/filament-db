@@ -104,8 +104,8 @@ export default function OptLinkDialog({ filamentId, onLinked, onClose, mode = "l
     return () => document.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Normalized once per loaded list, not once per keystroke per row
-  // (Codex P2 on PR #1181 — this filter runs over ~11.7k materials).
+  // Normalized once per loaded list, not once per keystroke per row —
+  // this filter runs over ~11.7k materials.
   const searchable = useMemo(
     () =>
       materials.map((m) => ({

@@ -315,7 +315,7 @@ describe("API route correctness", () => {
   });
 
   it("#273 — spool-check excludes a retired parent spool from the fallback", async () => {
-    // Codex review: the parent-fallback must not count retired spools —
+    // The parent-fallback must not count retired spools —
     // a retired roll is out of service and shouldn't satisfy the check.
     const parent = await Filament.create({
       name: "Retired-Stock Parent",
@@ -906,7 +906,7 @@ describe("API route correctness", () => {
     expect(fresh.temperatures.nozzle).toBe(210);
     expect(fresh.temperatures.bed).toBe(60);
     expect(fresh.settings?.min_fan_speed).toBeUndefined(); // fan didn't leak into the settings bag
-    // Codex P2: EM/retraction were captured into the calibration entry below, so they
+    // EM/retraction were captured into the calibration entry below, so they
     // must NOT also leak into the shared settings bag (which would make this nozzle's
     // values the default for the base filament + every other preset).
     expect(fresh.settings?.extrusion_multiplier).toBeUndefined();
@@ -973,7 +973,7 @@ describe("API route correctness", () => {
     // The top-level-homed values are NOT lost — they fall back to the filament-wide fields.
     expect(fresh.maxVolumetricSpeed).toBe(20);
     expect(fresh.temperatures.nozzle).toBe(230);
-    // Codex P2 round 3: EM/retraction have NO top-level home; for a per-nozzle preset
+    // EM/retraction have NO top-level home; for a per-nozzle preset
     // they must be DROPPED (not leaked into the shared settings bag) even when no
     // nozzle resolves — else one nozzle's EM becomes the base filament's default.
     expect(fresh.settings?.extrusion_multiplier).toBeUndefined();
@@ -1690,7 +1690,7 @@ describe("API route correctness", () => {
   });
 
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
-    // Codex P1: a variant with its own non-empty calibrations array
+    // A variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
     // parent's), so the sync must land on the variant — not the parent.
     const nozzle = await Nozzle.create({
@@ -1980,8 +1980,7 @@ describe("API route correctness", () => {
       );
       // Pre-fix: decodeURIComponent("ABS 100%") threw → caught → 500. The
       // route must actually RESOLVE the filament (200 + its name echoed back),
-      // not merely avoid a 500 — so a regression to 404/400 also fails (Codex
-      // P3 on PR #685).
+      // not merely avoid a 500 — so a regression to 404/400 also fails.
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.filament).toBe("ABS 100%");
@@ -2481,7 +2480,7 @@ describe("API route correctness", () => {
     it("950.5 (sweep r5/r8) — an orca sync purges a stale filament_settings_id even with no new passthrough key, but preserves other bag keys", async () => {
       // The orca per-id route gates its settings write on `added`; without honoring
       // `removed`, a structured-only sync discards the purge and the stale
-      // never-baggable key survives. And per r8 the purge must be NARROW — a
+      // never-baggable key survives. And the purge must be NARROW — a
       // non-never-baggable stale shadow (density) must survive.
       const f = await Filament.create({
         name: "Orca Sweep PLA",
