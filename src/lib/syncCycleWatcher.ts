@@ -31,6 +31,34 @@ export interface SyncCycleWatcher {
   observe(sample: SyncCycleSample): boolean;
 }
 
+/**
+ * Did a cycle end while the page's mount scans were already in flight?
+ *
+ * `observe` only sees events delivered AFTER the subscription is installed,
+ * and the scans are issued by an earlier effect. A cycle finishing in between
+ * is seen by neither: the snapshot then seeds that completed stamp as the
+ * baseline, so no later event reports an ending, while the scan itself may
+ * have read the pre-copy database. The result is a stale list — and, now that
+ * the abrasive audit shares the all-clear banner, a stale assertion of health.
+ *
+ * Comparing the seeded stamp against the moment the scans were issued closes
+ * that window without a refetch on every mount. It fails toward refetching:
+ * an unparseable stamp returns true, because one extra read at mount is
+ * bounded and cheap, and staleness is the failure this whole module exists to
+ * prevent. A null stamp is NOT unparseable — it means no cycle has ever
+ * completed, so there is nothing to have missed.
+ */
+export function seededCycleMayPostdate(
+  sample: SyncCycleSample,
+  scansIssuedAt: number,
+): boolean {
+  const stamp = sample.lastSyncAt ?? null;
+  if (stamp === null) return false;
+  const at = Date.parse(stamp);
+  if (Number.isNaN(at)) return true;
+  return at > scansIssuedAt;
+}
+
 export function createSyncCycleWatcher(): SyncCycleWatcher {
   // A SEPARATE flag, not `lastSeenSync === null`: null is a legitimate stamp
   // — the app mounts mid-initial-sync, or after connection failures, with

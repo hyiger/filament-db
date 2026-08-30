@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
+import { createSyncCycleWatcher, seededCycleMayPostdate } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1164: the Data health page refetches its own local scan whenever a sync
@@ -74,5 +74,35 @@ describe("createSyncCycleWatcher", () => {
     w.seed({});
     expect(w.observe({})).toBe(false);
     expect(w.observe(idle("T1"))).toBe(true);
+  });
+});
+
+describe("seededCycleMayPostdate", () => {
+  const T = Date.parse("2026-08-30T04:00:00.000Z");
+
+  it("is false when no cycle has ever completed", () => {
+    // A null stamp is not a missed ending — there is nothing to have missed.
+    expect(seededCycleMayPostdate({ lastSyncAt: null }, T)).toBe(false);
+    expect(seededCycleMayPostdate({}, T)).toBe(false);
+  });
+
+  it("is false for a cycle that ended before the scans went out", () => {
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T03:59:59.000Z" }, T)).toBe(false);
+  });
+
+  it("is false for a stamp equal to the issue moment", () => {
+    // The scan was issued at or after that ending, so it read post-copy data.
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.000Z" }, T)).toBe(false);
+  });
+
+  it("is true for a cycle that ended while the scans were in flight", () => {
+    // The window no listener covers: too late for the scan, too early for
+    // `observe`, and seeded as the baseline so no later event reports it.
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.001Z" }, T)).toBe(true);
+  });
+
+  it("fails toward refetching on an unparseable stamp", () => {
+    // One extra read at mount is bounded; a stale all-clear is not.
+    expect(seededCycleMayPostdate({ lastSyncAt: "not a date" }, T)).toBe(true);
   });
 });

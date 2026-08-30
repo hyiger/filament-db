@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
+import { createSyncCycleWatcher, seededCycleMayPostdate } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1149 — Data health: the trim-collision resolution surface.
@@ -108,6 +108,11 @@ export default function DataHealthPage() {
   // endpoints are independent — one scan superseding the other's write would
   // be a different bug.
   const abrasiveSeq = useRef(0);
+  // When the mount scans were issued. The sync subscription is installed by a
+  // LATER effect, so a cycle finishing in between is delivered to no listener
+  // and then seeded as the baseline — invisible to `observe`, while the scans
+  // themselves may have read the pre-copy database.
+  const scansIssuedAt = useRef(0);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
   // ticket may write. The mount scan and a completion-triggered
@@ -189,6 +194,7 @@ export default function DataHealthPage() {
     let cancelled = false;
     const seq = ++abrasiveSeq.current;
     const current = () => !cancelled && seq === abrasiveSeq.current;
+    scansIssuedAt.current = Date.now();
     (async () => {
       try {
         const res = await fetch("/api/abrasive-nozzles");
@@ -245,6 +251,13 @@ export default function DataHealthPage() {
         if (cancelled || sawLiveStatus) return;
         setSyncConflicts((st as StatusSample).nameConflicts ?? []);
         watcher.seed(st);
+        // Nothing else can catch a cycle that ended between the scans going
+        // out and this subscription existing: it reaches no listener, and
+        // seeding its stamp means no later event reports an ending either.
+        if (seededCycleMayPostdate(st as StatusSample, scansIssuedAt.current)) {
+          void load();
+          void loadAbrasive();
+        }
       } catch {
         /* status unavailable — the local scan above still stands */
       }
