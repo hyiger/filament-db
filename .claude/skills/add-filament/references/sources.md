@@ -108,11 +108,22 @@ in between. Do it immediately after that create — the generated original varia
 parent's other child, the one whose id is not the one the create just returned — moving
 `optTags` onto it and clearing them from the template.
 
-The **OpenPrintTag link strands the same way**, and for the same reason: the promotion copy
-carries no `settings`, so a standalone's `openprinttag_slug` and snapshot stay on what is now a
-template — precisely the template-level linkage the main skill forbids, and a later sync can
-push that one colour's managed values across the family. Unlink the template and relink the
-generated original variant in the same cleanup pass.
+**Generalise this, because the tag is not the only thing that strands.** Promotion copies
+colour and inventory and nothing else, so *anything colour-specific held on a standalone stays
+behind on the new template* — and every field the resolver treats as inheritable is then
+adopted by each sibling that doesn't override it. Three known cases, all needing the same
+post-create move:
+
+| Stranded | Consequence for later siblings |
+|---|---|
+| `optTags` | an opaque colour renders transparent |
+| `transmissionDistance` | inherits the original colour's TD as their own |
+| `settings.openprinttag_slug` + `openprinttagSnapshot` | template-level OPT linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide |
+
+So the cleanup pass is: move those onto the generated original variant, clear them from the
+template. Before promoting anything, look at what else the standalone carries that describes
+its colour rather than its product line — the list above is what has been hit so far, not a
+guarantee it is complete.
 
 ## When the vendor lists no hex at all
 
