@@ -201,9 +201,15 @@ jq '[.materials[] | select(.brandSlug=="<slug, not the brand name>")]' /tmp/opt.
 #   jq -r '[.materials[].brandSlug] | unique | .[]' /tmp/opt.json | grep -i fuel
 ```
 
-Match on brand **and** colour, not name similarity. Name-similarity scoring reliably proposes
-`overture-petg-green` for "Overture PETG Grey" and matches product lines to whichever colour
-happens to sort first.
+Match on brand **and product line and** colour, not name similarity. Brand plus colour is not
+unique: a vendor sells the same colour across PLA, PETG and ASA, so "Overture Grey" narrows to
+several entries, and picking one feeds the create a density and a temperature band from the
+wrong polymer — then pins that wrong slug as the record's permanent upstream link. Filter on
+the catalogue's own material field too, and if brand + line + colour still leaves more than
+one, ask rather than choose.
+
+Name-similarity scoring is the other trap: it reliably proposes `overture-petg-green` for
+"Overture PETG Grey" and matches product lines to whichever colour happens to sort first.
 
 **Link only colour-level records, never a template.** Every OPT entry is one colour, so
 linking a product line pins one colour's provenance onto the whole family — and a later
@@ -337,7 +343,7 @@ ORIG_ID=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID" \
   | jq -r --arg new "$ID" '._variants[]? | select(._id != $new) | ._id' | head -1)
 # what the template is actually holding (?raw=true — unresolved, so this is its OWN state)
 curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
-  | jq '{optTags, secondaryColors, transmissionDistance, slug: .settings.openprinttag_slug}'
+  | jq '{optTags, secondaryColors, transmissionDistance, settings}'
 ```
 
 Use `?raw=true` for the template. A resolved read cannot answer this question, and `_variants`
@@ -347,6 +353,15 @@ which is how you can tell the tags are stranded rather than genuinely shared.
 Then, for whatever that read showed, writing the variant first so an interrupted run
 over-specifies rather than loses:
 
+- **`settings.filament_abrasive`** — the whole `settings` bag strands, and it does not need a
+  non-empty variant array to reach the siblings: `resolveFilament` SHALLOW-MERGES it
+  (`{...parentSettings, ...variantSettings}`), so every key the template holds reaches every
+  colour that does not override that exact key. When the standalone was abrasive because of its
+  *pigment* — a glow or sparkle colour — `filament_abrasive: "1"` stays on the line, the next
+  ordinary colour inherits it and exports it, and a firmware `M862.1` check can refuse a
+  filament that is not abrasive at all. Same test as tag `4`: pigment or polymer? If pigment,
+  `PUT` it onto `$ORIG_ID` and clear it from the template. Read the rest of the bag with the
+  same question — which is why the command above prints all of it rather than just the slug.
 - **`secondaryColors`** — an unconditional move, for the same reason and with the same
   mechanics as `optTags`. Promotion copies `color` and `colorName` but not this array, and it
   is whole-array fallback too, so a dual-colour or gradient standalone leaves its second and
