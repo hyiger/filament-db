@@ -315,6 +315,16 @@ export default function DataHealthPage() {
         </div>
       )}
 
+      {/* Headed only when it has content: the page carries two independent
+          checks now, and an empty "Name conflicts" heading above the abrasive
+          list reads as a section that failed to load. */}
+      {conflicts.length > 0 && (
+        <>
+          <h2 className="text-lg font-semibold mb-1">{t("health.conflicts.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.conflicts.subtitle")}</p>
+        </>
+      )}
+
       <div className="space-y-4">
         {conflicts.map((c) => {
           const deletable = c.dependents.total === 0;
