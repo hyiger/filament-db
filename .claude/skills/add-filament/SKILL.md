@@ -71,6 +71,11 @@ variant, the parent becomes a colourless template) and repeat the identical requ
 `"promoteParent": true` added. Never send that flag without asking — it restructures a second
 record.
 
+Worth doing first: if that existing filament has a colour but no `colorName`, set one before
+triggering the gate. The promoted variant is auto-named `"<parent> — <colorName>"`, falling
+back to `"— Original"` when the field is blank, so one word turns a meaningless name into the
+right one.
+
 **Nothing exists** — create a standalone filament. Do not invent a template for a single
 colour; the model derives template-ness from having variants, so it happens on its own when
 the second colour arrives.
@@ -92,6 +97,19 @@ useful for colour, and it is the linkage that lets the record pull future update
 measurably wrong sometimes: in one audit of 27 linked filaments, four of the vendor-published
 colours disagreed with OPT and the user's existing values were the correct ones. If OPT and
 the vendor disagree, the vendor wins and it is worth telling the user.
+
+**When a vendor publishes a range, let the library pick the value.** A spec of "250–270 °C
+nozzle, 80–100 °C bed" still needs one number in each field. Before reaching for the midpoint,
+look for a same-material record with the same published range and see what the user actually
+runs — in one case an existing PC with an identical 250–270 window was set to 260/100, which
+is a far better answer than arithmetic because it reflects their hardware and habits. Store
+the range in `nozzleRangeMin`/`Max` as well, so the guardrails survive.
+
+**A record's own process values can expose a wrong vendor.** One filament filed under one
+manufacturer turned out to carry temperatures, max volumetric speed and shrinkage that exactly
+matched another maker's bench profile — the data identified the real product before anyone
+noticed the label was wrong. When a vendor lookup keeps coming up empty, or the numbers feel
+familiar, check them against the profiles you already have.
 
 **Ask third.** If neither source has a number, ask. A plausible-looking invented temperature
 is worse than a blank field, because a blank field is visibly missing.
@@ -148,6 +166,18 @@ first. Renaming later is disruptive because slicers key their presets on the fil
 Use the vendor spelling the rest of the library uses for that brand, so filters and grouping
 don't fragment across `3D Fuel` / `3D-Fuel`.
 
+**Keep nozzle references out of the name.** A filament is a material; a preset is a material
+*plus* a nozzle. `HF0.4` and `0.6` are meaningful on a slicer preset and wrong on a filament,
+which has no nozzle of its own — so `CHCKX PCTG HF0.4` is really `CHCKX PCTG`.
+
+**The `type` feeds a reference-chapter resolver, so it is not free text in practice.** Record
+the fill (`PC-CF`, not `PC`, for a carbon-filled polycarbonate) but drop the loading
+percentage (`PPS-CF`, not `PPS-CF10`) — the resolver strips a `-CF`/`-GF` suffix to find the
+base chemistry, and the rest of the library follows that convention. What it cannot do is
+invent: a tidier-looking `PLA-Wood` matches nothing and silently hides the reference panel,
+where the existing `Woodfill` resolves to the PLA chapter. Reuse a type the library already
+uses, and if a genuinely new one is needed, check it still resolves.
+
 ### 6. Weights, then the spool
 
 Adding a filament always means a physical roll arrived, so the record is not finished until it
@@ -199,6 +229,14 @@ want to know.
 `findOneAndUpdate`, so a nested `{"temperatures": {"nozzle": 250}}` **replaces the whole
 subdocument** and silently destroys `bed`, the range fields and the first-layer values. Send
 `{"temperatures.nozzle": 250}` instead. The same applies to `settings.<key>`.
+
+**Name uniqueness is case-sensitive here, and the filesystem may not be.** The unique index on
+`name` declares no collation, so it is a byte comparison — `SunLu PP` and `SUNLU PP` are two
+distinct filaments and neither create will complain. That becomes destructive the moment names
+reach a filesystem: on macOS, writing a preset for one lands on the file of the other, keeping
+the original filename and silently replacing its contents. So when adopting a vendor's
+capitalisation, compare names case-INsensitively against what already exists, and expect a
+file count that comes up one short to mean exactly this.
 
 **Templates reject colour and inventory silently.** Writing `color`, `colorName`,
 `totalWeight` or `lowStockThreshold` to a template strips those fields rather than erroring —
