@@ -69,7 +69,18 @@ export async function GET() {
     const findings = auditAbrasiveNozzles(
       resolved.map((r) => r.doc),
       nozzles,
-    ).map((f) => ({ ...f, inheritedFrom: viaById.get(f.filamentId) ?? null }));
+    ).map((f) => ({
+      ...f,
+      // The hint reads "these nozzles come from the template — change them
+      // there", so it only belongs on a finding ABOUT the nozzles. On a
+      // flag-only finding the inherited nozzle set is already correct, and
+      // pointing the user at it sends them to edit something healthy while
+      // the flag that actually needs fixing sits on this record.
+      inheritedFrom:
+        f.softNozzles.length > 0 || f.unassigned
+          ? (viaById.get(f.filamentId) ?? null)
+          : null,
+    }));
 
     return NextResponse.json({ findings });
   } catch (err) {

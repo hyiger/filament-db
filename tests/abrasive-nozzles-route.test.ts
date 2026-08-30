@@ -90,6 +90,25 @@ describe("GET /api/abrasive-nozzles", () => {
     expect(variant.inheritedFrom).toBe("Acme PPS-CF");
   });
 
+  it("omits the template hint on a flag-only finding", async () => {
+    // The hint says "change the nozzles on the template". With the inherited
+    // nozzle set already correct and only the flag wrong, that sends the user
+    // to edit something healthy and away from the record that needs fixing.
+    const template = await Filament.create({
+      name: "Acme PET-CF", vendor: "Acme", type: "PET-CF",
+      settings: { filament_abrasive: "1" }, compatibleNozzles: [hardId],
+    });
+    await Filament.create({
+      name: "Acme PET-CF Grey", vendor: "Acme", type: "PET-CF", color: "#777777",
+      parentId: template._id, settings: { filament_abrasive: "0" },
+    });
+    const [finding] = (await scan()).findings;
+    expect(finding.filamentName).toBe("Acme PET-CF Grey");
+    expect(finding.flagMismatch).toBe(true);
+    expect(finding.softNozzles).toEqual([]);
+    expect(finding.inheritedFrom).toBeNull();
+  });
+
   it("does not blame the template for a variant's own assignment", async () => {
     const template = await Filament.create({
       name: "Acme PA-CF", vendor: "Acme", type: "PA-CF",

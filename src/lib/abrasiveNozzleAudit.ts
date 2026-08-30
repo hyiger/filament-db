@@ -127,9 +127,12 @@ export interface AbrasiveFinding {
    */
   unassigned: boolean;
   /**
-   * Material says abrasive but `filament_abrasive` is not `"1"`. The exported
-   * preset then asserts the filament is safe, and a firmware check reading it
-   * (`M862.1 … A{filament_abrasive}`) will not refuse the print.
+   * Material says abrasive but `filament_abrasive` is not effectively on. The
+   * exported preset then asserts the filament is safe, and a firmware check
+   * reading it (`M862.1 … A{filament_abrasive}`) will not refuse the print.
+   *
+   * Covers a value that is SET but unusable — a boolean `true`, say — not only
+   * an absent or explicitly-off one. Downstream those are the same thing.
    */
   flagMismatch: boolean;
 }
@@ -151,11 +154,21 @@ function idOf(ref: unknown): string | null {
  * three. Collapsing "unset" into "off" would let the `filled` name heuristic be
  * suppressed on every filament that simply never set the flag.
  */
-function flagValue(filament: AuditFilament): "on" | "off" | "unset" {
+function flagValue(filament: AuditFilament): "on" | "off" | "unset" | "unusable" {
   const raw = settingFlagScalar((filament.settings ?? {})["filament_abrasive"]);
-  if (raw === "1" || raw === 1 || raw === true) return "on";
+  if (raw == null) return "unset";
+  // Only what the rest of the app reads as ON counts as on. `settingFlagIsOn`
+  // is `String(scalar) === "1"`, and the export writes the bag value through
+  // verbatim, so a boolean `true` — which the generic API will happily store —
+  // is read as OFF by the form, ships to the slicer as the literal `true`, and
+  // is not `1` to a firmware `M862.1` check. Accepting it here would have this
+  // audit call a record healthy that every consumer treats as unflagged, which
+  // is the false all-clear the whole check exists to prevent.
+  if (String(raw) === "1") return "on";
   if (raw === "0" || raw === 0 || raw === false) return "off";
-  return "unset";
+  // Present but not a value anything downstream acts on. Someone set this
+  // field, so it is evidence about the filament AND a defect in its own right.
+  return "unusable";
 }
 
 /**
@@ -170,7 +183,7 @@ export function abrasiveReasons(filament: AuditFilament): AbrasiveReason[] {
   const flag = flagValue(filament);
   const reasons: AbrasiveReason[] = [];
 
-  if (flag === "on") reasons.push("flagged");
+  if (flag === "on" || flag === "unusable") reasons.push("flagged");
   if ((filament.optTags ?? []).some((t) => ABRASIVE_OPT_TAGS.has(t))) reasons.push("tagged");
   if (isFibreType(filament.type ?? "")) reasons.push("fibre");
   if (flag !== "off" && FILLED_RE.test(`${filament.type ?? ""} ${filament.name ?? ""}`)) {

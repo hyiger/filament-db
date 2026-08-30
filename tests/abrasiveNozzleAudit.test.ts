@@ -110,13 +110,33 @@ describe("abrasiveReasons", () => {
     })).toEqual([]);
   });
 
-  it("accepts the flag as a boolean or a number, not just a string", () => {
-    expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: true } }))
-      .toEqual(["flagged"]);
+  it("accepts a numeric 1, and an explicit numeric 0 still suppresses the heuristic", () => {
     expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: 1 } }))
       .toEqual(["flagged"]);
-    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Sparkle", settings: { filament_abrasive: 0 } }))
-      .toEqual([]);
+    expect(abrasiveReasons({
+      _id: "x", type: "PLA", name: "Glitter Grey", settings: { filament_abrasive: 0 },
+    })).toEqual([]);
+  });
+
+  it("does NOT accept boolean true as an enabled flag", () => {
+    // `settingFlagIsOn` is String(scalar) === "1", so the form reads `true` as
+    // OFF, the export ships the literal `true`, and a firmware M862.1 check
+    // does not see 1. Calling that healthy is the false all-clear this exists
+    // to prevent — so it stays a reason (someone set the field) AND a mismatch.
+    const f: AuditFilament = { ...CLEAN, _id: "fb", settings: { filament_abrasive: true } };
+    expect(abrasiveReasons(f)).toEqual(expect.arrayContaining(["flagged"]));
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.flagMismatch).toBe(true);
+  });
+
+  it("reports a flag holding a value nothing downstream reads", () => {
+    // A set-but-unusable value is evidence about the filament and a defect in
+    // its own right; it must not read as either enabled or absent.
+    const f: AuditFilament = {
+      ...CLEAN, _id: "fj", type: "PETG", settings: { filament_abrasive: "yes" },
+    };
+    expect(abrasiveReasons(f)).toEqual(["flagged"]);
+    expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
   });
 });
 
