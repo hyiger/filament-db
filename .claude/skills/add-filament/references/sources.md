@@ -116,9 +116,21 @@ post-create move:
 
 | Stranded | Consequence for later siblings | How to move it |
 |---|---|---|
-| `optTags` | an opaque colour renders transparent | `PUT` the array onto the variant, `[]` on the template |
+| `optTags` | an opaque colour renders transparent | move **only the appearance tags** — see below — and leave the rest on the template |
 | `transmissionDistance` | inherits the original colour's TD as their own | `PUT` the value onto the variant, `null` on the template |
 | the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT** — `DELETE …/openprinttag/link` on the template, then `POST` the slug to the variant |
+
+**`optTags` is a mixed namespace, so moving the whole array is wrong.** It carries how a colour
+*looks* alongside what the material *is*: `2` transparent, `3` translucent, `16` matte, `17`
+silk, `22` sparkle, `23` phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28`
+dual-colour and `29` triple-colour describe this colour and belong on the variant. `4` abrasive,
+`0`/`31` glass and carbon fibre, `33` hygroscopic, `9` flexible, `5` food-safe and the rest
+describe the product line and must stay on the template, where every sibling inherits them.
+Sweeping the array across takes `4` off the line, which — because the resolver reads the
+effective value — hides the whole family from the abrasive/nozzle check in Settings → Data
+health. **When a tag is not clearly one of the appearance tags listed above, leave it on the
+template**: an appearance tag stranded there is a visible rendering wart, a safety tag moved
+off it is silent.
 
 The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
 `openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips

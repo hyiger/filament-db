@@ -81,7 +81,9 @@ colour turns it into a template. The server gates this: your create returns **40
 user what will happen (the existing filament's colour and spools move onto a new sibling
 variant, the parent becomes a colourless template) and repeat the identical request with
 `"promoteParent": true` added. Never send that flag without asking — it restructures a second
-record.
+record. When you take this path, **step 5a is not optional** — promotion strands the old
+colour's tags, TD and OpenPrintTag link on the new template, where your new colour inherits
+them.
 
 Worth doing first: if that existing filament has a colour but no `colorName`, set one before
 triggering the gate. The promoted variant is auto-named `"<parent> — <colorName>"`, falling
@@ -191,7 +193,8 @@ CODE=$(printf '%s' "$RESP" | tail -n1); BODY=$(printf '%s' "$RESP" | sed '$d')
 
 Check `$CODE` before going further. **201** — take the id with
 `ID=$(printf '%s' "$BODY" | jq -r '.filament._id // ._id')`. **409** — `$BODY` carries either
-the promotion gate (confirm, then retry with `promoteParent: true`) or a name collision.
+the promotion gate (confirm, then retry with `promoteParent: true`, then run step 5a) or a
+name collision.
 Anything else is a validation error naming its field. Extracting the id first instead turns a
 409 into the string `null` and every later call targets `/null`, silently, while the parent
 state you needed for the confirmation is gone.
@@ -222,6 +225,48 @@ base chemistry, and the rest of the library follows that convention. What it can
 invent: a tidier-looking `PLA-Wood` matches nothing and silently hides the reference panel,
 where the existing `Woodfill` resolves to the PLA chapter. Reuse a type the library already
 uses, and if a genuinely new one is needed, check it still resolves.
+
+### 5a. Only if you retried with `promoteParent: true`
+
+Promotion copies colour and inventory onto the generated original variant and **nothing else**.
+Anything colour-specific the old standalone was carrying stays behind on the new template,
+where the resolver hands it to every sibling that doesn't override it — including the one you
+just created. So the colour you added can silently inherit the *previous* colour's tags, its
+transmission distance, and its OpenPrintTag link.
+
+This is an inspection, not a ritual. Read the template back and act only on what is actually
+there; on a standalone that carried none of it, this step reads once and does nothing.
+
+```bash
+# the sibling promotion generated — the template's other child
+ORIG_ID=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID" \
+  | jq -r --arg new "$ID" '._variants[]? | select(._id != $new) | ._id' | head -1)
+# what the template is actually holding (?raw=true — unresolved, so this is its OWN state)
+curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
+  | jq '{optTags, transmissionDistance, slug: .settings.openprinttag_slug}'
+```
+
+Use `?raw=true` for the template. A resolved read cannot answer this question, and `_variants`
+entries report *effective* values — before cleanup both children echo the template's tags,
+which is how you can tell the tags are stranded rather than genuinely shared.
+
+Then, for whatever that read showed, writing the variant first so an interrupted run
+over-specifies rather than loses:
+
+- **`transmissionDistance`** — an unconditional move. TD is per-colour optics; no two colours
+  share one. `PUT` the value onto `$ORIG_ID`, then `null` on the template.
+- **`optTags`** — move only the tags that describe how that colour *looks*: `2` transparent,
+  `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24` glow, `25`
+  colour-changing, `27` gradient, `28` dual/`29` triple-colour. Everything else — `4` abrasive,
+  `0`/`31` fibre, `33` hygroscopic, `9` flexible, `5` food-safe — describes the product line
+  and stays. Moving the whole array takes `4` off the template and hides the entire family from
+  the abrasive/nozzle check in Settings → Data health, because that check reads the effective
+  value. **If a tag isn't clearly on the appearance list, leave it on the template**: a stranded
+  appearance tag is a visible rendering wart, a safety tag moved off the line is silent.
+- **The OpenPrintTag link** — cannot be moved with a `PUT`; it is three fields, one of them
+  server-owned. Follow the route sequence in `references/sources.md`, and keep its ordering:
+  read the template's existing slug *before* the `DELETE`, because that slug belongs to the
+  original colour and the one you looked up in step 4 belongs to the new one.
 
 ### 6. Link the OpenPrintTag match
 

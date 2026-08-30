@@ -50,8 +50,15 @@ Responses:
 natural one. An empty body is refused so a stray call can't mint a phantom 0 g spool.
 
 ```json
-{ "totalWeight": 1186, "label": "", "purchaseDate": "2026-08-29", "locationId": null }
+{ "totalWeight": 1186, "label": "", "locationId": null }
 ```
+
+`purchaseDate` and `openedDate` are absent on purpose. Both are optional, and a date copied
+out of a reference is a date the user never gave — it looks right, so nobody catches it. Send
+either only when the user states or implies one. A placeholder would not help: leaving the key
+in the body still says "this field belongs here", and the agent then fills it in. Both accept
+`YYYY-MM-DD`, a full ISO 8601 string, or `null`; an ISO-shaped but impossible date such as
+`2026-02-30` is rejected rather than rolled over, so a 400 naming one of these is real.
 
 `totalWeight` is **gross** — filament plus spool. Append `?shape=spool` to get just the created
 spool back instead of the whole filament document with every sibling's photo blob.
