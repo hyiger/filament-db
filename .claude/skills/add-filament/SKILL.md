@@ -62,7 +62,7 @@ If the user scanned a tag, the decoded payload gives you most of this already.
 ### 2. Find the family
 
 ```bash
-curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.parentId // "root")\t\(.hasVariants)"'
+curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.color // "-")\t\(.parentId // "root")\t\(.hasVariants)"'
 ```
 
 Assign the `_id` of whatever you match — every later step addresses the family through it:
@@ -83,6 +83,11 @@ for you.
 that a filament being added is always a new physical roll, and a roll of a colour already in the
 library needs no new record at all — only a spool. Match on vendor + name + colour, across
 variants as well as roots.
+
+The listing carries `color`, which is why it is projected above. It does **not** carry
+`colorName`, so when the names do not settle it — two greys in one line, a name that does not
+encode the colour — read the candidates with `GET /api/filaments/{id}` and compare there rather
+than guessing from the name alone.
 
 If it exists, that record is `$ID` and you are done with steps 3 to 6: go straight to step 7 and
 register the spool. Creating anyway is not a harmless duplicate — the unique-name index returns
@@ -290,7 +295,7 @@ ORIG_ID=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID" \
   | jq -r --arg new "$ID" '._variants[]? | select(._id != $new) | ._id' | head -1)
 # what the template is actually holding (?raw=true — unresolved, so this is its OWN state)
 curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
-  | jq '{optTags, transmissionDistance, slug: .settings.openprinttag_slug}'
+  | jq '{optTags, secondaryColors, transmissionDistance, slug: .settings.openprinttag_slug}'
 ```
 
 Use `?raw=true` for the template. A resolved read cannot answer this question, and `_variants`
@@ -300,6 +305,12 @@ which is how you can tell the tags are stranded rather than genuinely shared.
 Then, for whatever that read showed, writing the variant first so an interrupted run
 over-specifies rather than loses:
 
+- **`secondaryColors`** — an unconditional move, for the same reason and with the same
+  mechanics as `optTags`. Promotion copies `color` and `colorName` but not this array, and it
+  is whole-array fallback too, so a dual-colour or gradient standalone leaves its second and
+  third colours on the template and every later sibling renders with them. `PUT` the array onto
+  `$ORIG_ID` and `[]` on the template. Unlike `optTags` there is no shared case to weigh: a
+  secondary colour is part of one colour's appearance by definition.
 - **`transmissionDistance`** — an unconditional move. TD is per-colour optics; no two colours
   share one. `PUT` the value onto `$ORIG_ID`, then `null` on the template.
 - **`optTags`** — the array does not merge. `resolveFilament` uses whole-array fallback: a

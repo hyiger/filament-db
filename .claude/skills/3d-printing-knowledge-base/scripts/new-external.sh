@@ -30,6 +30,12 @@ while [[ "$root" != "/" && ! -d "$root/external" ]]; do root="$(dirname "$root")
 case "$SRC" in
   *[$'\n\r']*) die "source must be a single line" ;;
 esac
+# Same rule for the scope. It reaches the same quoting path, and a newline
+# there writes a multiline scalar that the line-oriented provenance checker
+# still reports clean -- and can forge what look like extra metadata keys.
+case "$SCOPE" in
+  *[$'\n\r']*) die "scope must be a single line" ;;
+esac
 
 # Emit both free-text fields as YAML double-quoted scalars. The documented
 # citation form is prose, and prose routinely contains YAML-significant
@@ -42,6 +48,12 @@ yaml_quote() {
   local v=$1
   v=${v//\\/\\\\}   # backslashes first, or the next substitution doubles them
   v=${v//\"/\\\"}
+  # Line breaks escaped rather than emitted raw. The callers above already
+  # refuse them, so this is belt-and-braces for any future caller -- but it is
+  # the difference between a malformed file and a well-formed one, and the
+  # checker cannot tell a multiline scalar from injected metadata.
+  v=${v//$'\r'/\\r}
+  v=${v//$'\n'/\\n}
   printf '"%s"' "$v"
 }
 

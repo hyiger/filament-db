@@ -114,11 +114,12 @@ unconditionally is what causes the mirror-image bug on a Matte or Silk product l
 **Generalise this, because the tag is not the only thing that strands.** Promotion copies
 colour and inventory and nothing else, so *anything colour-specific held on a standalone stays
 behind on the new template* — and every field the resolver treats as inheritable is then
-adopted by each sibling that doesn't override it. Three known cases, all needing the same
+adopted by each sibling that doesn't override it. Four known cases, all needing the same
 post-create move:
 
 | Stranded | Consequence for later siblings | How to move it |
 |---|---|---|
+| `secondaryColors` | later siblings render with the original colour's second and third colours | `PUT` the array onto the variant, `[]` on the template — promotion copies `color` and `colorName` but not this |
 | `optTags` | an opaque colour renders transparent | **split, then copy** — see below; the array replaces rather than merges, so a plain move loses tags |
 | `transmissionDistance` | inherits the original colour's TD as their own | `PUT` the value onto the variant, `null` on the template |
 | the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT** — `DELETE …/openprinttag/link` on the template, then `POST` the slug to the variant |
