@@ -7043,7 +7043,7 @@
                           },
                           "unassigned": {
                             "type": "boolean",
-                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a restriction either: the slicer export derives no compatible_printers_condition from it (GH #1021), so it is the app's record of intent rather than an enforced limit. An empty list simply means no soft-nozzle assignment can be detected for this filament."
+                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a baked restriction either: the export derives no compatible_printers_condition from it (GH #1021), so an unscoped bundle is not limited by nozzle — only a request naming a printer (?printer=) is filtered on this list. An empty list simply means no soft-nozzle assignment can be detected for this filament."
                           },
                           "flagMismatch": {
                             "type": "boolean",

@@ -8,11 +8,13 @@
  * carbide or ruby-tipped nozzle survives them.
  *
  * WHY THIS EXISTS. `compatibleNozzles` is the app's RECORD of which nozzles a
- * filament may run on — read by the form's nozzle picker and by calibration
- * reachability, not by the print path. Since GH #1021 the export derives no
- * `compatible_printers_condition` from it, so it restricts nothing at print
- * time; it is a statement of intent, and it is maintained by hand, so it goes
- * stale in silence. A filament typed `PC` when its nozzles were assigned keeps
+ * filament may run on — read by the form's nozzle picker, by calibration
+ * reachability, and by the printer-scoped export. What it is NOT is a baked
+ * restriction: GH #1021 removed the derived `compatible_printers_condition`,
+ * so an ordinary export limits nothing at print time, and a slicer only gets a
+ * filtered bundle when it asks for a named printer (`?printer=`). Either way
+ * the list is a statement of intent maintained by hand, so it goes stale in
+ * silence. A filament typed `PC` when its nozzles were assigned keeps
  * that permissive set after being retyped `PC-CF`; nothing errors, nothing
  * warns, and the wrong nozzle stays on the list. A stale entry is therefore a
  * wrong record rather than an open door — which is still worth reporting,
@@ -182,13 +184,15 @@ export function auditAbrasiveNozzles(
     // Only report a filament that actually has a problem. An abrasive filament
     // correctly restricted to hardened nozzles AND correctly flagged is fine.
     //
-    // NOT a reason to fire here: the exported preset carries an EMPTY
-    // `compatible_printers_condition` (GH #1021), so this list never reaches
-    // the slicer and cannot stop a soft-nozzle printer selecting the preset.
+    // NOT a reason to fire here: an ordinary export bakes an EMPTY
+    // `compatible_printers_condition` (GH #1021), so on an UNSCOPED request
+    // this list does not stop a soft-nozzle printer selecting the preset.
     // True — and uniformly true of every filament, which is the point. No edit
     // a user can make would clear such a finding, so raising it per row would
     // report every correctly-configured abrasive filament forever and bury the
-    // two findings that ARE actionable. The enforceable lever is
+    // two findings that ARE actionable. It is also no longer the whole story:
+    // a request naming a printer IS filtered on this list, so keeping it
+    // accurate has a direct effect and a correct list deserves silence here. The enforceable lever is
     // `filament_abrasive`, which does ride the settings bag into the export and
     // into the firmware's `M862.1` check — which is why `flagMismatch` is part
     // of this condition. The disclosure that assignments are advisory belongs
