@@ -19,13 +19,22 @@ apart.
 ├── authored/       →   a symlink to filament-db.wiki/. One directory under two
 │                       names; the paths cannot diverge. READ ONLY.
 ├── external/           Third-party material. The ONLY writable directory.
-└── scripts/       →   a symlink to this skill's own scripts directory, so the
-                       `scripts/...` invocations below work from the KB root:
-                         ln -s ~/.claude/skills/3d-printing-knowledge-base/scripts scripts
+└── scripts/       →   a symlink to wherever THIS skill is installed, so the
+                       `scripts/...` invocations below resolve from the KB root.
 ```
 
-Without that symlink every `scripts/…` command here is unrunnable from a fresh
-checkout — make it once, or invoke the scripts by their full path.
+Point it at the copy you are actually running. In a project checkout that is
+the repository's own `.claude/skills/`, not `~/.claude/skills/` — nothing
+installs it there, so a home-directory link would simply dangle and every
+`scripts/…` command below would fail:
+
+```bash
+# from the knowledge-base root, pointing at the project checkout:
+ln -s /path/to/filament-db/.claude/skills/3d-printing-knowledge-base/scripts scripts
+```
+
+Or skip the link and invoke the scripts by their full path — the commands below
+are written relative to the KB root only for readability.
 
 Plus the live Filament DB REST API on `http://localhost:3456`.
 
