@@ -291,8 +291,12 @@ over-specifies rather than loses:
   is not a move, it is a split plus a copy.
 
   Ask of each tag: *does it describe this colour, or the product line?* That is a question
-  about the family, not a fixed list of ids. `4` abrasive, `0`/`31` fibre, `33` hygroscopic,
-  `9` flexible and `5` food-safe are always the line. The appearance tags — `2` transparent,
+  about the family, not a fixed list of ids — and it applies to every tag, including the
+  material ones. `0`/`31` fibre, `33` hygroscopic, `9` flexible and `5` food-safe come from the
+  base polymer, so in practice they are always the line. `4` abrasive usually is too, but not
+  when the abrasive thing is the *pigment*: one glow colour in an otherwise ordinary line is
+  abrasive on its own account, and leaving `4` on the template marks every plain sibling
+  abrasive and restricts them all to hardened nozzles. The appearance tags — `2` transparent,
   `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24` glow, `25`
   colour-changing, `27` gradient, `28` dual/`29` triple-colour — are usually the colour, but
   not always: in a **Matte PLA** or **Silk PLA** line the finish is the product, shared by

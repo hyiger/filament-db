@@ -129,10 +129,13 @@ phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28` dual-colour
 triple-colour — alongside what the material *is*: `4` abrasive, `0`/`31` glass and carbon fibre,
 `33` hygroscopic, `9` flexible, `5` food-safe.
 
-Those groupings are the usual case, not a partition you can apply blind. A finish is
-colour-specific in a line that has one silk colour among many, and is the *product* in a
-"Matte PLA" line where every colour shares it — same tag id, opposite answer. Read the family
-name and the siblings before deciding.
+Those groupings are the usual case, not a partition you can apply blind, and that cuts both
+ways. A finish is colour-specific in a line with one silk colour among many, and is the
+*product* in a "Matte PLA" line where every colour shares it — same tag id, opposite answer.
+`4` abrasive runs the other direction: it is a property of the base polymer in a CF line, but a
+property of the *pigment* in a line carrying one glow colour, where leaving it on the template
+marks every plain sibling abrasive and restricts them all to hardened nozzles. Read the family
+name and the siblings before deciding, for every tag.
 
 Both halves of that matter, and the obvious remedies each break one. Sweeping the whole array
 onto the variant takes `4` off the product line, so every later sibling inherits no abrasive
