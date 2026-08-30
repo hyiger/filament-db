@@ -18,8 +18,14 @@ apart.
 │                       documentation. READ ONLY.
 ├── authored/       →   a symlink to filament-db.wiki/. One directory under two
 │                       names; the paths cannot diverge. READ ONLY.
-└── external/           Third-party material. The ONLY writable directory.
+├── external/           Third-party material. The ONLY writable directory.
+└── scripts/       →   a symlink to this skill's own scripts directory, so the
+                       `scripts/...` invocations below work from the KB root:
+                         ln -s ~/.claude/skills/3d-printing-knowledge-base/scripts scripts
 ```
+
+Without that symlink every `scripts/…` command here is unrunnable from a fresh
+checkout — make it once, or invoke the scripts by their full path.
 
 Plus the live Filament DB REST API on `http://localhost:3456`.
 
@@ -76,10 +82,10 @@ datasheet governs.
 This is the most likely way to give a damaging answer, because the two look
 similar and are not:
 
-| Property | Typical source value | Actual print value |
+| Property | Typical source value | Family band (NOT a printable value — look the record up) |
 |---|---|---|
 | PA6 melting point | ~220 °C | nozzle 260–280 °C |
-| PPS melting point | ~280 °C | PPS-CF nozzle 320–345 °C |
+| PPS melting point | ~280 °C | PPS-CF nozzle 320–350 °C |
 | PC glass transition | ~147 °C | nozzle 260–290 °C |
 
 A melting point is not a nozzle temperature. A glass transition is not a bed
@@ -103,12 +109,17 @@ Every file in `external/` must carry:
 
 ```yaml
 ---
-source:    <url or citation>
+source:    "<url or citation>"
 retrieved: <YYYY-MM-DD>
 trust:     background
-scope:     <what this file may be used for>
+scope:     "<what this file may be used for>"
 ---
 ```
+
+The two free-text fields are quoted and the two constrained ones are not — that
+is what `new-external.sh` emits, and what `check-provenance.sh` accepts. An
+unquoted citation containing a colon, a `#`, or a leading `[` is not the string
+you meant, so prefer the generator over hand-writing this block.
 
 A file in `external/` without front matter is untrusted — flag it to the user
 rather than reading from it. `scripts/check-provenance.sh` audits the directory.
@@ -188,7 +199,7 @@ missing data.
 | `fdb.sh check` | Preflight. Always first. |
 | `fdb.sh list` | Overview — name, material, brand, spool count. |
 | `fdb.sh find <text>` | Locate a filament by partial name. Returns ids. |
-| `fdb.sh detail <text>` | Full resolved record. **Use for calibration.** |
+| `fdb.sh detail <name>` | Full resolved record — the unprojected route, so project it. **Use for calibration.** Exact name wins, else a unique substring. |
 | `fdb.sh schema` | Actual field names on a real record. |
 | `fdb.sh get <path>` | Any other endpoint. |
 
@@ -205,17 +216,22 @@ version. Ask the user rather than trying variations. Known routes include
 `/api/filaments`, `/api/filaments/{id}`, `/api/filaments/match`,
 `/api/spools/by-location`, `/api/spools/{spoolId}`, `/api/print-history`,
 `/api/analytics`, and per-slicer exports at
-`/api/filaments/{id}/{prusaslicer,orcaslicer,bambustudio}`.
+`/api/filaments/{id}/{prusaslicer,orcaslicer,bambustudio}` — those return `.ini`
+/`.json` FILES, not an API envelope, so `fdb.sh` refuses them as non-JSON and
+names the Content-Type when it does. Fetch one directly if you actually want it.
 
 ## Context discipline
 
-`GET /api/filaments` returns everything: spool subdocuments, `usageHistory`,
-`dryCycles`, and the `settings` passthrough bag, which carries every slicer key
-the app does not model. Potentially megabytes for a question about one number.
+It is the SINGLE-RECORD route that is expensive, not the list. `GET
+/api/filaments` is a projection — 19 fields, no `settings`, no `usageHistory`,
+no `dryCycles`, no photos. `GET /api/filaments/{id}` is the unprojected one: 51
+fields including the `settings` passthrough bag and every spool's photo, which
+is why `fdb.sh detail` is the command to be careful with, even though it is
+also the one you must use for calibration.
 
-Never pipe a raw collection response into your reasoning context. `fdb.sh list`
-and `fdb.sh find` already project down. When you need something they do not
-cover, project at the boundary:
+Never pipe a raw response into your reasoning context. `fdb.sh list` and
+`fdb.sh find` already project down. When you need a detail record, project at
+the boundary:
 
 ```bash
 scripts/fdb.sh get /api/filaments/ID | jq '{name, temperatures, shrinkageXY}'
