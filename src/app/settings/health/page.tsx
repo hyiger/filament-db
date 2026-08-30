@@ -99,6 +99,15 @@ export default function DataHealthPage() {
   // Tracked separately from `error`, whose message names the name-conflict
   // scan. A shared flag would tell the user the wrong check broke.
   const [abrasiveError, setAbrasiveError] = useState(false);
+  // The abrasive scan needs its OWN ticket, for the same reason `scanSeq`
+  // exists below and shared with BOTH of its request paths. Mounting while a
+  // sync finishes fires the mount scan and the completion refetch
+  // concurrently with no ordering between them, so the mount request can read
+  // the pre-sync database, resolve last, and reinstate a stale all-clear over
+  // the post-sync findings. A separate counter from `scanSeq` because the two
+  // endpoints are independent — one scan superseding the other's write would
+  // be a different bug.
+  const abrasiveSeq = useRef(0);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
   // ticket may write. The mount scan and a completion-triggered
@@ -159,16 +168,18 @@ export default function DataHealthPage() {
   // only the conflict scan would leave the abrasive list a pre-sync snapshot
   // while the all-clear banner spoke for both.
   const loadAbrasive = useCallback(async () => {
+    const seq = ++abrasiveSeq.current;
     try {
       const res = await fetch("/api/abrasive-nozzles");
       if (!res.ok) throw new Error();
       const body = (await res.json()) as { findings: AbrasiveFinding[] };
+      if (seq !== abrasiveSeq.current) return;
       setAbrasive(body.findings);
       setAbrasiveError(false);
     } catch {
-      setAbrasiveError(true);
+      if (seq === abrasiveSeq.current) setAbrasiveError(true);
     } finally {
-      setAbrasiveLoading(false);
+      if (seq === abrasiveSeq.current) setAbrasiveLoading(false);
     }
   }, []);
 
@@ -176,21 +187,23 @@ export default function DataHealthPage() {
   // set-state-in-effect rule.
   useEffect(() => {
     let cancelled = false;
+    const seq = ++abrasiveSeq.current;
+    const current = () => !cancelled && seq === abrasiveSeq.current;
     (async () => {
       try {
         const res = await fetch("/api/abrasive-nozzles");
         if (!res.ok) throw new Error();
         const body = (await res.json()) as { findings: AbrasiveFinding[] };
-        if (!cancelled) setAbrasive(body.findings);
+        if (current()) setAbrasive(body.findings);
       } catch {
         // "Advisory" describes the FINDINGS, not the scan. Swallowing the
         // failure left the list empty and the loading flag cleared, which the
         // all-clear below reads as "checked, nothing found" — a green
         // "your data looks healthy" for a check that never ran. This page has
         // made that mistake once already (GH #1164, the remote conflicts).
-        if (!cancelled) setAbrasiveError(true);
+        if (current()) setAbrasiveError(true);
       } finally {
-        if (!cancelled) setAbrasiveLoading(false);
+        if (current()) setAbrasiveLoading(false);
       }
     })();
     return () => {
