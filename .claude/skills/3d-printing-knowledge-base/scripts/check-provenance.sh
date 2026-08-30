@@ -271,13 +271,16 @@ while IFS= read -r -d '' f; do
             add_note "${key}: value is a bare YAML indicator — quote it, or rewrite with new-external.sh"; continue ;;
         esac
         # ": " reopens the line as a nested mapping and a trailing ":" makes it
-        # a key — both unloadable. The separator is colon + ANY whitespace, so a
-        # tab counts too. Strip a trailing comment first, or
-        # `Fiberon # see table 2: page 4` (valid) would trip it.
+        # a key — both unloadable. The separator is colon + ANY whitespace, so
+        # colon-TAB counts too — but only after a colon: a bare tab inside a
+        # plain scalar (`Vendor<TAB>TDS`, ordinary pasted text) is perfectly
+        # valid YAML, and rejecting it was a false positive, which for this
+        # tool is worse than the miss it replaced. Strip a trailing comment
+        # first, or `Fiberon # see table 2: page 4` (valid) would trip it.
         plain="${raw%%[[:space:]]#*}"
         plain="${plain%"${plain##*[![:space:]]}"}"
         case "$plain" in
-          *": "*|*$'\t'*|*:)
+          *": "*|*":"$'\t'*|*:)
             add_note "${key}: unquoted value contains \": \" or ends in \":\" — quote it, or rewrite with new-external.sh"; continue ;;
         esac ;;
     esac

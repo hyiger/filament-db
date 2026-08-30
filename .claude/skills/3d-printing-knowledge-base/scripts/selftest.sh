@@ -78,6 +78,10 @@ run_case quoted-null-str   ok  "$(fm '"null"')"
 run_case leading-dash      ok  "$(fm '-Vendor-TDS-rev-3')"
 run_case colon-no-space    ok  "$(fm 'ref:12345')"
 run_case colon-tab-sep     bad "$(printf -- '---\nsource:    Vendor:\trev\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+# A bare tab inside a plain scalar is valid YAML — only colon-TAB is a mapping
+# separator. Rejecting every tab was a false positive, and for this pair of
+# scripts a false positive is worse than the miss it replaced.
+run_case plain-tab-ok      ok  "$(printf -- '---\nsource:    Vendor\tTDS rev 3\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
 run_case non-ascii         ok  "$(fm '"Émile — TDS révision 3"')"
 run_case backslash-tail    ok  "$(fm "\"Vendor TDS rev 3${B}${B}\"")"
 run_case windows-path      ok  "$(fm "\"C:${B}${B}temp${B}${B}tds.pdf\"")"
