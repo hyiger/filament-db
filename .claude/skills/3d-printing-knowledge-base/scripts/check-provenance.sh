@@ -13,6 +13,38 @@ if [[ ! -d "$root/external" ]]; then
   printf 'ERROR: no external/ directory found above %s\n' "$PWD" >&2; exit 1
 fi
 
+# Decode a front-matter scalar far enough to tell "has a value" from "has none".
+#
+# Deliberately not a YAML parser -- it covers exactly the surface these four
+# fields can present: the two quoting styles, backslash escapes inside double
+# quotes, inline comments, and the plain null spellings. Each of those has now
+# been a way to write a file with no provenance that still audited Clean, and
+# adding them as separate special cases is what let the next one through.
+yaml_scalar() {
+  local v=$1 out="" i c prev=""
+  case "$v" in
+    \"*)
+      # Quoted: the value is what is inside. Anything after the closing quote
+      # is a comment or junk, and either way not provenance.
+      i=1
+      while (( i < ${#v} )); do
+        c=${v:i:1}
+        [[ "$c" == '"' && "$prev" != "\\" ]] && break
+        out+="$c"; prev="$c"; i=$((i+1))
+      done
+      printf '%s' "$out"; return ;;
+    \'*)
+      out=${v:1}; printf '%s' "${out%%\'*}"; return ;;
+  esac
+  # Plain scalar: '#' opens a comment at the start or after whitespace, and
+  # only then does a null spelling mean anything.
+  [[ "$v" == '#'* ]] && { printf ''; return; }
+  v="${v%%[[:space:]]#*}"
+  v="${v%"${v##*[![:space:]]}"}"
+  case "$v" in null|Null|NULL|'~') v="" ;; esac
+  printf '%s' "$v"
+}
+
 problems=0
 checked=0
 
@@ -50,20 +82,7 @@ while IFS= read -r f; do
     # non-whitespace test -- the quotes are the content -- and a file with no
     # provenance at all passes the audit. Strip surrounding quotes before
     # deciding, and require something left.
-    val="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm" | head -1)"
-    val="${val%"${val##*[![:space:]]}"}"   # drop trailing whitespace
-    case "$val" in
-      \"*\"|\'*\')
-        # A QUOTED scalar is a string, so its content is whatever is inside --
-        # including the literal word "null", which is odd provenance but is
-        # provenance. Only emptiness disqualifies it.
-        val="${val:1:$((${#val}-2))}" ;;
-      *)
-        # A PLAIN scalar can be a YAML null. A reader resolves `null` or `~` to
-        # no value, so a field spelled that way has no provenance even though
-        # the line is not blank -- which is how a hand-edited file passed.
-        case "$val" in null|Null|NULL|'~') val="" ;; esac ;;
-    esac
+    val="$(yaml_scalar "$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm" | head -1)")"
     [[ -n "${val//[[:space:]]/}" ]] || missing="${missing}${missing:+ }${key}"
   done
   if [[ -n "$missing" ]]; then
