@@ -114,14 +114,16 @@ behind on the new template* — and every field the resolver treats as inheritab
 adopted by each sibling that doesn't override it. Three known cases, all needing the same
 post-create move:
 
-| Stranded | Consequence for later siblings |
-|---|---|
-| `optTags` | an opaque colour renders transparent |
-| `transmissionDistance` | inherits the original colour's TD as their own |
-| `settings.openprinttag_slug` + `openprinttagSnapshot` | template-level OPT linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide |
+| Stranded | Consequence for later siblings | How to move it |
+|---|---|---|
+| `optTags` | an opaque colour renders transparent | `PUT` the array onto the variant, `[]` on the template |
+| `transmissionDistance` | inherits the original colour's TD as their own | `PUT` the value onto the variant, `null` on the template |
+| the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT** — `DELETE …/openprinttag/link` on the template, then `POST` the slug to the variant |
 
-So the cleanup pass is: move those onto the generated original variant, clear them from the
-template. Before promoting anything, look at what else the standalone carries that describes
+The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
+`openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips
+the snapshot, leaving a linkage that looks present and classifies wrongly on the next check.
+Let the routes rebuild it: delete on the template, link on the variant. Before promoting anything, look at what else the standalone carries that describes
 its colour rather than its product line — the list above is what has been hit so far, not a
 guarantee it is complete.
 
