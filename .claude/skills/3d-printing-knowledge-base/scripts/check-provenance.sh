@@ -13,6 +13,14 @@ if [[ ! -d "$root/external" ]]; then
   printf 'ERROR: no external/ directory found above %s\n' "$PWD" >&2; exit 1
 fi
 
+# perl is used by the scalar decoder below and by the comment strip in the leak
+# scan. Without it the decoder would pass escapes through and the leak scan
+# would silently see no prose -- both failing toward "Clean", so refuse early.
+if ! command -v perl >/dev/null 2>&1; then
+  printf 'ERROR: perl is required (scalar decoding and HTML-comment stripping).\n' >&2
+  exit 1
+fi
+
 # Decode a front-matter scalar far enough to tell "has a value" from "has none".
 #
 # Deliberately not a YAML parser -- it covers exactly the surface these four
@@ -32,7 +40,16 @@ yaml_scalar() {
         [[ "$c" == '"' && "$prev" != "\\" ]] && break
         out+="$c"; prev="$c"; i=$((i+1))
       done
-      printf '%s' "$out"; return ;;
+      # Escapes are what a double-quoted scalar is FOR, and a value that is
+      # only escaped whitespace ("\\t", "\\u0020") resolves to blank -- read
+      # verbatim it looked like content. Decode the numeric forms, then the
+      # named ones, then drop any remaining backslash.
+      printf '%s' "$out" | perl -pe '
+        s/\\u([0-9a-fA-F]{4})/chr(hex($1))/ge;
+        s/\\x([0-9a-fA-F]{2})/chr(hex($1))/ge;
+        s/\\n/\n/g; s/\\t/\t/g; s/\\r/\r/g; s/\\0/ /g;
+        s/\\(.)/$1/g'
+      return ;;
     \'*)
       out=${v:1}; printf '%s' "${out%%\'*}"; return ;;
   esac
@@ -108,10 +125,6 @@ done < <(find "$root/external" -type f -name '*.md' | sort)
 PARAM_RE='nozzle temp|bed temp|chamber temp|extrusion multiplier|pressure advance|volumetric speed|dry(ing)? (temp|time)'
 # Without perl the comment strip used to fail into an empty $prose for every
 # file, skipping the entire scan while still printing "Clean." Refuse loudly.
-if ! command -v perl >/dev/null 2>&1; then
-  printf 'ERROR: perl is required for the parameter-leak scan (it strips HTML comments).\n' >&2
-  exit 1
-fi
 leaks=0
 while IFS= read -r f; do
   # Fail OPEN on unterminated front matter: if fm is still set at EOF the
