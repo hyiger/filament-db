@@ -62,11 +62,20 @@ req() {
 
   case "$http" in
     200) ;;
-    401|403)
-      die "HTTP ${http} from ${path}
+    401)
+      die "HTTP 401 from ${path}
   The FILAMENTDB_API_KEY bearer gate is active on this instance.
   That gate is all-or-nothing across /api/:path* with no same-origin exemption.
   Export the key in this shell and retry:  export FILAMENTDB_API_KEY=..." ;;
+    403)
+      # Filament DB's own gate answers 401 and only 401 (src/proxy.ts), so a
+      # 403 came from something in front of it — a reverse proxy, a corporate
+      # gateway, an allow-list. Prescribing an API key there sends the user
+      # after a fix that cannot work.
+      die "HTTP 403 from ${path}
+  Filament DB's own API-key gate answers 401, never 403, so this came from
+  something in front of it (a proxy or gateway). An API key will not help.
+  Check what is sitting between this shell and ${BASE}." ;;
     404) die "HTTP 404 from ${path} — endpoint does not exist on this version. Do NOT guess another path; ask the user." ;;
     000) die "no HTTP response from ${url}. The server closed the connection." ;;
     *)   die "HTTP ${http} from ${path}. Body: $(head -c 400 "$tmp")" ;;
@@ -105,21 +114,26 @@ case "$cmd" in
   schema)
     # Show what fields actually exist rather than assuming. Run once per session
     # if you are unsure of a field name; do not guess names.
-    req /api/filaments | as_array | jq '
-      if length == 0 then error("no filaments returned") else
-        .[0] | to_entries
-        | map({key, type: (.value|type)})
-        | sort_by(.key)
-      end'
+    #
+    # Reads a DETAIL record, not the list. The list route is a projection --
+    # it drops calibrations, drying, shrinkage and the settings bag among
+    # others -- so enumerating a list item reports a field as absent when it
+    # exists, which is precisely the wrong answer for a command whose whole
+    # job is "does this field name exist?".
+    sid="$(req /api/filaments | as_array | jq -r 'if length == 0 then error("no filaments returned") else .[0]._id // .[0].id end')"
+    req "/api/filaments/${sid}" | jq '
+      (.filament // .) | to_entries
+      | map({key, type: (.value|type)})
+      | sort_by(.key)'
     ;;
 
   list)
     req /api/filaments | as_array | jq '[.[] | {
       id:       (._id // .id),
       name,
-      material: (.material // .materialType // null),
-      brand:    (.brand // .manufacturer // null),
-      isParent: (.isTemplate // .isParent // null),
+      material: .type,
+      brand:    .vendor,
+      isParent: (.hasVariants // false),
       spools:   ((.spools // []) | length)
     }] | sort_by(.name)'
     ;;
@@ -129,7 +143,7 @@ case "$cmd" in
     req /api/filaments | as_array | jq --arg q "$1" '[.[]
       | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))
       | { id: (._id // .id), name,
-          material: (.material // .materialType // null),
+          material: .type, brand: .vendor,
           spools: ((.spools // []) | length) }]
       | if length == 0 then error("no filament name contains \"" + $q + "\"") else . end'
     ;;

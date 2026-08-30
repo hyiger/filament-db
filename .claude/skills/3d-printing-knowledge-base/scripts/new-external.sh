@@ -31,15 +31,29 @@ case "$SRC" in
   *[$'\n\r']*) die "source must be a single line" ;;
 esac
 
+# Emit both free-text fields as YAML double-quoted scalars. The documented
+# citation form is prose, and prose routinely contains YAML-significant
+# characters: "Vendor TDS: revision 3" makes the line a nested mapping, and a
+# leading "#" makes the value an empty string plus a comment. Either way the
+# helper reports success while writing a file whose provenance is wrong or
+# gone -- and check-provenance.sh matches these lines with regexes, so it
+# would then certify the result as clean.
+yaml_quote() {
+  local v=$1
+  v=${v//\\/\\\\}   # backslashes first, or the next substitution doubles them
+  v=${v//\"/\\\"}
+  printf '"%s"' "$v"
+}
+
 out="$root/external/${SLUG}.md"
 [[ -e "$out" ]] && die "$out already exists. Pick another slug, or edit it directly."
 
 cat > "$out" <<EOF
 ---
-source:    ${SRC}
+source:    $(yaml_quote "$SRC")
 retrieved: $(date +%Y-%m-%d)
 trust:     background
-scope:     ${SCOPE}
+scope:     $(yaml_quote "$SCOPE")
 ---
 
 # ${SLUG}

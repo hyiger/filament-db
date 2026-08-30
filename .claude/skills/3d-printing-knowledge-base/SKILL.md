@@ -156,10 +156,13 @@ Expect `OK — API reachable`. If it errors:
 - **Connection refused** — the app is not running. Tell the user to open the
   Filament DB Electron app, or run `npm run dev` in the repo. Stop; do not
   answer from memory.
-- **HTTP 401/403** — this instance has `FILAMENTDB_API_KEY` set. That gate is
+- **HTTP 401** — this instance has `FILAMENTDB_API_KEY` set. That gate is
   enforced in `src/proxy.ts` across `/api/:path*` with no same-origin exemption,
   so it applies to every request including yours. Ask the user for the key and
   `export FILAMENTDB_API_KEY=...` before retrying.
+- **HTTP 403** — not this app. Its gate answers 401 and only 401, so a 403 came
+  from something in front of it (a proxy, a gateway, an allow-list) and an API
+  key cannot resolve it. Report the status; do not ask for a key.
 
 ## Inheritance — the thing that silently gives wrong answers
 
