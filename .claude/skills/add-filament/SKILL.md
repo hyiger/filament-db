@@ -14,12 +14,18 @@ description: >
 
 # Adding a filament to Filament DB
 
-The API is at `http://localhost:3456` by default (override with `FILAMENTDB_URL`). If the
-instance sets `FILAMENTDB_API_KEY`, every request needs `Authorization: Bearer <key>` —
-the gate has no same-origin exemption.
+Set these up first — every command below uses them, and `$BASE` is empty until you do:
 
-Start with `curl -s -o /dev/null -w "%{http_code}" $BASE/api/filaments`. A connection error
-means the app is not running: say so and stop rather than guessing at the data.
+```bash
+BASE="${FILAMENTDB_URL:-http://localhost:3456}"
+AUTH=(); [ -n "${FILAMENTDB_API_KEY:-}" ] && AUTH=(-H "Authorization: Bearer $FILAMENTDB_API_KEY")
+curl -s "${AUTH[@]}" -o /dev/null -w '%{http_code}\n' "$BASE/api/filaments"
+```
+
+Expect `200`. A connection error means the app is not running: say so and stop rather than
+guessing at the data. A `401`/`403` means the instance sets `FILAMENTDB_API_KEY` — the gate has
+no same-origin exemption, so ask for the key and export it before retrying. Pass `"${AUTH[@]}"`
+on every later call; the examples below omit it only to stay readable.
 
 The companion `3d-printing-knowledge-base` skill is the **read** path and is deliberately
 read-only. This skill is the **write** path. Its sourcing discipline still applies here: a
@@ -118,47 +124,60 @@ Never carry a CSS colour name into the database as a placeholder. `#ff0000` for 
 `#FF00FF` for "magenta" are how the library fills up with values that look real and aren't.
 If you don't have the vendor's hex, leave the colour for the user to supply.
 
-### 4. Link to OpenPrintTag
+### 4. Find the OpenPrintTag match (but don't link yet)
 
-Search the catalogue and link if there is a genuine match:
+Search the catalogue now, so anything it offers can inform the create — but the link itself
+needs the new record's id, so it happens in step 6, after the create.
 
 ```bash
-curl -s "$BASE/api/openprinttag" | jq '[.materials[] | select(.brandSlug=="...")]'
-curl -s -X POST "$BASE/api/filaments/$ID/openprinttag/link" -H 'Content-Type: application/json' -d '{"slug":"..."}'
+curl -s "$BASE/api/openprinttag" -o /tmp/opt.json      # ~14k entries, several MB
+jq '[.materials[] | select(.brandSlug=="...")]' /tmp/opt.json
 ```
-
-Two rules that matter:
-
-**Link only colour-level records, never a template.** Every OPT entry is one colour, so
-linking a product line pins one colour's provenance onto the whole family.
-
-**The link route is safe; the import route is not.** `openprinttag/link` writes only the slug,
-uuid and provenance snapshot — never a field value — so it cannot damage anything. By
-contrast `POST /api/openprinttag/import` with a `parentId` *does* write values, and if the OPT
-entry is well-populated it will pin its temperatures onto the variant as local overrides,
-severing the inheritance you just set up. Import is only safe when the entry is a stub
-(`completenessTier: "stub"`, colour and nothing else) — check before using it, or use link
-plus your own values instead.
 
 Match on brand **and** colour, not name similarity. Name-similarity scoring reliably proposes
 `overture-petg-green` for "Overture PETG Grey" and matches product lines to whichever colour
 happens to sort first.
 
+**Link only colour-level records, never a template.** Every OPT entry is one colour, so
+linking a product line pins one colour's provenance onto the whole family — and a later
+check/sync can then write managed fields onto the template that every unoverridden variant
+inherits.
+
+**The link route is safe on a colour record; the import route is not.** `openprinttag/link`
+writes only the slug, uuid and provenance snapshot, never a field value. By contrast
+`POST /api/openprinttag/import` with a `parentId` *does* write values, and anything that
+differs from the parent survives pruning and becomes a local override, severing the
+inheritance you just set up.
+
+Do not use `completenessTier` as the safety check. "stub" covers every score from 0 to 3, so a
+stub can still carry density and print temperatures. **Inspect the mapped fields themselves** —
+if anything beyond colour is populated, prefer link plus your own values over import.
+
 ### 5. Create the record
 
+Capture the new `_id` — the link, the spool and the verification all need it.
+
 ```bash
-curl -s -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -d '{
+ID=$(curl -s -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -d '{
   "name": "Prusament PETG Prusa Orange",
   "vendor": "Prusament",
   "type": "PETG",
   "color": "#EB5403",
   "colorName": "Prusa Orange",
+  "transmissionDistance": 6.2,
+  "temperatures": { "nozzleRangeMin": 240, "nozzleRangeMax": 260 },
   "parentId": "<template id, omit for a standalone>"
-}'
+}' | jq -r '.filament._id // ._id')
 ```
 
 `name`, `vendor`, and `type` are required. For a variant, send nothing else unless this
 colour genuinely differs from the family.
+
+Two shapes that are easy to get wrong. **The nozzle range lives under `temperatures`** — a
+top-level `nozzleRangeMin` is silently dropped by the schema, and on a later `PUT` it needs the
+dotted `temperatures.nozzleRangeMin` form. And **if the vendor table gave you a TD, put it in
+`transmissionDistance` here**, or the value you went to the trouble of finding is discarded
+while the hex is kept.
 
 Match the family's existing naming convention rather than imposing one — look at the siblings
 first. Renaming later is disruptive because slicers key their presets on the filament name.
@@ -178,7 +197,22 @@ invent: a tidier-looking `PLA-Wood` matches nothing and silently hides the refer
 where the existing `Woodfill` resolves to the PLA chapter. Reuse a type the library already
 uses, and if a genuinely new one is needed, check it still resolves.
 
-### 6. Weights, then the spool
+### 6. Link the OpenPrintTag match
+
+Now that `$ID` exists, attach the slug chosen in step 4. Skip this entirely if the record is a
+template, or if nothing matched.
+
+```bash
+curl -s -X POST "$BASE/api/filaments/$ID/openprinttag/link" \
+  -H 'Content-Type: application/json' -d '{"slug":"3d-fuel-pro-pctg-natural"}'
+```
+
+A healthy link answers `{"linked": true, "found": true, "changes": []}` on
+`GET /api/filaments/$ID/openprinttag/check`. Any `changes` entry means the record and OPT
+disagree on a field — expected when you took a vendor value over OPT's, and worth saying so
+rather than silently adopting either.
+
+### 7. Weights, then the spool
 
 Adding a filament always means a physical roll arrived, so the record is not finished until it
 has a spool.
@@ -192,9 +226,16 @@ Three weights, and they are easy to confuse:
 | `totalWeight` | **spool** | gross weight of this roll right now, tare included |
 
 The first two are shared product spec and belong on the template. Take them from an existing
-variant or the template itself before asking — the family almost always already knows. Only
-if the family has neither, ask the user to weigh the roll, and be specific about wanting the
-gross weight with the spool on the scale.
+variant or the template itself before asking — the family almost always already knows.
+
+`totalWeight` is different and the family can never supply it: tare and nominal capacity
+describe the product, not how much filament is on *this* roll today. So ask for it separately,
+every time, and be specific about wanting the gross weight with the spool on the scale. The
+one shortcut is an unopened roll, where tare plus nominal net is a fair starting figure — say
+that you are assuming it rather than presenting it as measured.
+
+Skipping this is the most likely way to finish with a spool that tracks nothing: the record
+looks complete, the percentage bar is blank, and no error was ever raised.
 
 The remaining-percentage bar needs `netFilamentWeight` as its denominator, so a family missing
 it shows no bar at all. Worth filling in if you notice it absent.
@@ -209,7 +250,7 @@ NFC tags resolve against. Let it generate one. Only pass an explicit `instanceId
 a spool between records and preserving its printed identity, and note the uniqueness check
 ignores trashed rows, so a colliding id may need the old record trashing first.
 
-### 7. Verify against the resolved record
+### 8. Verify against the resolved record
 
 Read the record back **without** `?raw=true`. Raw shows stored values, where a variant's
 inherited fields are `null` and look alarming; the plain read shows what the app and the

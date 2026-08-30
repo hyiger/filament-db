@@ -13,14 +13,15 @@ else is wrong.
 |---|---|
 | `GET /api/filaments` | List. Carries `hasVariants`, `parentId`, `hasCalibrations`. Temperatures are already resolved. |
 | `GET /api/filaments/{id}` | **Resolved** record — what the app and slicer see. Use this to verify. |
-| `GET /api/filaments/{id}?raw=true` | **Stored** record. Inherited fields read `null`. Use to check what a record actually owns, plus `_variants`, `_parent`, `_inherited`. |
+| `GET /api/filaments/{id}?raw=true` | **Stored** record. Inherited fields read `null`. Use to check what a record actually owns; carries `_parent` and `_variants`. |
 | `GET /api/filaments/colors` | Distinct `{name, hex}` pairs already in use — good for matching an existing colour convention. |
 | `GET /api/openprinttag` | Whole OPT catalogue (~14k entries, several MB, cached an hour). Fetch to a file and filter locally rather than into context. |
 | `GET /api/nozzles`, `/api/printers`, `/api/bed-types` | Reference data for compatibility. |
 | `GET /api/spools/next-label` | `{next, max}` — suggested next numeric roll label. Suggestion only; reserves nothing. |
 
-`_inherited` on the resolved read is the quickest way to confirm a variant is inheriting
-rather than storing its own copies.
+`_inherited` appears **only on the resolved read** — `?raw=true` skips `resolveFilament`, so
+it never produces that field. It is the quickest way to confirm a variant is inheriting rather
+than storing its own copies, but you have to ask for the resolved shape to get it.
 
 ## Creating a filament
 
@@ -80,8 +81,11 @@ pass through, which is how a legacy template gets cleaned up.
 ## OpenPrintTag
 
 `POST /api/filaments/{id}/openprinttag/link` with `{"slug": "..."}` — writes only
-`settings.openprinttag_slug`, `openprinttag_uuid`, and the `openprinttagSnapshot`. Never a
-field value, so it is safe on any record. `DELETE` on the same route removes the linkage.
+`settings.openprinttag_slug`, `openprinttag_uuid`, and the `openprinttagSnapshot`, never a
+field value. Safe on a **standalone or a variant**; not on a template. An OPT entry is one
+colour, so linking a product line attaches that colour's provenance to the whole family, and a
+later check/sync can then write managed fields such as `transmissionDistance` and `optTags`
+onto the template, which every unoverridden variant inherits. `DELETE` on the same route removes the linkage.
 
 `GET /api/filaments/{id}/openprinttag/check` — diffs the record against upstream. Fields
 matching the snapshot classify as `adopt`; fields the user has changed classify as `conflict`

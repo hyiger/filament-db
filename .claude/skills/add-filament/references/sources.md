@@ -98,6 +98,13 @@ colour's nature: 3D-Fuel's Pro PCTG Natural reads 100, confirming a genuinely cl
 rather than a tinted one. A high TD is a reason to set the transparent or translucent finish
 tag (`optTags` 2 and 3) so the swatch renders see-through.
 
+**A finish tag on a standalone becomes a family-wide default if that filament is ever
+promoted.** Promotion moves colour and inventory to the generated original variant but leaves
+`optTags` behind on the new template, and `optTags` is whole-array fallback — so every sibling
+that declares none inherits it, and an opaque colour added later renders transparent. If you
+set a transparent tag on a standalone, move it to the original variant and clear it from the
+template as part of the promotion, before adding the second colour.
+
 ## When the vendor lists no hex at all
 
 Some products genuinely have no colour. Overture's PETG Transparent is listed in their own PDF
