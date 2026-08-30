@@ -23,8 +23,10 @@ curl -s "${AUTH[@]}" -o /dev/null -w '%{http_code}\n' "$BASE/api/filaments"
 ```
 
 Expect `200`. A connection error means the app is not running: say so and stop rather than
-guessing at the data. A `401`/`403` means the instance sets `FILAMENTDB_API_KEY` — the gate has
-no same-origin exemption, so ask for the key and export it before retrying. Pass `"${AUTH[@]}"`
+guessing at the data. A `401` means the instance sets `FILAMENTDB_API_KEY` — the gate has no
+same-origin exemption, so ask for the key and export it before retrying. A `403` is *not* that
+gate, which only ever answers 401: look to the same-origin request guard or a reverse proxy,
+and do not loop asking for a key that cannot help. Pass `"${AUTH[@]}"`
 on every later call; the examples below omit it only to stay readable.
 
 The companion `3d-printing-knowledge-base` skill is the **read** path and is deliberately
@@ -161,17 +163,29 @@ if anything beyond colour is populated, prefer link plus your own values over im
 
 Capture the new `_id` — the link, the spool and the verification all need it.
 
+A **variant** carries only what is its own. No temperatures — sending a range that merely
+equals the family's still pins it as an override that stops following later template edits,
+which is the central rule of this skill breaking in its own worked example:
+
 ```bash
-RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -d '{
-  "name": "Prusament PETG Prusa Orange",
-  "vendor": "Prusament",
-  "type": "PETG",
-  "color": "#EB5403",
-  "colorName": "Prusa Orange",
-  "transmissionDistance": 6.2,
-  "temperatures": { "nozzleRangeMin": 240, "nozzleRangeMax": 260 },
-  "parentId": "<template id, omit for a standalone>"
-}')
+PAYLOAD='{"name":"Prusament PETG Prusa Orange","vendor":"Prusament","type":"PETG",
+  "color":"#EB5403","colorName":"Prusa Orange","transmissionDistance":6.2,
+  "parentId":"'"$TEMPLATE_ID"'"}'
+```
+
+A **standalone** has no template to inherit from, so the shared spec goes here — nested on
+create, and note the weights, which nothing else will supply:
+
+```bash
+PAYLOAD='{"name":"PRILINE PC-CF","vendor":"PRILINE","type":"PC-CF",
+  "color":"#000000","colorName":"Black",
+  "temperatures":{"nozzle":260,"nozzleRangeMin":250,"nozzleRangeMax":270,"bed":100},
+  "spoolWeight":147,"netFilamentWeight":1000,"dryingTemperature":90,"dryingTime":480}'
+```
+
+```bash
+RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/api/filaments" \
+  -H 'Content-Type: application/json' -d "$PAYLOAD")
 CODE=$(printf '%s' "$RESP" | tail -n1); BODY=$(printf '%s' "$RESP" | sed '$d')
 ```
 
@@ -249,8 +263,10 @@ that you are assuming it rather than presenting it as measured.
 Skipping this is the most likely way to finish with a spool that tracks nothing: the record
 looks complete, the percentage bar is blank, and no error was ever raised.
 
-**If the family has neither, gather them and write them before creating the spool** — noticing
-they are absent is not enough. The remaining-percentage bar divides by `netFilamentWeight`, and
+**If the family is missing either one, gather it and write it before creating the spool** —
+noticing it is absent is not enough, and one out of two is not enough either: without the tare
+there is no display at all, and without a positive net the percentage stays blank while only
+grams show. The remaining-percentage bar divides by `netFilamentWeight`, and
 remaining grams subtract `spoolWeight`, so a spool added to a family with both null tracks a
 gross number and nothing else. On a standalone, put them in the create payload. On an existing
 family, PUT them onto the template first, so every colour inherits them:
@@ -268,8 +284,12 @@ plainly that the display stays blank until the tare arrives.
 
 ```bash
 curl -s -X POST "$BASE/api/filaments/$ID/spools?shape=spool" -H 'Content-Type: application/json' \
-  -d '{"totalWeight": 1186, "label": "", "purchaseDate": "2026-08-29"}'
+  -d '{"totalWeight": 1186, "label": ""}'
 ```
+
+`purchaseDate` is optional and deliberately absent above: only send it when the user gives a
+date, or when they say the roll arrived today and you derive today's. A copied example date
+silently backdates every roll added afterwards.
 
 The server mints an `instanceId` for the spool — a durable identity that printed QR labels and
 NFC tags resolve against. Let it generate one. Only pass an explicit `instanceId` when moving

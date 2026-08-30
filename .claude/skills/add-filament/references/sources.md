@@ -108,6 +108,12 @@ in between. Do it immediately after that create — the generated original varia
 parent's other child, the one whose id is not the one the create just returned — moving
 `optTags` onto it and clearing them from the template.
 
+The **OpenPrintTag link strands the same way**, and for the same reason: the promotion copy
+carries no `settings`, so a standalone's `openprinttag_slug` and snapshot stay on what is now a
+template — precisely the template-level linkage the main skill forbids, and a later sync can
+push that one colour's managed values across the family. Unlink the template and relink the
+generated original variant in the same cleanup pass.
+
 ## When the vendor lists no hex at all
 
 Some products genuinely have no colour. Overture's PETG Transparent is listed in their own PDF
