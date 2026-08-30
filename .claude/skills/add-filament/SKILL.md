@@ -237,8 +237,20 @@ that you are assuming it rather than presenting it as measured.
 Skipping this is the most likely way to finish with a spool that tracks nothing: the record
 looks complete, the percentage bar is blank, and no error was ever raised.
 
-The remaining-percentage bar needs `netFilamentWeight` as its denominator, so a family missing
-it shows no bar at all. Worth filling in if you notice it absent.
+**If the family has neither, gather them and write them before creating the spool** — noticing
+they are absent is not enough. The remaining-percentage bar divides by `netFilamentWeight`, and
+remaining grams subtract `spoolWeight`, so a spool added to a family with both null tracks a
+gross number and nothing else. On a standalone, put them in the create payload. On an existing
+family, PUT them onto the template first, so every colour inherits them:
+
+```bash
+curl -s -X PUT "$BASE/api/filaments/$TEMPLATE_ID" -H 'Content-Type: application/json' \
+  -d '{"spoolWeight": 147, "netFilamentWeight": 1000}'
+```
+
+The net is usually on the packaging or the listing; the tare almost never is, so expect to ask
+for a weighed empty spool. If only the net is available, write it anyway — the bar works and
+only the grams figure stays approximate.
 
 ```bash
 curl -s -X POST "$BASE/api/filaments/$ID/spools?shape=spool" -H 'Content-Type: application/json' \

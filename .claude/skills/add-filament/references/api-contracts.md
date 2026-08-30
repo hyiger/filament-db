@@ -92,9 +92,11 @@ matching the snapshot classify as `adopt`; fields the user has changed classify 
 and are not auto-applied. A clean result (`changes: []`) means the link is healthy.
 
 `POST /api/openprinttag/import` with `{"slugs":["..."], "parentId":"..."}` **does write field
-values**. It prunes values equal to the parent's effective value, so it is safe against a stub
-entry (colour only) and dangerous against a well-populated one, which will pin temperatures as
-variant overrides. Check `completenessTier` first. Single slug only in variant mode; a name
+values**. It prunes values equal to the parent's effective value, so anything that
+differs survives and becomes a local override, severing inheritance. **Do not gate this on
+`completenessTier`** — "stub" spans scores 0 to 3, so a stub can still carry density and print
+temperatures. Inspect the mapped fields themselves and prefer link-plus-your-own-values
+whenever anything beyond colour is populated. Single slug only in variant mode; a name
 collision returns 409 without mutating anything.
 
 ## Deleting

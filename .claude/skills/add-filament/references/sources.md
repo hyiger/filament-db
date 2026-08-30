@@ -101,9 +101,12 @@ tag (`optTags` 2 and 3) so the swatch renders see-through.
 **A finish tag on a standalone becomes a family-wide default if that filament is ever
 promoted.** Promotion moves colour and inventory to the generated original variant but leaves
 `optTags` behind on the new template, and `optTags` is whole-array fallback — so every sibling
-that declares none inherits it, and an opaque colour added later renders transparent. If you
-set a transparent tag on a standalone, move it to the original variant and clear it from the
-template as part of the promotion, before adding the second colour.
+that declares none inherits it, and an opaque colour added later renders transparent. Note the cleanup can only run *after* the fact: `/promote` rejects a
+standalone outright ("a standalone becomes a template when its first variant is created"), and
+the gated create performs the promotion and the new sibling in one step, so there is no moment
+in between. Do it immediately after that create — the generated original variant is the
+parent's other child, the one whose id is not the one the create just returned — moving
+`optTags` onto it and clearing them from the template.
 
 ## When the vendor lists no hex at all
 
