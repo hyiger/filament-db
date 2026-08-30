@@ -806,7 +806,7 @@ inherits = *PLA*
         { _id: parent._id },
         { $set: { cost: null, inherits: null }, $unset: { "temperatures.nozzle": "" } },
       );
-      const exportRes = await exportFilaments();
+      const exportRes = await exportFilaments(new NextRequest("http://localhost/api/filaments/export"));
       const bundle = await exportRes.text();
       const section = extractSection(bundle, "RT Base — Red");
       expect(section).not.toMatch(/^\s*inherits\s*=\s*\*PLA\*/m);
@@ -930,7 +930,7 @@ filament_shrinkage_compensation_xy = 0.3
         { _id: parent._id },
         { $set: { spoolWeight: null, shrinkageXY: null } },
       );
-      const exportRes = await exportFilaments();
+      const exportRes = await exportFilaments(new NextRequest("http://localhost/api/filaments/export"));
       const section = extractSection(await exportRes.text(), "SW Base — Red");
       expect(section).not.toMatch(/^\s*filament_spool_weight\s*=/m);
       expect(section).not.toMatch(/^\s*filament_shrinkage_compensation_xy\s*=/m);
@@ -1122,7 +1122,7 @@ filamentdb_nozzle = 0.6 Brass
   describe("GET /api/filaments/export (INI bundle)", () => {
     it("returns text/plain with an attachment Content-Disposition", async () => {
       await Filament.create({ name: "Export PLA", vendor: "T", type: "PLA" });
-      const res = await exportFilaments();
+      const res = await exportFilaments(new NextRequest("http://localhost/api/filaments/export"));
       expect(res.status).toBe(200);
       // GH #341 aligned this with /api/filaments/prusaslicer (charset=utf-8)
       expect(res.headers.get("Content-Type")).toMatch(/^text\/plain(;\s*charset=utf-8)?$/);
@@ -1139,7 +1139,7 @@ filamentdb_nozzle = 0.6 Brass
         type: "PLA",
         _deletedAt: new Date(),
       });
-      const res = await exportFilaments();
+      const res = await exportFilaments(new NextRequest("http://localhost/api/filaments/export"));
       const text = await res.text();
       expect(text).toMatch(/Live PLA/);
       expect(text).not.toMatch(/Trashed PLA/);
