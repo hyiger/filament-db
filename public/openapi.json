@@ -6982,6 +6982,88 @@
           }
         }
       }
+    },
+    "/api/abrasive-nozzles": {
+      "get": {
+        "summary": "Scan for abrasive filaments on unsuitable nozzles",
+        "description": "Read-only advisory scan (no writes). Reports filaments that read as abrasive — `settings.filament_abrasive` on, OPT tag 4, a fibre-reinforced type (CF/GF), or a filled product name — that either allow a nozzle which is not hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Runs on RESOLVED documents, so a variant inheriting its template's nozzle set is judged on the effective set and reports the template in `inheritedFrom`. An explicit `filament_abrasive = \"0\"` suppresses only the weakest (name) heuristic: the app writes that flag from `form.abrasive` alone while its own predicate also honours OPT tag 4, so a stored `\"0\"` is not a reliable negative. Abrasiveness is inferred, so findings are advisory and nothing is repaired.",
+        "tags": [
+          "maintenance"
+        ],
+        "responses": {
+          "200": {
+            "description": "Findings, worst first (empty array when healthy)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "filamentId": {
+                            "type": "string"
+                          },
+                          "filamentName": {
+                            "type": "string"
+                          },
+                          "filamentType": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reasons": {
+                            "type": "array",
+                            "description": "Why the record reads as abrasive.",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "flagged",
+                                "tagged",
+                                "fibre",
+                                "filled"
+                              ]
+                            }
+                          },
+                          "softNozzles": {
+                            "type": "array",
+                            "description": "Assigned nozzles that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown — a dangling ref is not evidence of hardness.",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "unassigned": {
+                            "type": "boolean",
+                            "description": "No compatible nozzles recorded, so nothing restricts where it may be used."
+                          },
+                          "flagMismatch": {
+                            "type": "boolean",
+                            "description": "Material reads as abrasive but `filament_abrasive` is not on, so exported presets assert the filament is safe."
+                          },
+                          "inheritedFrom": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "Template name when the nozzle set is inherited — where the fix belongs."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
