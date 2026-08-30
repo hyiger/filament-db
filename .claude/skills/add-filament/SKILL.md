@@ -79,7 +79,17 @@ carrying the value in your head; a step that interpolates an unset variable buil
 `parentId` is `root` for a template and a standalone alike, so it cannot identify the record
 for you.
 
-Three cases, and they lead to different work:
+**First, check whether this exact colour is already there.** The headline rule of this skill is
+that a filament being added is always a new physical roll, and a roll of a colour already in the
+library needs no new record at all — only a spool. Match on vendor + name + colour, across
+variants as well as roots.
+
+If it exists, that record is `$ID` and you are done with steps 3 to 6: go straight to step 7 and
+register the spool. Creating anyway is not a harmless duplicate — the unique-name index returns
+a 409 and the roll never gets recorded, or, if your generated name differs by a word, you
+silently end up with two records for one colour and a promotion that should not have happened.
+
+Only when the colour is genuinely new do the three cases below apply:
 
 **A template already exists** (`hasVariants: true`, name matches the product line) — create a
 variant under it. This is the good case: the variant inherits everything and you only need
@@ -269,22 +279,25 @@ over-specifies rather than loses:
   variant with a non-empty array **replaces** the template's rather than adding to it. So this
   is not a move, it is a split plus a copy.
 
-  Separate the template's tags into the ones describing how that colour *looks* — `2`
-  transparent, `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24`
-  glow, `25` colour-changing, `27` gradient, `28` dual/`29` triple-colour — and everything else,
-  which describes the product line: `4` abrasive, `0`/`31` fibre, `33` hygroscopic, `9`
-  flexible, `5` food-safe.
+  Ask of each tag: *does it describe this colour, or the product line?* That is a question
+  about the family, not a fixed list of ids. `4` abrasive, `0`/`31` fibre, `33` hygroscopic,
+  `9` flexible and `5` food-safe are always the line. The appearance tags — `2` transparent,
+  `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24` glow, `25`
+  colour-changing, `27` gradient, `28` dual/`29` triple-colour — are usually the colour, but
+  not always: in a **Matte PLA** or **Silk PLA** line the finish is the product, shared by
+  every colour in it, and stripping it off the template makes each new sibling render wrong.
+  The family name and the sibling colours tell you which you are looking at.
 
-  The template keeps **only the product-line tags**. The variant gets the appearance tags
-  **plus a copy of those same product-line tags**, because its own array is what it resolves to
-  and anything left out is simply gone for that colour. From `[2, 4]` that is template `[4]`,
+  Then: the template keeps **every line tag**, and the variant gets **its colour-specific tags
+  plus a copy of every line tag**. Its own array is what it resolves to, so anything left out
+  is simply gone for that colour. From `[2, 4]` on a normal line that is template `[4]`,
   variant `[2, 4]` — not variant `[2]`, which would strip the abrasive marker off the original
-  colour and hide it from the nozzle-safety check in Settings → Data health. New siblings, whose
-  array stays empty, inherit `[4]` correctly.
+  colour and hide it from the nozzle-safety check in Settings → Data health. On a matte line
+  holding `[16, 4]`, both stay: template `[16, 4]`, variant `[16, 4]`.
 
-  **If a tag isn't clearly on the appearance list, treat it as product-line**: it then stays on
-  the template *and* rides along on the variant, so an over-inclusive guess costs nothing while
-  a missed safety tag is silent.
+  **When you cannot tell, call it a line tag.** A line tag appears in both places, so an
+  over-inclusive guess costs nothing; a tag wrongly called colour-specific is removed from the
+  template and every later sibling loses it silently.
 - **The OpenPrintTag link** — cannot be moved with a `PUT`; it is three fields, one of them
   server-owned. Follow the route sequence in `references/sources.md`, and keep its ordering:
   read the template's existing slug *before* the `DELETE`, because that slug belongs to the

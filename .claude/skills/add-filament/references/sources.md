@@ -126,6 +126,11 @@ phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28` dual-colour
 triple-colour — alongside what the material *is*: `4` abrasive, `0`/`31` glass and carbon fibre,
 `33` hygroscopic, `9` flexible, `5` food-safe.
 
+Those groupings are the usual case, not a partition you can apply blind. A finish is
+colour-specific in a line that has one silk colour among many, and is the *product* in a
+"Matte PLA" line where every colour shares it — same tag id, opposite answer. Read the family
+name and the siblings before deciding.
+
 Both halves of that matter, and the obvious remedies each break one. Sweeping the whole array
 onto the variant takes `4` off the product line, so every later sibling inherits no abrasive
 marker. But moving *only* the appearance tags fails too, and less obviously: `resolveFilament`
@@ -133,14 +138,14 @@ gives `optTags` whole-array fallback, so a variant holding `[2]` **replaces** th
 `[4]` instead of adding to it — the original colour loses its abrasive marker and drops out of
 the nozzle-safety check in Settings → Data health, which reads the resolved value.
 
-So the template keeps only the product-line tags, and the variant gets the appearance tags plus
+So the template keeps every product-line tag, and the variant gets its colour-specific tags plus
 a **copy** of those product-line tags. `[2, 4]` becomes template `[4]`, variant `[2, 4]`. New
-siblings leave their array empty and inherit `[4]`.
+siblings leave their array empty and inherit `[4]`. On a matte line holding `[16, 4]`, the
+finish is shared, so nothing splits at all: template `[16, 4]`, variant `[16, 4]`.
 
-**When a tag is not clearly one of the appearance tags listed above, treat it as
-product-line.** It then stays on the template and rides along on the variant, so an
-over-inclusive guess costs nothing, while a safety tag left out of the variant's array is
-silent.
+**When you cannot tell which a tag is, call it product-line.** It then stays on the template and
+rides along on the variant, so an over-inclusive guess costs nothing — while a tag wrongly
+called colour-specific is removed from the template and every later sibling loses it silently.
 
 The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
 `openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips
