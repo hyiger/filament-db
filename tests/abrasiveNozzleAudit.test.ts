@@ -1,0 +1,271 @@
+import { describe, it, expect } from "vitest";
+import {
+  abrasiveReasons,
+  auditAbrasiveNozzles,
+  OPT_TAG_ABRASIVE,
+  type AuditFilament,
+  type AuditNozzle,
+} from "@/lib/abrasiveNozzleAudit";
+
+const SOFT: AuditNozzle = { _id: "indx", name: "INDX 0.4 HF", hardened: false };
+const HARD: AuditNozzle = { _id: "wc04", name: "WC HF 0.4", hardened: true };
+const NOZZLES = [SOFT, HARD];
+
+/** An abrasive filament restricted to hardened nozzles and flagged correctly. */
+const CLEAN: AuditFilament = {
+  _id: "f-clean",
+  name: "Fiberon PA6-CF20",
+  type: "PA6-CF",
+  settings: { filament_abrasive: "1" },
+  compatibleNozzles: [HARD._id],
+};
+
+describe("abrasiveReasons", () => {
+  it("reads the explicit flag", () => {
+    expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: "1" } }))
+      .toEqual(["flagged"]);
+  });
+
+  it("reads the OPT abrasive tag", () => {
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [OPT_TAG_ABRASIVE] }))
+      .toEqual(["tagged"]);
+  });
+
+  it("reads the specific material tags, not only the generic abrasive one", () => {
+    // A record tagged `31` carbon fibre states the fact more precisely than
+    // tag 4 does; reading only tag 4 threw away the better evidence. A plain
+    // type with no flag and a soft nozzle used to be reported not at all.
+    for (const tag of [0, 1, 19, 20, 21, 22, 23, 24, 31, 32]) {
+      expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [tag] }), `tag ${tag}`)
+        .toEqual(["tagged"]);
+    }
+  });
+
+  it("ignores tags that describe behaviour rather than wear", () => {
+    // HEAT_RESISTANT, LOW_WARP, HYGROSCOPIC, MATTE say nothing about abrasion.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 33, 16] })).toEqual([]);
+  });
+
+  it("reads fibre reinforcement out of the type", () => {
+    for (const type of ["PA6-CF20", "PET-CF", "PPS-CF10", "HT-PLA-GF", "PP CF", "PA_GF"]) {
+      expect(abrasiveReasons({ _id: "x", type }), type).toContain("fibre");
+    }
+  });
+
+  it("reads a separator-free reinforcement suffix", () => {
+    // `referenceChapter.ts` resolves PETGCF to a chapter and its test pins it,
+    // so the spelling is supported — missing it here drops the filament from
+    // the scan entirely rather than merely mis-labelling it.
+    for (const type of ["PETGCF", "PA6GF20", "PACF"]) {
+      expect(abrasiveReasons({ _id: "x", type }), type).toContain("fibre");
+    }
+  });
+
+  it("reads reinforcement carried only in the product name", () => {
+    // An OpenPrintTag import can put the base polymer in the type and the
+    // reinforcement in the name alone; with no abrasive tag that record
+    // produced no reasons and left the scan entirely.
+    expect(abrasiveReasons({ _id: "x", type: "PCTG", name: "PCTG CF Black" }))
+      .toEqual(["fibre"]);
+    expect(abrasiveReasons({ _id: "x", type: "PA", name: "Acme PA-GF20 Natural" }))
+      .toEqual(["fibre"]);
+  });
+
+  it("does not invent a suffix rule for free-text names", () => {
+    // Token form only on the name: a suffix rule there would fire on any word
+    // ending in those letters. The type keeps the suffix form, where PETGCF is
+    // a real spelling.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Midnight Blugf" })).toEqual([]);
+    expect(abrasiveReasons({ _id: "x", type: "PETGCF", name: "Plain Name" }))
+      .toEqual(["fibre"]);
+  });
+
+  it("does not read CF out of a word that merely contains those letters", () => {
+    // "PCTG" contains no CF token; neither does a colour named "Buff".
+    expect(abrasiveReasons({ _id: "x", type: "PCTG", name: "Scaffold Buff" })).toEqual([]);
+  });
+
+  it("reads glow and metal fill out of the name", () => {
+    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Glow in the Dark Green" }))
+      .toEqual(["filled"]);
+    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Bronze Fill" })).toEqual(["filled"]);
+  });
+
+  it("returns nothing for an ordinary filament", () => {
+    expect(abrasiveReasons({ _id: "x", type: "PETG", name: "Prusament PETG Orange" }))
+      .toEqual([]);
+  });
+
+  it("lets an explicit 0 suppress ONLY the weak name heuristic", () => {
+    const off = { filament_abrasive: "0" };
+    // "Metallic Grey" is a pigment, not metal fill — the user saying so wins.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Metallic Grey", settings: off }))
+      .toEqual([]);
+  });
+
+  it("does NOT let an explicit 0 suppress a fibre type or the OPT tag", () => {
+    // This is the crux. `FilamentForm` writes `form.abrasive ? "1" : "0"`
+    // while its own predicate is `form.abrasive || optTags.includes(4)`, so a
+    // tag-marked abrasive is PERSISTED as "0". Trusting that "0" would make
+    // the audit blind to exactly the filaments most likely to be misfiled.
+    const off = { filament_abrasive: "0" };
+    expect(abrasiveReasons({ _id: "x", type: "PA6-CF20", settings: off })).toEqual(["fibre"]);
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [4], settings: off }))
+      .toEqual(["tagged"]);
+  });
+
+  it("collapses Orca's per-extruder array flag, in both directions", () => {
+    // GH #678: a dual-extruder Orca/Bambu round-trip stores ["1","1"]. Read
+    // locally as a whole array it matches neither "1" nor "0", so it landed in
+    // "unset" — a false NEGATIVE on the flag. The ["0","0"] case is the
+    // mirror the finding missed: an explicit off stopped suppressing the weak
+    // name heuristic, so a filament the user had marked not-abrasive was
+    // reported anyway.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: ["1", "1"] } }))
+      .toEqual(["flagged"]);
+    expect(abrasiveReasons({
+      _id: "x", type: "PLA", name: "Metallic Grey",
+      settings: { filament_abrasive: ["0", "0"] },
+    })).toEqual([]);
+  });
+
+  it("accepts a numeric 1, and an explicit numeric 0 still suppresses the heuristic", () => {
+    expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: 1 } }))
+      .toEqual(["flagged"]);
+    expect(abrasiveReasons({
+      _id: "x", type: "PLA", name: "Glitter Grey", settings: { filament_abrasive: 0 },
+    })).toEqual([]);
+  });
+
+  it("does NOT accept boolean true as an enabled flag", () => {
+    // `settingFlagIsOn` is String(scalar) === "1", so the form reads `true` as
+    // OFF, the export ships the literal `true`, and a firmware M862.1 check
+    // does not see 1. Calling that healthy is the false all-clear this exists
+    // to prevent — so it stays a reason (someone set the field) AND a mismatch.
+    const f: AuditFilament = { ...CLEAN, _id: "fb", settings: { filament_abrasive: true } };
+    expect(abrasiveReasons(f)).toEqual(expect.arrayContaining(["flagged"]));
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.flagMismatch).toBe(true);
+  });
+
+  it("reports a flag holding a value nothing downstream reads", () => {
+    // A set-but-unusable value is evidence about the filament and a defect in
+    // its own right; it must not read as either enabled or absent.
+    const f: AuditFilament = {
+      ...CLEAN, _id: "fj", type: "PETG", name: "Acme PETG Blue",
+      settings: { filament_abrasive: "yes" },
+    };
+    expect(abrasiveReasons(f)).toEqual(["flagged"]);
+    expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
+  });
+});
+
+describe("auditAbrasiveNozzles", () => {
+  it("reports an abrasive filament that can reach a soft nozzle", () => {
+    const f: AuditFilament = { ...CLEAN, _id: "f1", compatibleNozzles: [HARD._id, SOFT._id] };
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.filamentId).toBe("f1");
+    expect(finding.softNozzles).toEqual([{ id: "indx", name: "INDX 0.4 HF" }]);
+    expect(finding.reasons).toContain("fibre");
+  });
+
+  it("stays silent on an abrasive filament that is correctly restricted AND flagged", () => {
+    expect(auditAbrasiveNozzles([CLEAN], NOZZLES)).toEqual([]);
+  });
+
+  it("stays silent on a non-abrasive filament however it is assigned", () => {
+    const pla: AuditFilament = {
+      _id: "f2", name: "Prusament PLA", type: "PLA", compatibleNozzles: [SOFT._id],
+    };
+    expect(auditAbrasiveNozzles([pla], NOZZLES)).toEqual([]);
+  });
+
+  it("reports an abrasive filament with no nozzles assigned", () => {
+    // Not benign: an empty list reads as "no restriction" wherever it is
+    // consumed, so nothing holds the filament back from a soft nozzle.
+    const f: AuditFilament = { ...CLEAN, _id: "f3", compatibleNozzles: [] };
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.unassigned).toBe(true);
+    expect(finding.softNozzles).toEqual([]);
+  });
+
+  it("treats a nozzle ref missing from the catalogue as unsafe", () => {
+    // A dangling ref is not evidence of hardness. Assuming hardened would
+    // make a stale assignment disappear from the report that exists to find
+    // stale assignments.
+    const f: AuditFilament = { ...CLEAN, _id: "f4", compatibleNozzles: ["ghost"] };
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.softNozzles).toEqual([{ id: "ghost", name: "(unknown nozzle)" }]);
+  });
+
+  it("reports a flag that contradicts the material even when nozzles are right", () => {
+    // The 7 real presets that export `filament_abrasive = 0`: the slicer and
+    // the INDX firmware's M862.1 check are both told the filament is safe.
+    const f: AuditFilament = { ...CLEAN, _id: "f5", settings: { filament_abrasive: "0" } };
+    const [finding] = auditAbrasiveNozzles([f], NOZZLES);
+    expect(finding.flagMismatch).toBe(true);
+    expect(finding.softNozzles).toEqual([]);
+    expect(finding.unassigned).toBe(false);
+  });
+
+  it("does not call an array-flagged abrasive a flag mismatch", () => {
+    const f: AuditFilament = { ...CLEAN, _id: "f11", settings: { filament_abrasive: ["1", "1"] } };
+    expect(auditAbrasiveNozzles([f], NOZZLES)).toEqual([]);
+  });
+
+  it("reports a missing flag, not only a wrong one", () => {
+    const f: AuditFilament = { ...CLEAN, _id: "f6", settings: {} };
+    expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
+  });
+
+  it("reads populated nozzle docs as well as raw ids", () => {
+    const f: AuditFilament = { ...CLEAN, _id: "f7", compatibleNozzles: [{ _id: "indx" }] };
+    expect(auditAbrasiveNozzles([f], NOZZLES)[0].softNozzles).toHaveLength(1);
+  });
+
+  it("orders soft-nozzle findings before unassigned before flag-only", () => {
+    const soft: AuditFilament = { ...CLEAN, _id: "a", name: "Zeta", compatibleNozzles: [SOFT._id] };
+    const none: AuditFilament = { ...CLEAN, _id: "b", name: "Alpha", compatibleNozzles: [] };
+    const flag: AuditFilament = { ...CLEAN, _id: "c", name: "Alpha", settings: {} };
+    const out = auditAbrasiveNozzles([flag, none, soft], NOZZLES);
+    expect(out.map((f) => f.filamentId)).toEqual(["a", "b", "c"]);
+  });
+
+  it("breaks a severity tie by name, so the list has a stable order", () => {
+    // Without this the order of two equally-severe rows follows whatever the
+    // query returned, and the page reshuffles between scans for no reason.
+    const mk = (id: string, name: string): AuditFilament => ({
+      ...CLEAN, _id: id, name, compatibleNozzles: [SOFT._id],
+    });
+    const out = auditAbrasiveNozzles([mk("z", "Zinc"), mk("a", "Alpha")], NOZZLES);
+    expect(out.map((f) => f.filamentName)).toEqual(["Alpha", "Zinc"]);
+  });
+
+  it("tolerates a record carrying no name, type or nozzle array", () => {
+    // Rows arrive from CSV import, hybrid sync and snapshot restore, not only
+    // from the form — every field this reads has to survive being absent.
+    const bare: AuditFilament = { _id: "f9", optTags: [OPT_TAG_ABRASIVE] };
+    const [finding] = auditAbrasiveNozzles([bare], NOZZLES);
+    expect(finding).toMatchObject({
+      filamentName: "",
+      filamentType: null,
+      reasons: ["tagged"],
+      unassigned: true,
+    });
+  });
+
+  it("skips junk nozzle references instead of counting them as nozzles", () => {
+    // A null ref is absence, not an unnamed nozzle — counting it would report
+    // a soft nozzle that does not exist and hide the real "unassigned" state.
+    const f: AuditFilament = { ...CLEAN, _id: "f10", compatibleNozzles: [null, { _id: null }] };
+    const [finding] = auditAbrasiveNozzles([f], [...NOZZLES, { _id: null, name: "junk" }]);
+    expect(finding.softNozzles).toEqual([]);
+    expect(finding.unassigned).toBe(true);
+  });
+
+  it("tolerates an empty catalogue and empty input", () => {
+    expect(auditAbrasiveNozzles([], NOZZLES)).toEqual([]);
+    // With no nozzle catalogue every ref is unresolvable — reported, not hidden.
+    expect(auditAbrasiveNozzles([{ ...CLEAN, _id: "f8" }], [])[0].softNozzles).toHaveLength(1);
+  });
+});

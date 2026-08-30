@@ -6982,6 +6982,88 @@
           }
         }
       }
+    },
+    "/api/abrasive-nozzles": {
+      "get": {
+        "summary": "Scan for abrasive filaments on unsuitable nozzles",
+        "description": "Read-only advisory scan (no writes). Reports filaments that read as abrasive — `settings.filament_abrasive` on; an abrasive-implying OPT tag (4 ABRASIVE, or a specific material tag: 0 glass fibre, 1 aramid, 19 wood, 20 metal, 21 stone, 22 sparkle, 23 phosphorescent, 24 glow, 31 carbon fibre, 32 kevlar — tags describing thermal or mechanical behaviour are deliberately excluded); a fibre-reinforced type (CF/GF, with or without a separator, so PA6-CF20 and PETGCF both count); or a filled product name — that either allow a nozzle which is not hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Templates are excluded: a filament with live variants is not printable stock. Runs on RESOLVED documents, so a variant inheriting its template's nozzle set is judged on the effective set and reports the template in `inheritedFrom`. An explicit `filament_abrasive = \"0\"` suppresses only the weakest (name) heuristic — never a fibre type or an abrasive tag: the app writes that flag from `form.abrasive` alone while its own predicate also honours OPT tag 4, so a stored `\"0\"` is not a reliable negative. Abrasiveness is inferred, so findings are advisory and nothing is repaired.",
+        "tags": [
+          "maintenance"
+        ],
+        "responses": {
+          "200": {
+            "description": "Findings, worst first (empty array when healthy)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "findings": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "filamentId": {
+                            "type": "string"
+                          },
+                          "filamentName": {
+                            "type": "string"
+                          },
+                          "filamentType": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "reasons": {
+                            "type": "array",
+                            "description": "Why the record reads as abrasive. `tagged` covers the generic ABRASIVE tag and the specific abrasive material tags alike; `fibre` is the type; `filled` is the weakest (name) heuristic and is the only one an explicit `filament_abrasive = \"0\"` suppresses.",
+                            "items": {
+                              "type": "string",
+                              "enum": [
+                                "flagged",
+                                "tagged",
+                                "fibre",
+                                "filled"
+                              ]
+                            }
+                          },
+                          "softNozzles": {
+                            "type": "array",
+                            "description": "Nozzles this filament is RECORDED as compatible with that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown — a dangling ref is not evidence of hardness.",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          },
+                          "unassigned": {
+                            "type": "boolean",
+                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a baked restriction either: the export derives no compatible_printers_condition from it (GH #1021), so an unscoped bundle is not limited by nozzle — only a request naming a printer (?printer=) is filtered on this list. An empty list simply means no soft-nozzle assignment can be detected for this filament."
+                          },
+                          "flagMismatch": {
+                            "type": "boolean",
+                            "description": "Material reads as abrasive but `filament_abrasive` is not on, so exported presets assert the filament is safe."
+                          },
+                          "inheritedFrom": {
+                            "type": "string",
+                            "nullable": true,
+                            "description": "Template name when the nozzle set is inherited — where the fix belongs."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
