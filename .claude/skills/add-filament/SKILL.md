@@ -278,11 +278,20 @@ promotion cleanup does (step 5a): the array replaces rather than merges, so anyt
 out is gone for this colour. A glow colour joining a PLA line tagged `[33]` hygroscopic is
 `[24, 4, 33]`, not `[24, 4]` — read the family's effective tags off the template first.
 
-**On the promotion path, do step 5a BEFORE deciding this.** Until that cleanup runs the
-"family" is a standalone whose tags still describe the ORIGINAL colour, so copying them here
-hands the new colour the old one's transparent or silk tag — the exact contamination 5a exists
-to undo, arriving from the other direction. Promote, clean the template, then read the line
-tags off it.
+**On the promotion path this cannot be decided yet — create WITHOUT `optTags`.** Promotion and
+creation are the SAME request (the replay carrying `promoteParent: true`), so there is no
+moment beforehand in which to clean the template: until 5a runs, the "family" is a standalone
+whose tags still describe the ORIGINAL colour. Sending them here hands the new colour the old
+one's transparent or silk tag — the contamination 5a exists to undo, arriving from the other
+direction — and omitting them leaves the new variant inheriting those same tags meanwhile,
+which is harmless only because the next step fixes it. So:
+
+1. create with no `optTags` at all;
+2. run step 5a, which decides what is a line tag and what belongs to the original colour;
+3. only then `PUT` this colour's own array onto `$ID`, by the rule above.
+
+Step 3 is not optional and nothing else performs it: 5a writes the template and the ORIGINAL
+variant, never the colour you just added.
 
 When the colour is unremarkable, omit `optTags` entirely and let it inherit. An array that
 merely repeats the family's pins a copy that stops tracking the template.
@@ -363,12 +372,19 @@ over-specifies rather than loses:
   every colour in it, and stripping it off the template makes each new sibling render wrong.
   The family name and the sibling colours tell you which you are looking at.
 
-  Then: the template keeps **every line tag**, and the variant gets **its colour-specific tags
-  plus a copy of every line tag**. Its own array is what it resolves to, so anything left out
-  is simply gone for that colour. From `[2, 4]` on a normal line that is template `[4]`,
-  variant `[2, 4]` — not variant `[2]`, which would strip the abrasive marker off the original
-  colour and hide it from the nozzle-safety check in Settings → Data health. On a matte line
-  holding `[16, 4]`, both stay: template `[16, 4]`, variant `[16, 4]`.
+  Then: the template keeps **every line tag**. The variant gets an array **only if it has a
+  colour-specific tag of its own** — and when it does, that array must also repeat every line
+  tag, because its own array is what it resolves to and anything left out is gone for that
+  colour. From `[2, 4]` on a normal line that is template `[4]`, variant `[2, 4]` — not variant
+  `[2]`, which would strip the abrasive marker off the original colour and hide it from the
+  nozzle-safety check in Settings → Data health.
+
+  **When every tag turns out to be a line tag, leave the variant's array EMPTY.** On a matte
+  line holding `[16, 4]` nothing is colour-specific, so the template keeps `[16, 4]` and the
+  variant stores nothing — writing `[16, 4]` onto it too would look identical today and pin a
+  copy that stops tracking the template, so a later change to the line's shared tags would
+  never reach that colour. Copying is the price of an override, not something to pay when no
+  override is needed.
 
   **When you cannot tell, ask.** There is no safe default here, which is why this is a question
   and not a lookup: guess "line" and a `2` transparent stays on the template, so the next opaque

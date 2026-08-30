@@ -145,10 +145,15 @@ gives `optTags` whole-array fallback, so a variant holding `[2]` **replaces** th
 `[4]` instead of adding to it — the original colour loses its abrasive marker and drops out of
 the nozzle-safety check in Settings → Data health, which reads the resolved value.
 
-So the template keeps every product-line tag, and the variant gets its colour-specific tags plus
-a **copy** of those product-line tags. `[2, 4]` becomes template `[4]`, variant `[2, 4]`. New
-siblings leave their array empty and inherit `[4]`. On a matte line holding `[16, 4]`, the
-finish is shared, so nothing splits at all: template `[16, 4]`, variant `[16, 4]`.
+So the template keeps every product-line tag, and the variant gets an array only when it has a
+colour-specific tag of its own — in which case that array must also repeat the product-line
+tags. `[2, 4]` becomes template `[4]`, variant `[2, 4]`. New siblings leave their array empty
+and inherit `[4]`.
+
+On a matte line holding `[16, 4]` the finish is shared, so nothing is colour-specific and
+nothing splits: template `[16, 4]`, variant **empty**. Writing `[16, 4]` onto the variant as
+well would render identically today and pin a copy that stops tracking the template, so a later
+change to the line's shared tags would never reach that colour. Copy only to carry an override.
 
 **When you cannot tell which a tag is, ask the user.** Neither default is safe. Guessing
 product-line leaves a `2` transparent on the template, so the next opaque colour renders
