@@ -1852,7 +1852,7 @@
   "health.abrasive.error": "Abrasives Filament an ungeeigneten Düsen konnte nicht geprüft werden.",
   "health.abrasive.because": "Gilt als abrasiv wegen: {reasons}",
   "health.abrasive.reason.flagged": "als abrasiv markiert",
-  "health.abrasive.reason.tagged": "Abrasiv-Tag",
+  "health.abrasive.reason.tagged": "Abrasiv- oder Füllstoff-Tag",
   "health.abrasive.reason.fibre": "faserverstärkter Typ",
   "health.abrasive.reason.filled": "gefüllter Name",
   "health.abrasive.softNozzles": "Als kompatibel eingetragen mit nicht gehärteten Düsen: {nozzles}",

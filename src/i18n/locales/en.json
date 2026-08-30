@@ -1852,7 +1852,7 @@
   "health.abrasive.error": "Could not scan for abrasive filament on unsuitable nozzles.",
   "health.abrasive.because": "Read as abrasive because: {reasons}",
   "health.abrasive.reason.flagged": "marked abrasive",
-  "health.abrasive.reason.tagged": "abrasive tag",
+  "health.abrasive.reason.tagged": "abrasive or filled tag",
   "health.abrasive.reason.fibre": "fibre-reinforced type",
   "health.abrasive.reason.filled": "filled name",
   "health.abrasive.softNozzles": "Recorded as compatible with nozzles that are not hardened: {nozzles}",

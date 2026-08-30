@@ -65,6 +65,35 @@ const FILLED_RE =
 /** OPT tag id 4 marks a filament abrasive; the form treats it as authoritative. */
 export const OPT_TAG_ABRASIVE = 4;
 
+/**
+ * Tags that say the filament is abrasive, whether or not tag 4 is also set.
+ *
+ * Tag 4 is the generic marker, but the OPT vocabulary also has SPECIFIC tags
+ * for the things that make a filament abrasive, and they are selectable in the
+ * form. A record tagged `31` carbon fibre is stating the same fact more
+ * precisely than tag 4 does, so reading only tag 4 discards the better
+ * evidence: a plainly-typed `PLA` with `optTags: [31]`, no flag and a soft
+ * nozzle went unreported entirely.
+ *
+ * Everything here abrades a soft nozzle in ordinary use — mineral and metal
+ * fills, glass and carbon fibre, aramid, and the strontium-aluminate pigments
+ * behind glow and sparkle. Deliberately NOT here: tags describing thermal or
+ * mechanical behaviour, which say nothing about wear.
+ */
+const ABRASIVE_OPT_TAGS: ReadonlySet<number> = new Set([
+  0, // CONTAINS_GLASS_FIBER
+  1, // CONTAINS_ARAMID_FIBER
+  4, // ABRASIVE
+  19, // WOOD_FILL
+  20, // METAL_FILL
+  21, // STONE_FILL
+  22, // SPARKLE
+  23, // PHOSPHORESCENT
+  24, // GLOW_IN_THE_DARK
+  31, // CONTAINS_CARBON_FIBER
+  32, // CONTAINS_KEVLAR
+]);
+
 export type AbrasiveReason = "flagged" | "tagged" | "fibre" | "filled";
 
 export interface AuditNozzle {
@@ -142,7 +171,7 @@ export function abrasiveReasons(filament: AuditFilament): AbrasiveReason[] {
   const reasons: AbrasiveReason[] = [];
 
   if (flag === "on") reasons.push("flagged");
-  if ((filament.optTags ?? []).includes(OPT_TAG_ABRASIVE)) reasons.push("tagged");
+  if ((filament.optTags ?? []).some((t) => ABRASIVE_OPT_TAGS.has(t))) reasons.push("tagged");
   if (isFibreType(filament.type ?? "")) reasons.push("fibre");
   if (flag !== "off" && FILLED_RE.test(`${filament.type ?? ""} ${filament.name ?? ""}`)) {
     reasons.push("filled");

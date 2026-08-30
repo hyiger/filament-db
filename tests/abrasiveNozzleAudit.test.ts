@@ -31,6 +31,21 @@ describe("abrasiveReasons", () => {
       .toEqual(["tagged"]);
   });
 
+  it("reads the specific material tags, not only the generic abrasive one", () => {
+    // A record tagged `31` carbon fibre states the fact more precisely than
+    // tag 4 does; reading only tag 4 threw away the better evidence. A plain
+    // type with no flag and a soft nozzle used to be reported not at all.
+    for (const tag of [0, 1, 19, 20, 21, 22, 23, 24, 31, 32]) {
+      expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [tag] }), `tag ${tag}`)
+        .toEqual(["tagged"]);
+    }
+  });
+
+  it("ignores tags that describe behaviour rather than wear", () => {
+    // HEAT_RESISTANT, LOW_WARP, HYGROSCOPIC, MATTE say nothing about abrasion.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 33, 16] })).toEqual([]);
+  });
+
   it("reads fibre reinforcement out of the type", () => {
     for (const type of ["PA6-CF20", "PET-CF", "PPS-CF10", "HT-PLA-GF", "PP CF", "PA_GF"]) {
       expect(abrasiveReasons({ _id: "x", type }), type).toContain("fibre");
@@ -174,6 +189,16 @@ describe("auditAbrasiveNozzles", () => {
     const flag: AuditFilament = { ...CLEAN, _id: "c", name: "Alpha", settings: {} };
     const out = auditAbrasiveNozzles([flag, none, soft], NOZZLES);
     expect(out.map((f) => f.filamentId)).toEqual(["a", "b", "c"]);
+  });
+
+  it("breaks a severity tie by name, so the list has a stable order", () => {
+    // Without this the order of two equally-severe rows follows whatever the
+    // query returned, and the page reshuffles between scans for no reason.
+    const mk = (id: string, name: string): AuditFilament => ({
+      ...CLEAN, _id: id, name, compatibleNozzles: [SOFT._id],
+    });
+    const out = auditAbrasiveNozzles([mk("z", "Zinc"), mk("a", "Alpha")], NOZZLES);
+    expect(out.map((f) => f.filamentName)).toEqual(["Alpha", "Zinc"]);
   });
 
   it("tolerates a record carrying no name, type or nozzle array", () => {
