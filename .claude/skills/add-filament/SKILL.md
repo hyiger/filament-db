@@ -68,7 +68,7 @@ curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.
 Assign the `_id` of whatever you match — every later step addresses the family through it:
 
 ```bash
-TEMPLATE_ID=<the _id from the row you matched>
+TEMPLATE_ID=<the _id from the row you matched, or its parentId if that row is a variant>
 ```
 
 It becomes `parentId` on the create, and the target for filling in family weights, for the
@@ -88,6 +88,17 @@ If it exists, that record is `$ID` and you are done with steps 3 to 6: go straig
 register the spool. Creating anyway is not a harmless duplicate — the unique-name index returns
 a 409 and the roll never gets recorded, or, if your generated name differs by a word, you
 silently end up with two records for one colour and a promotion that should not have happened.
+
+```bash
+ID=<the _id of the matching colour>
+# If that row is a VARIANT, the family is its PARENT, not itself.
+TEMPLATE_ID=<its parentId, or its own _id when parentId is "root">
+```
+
+Getting that second line wrong is quiet and durable: step 7 fills in missing family weights on
+`$TEMPLATE_ID`, so pointing it at the variant pins overrides on one colour while the template
+and every other colour stay incomplete — and the bar those weights drive keeps reading empty
+everywhere else.
 
 Only when the colour is genuinely new do the three cases below apply:
 
@@ -295,9 +306,12 @@ over-specifies rather than loses:
   colour and hide it from the nozzle-safety check in Settings → Data health. On a matte line
   holding `[16, 4]`, both stay: template `[16, 4]`, variant `[16, 4]`.
 
-  **When you cannot tell, call it a line tag.** A line tag appears in both places, so an
-  over-inclusive guess costs nothing; a tag wrongly called colour-specific is removed from the
-  template and every later sibling loses it silently.
+  **When you cannot tell, ask.** There is no safe default here, which is why this is a question
+  and not a lookup: guess "line" and a `2` transparent stays on the template, so the next opaque
+  colour added renders see-through; guess "colour" and a shared `16` matte leaves the template,
+  so the next colour renders flat-less. Both are the same contamination in opposite directions,
+  and both are silent. One question to the user settles it — name the tag and the family and ask
+  whether every colour in the line shares it.
 - **The OpenPrintTag link** — cannot be moved with a `PUT`; it is three fields, one of them
   server-owned. Follow the route sequence in `references/sources.md`, and keep its ordering:
   read the template's existing slug *before* the `DELETE`, because that slug belongs to the

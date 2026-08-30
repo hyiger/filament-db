@@ -105,8 +105,11 @@ that declares none inherits it, and an opaque colour added later renders transpa
 standalone outright ("a standalone becomes a template when its first variant is created"), and
 the gated create performs the promotion and the new sibling in one step, so there is no moment
 in between. Do it immediately after that create — the generated original variant is the
-parent's other child, the one whose id is not the one the create just returned — moving
-`optTags` onto it and clearing them from the template.
+parent's other child, the one whose id is not the one the create just returned.
+
+What to do with `optTags` there is not a straight move — the split rule below governs it, and
+a shared finish stays on the template as well as the variant. Clearing the template
+unconditionally is what causes the mirror-image bug on a Matte or Silk product line.
 
 **Generalise this, because the tag is not the only thing that strands.** Promotion copies
 colour and inventory and nothing else, so *anything colour-specific held on a standalone stays
@@ -143,9 +146,11 @@ a **copy** of those product-line tags. `[2, 4]` becomes template `[4]`, variant 
 siblings leave their array empty and inherit `[4]`. On a matte line holding `[16, 4]`, the
 finish is shared, so nothing splits at all: template `[16, 4]`, variant `[16, 4]`.
 
-**When you cannot tell which a tag is, call it product-line.** It then stays on the template and
-rides along on the variant, so an over-inclusive guess costs nothing — while a tag wrongly
-called colour-specific is removed from the template and every later sibling loses it silently.
+**When you cannot tell which a tag is, ask the user.** Neither default is safe. Guessing
+product-line leaves a `2` transparent on the template, so the next opaque colour renders
+see-through; guessing colour-specific takes a shared `16` matte off it, so the next colour loses
+the finish. Same contamination, opposite directions, both silent. Ask whether every colour in
+that line shares the property.
 
 The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
 `openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips
