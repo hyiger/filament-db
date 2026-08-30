@@ -116,21 +116,31 @@ post-create move:
 
 | Stranded | Consequence for later siblings | How to move it |
 |---|---|---|
-| `optTags` | an opaque colour renders transparent | move **only the appearance tags** — see below — and leave the rest on the template |
+| `optTags` | an opaque colour renders transparent | **split, then copy** — see below; the array replaces rather than merges, so a plain move loses tags |
 | `transmissionDistance` | inherits the original colour's TD as their own | `PUT` the value onto the variant, `null` on the template |
 | the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT** — `DELETE …/openprinttag/link` on the template, then `POST` the slug to the variant |
 
-**`optTags` is a mixed namespace, so moving the whole array is wrong.** It carries how a colour
-*looks* alongside what the material *is*: `2` transparent, `3` translucent, `16` matte, `17`
-silk, `22` sparkle, `23` phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28`
-dual-colour and `29` triple-colour describe this colour and belong on the variant. `4` abrasive,
-`0`/`31` glass and carbon fibre, `33` hygroscopic, `9` flexible, `5` food-safe and the rest
-describe the product line and must stay on the template, where every sibling inherits them.
-Sweeping the array across takes `4` off the line, which — because the resolver reads the
-effective value — hides the whole family from the abrasive/nozzle check in Settings → Data
-health. **When a tag is not clearly one of the appearance tags listed above, leave it on the
-template**: an appearance tag stranded there is a visible rendering wart, a safety tag moved
-off it is silent.
+**`optTags` is a mixed namespace, and the array does not merge.** It carries how a colour
+*looks* — `2` transparent, `3` translucent, `16` matte, `17` silk, `22` sparkle, `23`
+phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28` dual-colour, `29`
+triple-colour — alongside what the material *is*: `4` abrasive, `0`/`31` glass and carbon fibre,
+`33` hygroscopic, `9` flexible, `5` food-safe.
+
+Both halves of that matter, and the obvious remedies each break one. Sweeping the whole array
+onto the variant takes `4` off the product line, so every later sibling inherits no abrasive
+marker. But moving *only* the appearance tags fails too, and less obviously: `resolveFilament`
+gives `optTags` whole-array fallback, so a variant holding `[2]` **replaces** the template's
+`[4]` instead of adding to it — the original colour loses its abrasive marker and drops out of
+the nozzle-safety check in Settings → Data health, which reads the resolved value.
+
+So the template keeps only the product-line tags, and the variant gets the appearance tags plus
+a **copy** of those product-line tags. `[2, 4]` becomes template `[4]`, variant `[2, 4]`. New
+siblings leave their array empty and inherit `[4]`.
+
+**When a tag is not clearly one of the appearance tags listed above, treat it as
+product-line.** It then stays on the template and rides along on the variant, so an
+over-inclusive guess costs nothing, while a safety tag left out of the variant's array is
+silent.
 
 The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
 `openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips
@@ -146,7 +156,7 @@ ORIG_SLUG=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
 # 2. now the template can be unlinked
 curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
 # 3. relink the GENERATED ORIGINAL variant with its own slug, not the new colour's
-curl -s -X POST "$BASE/api/filaments/$ORIGINAL_VARIANT_ID/openprinttag/link" \
+curl -s -X POST "$BASE/api/filaments/$ORIG_ID/openprinttag/link" \
   -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}"
 ``` Before promoting anything, look at what else the standalone carries that describes
 its colour rather than its product line — the list above is what has been hit so far, not a

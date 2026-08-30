@@ -65,9 +65,19 @@ If the user scanned a tag, the decoded payload gives you most of this already.
 curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.parentId // "root")\t\(.hasVariants)"'
 ```
 
-Keep the `_id` of whatever you match — it becomes `parentId` on the create, and `$TEMPLATE_ID`
-if the family needs its weights filling in. `parentId` is `root` for a template and a
-standalone alike, so it cannot identify the record for you.
+Assign the `_id` of whatever you match — every later step addresses the family through it:
+
+```bash
+TEMPLATE_ID=<the _id from the row you matched>
+```
+
+It becomes `parentId` on the create, and the target for filling in family weights, for the
+post-promotion cleanup in step 5a, and for the OpenPrintTag relink. Set it here rather than
+carrying the value in your head; a step that interpolates an unset variable builds a URL like
+`/api/filaments//spools`, which fails in a way that does not name the cause.
+
+`parentId` is `root` for a template and a standalone alike, so it cannot identify the record
+for you.
 
 Three cases, and they lead to different work:
 
@@ -255,14 +265,26 @@ over-specifies rather than loses:
 
 - **`transmissionDistance`** — an unconditional move. TD is per-colour optics; no two colours
   share one. `PUT` the value onto `$ORIG_ID`, then `null` on the template.
-- **`optTags`** — move only the tags that describe how that colour *looks*: `2` transparent,
-  `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24` glow, `25`
-  colour-changing, `27` gradient, `28` dual/`29` triple-colour. Everything else — `4` abrasive,
-  `0`/`31` fibre, `33` hygroscopic, `9` flexible, `5` food-safe — describes the product line
-  and stays. Moving the whole array takes `4` off the template and hides the entire family from
-  the abrasive/nozzle check in Settings → Data health, because that check reads the effective
-  value. **If a tag isn't clearly on the appearance list, leave it on the template**: a stranded
-  appearance tag is a visible rendering wart, a safety tag moved off the line is silent.
+- **`optTags`** — the array does not merge. `resolveFilament` uses whole-array fallback: a
+  variant with a non-empty array **replaces** the template's rather than adding to it. So this
+  is not a move, it is a split plus a copy.
+
+  Separate the template's tags into the ones describing how that colour *looks* — `2`
+  transparent, `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24`
+  glow, `25` colour-changing, `27` gradient, `28` dual/`29` triple-colour — and everything else,
+  which describes the product line: `4` abrasive, `0`/`31` fibre, `33` hygroscopic, `9`
+  flexible, `5` food-safe.
+
+  The template keeps **only the product-line tags**. The variant gets the appearance tags
+  **plus a copy of those same product-line tags**, because its own array is what it resolves to
+  and anything left out is simply gone for that colour. From `[2, 4]` that is template `[4]`,
+  variant `[2, 4]` — not variant `[2]`, which would strip the abrasive marker off the original
+  colour and hide it from the nozzle-safety check in Settings → Data health. New siblings, whose
+  array stays empty, inherit `[4]` correctly.
+
+  **If a tag isn't clearly on the appearance list, treat it as product-line**: it then stays on
+  the template *and* rides along on the variant, so an over-inclusive guess costs nothing while
+  a missed safety tag is silent.
 - **The OpenPrintTag link** — cannot be moved with a `PUT`; it is three fields, one of them
   server-owned. Follow the route sequence in `references/sources.md`, and keep its ordering:
   read the template's existing slug *before* the `DELETE`, because that slug belongs to the
