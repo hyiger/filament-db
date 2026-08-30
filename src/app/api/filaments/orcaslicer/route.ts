@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import Printer from "@/models/Printer";
 import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { liveTemplateIds, excludeTemplates } from "@/lib/templateExportFilter";
+import {
+  resolvePrinterScope,
+  isOfferableOnPrinter,
+  unknownPrinterBody,
+} from "@/lib/slicerExportScope";
 import { generateOrcaSlicerProfiles } from "@/lib/orcaSlicerBundle";
 import { errorResponse } from "@/lib/apiErrorHandler";
 
@@ -33,6 +39,14 @@ export async function GET(request: NextRequest) {
     const typeFilter = searchParams.get("type");
     const vendorFilter = searchParams.get("vendor");
     const idsFilter = searchParams.get("ids");
+
+    // Narrow the bundle to what this printer can actually run. Opt-in: no
+    // param leaves the response exactly as it was. Resolved BEFORE the heavy
+    // query so a typo costs a 400, not a silently empty bundle.
+    const scope = await resolvePrinterScope(Printer, searchParams.get("printer"));
+    if (scope.kind === "not-found") {
+      return NextResponse.json(unknownPrinterBody(scope.raw), { status: 400 });
+    }
 
     // Build query
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -99,11 +113,18 @@ export async function GET(request: NextRequest) {
     }
 
     // Resolve variants
-    const resolved = exportable.map((f) =>
+    const resolvedAll = exportable.map((f) =>
       f.parentId
         ? resolveFilament(f, parentMap.get(f.parentId.toString()))
         : f,
     );
+
+    // Filter on the RESOLVED docs: compatibleNozzles is whole-array fallback,
+    // so an inheriting variant's effective set only exists after resolution.
+    const resolved =
+      scope.kind === "scoped"
+        ? resolvedAll.filter((f) => isOfferableOnPrinter(f, scope.nozzleIds))
+        : resolvedAll;
 
     const profiles = generateOrcaSlicerProfiles(resolved);
 
