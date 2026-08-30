@@ -54,6 +54,21 @@ const isFibreType = (type: string): boolean =>
   FIBRE_TOKEN_RE.test(type) || FIBRE_SUFFIX_RE.test(type);
 
 /**
+ * The same evidence in the NAME.
+ *
+ * An OpenPrintTag import can put the base polymer in the type and the
+ * reinforcement only in the product name — `type: "PCTG"`,
+ * `name: "PCTG CF Black"` — and with no abrasive tag such a record produced no
+ * reasons at all and left the scan entirely.
+ *
+ * Token form only, deliberately. A type is a compact code where `PETGCF` is a
+ * real spelling; a name is free text, and inventing a suffix rule for free text
+ * invites a false positive from any word that happens to end in those letters.
+ * A name carries the reinforcement as its own word or not at all.
+ */
+const isFibreName = (name: string): boolean => FIBRE_TOKEN_RE.test(name);
+
+/**
  * Fills that are abrasive without a CF/GF token. Matched against type AND name
  * because these are product naming rather than a type suffix. Deliberately the
  * weakest signal — "Metallic Grey" is a pigment, not metal fill — so it alone
@@ -185,7 +200,9 @@ export function abrasiveReasons(filament: AuditFilament): AbrasiveReason[] {
 
   if (flag === "on" || flag === "unusable") reasons.push("flagged");
   if ((filament.optTags ?? []).some((t) => ABRASIVE_OPT_TAGS.has(t))) reasons.push("tagged");
-  if (isFibreType(filament.type ?? "")) reasons.push("fibre");
+  if (isFibreType(filament.type ?? "") || isFibreName(filament.name ?? "")) {
+    reasons.push("fibre");
+  }
   if (flag !== "off" && FILLED_RE.test(`${filament.type ?? ""} ${filament.name ?? ""}`)) {
     reasons.push("filled");
   }

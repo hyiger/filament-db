@@ -61,6 +61,25 @@ describe("abrasiveReasons", () => {
     }
   });
 
+  it("reads reinforcement carried only in the product name", () => {
+    // An OpenPrintTag import can put the base polymer in the type and the
+    // reinforcement in the name alone; with no abrasive tag that record
+    // produced no reasons and left the scan entirely.
+    expect(abrasiveReasons({ _id: "x", type: "PCTG", name: "PCTG CF Black" }))
+      .toEqual(["fibre"]);
+    expect(abrasiveReasons({ _id: "x", type: "PA", name: "Acme PA-GF20 Natural" }))
+      .toEqual(["fibre"]);
+  });
+
+  it("does not invent a suffix rule for free-text names", () => {
+    // Token form only on the name: a suffix rule there would fire on any word
+    // ending in those letters. The type keeps the suffix form, where PETGCF is
+    // a real spelling.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", name: "Midnight Blugf" })).toEqual([]);
+    expect(abrasiveReasons({ _id: "x", type: "PETGCF", name: "Plain Name" }))
+      .toEqual(["fibre"]);
+  });
+
   it("does not read CF out of a word that merely contains those letters", () => {
     // "PCTG" contains no CF token; neither does a colour named "Buff".
     expect(abrasiveReasons({ _id: "x", type: "PCTG", name: "Scaffold Buff" })).toEqual([]);
@@ -133,7 +152,8 @@ describe("abrasiveReasons", () => {
     // A set-but-unusable value is evidence about the filament and a defect in
     // its own right; it must not read as either enabled or absent.
     const f: AuditFilament = {
-      ...CLEAN, _id: "fj", type: "PETG", settings: { filament_abrasive: "yes" },
+      ...CLEAN, _id: "fj", type: "PETG", name: "Acme PETG Blue",
+      settings: { filament_abrasive: "yes" },
     };
     expect(abrasiveReasons(f)).toEqual(["flagged"]);
     expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
