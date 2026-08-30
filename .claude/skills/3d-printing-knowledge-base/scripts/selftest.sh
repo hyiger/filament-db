@@ -147,6 +147,27 @@ if [[ -f "$d/authored/leaked.md" ]]; then
 else pass=$((pass+1)); fi
 rm -rf "$d"
 
+# Finder creates .DS_Store the moment anyone opens the folder, and both
+# enumerations skip dotfiles — so the zero-audited guard must skip them too,
+# or opening the directory makes the audit permanently red with no remedy.
+d="$(mktemp -d)"; mkdir -p "$d/external"; printf '\000\001' > "$d/external/.DS_Store"
+if (cd "$d" && bash "$here/check-provenance.sh" >/dev/null 2>&1); then pass=$((pass+1)); else
+  fail=$((fail+1)); printf 'FAIL [dotfile-only] .DS_Store alone failed the audit\n'; fi
+rm -rf "$d"
+
+# ...but a genuinely unexplained empty enumeration must still refuse to certify.
+d="$(mktemp -d)"; mkdir -p "$d/external/sub"; printf 'x' > "$d/external/sub/.hidden"
+printf 'x' > "$d/external/notes.rtf"
+# Captured, not piped into `grep -q`: this file runs under `pipefail`, and
+# grep -q exits on the first match, SIGPIPEs the script upstream, and the
+# pipeline then reports failure for a run that actually succeeded.
+out="$(cd "$d" && bash "$here/check-provenance.sh" 2>&1)"
+case "$out" in
+  *"Not audited"*) pass=$((pass+1)) ;;
+  *) fail=$((fail+1)); printf 'FAIL [unaudited-listed] a non-text file was not listed\n' ;;
+esac
+rm -rf "$d"
+
 # A tree holding only legitimately-unaudited files (a saved PDF) must PASS:
 # they are listed, never fatal, and the zero-audited guard contradicted that.
 d="$(mktemp -d)"; mkdir -p "$d/external"; printf '%%PDF-1.4' > "$d/external/paper.pdf"

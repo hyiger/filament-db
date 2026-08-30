@@ -357,7 +357,13 @@ if (( enumerate_failed )); then
   problems=$((problems+1))
 fi
 
-if (( checked == 0 && unaudited == 0 )) && [[ -n "$(ls -A "$root/external" 2>/dev/null)" ]]; then
+# `ls -A` counted dotfiles that BOTH enumerations deliberately skip, so an
+# otherwise-empty external/ holding only Finder's .DS_Store — which appears the
+# moment anyone opens the folder — failed with "0 files were audited". The
+# guard has to ask the same question the enumerations answer: is there anything
+# here that should have been audited or listed?
+if (( checked == 0 && unaudited == 0 )) \
+   && [[ -n "$(find -L "$root/external" -mindepth 1 ! -name '.*' -print -quit 2>/dev/null)" ]]; then
   printf '\nexternal/ is not empty but 0 files were audited — refusing to report Clean.\n'
   problems=$((problems+1))
 fi
