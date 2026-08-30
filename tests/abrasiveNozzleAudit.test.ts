@@ -37,6 +37,15 @@ describe("abrasiveReasons", () => {
     }
   });
 
+  it("reads a separator-free reinforcement suffix", () => {
+    // `referenceChapter.ts` resolves PETGCF to a chapter and its test pins it,
+    // so the spelling is supported — missing it here drops the filament from
+    // the scan entirely rather than merely mis-labelling it.
+    for (const type of ["PETGCF", "PA6GF20", "PACF"]) {
+      expect(abrasiveReasons({ _id: "x", type }), type).toContain("fibre");
+    }
+  });
+
   it("does not read CF out of a word that merely contains those letters", () => {
     // "PCTG" contains no CF token; neither does a colour named "Buff".
     expect(abrasiveReasons({ _id: "x", type: "PCTG", name: "Scaffold Buff" })).toEqual([]);

@@ -37,8 +37,19 @@
 
 import { settingFlagScalar } from "@/lib/slicerSettings";
 
-/** Fibre reinforcement as a whole token: `PA6-CF20`, `PET-GF`, `PP CF`. */
-const FIBRE_RE = /(^|[-_ ])(CF|GF)\d*($|[-_ ])/i;
+/**
+ * Fibre reinforcement, in the two spellings this codebase actually accepts:
+ * as a whole token (`PA6-CF20`, `PET-GF`, `PP CF`) and as a separator-free
+ * suffix (`PETGCF`, `PA6GF20`). The second is not hypothetical —
+ * `stripReinforcement` in `referenceChapter.ts` handles it and its test pins
+ * `PETGCF`, so a type in that form resolves to a reference chapter while going
+ * unrecognised here would leave the filament out of the scan entirely.
+ */
+const FIBRE_TOKEN_RE = /(^|[-_ ])(CF|GF)\d*($|[-_ ])/i;
+const FIBRE_SUFFIX_RE = /[-_ ]?(CF|GF)\d*$/i;
+
+const isFibreType = (type: string): boolean =>
+  FIBRE_TOKEN_RE.test(type) || FIBRE_SUFFIX_RE.test(type);
 
 /**
  * Fills that are abrasive without a CF/GF token. Matched against type AND name
@@ -130,7 +141,7 @@ export function abrasiveReasons(filament: AuditFilament): AbrasiveReason[] {
 
   if (flag === "on") reasons.push("flagged");
   if ((filament.optTags ?? []).includes(OPT_TAG_ABRASIVE)) reasons.push("tagged");
-  if (FIBRE_RE.test(filament.type ?? "")) reasons.push("fibre");
+  if (isFibreType(filament.type ?? "")) reasons.push("fibre");
   if (flag !== "off" && FILLED_RE.test(`${filament.type ?? ""} ${filament.name ?? ""}`)) {
     reasons.push("filled");
   }
