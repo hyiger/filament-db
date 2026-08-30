@@ -314,14 +314,19 @@ export default function DataHealthPage() {
           return;
         }
         toast(t("health.deleted"), "success");
+        // Both lists can hold the SAME filament, so a delete or rename here
+        // invalidates the abrasive card too: deleting leaves a link to a
+        // now-trashed row, and renaming can strand the old name or a
+        // name-derived abrasive reason that no longer applies.
         await load();
+        void loadAbrasive();
       } catch {
         toast(t("health.actionFailed"), "error");
       } finally {
         setBusy(false);
       }
     },
-    [confirm, t, toast, load],
+    [confirm, t, toast, load, loadAbrasive],
   );
 
   const handleRename = useCallback(
@@ -342,14 +347,19 @@ export default function DataHealthPage() {
         }
         toast(t("health.renamed"), "success");
         setRenaming(null);
+        // Both lists can hold the SAME filament, so a delete or rename here
+        // invalidates the abrasive card too: deleting leaves a link to a
+        // now-trashed row, and renaming can strand the old name or a
+        // name-derived abrasive reason that no longer applies.
         await load();
+        void loadAbrasive();
       } catch {
         toast(t("health.actionFailed"), "error");
       } finally {
         setBusy(false);
       }
     },
-    [renameValue, t, toast, load],
+    [renameValue, t, toast, load, loadAbrasive],
   );
 
   // GH #1164: derived ONCE — the all-clear banner and the remote section
