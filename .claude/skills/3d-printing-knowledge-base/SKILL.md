@@ -98,7 +98,7 @@ New reference material goes in `external/` and nowhere else. Use the helper so
 provenance is recorded correctly:
 
 ```bash
-scripts/new-external.sh <url> <slug>
+scripts/new-external.sh URL SLUG          # both required
 # e.g. scripts/new-external.sh https://en.wikipedia.org/wiki/Polyphenylene_sulfide pps
 ```
 

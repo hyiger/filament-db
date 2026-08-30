@@ -122,7 +122,7 @@ post-create move:
 | `secondaryColors` | later siblings render with the original colour's second and third colours | `PUT` the array onto the variant, `[]` on the template — promotion copies `color` and `colorName` but not this |
 | `optTags` | an opaque colour renders transparent | **split, then copy** — see below; the array replaces rather than merges, so a plain move loses tags |
 | `transmissionDistance` | inherits the original colour's TD as their own | `PUT` the value onto the variant, `null` on the template |
-| the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT** — `DELETE …/openprinttag/link` on the template, then `POST` the slug to the variant |
+| the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT**, and link BEFORE deleting — `POST` the saved slug to the variant, then `DELETE …/openprinttag/link` on the template |
 
 **`optTags` is a mixed namespace, and the array does not merge.** It carries how a colour
 *looks* — `2` transparent, `3` translucent, `16` matte, `17` silk, `22` sparkle, `23`
@@ -166,17 +166,25 @@ belongs to the NEW colour you are adding. Deleting first destroys the value you 
 ```bash
 # 1. save the ORIGINAL colour's slug off the template before touching anything
 ORIG_SLUG=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
-  | jq -r '.settings.openprinttag_slug')
-[ -n "$ORIG_SLUG" ] && [ "$ORIG_SLUG" != null ] || echo "nothing linked — skip the rest"
+  | jq -r '.settings.openprinttag_slug // empty')
+if [ -z "$ORIG_SLUG" ]; then
+  echo "nothing linked — steps 2 and 3 do not apply"
+else
 
-# 2. LINK THE VARIANT FIRST, and only continue if it worked
-LINK=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
-  "$BASE/api/filaments/$ORIG_ID/openprinttag/link" \
-  -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}")
+  # 2. LINK THE VARIANT FIRST, and only continue if it worked
+  LINK=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    "$BASE/api/filaments/$ORIG_ID/openprinttag/link" \
+    -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}")
 
-# 3. only now remove the template's copy
-[ "$LINK" = 200 ] && curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
+  # 3. only now remove the template's copy
+  [ "$LINK" = 200 ] && curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
+fi
 ```
+
+The `if` is load-bearing. An earlier version printed "skip the rest" and then
+carried straight on, POSTing the literal string `null` as a slug — which reads
+as handled and is worse than no guard at all. `// empty` rather than `// null`
+for the same reason: `jq -r` renders a null as the four characters `null`.
 
 **The order is the safety property, and it is the opposite of the obvious one.** Deleting
 first and posting second means any failure in the POST — the OPT catalogue unreachable, the

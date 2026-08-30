@@ -18,16 +18,25 @@ Set these up first — every command below uses them, and `$BASE` is empty until
 
 ```bash
 BASE="${FILAMENTDB_URL:-http://localhost:3456}"
-AUTH=(); [ -n "${FILAMENTDB_API_KEY:-}" ] && AUTH=(-H "Authorization: Bearer $FILAMENTDB_API_KEY")
-curl -s "${AUTH[@]}" -o /dev/null -w '%{http_code}\n' "$BASE/api/filaments"
+BASE="${BASE%/}"                 # a trailing slash yields //api/... and a 308
+AUTH=""
+[ -n "${FILAMENTDB_API_KEY:-}" ] && AUTH="Authorization: Bearer $FILAMENTDB_API_KEY"
+curl -s ${AUTH:+-H "$AUTH"} -o /dev/null -w '%{http_code}\n' "$BASE/api/filaments"
 ```
+
+A plain string rather than a bash array on purpose: `AUTH=()` expanded as
+`"${AUTH[@]}"` is a fatal *unbound variable* error under `set -u` on macOS's
+`/bin/bash` 3.2, so the array form makes this preflight unrunnable on the
+default shell of the machine this app is developed on.
 
 Expect `200`. A connection error means the app is not running: say so and stop rather than
 guessing at the data. A `401` means the instance sets `FILAMENTDB_API_KEY` — the gate has no
 same-origin exemption, so ask for the key and export it before retrying. A `403` is *not* that
 gate, which only ever answers 401: look to the same-origin request guard or a reverse proxy,
-and do not loop asking for a key that cannot help. Pass `"${AUTH[@]}"`
-on every later call; the examples below omit it only to stay readable.
+and do not loop asking for a key that cannot help — note the same-origin request
+guard covers mutating verbs only, so it cannot be the cause of a 403 on a GET.
+Pass `${AUTH:+-H "$AUTH"}` on every later call; the examples below omit it only
+to stay readable.
 
 The companion `3d-printing-knowledge-base` skill is the **read** path and is deliberately
 read-only. This skill is the **write** path. Its sourcing discipline still applies here: a
@@ -62,13 +71,19 @@ If the user scanned a tag, the decoded payload gives you most of this already.
 ### 2. Find the family
 
 ```bash
-curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.color // "-")\t\(.parentId // "root")\t\(.hasVariants)"'
+FAMILIES=$(curl -sf "$BASE/api/filaments") || { echo "lookup failed — STOP"; exit 1; }
+printf '%s' "$FAMILIES" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.color // "-")\t\(.parentId // "root")\t\(.hasVariants)"'
 ```
+
+`-f` and the guard are the point, not decoration. A bare `curl -s | jq` prints nothing on a
+500, a dropped connection or an auth failure — and "no rows" is exactly how "this product line
+does not exist yet" looks. The two are indistinguishable, and the branch you take on that
+reading is *create a new standalone*, which duplicates a family that was there all along.
 
 Assign the `_id` of whatever you match — every later step addresses the family through it:
 
 ```bash
-TEMPLATE_ID=<the _id from the row you matched, or its parentId if that row is a variant>
+TEMPLATE_ID=...   # the _id you matched — or its parentId, if that row is a variant
 ```
 
 It becomes `parentId` on the create, and the target for filling in family weights, for the
@@ -95,9 +110,9 @@ a 409 and the roll never gets recorded, or, if your generated name differs by a 
 silently end up with two records for one colour and a promotion that should not have happened.
 
 ```bash
-ID=<the _id of the matching colour>
+ID=...            # the _id of the matching colour
 # If that row is a VARIANT, the family is its PARENT, not itself.
-TEMPLATE_ID=<its parentId, or its own _id when parentId is "root">
+TEMPLATE_ID=...   # its parentId — or its own _id when parentId is "root"
 ```
 
 Getting that second line wrong is quiet and durable: step 7 fills in missing family weights on
@@ -174,8 +189,14 @@ Search the catalogue now, so anything it offers can inform the create — but th
 needs the new record's id, so it happens in step 6, after the create.
 
 ```bash
-curl -s "$BASE/api/openprinttag" -o /tmp/opt.json      # ~14k entries, several MB
-jq '[.materials[] | select(.brandSlug=="...")]' /tmp/opt.json
+# -f so a failed fetch is not silently answered by a stale /tmp/opt.json from an
+# earlier run; without it curl exits 0 on a 500 and leaves the old file in place.
+curl -sf "$BASE/api/openprinttag" -o /tmp/opt.json || \
+  { echo "OPT fetch failed — do NOT reuse a previous /tmp/opt.json"; rm -f /tmp/opt.json; }
+jq '[.materials[] | select(.brandSlug=="<slug, not the brand name>")]' /tmp/opt.json
+# brandSlug is a slug: "3d-fuel", not "3D Fuel". Guessing the display name
+# returns [] — indistinguishable from "this vendor is not in OPT". If unsure:
+#   jq -r '[.materials[].brandSlug] | unique | .[]' /tmp/opt.json | grep -i fuel
 ```
 
 Match on brand **and** colour, not name similarity. Name-similarity scoring reliably proposes
@@ -221,6 +242,10 @@ PAYLOAD='{"name":"PRILINE PC-CF","vendor":"PRILINE","type":"PC-CF",
   "spoolWeight":147,"netFilamentWeight":1000,"dryingTemperature":90,"dryingTime":480}'
 ```
 
+**`dryingTime` is MINUTES**, which no vendor datasheet uses — they all say hours. 480 above is
+8 hours. The schema caps it at 10080 (seven days), so an hours figure written straight through
+is accepted silently and reads as eight minutes of drying on a hygroscopic filament.
+
 ```bash
 RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/api/filaments" \
   -H 'Content-Type: application/json' -d "$PAYLOAD")
@@ -250,6 +275,12 @@ Send **its own tags plus a copy of the family's effective tags**, for the same r
 promotion cleanup does (step 5a): the array replaces rather than merges, so anything you leave
 out is gone for this colour. A glow colour joining a PLA line tagged `[33]` hygroscopic is
 `[24, 4, 33]`, not `[24, 4]` — read the family's effective tags off the template first.
+
+**On the promotion path, do step 5a BEFORE deciding this.** Until that cleanup runs the
+"family" is a standalone whose tags still describe the ORIGINAL colour, so copying them here
+hands the new colour the old one's transparent or silk tag — the exact contamination 5a exists
+to undo, arriving from the other direction. Promote, clean the template, then read the line
+tags off it.
 
 When the colour is unremarkable, omit `optTags` entirely and let it inherit. An array that
 merely repeats the family's pins a copy that stops tracking the template.
@@ -389,9 +420,10 @@ Skipping this is the most likely way to finish with a spool that tracks nothing:
 looks complete, the percentage bar is blank, and no error was ever raised.
 
 **If the family is missing either one, gather it and write it before creating the spool** —
-noticing it is absent is not enough, and one out of two is not enough either: without the tare
-there is no display at all, and without a positive net the percentage stays blank while only
-grams show. The remaining-percentage bar divides by `netFilamentWeight`, and
+noticing it is absent is not enough, and one out of two is not enough either. With either one
+missing the percentage bar is blank; `getRemainingDisplay` then falls back to a grams figure
+whose tooltip names the weight that is missing, so the user sees a number without a bar rather
+than nothing at all — visible, but not what they set the roll up for. The remaining-percentage bar divides by `netFilamentWeight`, and
 remaining grams subtract `spoolWeight`, so a spool added to a family with both null tracks a
 gross number and nothing else. On a standalone, put them in the create payload. On an existing
 family, PUT them onto the template first, so every colour inherits them:
