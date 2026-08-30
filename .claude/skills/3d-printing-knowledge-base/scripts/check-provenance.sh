@@ -92,39 +92,55 @@ while IFS= read -r f; do
 
   fm="$(awk 'NR==1&&/^---$/{next} /^---$/{exit} {print}' "$f")"
 
-  missing=""
+  # Validate the CANONICAL form and refuse everything else.
+  #
+  # This front matter is machine-written by new-external.sh: four keys, one
+  # line each, each a quoted or plain scalar. Trying to accept arbitrary YAML
+  # instead has now failed five rounds running -- quoted-empty, plain nulls,
+  # inline comments, escaped whitespace, and now block scalars and duplicate
+  # keys -- because each was patched as its own case, and every one of them was
+  # a file with NO provenance that audited Clean. Hand-rolling a YAML parser in
+  # bash is unbounded; checking that a generated file still looks generated is
+  # not. Anything outside the canonical form is reported as unsupported, and
+  # the remedy is to rewrite it with new-external.sh.
+  note=""
+  add_note() { note="${note}${note:+; }$1"; }
   for key in source retrieved trust scope; do
-    # A QUOTED-EMPTY value has to count as missing. The generator emits these
-    # fields as quoted scalars, so `source: ""` satisfies a bare
-    # non-whitespace test -- the quotes are the content -- and a file with no
-    # provenance at all passes the audit. Strip surrounding quotes before
-    # deciding, and require something left.
-    val="$(yaml_scalar "$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm" | head -1)")"
-    [[ -n "${val//[[:space:]]/}" ]] || missing="${missing}${missing:+ }${key}"
+    cnt="$(grep -cE "^${key}:" <<<"$fm")"
+    if (( cnt == 0 )); then add_note "${key}: absent"; continue; fi
+    # Duplicates are ambiguous by definition -- readers variously reject them
+    # or keep the last -- and `head -1` silently validated the FIRST, so a good
+    # value followed by `source: null` passed.
+    if (( cnt > 1 )); then add_note "${key}: repeated ${cnt}x"; continue; fi
+    raw="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm")"
+    case "$raw" in
+      [\|\>]*) add_note "${key}: block scalars are not supported here"; continue ;;
+    esac
+    val="$(yaml_scalar "$raw")"
+    if [[ -z "${val//[[:space:]]/}" ]]; then add_note "${key}: empty"; continue; fi
+    # Both validate the DECODED value. Matching the serialized text rejected a
+    # validly quoted `retrieved: "2026-08-30"` -- a false positive introduced
+    # by adding the decoder to the presence check alone.
+    case "$key" in
+      retrieved)
+        [[ "$val" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+          || add_note "retrieved is not YYYY-MM-DD: ${val}" ;;
+      trust)
+        [[ "$val" == "background" ]] \
+          || add_note "trust must be \"background\" in external/ (got: ${val})" ;;
+    esac
   done
-  if [[ -n "$missing" ]]; then
-    printf '%s\n    missing/empty: %s\n' "$rel" "$missing"
+  if [[ -n "$note" ]]; then
+    printf '%s\n    %s\n' "$rel" "$note"
     problems=$((problems+1))
     continue
   fi
-
-  d="$(sed -n 's/^retrieved:[[:space:]]*//p' <<<"$fm" | head -1)"
-  [[ "$d" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || {
-    printf '%s\n    retrieved is not YYYY-MM-DD: %s\n' "$rel" "$d"
-    problems=$((problems+1)); continue; }
-
-  t="$(sed -n 's/^trust:[[:space:]]*//p' <<<"$fm" | head -1)"
-  [[ "$t" == "background" ]] || {
-    printf '%s\n    trust must be "background" in external/ (got: %s)\n' "$rel" "$t"
-    problems=$((problems+1)); continue; }
 done < <(find "$root/external" -type f -name '*.md' | sort)
 
 # Cheap smell test: process parameters that should never live in external/.
 # Only prose counts — front matter and HTML comments are stripped first, or the
 # template's own warning text trips the detector.
 PARAM_RE='nozzle temp|bed temp|chamber temp|extrusion multiplier|pressure advance|volumetric speed|dry(ing)? (temp|time)'
-# Without perl the comment strip used to fail into an empty $prose for every
-# file, skipping the entire scan while still printing "Clean." Refuse loudly.
 leaks=0
 while IFS= read -r f; do
   # Fail OPEN on unterminated front matter: if fm is still set at EOF the
