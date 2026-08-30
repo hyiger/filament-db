@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
+import { TEMPLATE_NOT_EXPORTABLE } from "@/lib/templateExportFilter";
+import { hasVariants } from "@/lib/resolveFilament";
+import Filament from "@/models/Filament";
 import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 import {
   resolveFilamentForExport,
@@ -29,6 +32,13 @@ export async function GET(
     const filament = await resolveFilamentForExport(id);
     if (!filament) {
       return errorResponse("Filament not found", 404);
+    }
+
+    // GH: a template is an abstract product line, not printable stock — there
+    // is no spool of it to load, so refuse rather than hand the slicer a
+    // preset the user can select but never actually have.
+    if (await hasVariants(Filament, String(filament._id))) {
+      return NextResponse.json(TEMPLATE_NOT_EXPORTABLE, { status: 400 });
     }
 
     const ini = generatePrusaSlicerBundle([filament]);

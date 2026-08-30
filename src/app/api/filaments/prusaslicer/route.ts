@@ -5,6 +5,7 @@ import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
+import { liveTemplateIds, excludeTemplates } from "@/lib/templateExportFilter";
 import { generatePrusaSlicerBundle, collapsePerNozzleImportSections } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 import { upsertIniFilament } from "@/lib/iniImportApply";
@@ -71,10 +72,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
+    // GH: a template is not printable stock, so it must not reach the slicer as
+    // a selectable preset. It still has to stay in `parentMap` above — its
+    // variants resolve through it — so the filter applies to what is EMITTED,
+    // not to what was loaded.
+    const templateIds = await liveTemplateIds(Filament);
+    const exportable = excludeTemplates(filaments, templateIds);
+
     // If a variant's parent isn't in the filtered results, batch-fetch missing parents
     const missingParentIds = [
       ...new Set(
-        filaments
+        exportable
           .filter((f) => f.parentId && !parentMap.has(f.parentId.toString()))
           .map((f) => f.parentId!.toString()),
       ),
@@ -96,7 +104,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Resolve variants
-    const resolved = filaments.map((f) =>
+    const resolved = exportable.map((f) =>
       f.parentId
         ? resolveFilament(f, parentMap.get(f.parentId.toString()))
         : f,
