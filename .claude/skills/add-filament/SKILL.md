@@ -279,6 +279,20 @@ added to an ordinary line and left with no tags is not marked abrasive, so nothi
 being offered on a soft nozzle. Glow, metal-fill and stone-fill pigments are abrasive; include
 `4` alongside the appearance tag when the pigment is what makes it so.
 
+**Tag `4` alone is not enough — send `settings.filament_abrasive: "1"` with it.** The two are
+read by different consumers: the form's nozzle picker honours the tag, while the EXPORTER reads
+only the setting, and that is the value a firmware `M862.1` check sees. A colour marked abrasive
+by tag alone therefore ships to the printer as safe. Worse, the form writes that setting from
+its own checkbox, so a later save of the record with only the tag set writes `"0"` — an active
+assertion that an abrasive filament is not one. Send both together whenever this branch adds `4`:
+
+```bash
+# in the create payload:  "optTags":[24,4], "settings":{"filament_abrasive":"1"}
+# or afterwards, DOTTED so the rest of the bag survives:
+curl -s -X PUT "$BASE/api/filaments/$ID" -H 'Content-Type: application/json' \
+  -d '{"settings.filament_abrasive":"1"}'
+```
+
 Send **its own tags plus a copy of the family's effective tags**, for the same reason the
 promotion cleanup does (step 5a): the array replaces rather than merges, so anything you leave
 out is gone for this colour. A glow colour joining a PLA line tagged `[33]` hygroscopic is
