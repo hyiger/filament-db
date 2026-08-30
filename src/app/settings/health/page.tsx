@@ -96,6 +96,9 @@ export default function DataHealthPage() {
   // scan must not withhold the conflict list, and vice versa.
   const [abrasive, setAbrasive] = useState<AbrasiveFinding[]>([]);
   const [abrasiveLoading, setAbrasiveLoading] = useState(true);
+  // Tracked separately from `error`, whose message names the name-conflict
+  // scan. A shared flag would tell the user the wrong check broke.
+  const [abrasiveError, setAbrasiveError] = useState(false);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
   // ticket may write. The mount scan and a completion-triggered
@@ -162,7 +165,12 @@ export default function DataHealthPage() {
         const body = (await res.json()) as { findings: AbrasiveFinding[] };
         if (!cancelled) setAbrasive(body.findings);
       } catch {
-        /* advisory — leave the list empty */
+        // "Advisory" describes the FINDINGS, not the scan. Swallowing the
+        // failure left the list empty and the loading flag cleared, which the
+        // all-clear below reads as "checked, nothing found" — a green
+        // "your data looks healthy" for a check that never ran. This page has
+        // made that mistake once already (GH #1164, the remote conflicts).
+        if (!cancelled) setAbrasiveError(true);
       } finally {
         if (!cancelled) setAbrasiveLoading(false);
       }
@@ -304,11 +312,14 @@ export default function DataHealthPage() {
       {!loading && error && (
         <p className="text-sm text-red-500">{t("health.error")}</p>
       )}
+      {!abrasiveLoading && abrasiveError && (
+        <p className="text-sm text-red-500">{t("health.abrasive.error")}</p>
+      )}
       {/* GH #1164: the all-clear must account for BOTH databases.
           With a clean local scan and a remote-only conflict — the primary
           case this PR adds — the page otherwise rendered "your data is
           healthy" directly above an amber conflict list. */}
-      {!loading && !error && !abrasiveLoading && conflicts.length === 0 &&
+      {!loading && !error && !abrasiveLoading && !abrasiveError && conflicts.length === 0 &&
         remoteConflicts.length === 0 && abrasive.length === 0 && (
         <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
           <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>

@@ -65,9 +65,19 @@ export function settingValuesEqual(a: unknown, b: unknown): boolean {
  * Every reader — form seeds, the form's unedited-restore mirror, the
  * detail page, the OpenPrintTag tag writers — must go through this, or a
  * "1;1" array reads as off in one place and on in another.
+ *
+ * A reader that needs the per-extruder collapse but NOT this boolean — one
+ * that has to tell "off" from "unset", which a boolean cannot express — takes
+ * `settingFlagScalar` instead. Splitting it keeps the "element 0 is canonical"
+ * rule in one place while letting such a reader keep its own acceptance;
+ * re-deriving the collapse locally is what this docblock exists to forbid.
  */
+export function settingFlagScalar(value: unknown): unknown {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 export function settingFlagIsOn(value: unknown): boolean {
-  const scalar = Array.isArray(value) ? value[0] : value;
+  const scalar = settingFlagScalar(value);
   // String-coerce for parity with pre-#678's unwrap(), which did
   // String(value[0]) — the Mixed bag can hold a numeric 1 from the generic
   // API, and a bare === "1" would read it as OFF where the old collapse

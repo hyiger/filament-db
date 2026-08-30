@@ -7,11 +7,16 @@
  * measured in microns and fares little better. Only a through-hardened,
  * carbide or ruby-tipped nozzle survives them.
  *
- * WHY THIS EXISTS. `compatibleNozzles` is what every consumer trusts to keep an
- * abrasive filament away from a nozzle it would ruin, and it is maintained by
- * hand, so it goes stale silently. A filament typed `PC` when its nozzles were
- * assigned keeps that permissive set after being retyped `PC-CF`; nothing
- * errors, nothing warns, and the wrong nozzle stays on the list.
+ * WHY THIS EXISTS. `compatibleNozzles` is the app's RECORD of which nozzles a
+ * filament may run on — read by the form's nozzle picker and by calibration
+ * reachability, not by the print path. Since GH #1021 the export derives no
+ * `compatible_printers_condition` from it, so it restricts nothing at print
+ * time; it is a statement of intent, and it is maintained by hand, so it goes
+ * stale in silence. A filament typed `PC` when its nozzles were assigned keeps
+ * that permissive set after being retyped `PC-CF`; nothing errors, nothing
+ * warns, and the wrong nozzle stays on the list. A stale entry is therefore a
+ * wrong record rather than an open door — which is still worth reporting,
+ * because the record is what the user reasons from.
  *
  * WHY THE `filament_abrasive` FLAG IS NOT TRUSTED AS A NEGATIVE. The flag is a
  * second line of defence — Prusa's INDX start G-code passes it to `M862.1`, so
@@ -29,6 +34,8 @@
  * fibre loading and a 20% structural one are both "CF". Reporting is honest;
  * deciding is the user's.
  */
+
+import { settingFlagScalar } from "@/lib/slicerSettings";
 
 /** Fibre reinforcement as a whole token: `PA6-CF20`, `PET-GF`, `PP CF`. */
 const FIBRE_RE = /(^|[-_ ])(CF|GF)\d*($|[-_ ])/i;
@@ -92,8 +99,18 @@ function idOf(ref: unknown): string | null {
   return v == null ? null : String(v);
 }
 
+/**
+ * Tri-state read of `filament_abrasive`.
+ *
+ * Borrows the GH #678 per-extruder collapse from `settingFlagScalar` — an
+ * Orca/Bambu round-trip can store `["1","1"]`, and reading that shape locally
+ * is exactly what that module's docblock forbids. It does NOT use
+ * `settingFlagIsOn`: that answers a two-state question, and this one needs
+ * three. Collapsing "unset" into "off" would let the `filled` name heuristic be
+ * suppressed on every filament that simply never set the flag.
+ */
 function flagValue(filament: AuditFilament): "on" | "off" | "unset" {
-  const raw = (filament.settings ?? {})["filament_abrasive"];
+  const raw = settingFlagScalar((filament.settings ?? {})["filament_abrasive"]);
   if (raw === "1" || raw === 1 || raw === true) return "on";
   if (raw === "0" || raw === 0 || raw === false) return "off";
   return "unset";
@@ -153,6 +170,18 @@ export function auditAbrasiveNozzles(
 
     // Only report a filament that actually has a problem. An abrasive filament
     // correctly restricted to hardened nozzles AND correctly flagged is fine.
+    //
+    // NOT a reason to fire here: the exported preset carries an EMPTY
+    // `compatible_printers_condition` (GH #1021), so this list never reaches
+    // the slicer and cannot stop a soft-nozzle printer selecting the preset.
+    // True — and uniformly true of every filament, which is the point. No edit
+    // a user can make would clear such a finding, so raising it per row would
+    // report every correctly-configured abrasive filament forever and bury the
+    // two findings that ARE actionable. The enforceable lever is
+    // `filament_abrasive`, which does ride the settings bag into the export and
+    // into the firmware's `M862.1` check — which is why `flagMismatch` is part
+    // of this condition. The disclosure that assignments are advisory belongs
+    // once, in the page copy, where it also covers the rows suppressed here.
     if (soft.length === 0 && !unassigned && !flagMismatch) continue;
 
     findings.push({

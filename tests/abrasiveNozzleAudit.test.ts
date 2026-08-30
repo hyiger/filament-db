@@ -71,6 +71,21 @@ describe("abrasiveReasons", () => {
       .toEqual(["tagged"]);
   });
 
+  it("collapses Orca's per-extruder array flag, in both directions", () => {
+    // GH #678: a dual-extruder Orca/Bambu round-trip stores ["1","1"]. Read
+    // locally as a whole array it matches neither "1" nor "0", so it landed in
+    // "unset" — a false NEGATIVE on the flag. The ["0","0"] case is the
+    // mirror the finding missed: an explicit off stopped suppressing the weak
+    // name heuristic, so a filament the user had marked not-abrasive was
+    // reported anyway.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: ["1", "1"] } }))
+      .toEqual(["flagged"]);
+    expect(abrasiveReasons({
+      _id: "x", type: "PLA", name: "Metallic Grey",
+      settings: { filament_abrasive: ["0", "0"] },
+    })).toEqual([]);
+  });
+
   it("accepts the flag as a boolean or a number, not just a string", () => {
     expect(abrasiveReasons({ _id: "x", type: "PLA", settings: { filament_abrasive: true } }))
       .toEqual(["flagged"]);
@@ -127,6 +142,11 @@ describe("auditAbrasiveNozzles", () => {
     expect(finding.flagMismatch).toBe(true);
     expect(finding.softNozzles).toEqual([]);
     expect(finding.unassigned).toBe(false);
+  });
+
+  it("does not call an array-flagged abrasive a flag mismatch", () => {
+    const f: AuditFilament = { ...CLEAN, _id: "f11", settings: { filament_abrasive: ["1", "1"] } };
+    expect(auditAbrasiveNozzles([f], NOZZLES)).toEqual([]);
   });
 
   it("reports a missing flag, not only a wrong one", () => {
