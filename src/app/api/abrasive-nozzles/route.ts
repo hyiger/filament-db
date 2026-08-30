@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { auditAbrasiveNozzles, type AuditFilament } from "@/lib/abrasiveNozzleAudit";
+import { liveTemplateIds, excludeTemplates } from "@/lib/templateExportFilter";
 
 /**
  * GET /api/abrasive-nozzles
@@ -35,7 +36,18 @@ export async function GET() {
       if (!f.parentId) parents.set(String(f._id), f);
     }
 
-    const resolved = filaments.map((f) => {
+    // A template is not printable stock (GH #605) and the slicer routes drop
+    // it for that reason, so auditing one alongside its variants reports a
+    // filament nobody can load. Two concrete wrongs: a bad inherited default
+    // renders as a duplicate card next to the variant that actually inherits
+    // it, and a template whose children ALL override that default produces a
+    // finding for a value no exported preset uses. Same filter the export
+    // uses, so the two cannot drift — and applied to what is AUDITED, never to
+    // what is loaded, because the variants resolve through these rows.
+    const templateIds = await liveTemplateIds(Filament);
+    const auditable = excludeTemplates(filaments, templateIds);
+
+    const resolved = auditable.map((f) => {
       const parent = f.parentId ? parents.get(String(f.parentId)) : undefined;
       return {
         doc: (parent ? resolveFilament(f, parent) : f) as unknown as AuditFilament,

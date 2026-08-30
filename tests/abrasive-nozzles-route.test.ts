@@ -121,6 +121,39 @@ describe("GET /api/abrasive-nozzles", () => {
     ]);
   });
 
+  it("does not audit a template alongside the variants that inherit from it", async () => {
+    // A template is not printable stock, so a finding against it is a card for
+    // a filament nobody can load — and a duplicate of the variant's own.
+    const template = await Filament.create({
+      name: "Acme PA-CF", vendor: "Acme", type: "PA-CF",
+      settings: { filament_abrasive: "1" }, compatibleNozzles: [softId],
+    });
+    await Filament.create({
+      name: "Acme PA-CF Red", vendor: "Acme", type: "PA-CF", color: "#ff0000",
+      parentId: template._id,
+    });
+    const { findings } = await scan();
+    expect(findings.map((f: { filamentName: string }) => f.filamentName))
+      .toEqual(["Acme PA-CF Red"]);
+    expect(findings[0].inheritedFrom).toBe("Acme PA-CF");
+  });
+
+  it("still audits a standalone, and a parent whose only variant is trashed", async () => {
+    // Template-ness is derived from LIVE variants, so a trashed-only parent is
+    // a standalone again — and printable, so it must stay in the scan.
+    const parent = await Filament.create({
+      name: "Acme PPA-CF", vendor: "Acme", type: "PPA-CF", color: "#00ff00",
+      settings: { filament_abrasive: "1" }, compatibleNozzles: [softId],
+    });
+    await Filament.create({
+      name: "Acme PPA-CF Blue", vendor: "Acme", type: "PPA-CF", color: "#0000ff",
+      parentId: parent._id, _deletedAt: new Date(),
+    });
+    const { findings } = await scan();
+    expect(findings.map((f: { filamentName: string }) => f.filamentName))
+      .toEqual(["Acme PPA-CF"]);
+  });
+
   it("ignores trashed and purged filaments", async () => {
     await Filament.create({
       name: "Trashed CF", vendor: "Acme", type: "PA-CF", color: "#555555",
