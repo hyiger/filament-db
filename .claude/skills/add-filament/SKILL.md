@@ -233,6 +233,22 @@ state you needed for the confirmation is gone.
 `name`, `vendor`, and `type` are required. For a variant, send nothing else unless this
 colour genuinely differs from the family.
 
+**`optTags` is the exception that catches people out.** If this colour has a property its
+siblings do not — glow, transparent, translucent, silk, sparkle, a colour-changing pigment —
+it needs its own array, and it will not get one by accident: an omitted `optTags` inherits the
+family's, and the OpenPrintTag link in step 6 writes no field values at all. A glow colour
+added to an ordinary line and left with no tags is not marked abrasive, so nothing stops it
+being offered on a soft nozzle. Glow, metal-fill and stone-fill pigments are abrasive; include
+`4` alongside the appearance tag when the pigment is what makes it so.
+
+Send **its own tags plus a copy of the family's effective tags**, for the same reason the
+promotion cleanup does (step 5a): the array replaces rather than merges, so anything you leave
+out is gone for this colour. A glow colour joining a PLA line tagged `[33]` hygroscopic is
+`[24, 4, 33]`, not `[24, 4]` — read the family's effective tags off the template first.
+
+When the colour is unremarkable, omit `optTags` entirely and let it inherit. An array that
+merely repeats the family's pins a copy that stops tracking the template.
+
 Two shapes that are easy to get wrong. **The nozzle range lives under `temperatures`** — a
 top-level `nozzleRangeMin` is silently dropped by the schema, and on a later `PUT` it needs the
 dotted `temperatures.nozzleRangeMin` form. And **if the vendor table gave you a TD, put it in
