@@ -13,10 +13,17 @@ set -euo pipefail
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ $# -ge 2 ]] || die "usage: new-external.sh <url-or-citation> <slug> [scope]"
+# An EMPTY citation passes the count check -- `new-external.sh "$URL" slug`
+# with URL unset is the ordinary way to reach it -- and writes source: "",
+# which the auditor's non-whitespace test reads as content because the quotes
+# are content. The result is a tier-4 file with no provenance that reports
+# Clean, which is the one thing this pair of scripts exists to make impossible.
+[[ -n "${1//[[:space:]]/}" ]] || die "source must not be empty (got: '$1')"
 
 SRC="$1"
 SLUG="$2"
 SCOPE="${3:-chemistry and background only — no processing parameters}"
+[[ -n "${SCOPE//[[:space:]]/}" ]] || die "scope must not be empty"
 
 # Locate the knowledge-base root: the dir containing external/.
 root="$PWD"

@@ -45,7 +45,15 @@ while IFS= read -r f; do
 
   missing=""
   for key in source retrieved trust scope; do
-    grep -Eq "^${key}:[[:space:]]*[^[:space:]]" <<<"$fm" || missing="${missing}${missing:+ }${key}"
+    # A QUOTED-EMPTY value has to count as missing. The generator emits these
+    # fields as quoted scalars, so `source: ""` satisfies a bare
+    # non-whitespace test -- the quotes are the content -- and a file with no
+    # provenance at all passes the audit. Strip surrounding quotes before
+    # deciding, and require something left.
+    val="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm" | head -1)"
+    val="${val%\"}"; val="${val#\"}"
+    val="${val%\'}"; val="${val#\'}"
+    [[ -n "${val//[[:space:]]/}" ]] || missing="${missing}${missing:+ }${key}"
   done
   if [[ -n "$missing" ]]; then
     printf '%s\n    missing/empty: %s\n' "$rel" "$missing"
