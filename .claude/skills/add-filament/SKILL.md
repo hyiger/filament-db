@@ -60,8 +60,12 @@ If the user scanned a tag, the decoded payload gives you most of this already.
 ### 2. Find the family
 
 ```bash
-curl -s "$BASE/api/filaments" | jq -r '.[] | "\(.name)\t\(.vendor)\t\(.type)\t\(.parentId // "root")\t\(.hasVariants)"'
+curl -s "$BASE/api/filaments" | jq -r '.[] | "\(._id)\t\(.name)\t\(.vendor)\t\(.type)\t\(.parentId // "root")\t\(.hasVariants)"'
 ```
+
+Keep the `_id` of whatever you match — it becomes `parentId` on the create, and `$TEMPLATE_ID`
+if the family needs its weights filling in. `parentId` is `root` for a template and a
+standalone alike, so it cannot identify the record for you.
 
 Three cases, and they lead to different work:
 
@@ -158,7 +162,7 @@ if anything beyond colour is populated, prefer link plus your own values over im
 Capture the new `_id` — the link, the spool and the verification all need it.
 
 ```bash
-ID=$(curl -s -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -d '{
+RESP=$(curl -s -w '\n%{http_code}' -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -d '{
   "name": "Prusament PETG Prusa Orange",
   "vendor": "Prusament",
   "type": "PETG",
@@ -167,8 +171,16 @@ ID=$(curl -s -X POST "$BASE/api/filaments" -H 'Content-Type: application/json' -
   "transmissionDistance": 6.2,
   "temperatures": { "nozzleRangeMin": 240, "nozzleRangeMax": 260 },
   "parentId": "<template id, omit for a standalone>"
-}' | jq -r '.filament._id // ._id')
+}')
+CODE=$(printf '%s' "$RESP" | tail -n1); BODY=$(printf '%s' "$RESP" | sed '$d')
 ```
+
+Check `$CODE` before going further. **201** — take the id with
+`ID=$(printf '%s' "$BODY" | jq -r '.filament._id // ._id')`. **409** — `$BODY` carries either
+the promotion gate (confirm, then retry with `promoteParent: true`) or a name collision.
+Anything else is a validation error naming its field. Extracting the id first instead turns a
+409 into the string `null` and every later call targets `/null`, silently, while the parent
+state you needed for the confirmation is gone.
 
 `name`, `vendor`, and `type` are required. For a variant, send nothing else unless this
 colour genuinely differs from the family.
@@ -249,8 +261,10 @@ curl -s -X PUT "$BASE/api/filaments/$TEMPLATE_ID" -H 'Content-Type: application/
 ```
 
 The net is usually on the packaging or the listing; the tare almost never is, so expect to ask
-for a weighed empty spool. If only the net is available, write it anyway — the bar works and
-only the grams figure stays approximate.
+for a weighed empty spool — and do ask, because **net alone is not enough**. `computeRemaining`
+returns null the moment `spoolWeight` is null, before it reaches the percentage, so a roll with
+a net but no tare displays nothing at all. Store a known net anyway so it is not lost, but say
+plainly that the display stays blank until the tare arrives.
 
 ```bash
 curl -s -X POST "$BASE/api/filaments/$ID/spools?shape=spool" -H 'Content-Type: application/json' \

@@ -11,7 +11,7 @@ else is wrong.
 
 | Call | Purpose |
 |---|---|
-| `GET /api/filaments` | List. Carries `hasVariants`, `parentId`, `hasCalibrations`. Temperatures are already resolved. |
+| `GET /api/filaments` | List. Carries `hasVariants`, `parentId`, `hasCalibrations`. Temperatures are resolved but **projected to `nozzle` and `bed` only** — range, first-layer and standby are absent, so compare ranges via the detail read, not here. |
 | `GET /api/filaments/{id}` | **Resolved** record — what the app and slicer see. Use this to verify. |
 | `GET /api/filaments/{id}?raw=true` | **Stored** record. Inherited fields read `null`. Use to check what a record actually owns; carries `_parent` and `_variants`. |
 | `GET /api/filaments/colors` | Distinct `{name, hex}` pairs already in use — good for matching an existing colour convention. |
