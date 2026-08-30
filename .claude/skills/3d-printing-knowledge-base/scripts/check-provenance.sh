@@ -62,6 +62,28 @@ yaml_scalar() {
   printf '%s' "$v"
 }
 
+# What follows the closing quote of a quoted scalar. Exit 1 when the quote is
+# never closed.
+#
+# The decoder stops AT the closing quote and discards whatever comes after, so
+# `source: "https://example.com" [` yielded a clean URL and audited fine — and
+# the unmatched-line guard cannot see it either, because the line does start
+# with a recognized key. Under a canonical-form posture the tail has to be
+# checked, not dropped.
+yaml_quoted_tail() {
+  local v=$1 q=${1:0:1} i=1 c prev=""
+  while (( i < ${#v} )); do
+    c=${v:i:1}
+    # A backslash escape only applies inside DOUBLE quotes; in a single-quoted
+    # YAML scalar a backslash is an ordinary character.
+    if [[ "$c" == "$q" && ! ( "$q" == '"' && "$prev" == "\\" ) ]]; then
+      printf '%s' "${v:i+1}"; return 0
+    fi
+    prev="$c"; i=$((i+1))
+  done
+  return 1
+}
+
 problems=0
 checked=0
 
@@ -127,6 +149,15 @@ while IFS= read -r f; do
     raw="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm")"
     case "$raw" in
       [\|\>]*) add_note "${key}: block scalars are not supported here"; continue ;;
+      \"*|\'*)
+        if tail="$(yaml_quoted_tail "$raw")"; then
+          tail="${tail#"${tail%%[![:space:]]*}"}"
+          if [[ -n "$tail" && "$tail" != '#'* ]]; then
+            add_note "${key}: unexpected text after the quoted value: ${tail}"; continue
+          fi
+        else
+          add_note "${key}: quoted value is never closed"; continue
+        fi ;;
     esac
     val="$(yaml_scalar "$raw")"
     if [[ -z "${val//[[:space:]]/}" ]]; then add_note "${key}: empty"; continue; fi
