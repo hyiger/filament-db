@@ -13,6 +13,11 @@ set -euo pipefail
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 [[ $# -ge 2 ]] || die "usage: new-external.sh <url-or-citation> <slug> [scope]"
+# An UNQUOTED multi-word scope silently became its first word, and an unquoted
+# citation truncated to one word whenever arg 2 happened to be a legal slug --
+# both at exit 0. Refuse rather than absorb, so the source case is caught too.
+[[ $# -le 3 ]] || die "too many arguments — quote the scope:
+  new-external.sh $1 $2 \"${*:3}\""
 # An EMPTY citation passes the count check -- `new-external.sh "$URL" slug`
 # with URL unset is the ordinary way to reach it -- and writes source: "",
 # which the auditor's non-whitespace test reads as content because the quotes
@@ -51,6 +56,22 @@ esac
 # helper reports success while writing a file whose provenance is wrong or
 # gone -- and check-provenance.sh matches these lines with regexes, so it
 # would then certify the result as clean.
+# The auditor rejects control characters and invalid UTF-8 in front matter, so
+# accepting them here would make the generator produce a file its own auditor
+# refuses. CR/LF were already refused above; this is the rest of the class.
+assert_printable() {
+  printf '%s' "$1" | perl -e 'use Encode(); binmode(STDIN,":raw");
+    my $s = do { local $/; <STDIN> }; $s = "" unless defined $s;
+    my $d = eval { Encode::decode("UTF-8",$s,Encode::FB_CROAK()) }; exit 1 unless defined $d;
+    for my $c (split //,$d) { my $o=ord $c;
+      next if $o==0x09; next if $o>=0x20 && $o<=0x7E;
+      next if $o==0x85; next if $o>=0xA0 && $o<=0xD7FF;
+      next if $o>=0xE000 && $o<=0xFFFD; next if $o>=0x10000 && $o<=0x10FFFF; exit 1 }
+    exit 0' || die "$2 contains a control character or invalid UTF-8"
+}
+assert_printable "$SRC" "source"
+assert_printable "$SCOPE" "scope"
+
 yaml_quote() {
   local v=$1
   v=${v//\\/\\\\}   # backslashes first, or the next substitution doubles them
@@ -77,11 +98,11 @@ scope:     $(yaml_quote "$SCOPE")
 
 # ${SLUG}
 
-<!--
-  Body goes here.
+_Write the body below this line — outside the comment. Leave everything above as generated._
 
+<!--
   This file is TIER 4 (background only). Nothing in it is authoritative.
-  Do NOT record nozzle, bed, chamber, or drying temperatures here, or any
+  Do NOT record temperatures here (nozzle, bed, chamber, drying), or any
   other value destined for a slicer — those belong in authored/ or the
   Filament DB record, and only after verification.
 

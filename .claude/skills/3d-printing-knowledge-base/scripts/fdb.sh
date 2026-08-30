@@ -10,7 +10,7 @@
 #   ./fdb.sh get <path>            Raw GET, e.g. get /api/filaments/abc123
 #   ./fdb.sh list                  All filaments, projected to a small summary
 #   ./fdb.sh find <substring>      Filaments whose name matches (case-insensitive)
-#   ./fdb.sh detail <substring>    Full record for the single best name match
+#   ./fdb.sh detail <name>         Full record; exact name wins, else a unique substring
 #   ./fdb.sh schema                Field names present on a sample record
 #
 # Env:
@@ -20,6 +20,9 @@
 set -euo pipefail
 
 BASE="${FILAMENTDB_URL:-http://localhost:3456}"
+# A trailing slash yields //api/filaments and a 308, whose error message then
+# printed a redirect target byte-identical to the path it claimed to request.
+while [ "${BASE%/}" != "$BASE" ]; do BASE="${BASE%/}"; done
 
 TMPFILE=""
 cleanup() { [[ -n "${TMPFILE:-}" ]] && rm -f "$TMPFILE"; TMPFILE=""; }
@@ -43,12 +46,15 @@ req() {
   TMPFILE="$tmp"
 
   if [[ -n "${FILAMENTDB_API_KEY:-}" ]]; then
-    http="$(curl -sS --max-time 30 -o "$tmp" -w '%{http_code}' \
+    meta="$(curl -sS --max-time 30 -o "$tmp" -w '%{http_code} %{content_type}' \
              -H "Authorization: Bearer ${FILAMENTDB_API_KEY}" "$url" 2>/dev/null)" || rc=$?
   else
-    http="$(curl -sS --max-time 30 -o "$tmp" -w '%{http_code}' "$url" 2>/dev/null)" || rc=$?
+    meta="$(curl -sS --max-time 30 -o "$tmp" -w '%{http_code} %{content_type}' "$url" 2>/dev/null)" || rc=$?
   fi
   rc="${rc:-0}"
+  http="${meta%% *}"
+  ctype="${meta#* }"
+  [[ "$ctype" == "$meta" ]] && ctype=""
 
   if [[ "$rc" -ne 0 ]]; then
     case "$rc" in
@@ -78,11 +84,17 @@ req() {
   Check what is sitting between this shell and ${BASE}." ;;
     404) die "HTTP 404 from ${path} — endpoint does not exist on this version. Do NOT guess another path; ask the user." ;;
     000) die "no HTTP response from ${url}. The server closed the connection." ;;
+    3??) die "HTTP ${http} redirect from ${path} (Location: $(head -c 200 "$tmp")).
+  A base URL with a trailing slash produces this. Check FILAMENTDB_URL.
+  Redirects are deliberately NOT followed: curl rewrites POST to GET on 301/302." ;;
     *)   die "HTTP ${http} from ${path}. Body: $(head -c 400 "$tmp")" ;;
   esac
 
   jq -e . "$tmp" >/dev/null 2>&1 \
-    || die "response from ${path} was not valid JSON. First 400 bytes: $(head -c 400 "$tmp")"
+    || die "response from ${path} was not valid JSON (Content-Type: ${ctype:-unknown}).
+  Some routes are text by design — the slicer exports return .ini/.json files.
+  If you meant one of those, fetch it yourself; this wrapper only speaks JSON.
+  First 400 bytes: $(head -c 400 "$tmp")"
 
   cat "$tmp"
   cleanup
@@ -134,7 +146,9 @@ case "$cmd" in
       material: .type,
       brand:    .vendor,
       isParent: (.hasVariants // false),
-      spools:   ((.spools // []) | length)
+      spools:   (if ((.spools // []) | length) > 0
+                 then ((.spools // []) | map(select(.retired != true)) | length)
+                 else (if .totalWeight != null then 1 else 0 end) end)
     }] | sort_by(.name)'
     ;;
 
@@ -144,13 +158,29 @@ case "$cmd" in
       | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))
       | { id: (._id // .id), name,
           material: .type, brand: .vendor,
-          spools: ((.spools // []) | length) }]
+          spools: (if ((.spools // []) | length) > 0
+                   then ((.spools // []) | map(select(.retired != true)) | length)
+                   else (if .totalWeight != null then 1 else 0 end) end) }]
       | if length == 0 then error("no filament name contains \"" + $q + "\"") else . end'
     ;;
 
   detail)
     [[ $# -ge 1 ]] || die "usage: fdb.sh detail <substring>"
-    ids="$(req /api/filaments | as_array | jq -r --arg q "$1" '[.[]
+    # A TEMPLATE's name is a prefix of every one of its variants, so no
+    # narrower substring exists and 11 of 12 templates in a real library were
+    # unreachable by this command. An exact name match short-circuits the
+    # ambiguity refusal; the substring path below is unchanged for everything
+    # else. Trim with a regex, not ltrimstr/rtrimstr (single occurrence only).
+    all_json="$(req /api/filaments | as_array)"
+    exact="$(printf '%s' "$all_json" | jq -r --arg q "$1" '[.[]
+      | select((.name // "") | ascii_downcase
+               == ($q | ascii_downcase | sub("^\\s+";"") | sub("\\s+$";"")))
+      | (._id // .id)] | if length == 1 then .[0] else empty end')"
+    if [[ -n "$exact" ]]; then
+      req "/api/filaments/${exact}"
+      exit 0
+    fi
+    ids="$(printf '%s' "$all_json" | jq -r --arg q "$1" '[.[]
       | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))
       | (._id // .id)] | .[]')"
     count="$(printf '%s\n' "$ids" | grep -c . || true)"
@@ -161,7 +191,9 @@ case "$cmd" in
     ;;
 
   ""|help|-h|--help)
-    sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'
+    # Print the header block while it is still comments, rather than a fixed
+    # line range that re-drifts every time the header changes.
+    sed -n '2,${/^#/!q;p;}' "$0" | sed 's/^# \{0,1\}//'
     ;;
 
   *)
