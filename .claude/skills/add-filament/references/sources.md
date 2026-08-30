@@ -123,7 +123,20 @@ post-create move:
 The link is the one that cannot be hand-moved. It is three fields — `openprinttag_slug`,
 `openprinttag_uuid` and the server-owned `openprinttagSnapshot` — and a generic `PUT` strips
 the snapshot, leaving a linkage that looks present and classifies wrongly on the next check.
-Let the routes rebuild it: delete on the template, link on the variant. Before promoting anything, look at what else the standalone carries that describes
+Let the routes rebuild it, and mind the order, because **two different slugs are in play**:
+the one on the template belongs to the ORIGINAL colour, while the one you looked up in step 4
+belongs to the NEW colour you are adding. Deleting first destroys the value you need.
+
+```bash
+# 1. save the ORIGINAL colour's slug off the template before touching anything
+ORIG_SLUG=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
+  | jq -r '.filament.settings.openprinttag_slug // .settings.openprinttag_slug')
+# 2. now the template can be unlinked
+curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
+# 3. relink the GENERATED ORIGINAL variant with its own slug, not the new colour's
+curl -s -X POST "$BASE/api/filaments/$ORIGINAL_VARIANT_ID/openprinttag/link" \
+  -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}"
+``` Before promoting anything, look at what else the standalone carries that describes
 its colour rather than its product line — the list above is what has been hit so far, not a
 guarantee it is complete.
 
