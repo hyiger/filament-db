@@ -101,6 +101,14 @@ export type PrinterScope =
  * shadow it. Names then match verbatim, then trimmed, then case-folded, and
  * only a LIVE printer is addressable.
  *
+ * The VERBATIM rung compares the caller's parameter UNTRIMMED, and that is the
+ * whole point of it: hybrid sync writes through the raw driver and bypasses the
+ * `trim` setter, so live printers named `"X"` and `"X "` can both exist, and
+ * this is the only rung that can tell them apart. Trimming before it — the
+ * obvious tidy-up — silently redirects `?printer=X%20` to `X`, and the bundle
+ * is then filtered against the wrong printer's nozzles. Only the emptiness
+ * check, the ObjectId test and the looser rungs may see the trimmed value.
+ *
  * An unknown printer returns `not-found` rather than an empty scope. Treating
  * a typo as "this printer has no nozzles" would filter the bundle down to
  * nothing, which is the silent-emptiness failure this design exists to avoid;
@@ -111,7 +119,8 @@ export async function resolvePrinterScope(
   PrinterModel: any,
   rawParam: string | null,
 ): Promise<PrinterScope> {
-  const raw = (rawParam ?? "").trim();
+  const original = rawParam ?? "";
+  const raw = original.trim();
   if (!raw) return { kind: "none" };
 
   let printer: { _id: unknown; name?: string; installedNozzles?: NozzleRef[] } | null = null;
@@ -123,15 +132,15 @@ export async function resolvePrinterScope(
   }
 
   if (!printer) {
-    // Verbatim, then trimmed, then case-folded. The name index is
-    // case-SENSITIVE and hybrid sync writes through the raw driver bypassing
-    // the trim setter, so "X" and "X " can both exist — go strictest first
-    // rather than letting document order decide.
+    // Verbatim (UNTRIMMED — see the docblock), then trimmed, then case-folded.
+    // The name index is case-SENSITIVE and hybrid sync writes through the raw
+    // driver bypassing the trim setter, so "X" and "X " can both exist — go
+    // strictest first rather than letting document order decide.
     const live = await PrinterModel.find({ _deletedAt: null })
       .select("name installedNozzles")
       .lean();
     printer =
-      live.find((p: { name?: string }) => p.name === raw) ??
+      live.find((p: { name?: string }) => p.name === original) ??
       live.find((p: { name?: string }) => (p.name ?? "").trim() === raw) ??
       live.find(
         (p: { name?: string }) => (p.name ?? "").trim().toLowerCase() === raw.toLowerCase(),

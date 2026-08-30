@@ -93,6 +93,26 @@ describe("resolvePrinterScope", () => {
     expect(s.kind === "scoped" && s.printerId).toBe(OID_B);
   });
 
+  it("distinguishes an untrimmed twin — the verbatim rung, untrimmed", async () => {
+    // Hybrid sync bypasses the trim setter, so "X" and "X " can both be live.
+    // Trimming the parameter before this rung would silently answer with "X"
+    // and filter the whole bundle against the wrong printer's nozzles.
+    const twins = [
+      { _id: OID_A, name: "Core One", installedNozzles: ["soft"] },
+      { _id: OID_B, name: "Core One ", installedNozzles: ["hard"] },
+    ];
+    const spaced = await resolvePrinterScope(printerModel(twins), "Core One ");
+    expect(spaced.kind === "scoped" && spaced.printerId).toBe(OID_B);
+    const bare = await resolvePrinterScope(printerModel(twins), "Core One");
+    expect(bare.kind === "scoped" && bare.printerId).toBe(OID_A);
+  });
+
+  it("still tolerates stray whitespace when there is no untrimmed twin", async () => {
+    // The forgiving rung has to survive the strict one being added above.
+    const s = await resolvePrinterScope(printerModel(rows), "  Prusa Core One INDX  ");
+    expect(s.kind === "scoped" && s.printerId).toBe(OID_B);
+  });
+
   it("prefers an exact name over a case-folded one", async () => {
     const dupes = [
       { _id: OID_A, name: "xl", installedNozzles: ["a"] },
