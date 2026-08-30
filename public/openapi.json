@@ -7028,7 +7028,7 @@
                           },
                           "softNozzles": {
                             "type": "array",
-                            "description": "Assigned nozzles that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown — a dangling ref is not evidence of hardness.",
+                            "description": "Nozzles this filament is RECORDED as compatible with that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown — a dangling ref is not evidence of hardness.",
                             "items": {
                               "type": "object",
                               "properties": {
@@ -7043,7 +7043,7 @@
                           },
                           "unassigned": {
                             "type": "boolean",
-                            "description": "No compatible nozzles recorded, so nothing restricts where it may be used."
+                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a restriction either: the slicer export derives no compatible_printers_condition from it (GH #1021), so it is the app's record of intent rather than an enforced limit. An empty list simply means no soft-nozzle assignment can be detected for this filament."
                           },
                           "flagMismatch": {
                             "type": "boolean",

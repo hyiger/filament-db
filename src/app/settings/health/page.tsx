@@ -153,9 +153,27 @@ export default function DataHealthPage() {
     };
   }, []);
 
+  // Refetch helper for the sync watcher, mirroring `load` above. A sync copies
+  // filaments and nozzles across, so it can create a mismatch this page is
+  // already showing as clean — or resolve one it is still showing. Refreshing
+  // only the conflict scan would leave the abrasive list a pre-sync snapshot
+  // while the all-clear banner spoke for both.
+  const loadAbrasive = useCallback(async () => {
+    try {
+      const res = await fetch("/api/abrasive-nozzles");
+      if (!res.ok) throw new Error();
+      const body = (await res.json()) as { findings: AbrasiveFinding[] };
+      setAbrasive(body.findings);
+      setAbrasiveError(false);
+    } catch {
+      setAbrasiveError(true);
+    } finally {
+      setAbrasiveLoading(false);
+    }
+  }, []);
+
   // The abrasive/nozzle audit. Same IIFE shape as the scan above for the
-  // set-state-in-effect rule. Advisory and read-only, so a failure degrades to
-  // "nothing to report" rather than an error banner over the conflict list.
+  // set-state-in-effect rule.
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -222,13 +240,16 @@ export default function DataHealthPage() {
       if (cancelled) return;
       sawLiveStatus = true;
       setSyncConflicts((st as StatusSample).nameConflicts ?? []);
-      if (watcher.observe(st)) void load();
+      if (watcher.observe(st)) {
+        void load();
+        void loadAbrasive();
+      }
     });
     return () => {
       cancelled = true;
       unsub?.();
     };
-  }, [load]);
+  }, [load, loadAbrasive]);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
