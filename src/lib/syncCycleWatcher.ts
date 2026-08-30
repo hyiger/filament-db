@@ -31,6 +31,50 @@ export interface SyncCycleWatcher {
   observe(sample: SyncCycleSample): boolean;
 }
 
+/**
+ * Did a cycle end while the page's mount scans were already in flight?
+ *
+ * `observe` only sees events delivered AFTER the subscription is installed,
+ * and the scans are issued by an earlier effect. A cycle finishing in between
+ * is seen by neither: the snapshot then seeds that completed stamp as the
+ * baseline, so no later event reports an ending, while the scan itself may
+ * have read the pre-copy database. The result is a stale list — and, now that
+ * the abrasive audit shares the all-clear banner, a stale assertion of health.
+ *
+ * Comparing the seeded stamp against the moment the scans were issued closes
+ * that window without a refetch on every mount. Everything here fails toward
+ * refetching, because one extra read at mount is bounded and cheap while a
+ * stale all-clear is neither:
+ *
+ *   - A TERMINAL FAILURE (`error`, `partial`) is a cycle ending that carries no
+ *     stamp advance — `sync-service.ts` publishes it with the previous
+ *     `lastSyncAt` — and per-collection error isolation means earlier
+ *     collections may already have copied. There is nothing to compare, and no
+ *     later event will report it, so assume the worst. `offline` is not one of
+ *     these: no cycle ran.
+ *   - EQUAL milliseconds cannot establish ordering, so a tie counts as
+ *     possibly-after. `Date.now()` and a parsed ISO stamp are the same clock at
+ *     the same resolution; `>` would silently prefer the stale answer.
+ *   - An UNPARSEABLE stamp is unknowable, so refetch.
+ *   - A NULL stamp is none of the above — it means no cycle has ever completed,
+ *     so there is nothing to have missed.
+ *
+ * `syncing` needs no special case: the in-flight cycle's ending will reach
+ * `observe`, and a PREVIOUS cycle that ended mid-window still shows up in the
+ * stamp comparison.
+ */
+export function seededCycleMayPostdate(
+  sample: SyncCycleSample,
+  scansIssuedAt: number,
+): boolean {
+  if (sample.state === "error" || sample.state === "partial") return true;
+  const stamp = sample.lastSyncAt ?? null;
+  if (stamp === null) return false;
+  const at = Date.parse(stamp);
+  if (Number.isNaN(at)) return true;
+  return at >= scansIssuedAt;
+}
+
 export function createSyncCycleWatcher(): SyncCycleWatcher {
   // A SEPARATE flag, not `lastSeenSync === null`: null is a legitimate stamp
   // — the app mounts mid-initial-sync, or after connection failures, with

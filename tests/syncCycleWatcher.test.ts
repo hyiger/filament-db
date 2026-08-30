@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
+import { createSyncCycleWatcher, seededCycleMayPostdate } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1164: the Data health page refetches its own local scan whenever a sync
@@ -74,5 +74,58 @@ describe("createSyncCycleWatcher", () => {
     w.seed({});
     expect(w.observe({})).toBe(false);
     expect(w.observe(idle("T1"))).toBe(true);
+  });
+});
+
+describe("seededCycleMayPostdate", () => {
+  const T = Date.parse("2026-08-30T04:00:00.000Z");
+
+  it("is false when no cycle has ever completed", () => {
+    // A null stamp is not a missed ending — there is nothing to have missed.
+    expect(seededCycleMayPostdate({ lastSyncAt: null }, T)).toBe(false);
+    expect(seededCycleMayPostdate({}, T)).toBe(false);
+  });
+
+  it("is false for a cycle that ended before the scans went out", () => {
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T03:59:59.000Z" }, T)).toBe(false);
+  });
+
+  it("treats an equal-millisecond stamp as possibly after the scan", () => {
+    // Same clock, same resolution: equality cannot establish which came first,
+    // and preferring the stale answer is the one outcome that costs anything.
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.000Z" }, T)).toBe(true);
+  });
+
+  it("refetches after a terminal failure, which advances no stamp", () => {
+    // A failed or partial cycle publishes the PREVIOUS lastSyncAt, and
+    // per-collection isolation means earlier collections may already have
+    // copied — so there is nothing to compare and no later event to wait for.
+    const old = { lastSyncAt: "2026-08-30T03:00:00.000Z" };
+    expect(seededCycleMayPostdate({ ...old, state: "error" }, T)).toBe(true);
+    expect(seededCycleMayPostdate({ ...old, state: "partial" }, T)).toBe(true);
+  });
+
+  it("does not refetch merely because the app is offline or syncing", () => {
+    // offline: no cycle ran. syncing: its ending will reach observe.
+    const old = { lastSyncAt: "2026-08-30T03:00:00.000Z" };
+    expect(seededCycleMayPostdate({ ...old, state: "offline" }, T)).toBe(false);
+    expect(seededCycleMayPostdate({ ...old, state: "syncing" }, T)).toBe(false);
+  });
+
+  it("still catches a previous cycle that ended mid-window while a new one runs", () => {
+    expect(seededCycleMayPostdate(
+      { lastSyncAt: "2026-08-30T04:00:00.001Z", state: "syncing" }, T,
+    )).toBe(true);
+  });
+
+  it("is true for a cycle that ended while the scans were in flight", () => {
+    // The window no listener covers: too late for the scan, too early for
+    // `observe`, and seeded as the baseline so no later event reports it.
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.001Z" }, T)).toBe(true);
+  });
+
+  it("fails toward refetching on an unparseable stamp", () => {
+    // One extra read at mount is bounded; a stale all-clear is not.
+    expect(seededCycleMayPostdate({ lastSyncAt: "not a date" }, T)).toBe(true);
   });
 });

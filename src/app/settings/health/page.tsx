@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { createSyncCycleWatcher } from "@/lib/syncCycleWatcher";
+import { createSyncCycleWatcher, seededCycleMayPostdate } from "@/lib/syncCycleWatcher";
 
 /**
  * GH #1149 — Data health: the trim-collision resolution surface.
@@ -43,6 +43,24 @@ interface Conflict {
   dependents: Dependents;
 }
 
+/**
+ * A filament whose abrasiveness and nozzle assignments disagree — either it
+ * can reach a nozzle that fibre fill would destroy, or its exported
+ * `filament_abrasive` flag tells the slicer and the printer firmware it is
+ * safe when the material says otherwise.
+ */
+interface AbrasiveFinding {
+  filamentId: string;
+  filamentName: string;
+  filamentType: string | null;
+  reasons: Array<"flagged" | "tagged" | "fibre" | "filled">;
+  softNozzles: { id: string; name: string }[];
+  unassigned: boolean;
+  flagMismatch: boolean;
+  /** Template name when the nozzle set is inherited — where the fix belongs. */
+  inheritedFrom: string | null;
+}
+
 /** The id-addressed routes the resolutions act through. */
 const ROUTE_BY_COLLECTION: Record<Conflict["collection"], string> = {
   filaments: "/api/filaments",
@@ -74,6 +92,38 @@ export default function DataHealthPage() {
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [busy, setBusy] = useState(false);
+  // Scanned independently of the trim conflicts: a slower or failing abrasive
+  // scan must not withhold the conflict list, and vice versa.
+  const [abrasive, setAbrasive] = useState<AbrasiveFinding[]>([]);
+  const [abrasiveLoading, setAbrasiveLoading] = useState(true);
+  // Tracked separately from `error`, whose message names the name-conflict
+  // scan. A shared flag would tell the user the wrong check broke.
+  const [abrasiveError, setAbrasiveError] = useState(false);
+  // The abrasive scan needs its OWN ticket, for the same reason `scanSeq`
+  // exists below and shared with BOTH of its request paths. Mounting while a
+  // sync finishes fires the mount scan and the completion refetch
+  // concurrently with no ordering between them, so the mount request can read
+  // the pre-sync database, resolve last, and reinstate a stale all-clear over
+  // the post-sync findings. A separate counter from `scanSeq` because the two
+  // endpoints are independent — one scan superseding the other's write would
+  // be a different bug.
+  const abrasiveSeq = useRef(0);
+  // When the mount scans were issued. The sync subscription is installed by a
+  // LATER effect, so a cycle finishing in between is delivered to no listener
+  // and then seeded as the baseline — invisible to `observe`, while the scans
+  // themselves may have read the pre-copy database.
+  //
+  // Claimed by whichever mount scan runs first, via `markScansIssued` below.
+  // It was set in the abrasive effect, which runs SECOND, so the recorded time
+  // was already after the conflict scan's request had gone out — a cycle
+  // completing in between then failed the comparison and that list kept a
+  // pre-copy result. First-writer-wins rather than pinning it to one effect,
+  // so reordering or adding a third scan cannot reintroduce that.
+  const scansIssuedAt = useRef(0);
+
+  const markScansIssued = useCallback(() => {
+    if (scansIssuedAt.current === 0) scansIssuedAt.current = Date.now();
+  }, []);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
   // ticket may write. The mount scan and a completion-triggered
@@ -107,6 +157,7 @@ export default function DataHealthPage() {
   // pattern OptResyncDialog established; the CI lint proved the difference).
   useEffect(() => {
     let cancelled = false;
+    markScansIssued();
     const seq = ++scanSeq.current;
     const current = () => !cancelled && seq === scanSeq.current;
     (async () => {
@@ -126,7 +177,57 @@ export default function DataHealthPage() {
     return () => {
       cancelled = true;
     };
+  }, [markScansIssued]);
+
+  // Refetch helper for the sync watcher, mirroring `load` above. A sync copies
+  // filaments and nozzles across, so it can create a mismatch this page is
+  // already showing as clean — or resolve one it is still showing. Refreshing
+  // only the conflict scan would leave the abrasive list a pre-sync snapshot
+  // while the all-clear banner spoke for both.
+  const loadAbrasive = useCallback(async () => {
+    const seq = ++abrasiveSeq.current;
+    try {
+      const res = await fetch("/api/abrasive-nozzles");
+      if (!res.ok) throw new Error();
+      const body = (await res.json()) as { findings: AbrasiveFinding[] };
+      if (seq !== abrasiveSeq.current) return;
+      setAbrasive(body.findings);
+      setAbrasiveError(false);
+    } catch {
+      if (seq === abrasiveSeq.current) setAbrasiveError(true);
+    } finally {
+      if (seq === abrasiveSeq.current) setAbrasiveLoading(false);
+    }
   }, []);
+
+  // The abrasive/nozzle audit. Same IIFE shape as the scan above for the
+  // set-state-in-effect rule.
+  useEffect(() => {
+    let cancelled = false;
+    markScansIssued();
+    const seq = ++abrasiveSeq.current;
+    const current = () => !cancelled && seq === abrasiveSeq.current;
+    (async () => {
+      try {
+        const res = await fetch("/api/abrasive-nozzles");
+        if (!res.ok) throw new Error();
+        const body = (await res.json()) as { findings: AbrasiveFinding[] };
+        if (current()) setAbrasive(body.findings);
+      } catch {
+        // "Advisory" describes the FINDINGS, not the scan. Swallowing the
+        // failure left the list empty and the loading flag cleared, which the
+        // all-clear below reads as "checked, nothing found" — a green
+        // "your data looks healthy" for a check that never ran. This page has
+        // made that mistake once already (GH #1164, the remote conflicts).
+        if (current()) setAbrasiveError(true);
+      } finally {
+        if (current()) setAbrasiveLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [markScansIssued]);
 
   // GH #1164, desktop only: the sync service's view of BOTH databases.
   // Same IIFE shape as above for the set-state-in-effect rule.
@@ -162,6 +263,13 @@ export default function DataHealthPage() {
         if (cancelled || sawLiveStatus) return;
         setSyncConflicts((st as StatusSample).nameConflicts ?? []);
         watcher.seed(st);
+        // Nothing else can catch a cycle that ended between the scans going
+        // out and this subscription existing: it reaches no listener, and
+        // seeding its stamp means no later event reports an ending either.
+        if (seededCycleMayPostdate(st as StatusSample, scansIssuedAt.current)) {
+          void load();
+          void loadAbrasive();
+        }
       } catch {
         /* status unavailable — the local scan above still stands */
       }
@@ -170,13 +278,16 @@ export default function DataHealthPage() {
       if (cancelled) return;
       sawLiveStatus = true;
       setSyncConflicts((st as StatusSample).nameConflicts ?? []);
-      if (watcher.observe(st)) void load();
+      if (watcher.observe(st)) {
+        void load();
+        void loadAbrasive();
+      }
     });
     return () => {
       cancelled = true;
       unsub?.();
     };
-  }, [load]);
+  }, [load, loadAbrasive]);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
@@ -203,14 +314,19 @@ export default function DataHealthPage() {
           return;
         }
         toast(t("health.deleted"), "success");
+        // Both lists can hold the SAME filament, so a delete or rename here
+        // invalidates the abrasive card too: deleting leaves a link to a
+        // now-trashed row, and renaming can strand the old name or a
+        // name-derived abrasive reason that no longer applies.
         await load();
+        void loadAbrasive();
       } catch {
         toast(t("health.actionFailed"), "error");
       } finally {
         setBusy(false);
       }
     },
-    [confirm, t, toast, load],
+    [confirm, t, toast, load, loadAbrasive],
   );
 
   const handleRename = useCallback(
@@ -231,14 +347,19 @@ export default function DataHealthPage() {
         }
         toast(t("health.renamed"), "success");
         setRenaming(null);
+        // Both lists can hold the SAME filament, so a delete or rename here
+        // invalidates the abrasive card too: deleting leaves a link to a
+        // now-trashed row, and renaming can strand the old name or a
+        // name-derived abrasive reason that no longer applies.
         await load();
+        void loadAbrasive();
       } catch {
         toast(t("health.actionFailed"), "error");
       } finally {
         setBusy(false);
       }
     },
-    [renameValue, t, toast, load],
+    [renameValue, t, toast, load, loadAbrasive],
   );
 
   // GH #1164: derived ONCE — the all-clear banner and the remote section
@@ -260,14 +381,28 @@ export default function DataHealthPage() {
       {!loading && error && (
         <p className="text-sm text-red-500">{t("health.error")}</p>
       )}
+      {!abrasiveLoading && abrasiveError && (
+        <p className="text-sm text-red-500">{t("health.abrasive.error")}</p>
+      )}
       {/* GH #1164: the all-clear must account for BOTH databases.
           With a clean local scan and a remote-only conflict — the primary
           case this PR adds — the page otherwise rendered "your data is
           healthy" directly above an amber conflict list. */}
-      {!loading && !error && conflicts.length === 0 && remoteConflicts.length === 0 && (
+      {!loading && !error && !abrasiveLoading && !abrasiveError && conflicts.length === 0 &&
+        remoteConflicts.length === 0 && abrasive.length === 0 && (
         <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
           <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>
         </div>
+      )}
+
+      {/* Headed only when it has content: the page carries two independent
+          checks now, and an empty "Name conflicts" heading above the abrasive
+          list reads as a section that failed to load. */}
+      {conflicts.length > 0 && (
+        <>
+          <h2 className="text-lg font-semibold mb-1">{t("health.conflicts.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.conflicts.subtitle")}</p>
+        </>
       )}
 
       <div className="space-y-4">
@@ -416,6 +551,70 @@ export default function DataHealthPage() {
                   <p className="text-xs text-gray-500 mt-1">{t("health.remote.hint")}</p>
                 </div>
               ))}
+          </div>
+        </section>
+      )}
+
+      {/* Abrasive filament vs. nozzle assignment. Advisory: abrasiveness is
+          inferred (a 4% cosmetic fibre loading and a 20% structural one are
+          both "CF"), so this reports and never repairs. Placed last because
+          the trim conflicts above are unambiguous defects. */}
+      {abrasive.length > 0 && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold mb-1">{t("health.abrasive.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.abrasive.subtitle")}</p>
+          <div className="space-y-3">
+            {abrasive.map((f) => (
+              <div
+                key={f.filamentId}
+                className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-4"
+              >
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <Link
+                    href={`/filaments/${f.filamentId}`}
+                    className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {f.filamentName}
+                  </Link>
+                  {f.filamentType && (
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                      {f.filamentType}
+                    </span>
+                  )}
+                </div>
+                {/* Why it reads as abrasive, so a false positive can be judged
+                    rather than taken on faith. */}
+                <p className="text-xs text-gray-500 mb-2">
+                  {t("health.abrasive.because", {
+                    reasons: f.reasons.map((r) => t(`health.abrasive.reason.${r}`)).join(", "),
+                  })}
+                </p>
+                {f.softNozzles.length > 0 && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {t("health.abrasive.softNozzles", {
+                      nozzles: f.softNozzles.map((n) => n.name).join(", "),
+                    })}
+                  </p>
+                )}
+                {f.unassigned && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {t("health.abrasive.unassigned")}
+                  </p>
+                )}
+                {f.flagMismatch && (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {t("health.abrasive.flagMismatch")}
+                  </p>
+                )}
+                {/* A variant inheriting its template's nozzles cannot be fixed
+                    on its own page — the value comes straight back. */}
+                {f.inheritedFrom && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    {t("health.abrasive.inheritedFrom", { template: f.inheritedFrom })}
+                  </p>
+                )}
+              </div>
+            ))}
           </div>
         </section>
       )}
