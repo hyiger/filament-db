@@ -86,6 +86,11 @@ yaml_quote() {
 }
 
 out="$root/external/${SLUG}.md"
+# -e is FALSE for a dangling symlink, and the redirection below then follows the
+# link and creates its target — so external/x.md -> ../authored/x.md let this
+# external-only helper write into a directory the skill declares READ ONLY.
+# -L catches the link itself whether or not its target exists.
+[[ -L "$out" ]] && die "$out is a symlink. Refusing to write through it — remove the link first."
 [[ -e "$out" ]] && die "$out already exists. Pick another slug, or edit it directly."
 
 cat > "$out" <<EOF

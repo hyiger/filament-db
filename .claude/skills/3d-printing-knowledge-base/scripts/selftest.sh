@@ -89,10 +89,51 @@ run_case leak-underscored  bad "$(printf -- '---\nsource:    "https://x"\nretrie
 run_case chemistry-ok      ok  "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nPA6 reduces shrinkage anisotropy; chain retraction in the Doi-Edwards tube model.\n')"
 run_case url-with-temp-ok  ok  "$(printf -- '---\nsource:    "https://x.com/pa6-cf-bed-temp-chart"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nInert body.\n')"
 
+# --- YAML escape semantics (the set is closed; the catch-all was not) -------
+run_case esc-U-8digit      bad "$(fm "\"${B}U00000020\"")"
+run_case esc-unknown-q     bad "$(fm "\"${B}q\"")"
+run_case esc-backspace     bad "$(fm '"https://x"' '2026-08-30' "\"${B}background\"")"
+run_case esc-known-newline ok  "$(fm "\"Vendor TDS${B}nrev 3\"")"
+run_case esc-slash         ok  "$(fm "\"https:${B}/${B}/x/tds\"")"
+
 # --- byte-level shapes an editor introduces on its own ----------------------
 run_case crlf              ok  "$(printf -- '---\r\nsource:    "https://x"\r\nretrieved: 2026-08-30\r\ntrust:     background\r\nscope:     "c"\r\n---\r\n\r\n# t\r\n')"
 run_case bom               ok  "$(printf -- '\xEF\xBB\xBF---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
 run_case control-char      bad "$(printf -- '---\nsource:    "a\x01b"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+
+# --- enumeration and write-scope --------------------------------------------
+# These need a tree rather than a single file, so they are hand-rolled.
+# An UNREADABLE subtree, not a symlink cycle: the cycle case is
+# find-implementation-dependent — bfs and GNU find report it, while BSD find
+# (macOS's default, and what this script actually runs under) detects and skips
+# it silently and correctly, so there is nothing to catch there. A permission
+# error is reported by every implementation.
+d="$(mktemp -d)"; mkdir -p "$d/external/locked"
+printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n' > "$d/external/good.md"
+printf 'x' > "$d/external/locked/hidden.md"; chmod 000 "$d/external/locked"
+if [[ "$(id -u)" == "0" ]]; then
+  printf 'SKIP [enumeration-error] running as root; chmod cannot deny\n'
+elif (cd "$d" && bash "$here/check-provenance.sh" >/dev/null 2>&1); then
+  fail=$((fail+1)); printf 'FAIL [enumeration-error] audit certified an incomplete enumeration\n'
+else pass=$((pass+1)); fi
+chmod 755 "$d/external/locked" 2>/dev/null; rm -rf "$d"
+
+# A NUL byte is stripped by command substitution before any validator sees it.
+d="$(mktemp -d)"; mkdir -p "$d/external"
+printf -- '---\nsource:    "a\000b"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n' > "$d/external/nul.md"
+if (cd "$d" && bash "$here/check-provenance.sh" >/dev/null 2>&1); then
+  fail=$((fail+1)); printf 'FAIL [nul-byte] audit reported clean for a NUL-bearing file\n'
+else pass=$((pass+1)); fi
+rm -rf "$d"
+
+# A dangling symlink let the external-only generator write outside external/.
+d="$(mktemp -d)"; mkdir -p "$d/external" "$d/authored"
+ln -s ../authored/leaked.md "$d/external/evil.md"
+(cd "$d" && bash "$here/new-external.sh" "https://x/tds" evil >/dev/null 2>&1)
+if [[ -f "$d/authored/leaked.md" ]]; then
+  fail=$((fail+1)); printf 'FAIL [symlink-escape] generator wrote through a link into authored/\n'
+else pass=$((pass+1)); fi
+rm -rf "$d"
 
 # --- generator round-trip: whatever new-external.sh writes must audit clean --
 gen_case() { # name citation [scope]

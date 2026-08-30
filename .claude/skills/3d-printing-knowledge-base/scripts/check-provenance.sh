@@ -38,16 +38,21 @@ fi
 # split into two bogus reads and was dropped by both loops. -iname over three
 # extensions because `-name '*.md'` silently skipped Notes.MD and notes.txt.
 # -L so a symlinked file or directory is followed rather than ignored.
-kb_text_files() {
-  find -L "$root/external" -type f \
-    \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.txt' \) -print0 \
-  | LC_ALL=C sort -z
-}
-kb_other_files() {
-  find -L "$root/external" -type f \
-    ! -iname '*.md' ! -iname '*.markdown' ! -iname '*.txt' ! -name '.*' -print0 \
-  | LC_ALL=C sort -z
-}
+# Enumerated ONCE into temp files, because `find`'s exit status is invisible
+# through process substitution: a symlink cycle under external/ printed its
+# error to stderr, the loop consumed whatever had been listed, and the script
+# still exited 0 with "Provenance clean" over an audit it knew was incomplete.
+TEXTLIST="$(mktemp)"; OTHERLIST="$(mktemp)"; FINDERR="$(mktemp)"
+trap 'rm -f "$TEXTLIST" "$OTHERLIST" "$FINDERR"' EXIT
+enumerate_failed=0
+find -L "$root/external" -type f \
+  \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.txt' \) -print0 \
+  2>"$FINDERR" | LC_ALL=C sort -z > "$TEXTLIST" || enumerate_failed=1
+[[ -s "$FINDERR" ]] && enumerate_failed=1
+find -L "$root/external" -type f \
+  ! -iname '*.md' ! -iname '*.markdown' ! -iname '*.txt' ! -name '.*' -print0 \
+  2>>"$FINDERR" | LC_ALL=C sort -z > "$OTHERLIST" || enumerate_failed=1
+[[ -s "$FINDERR" ]] && enumerate_failed=1
 
 # A path may contain a newline, which would split or forge a report line.
 disp() { printf '%s' "$1" | perl -pe 's/\\/\\\\/g; s/\n/\\n/g; s/\t/\\t/g; s/\r/\\r/g'; }
@@ -104,9 +109,12 @@ yaml_scalar() {
       # previous one's output, so a generator-escaped `\\` was consumed by a
       # later pass and `C:\temp\tds.pdf` decoded to `C:<TAB>emp<TAB>ds.pdf` —
       # rejecting the generator's own output as empty. Do not split this up.
-      printf '%s' "$out" | perl -pe 's{\\(u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)}{ my $e=$1;
-        $e=~/^u(....)$/ ? chr(hex($1)) : $e=~/^x(..)$/ ? chr(hex($1)) :
-        $e eq "n" ? "\n" : $e eq "t" ? "\t" : $e eq "r" ? "\r" : $e eq "0" ? " " : $e }ge'
+      printf '%s' "$out" | perl -pe 's{\\(U[0-9a-fA-F]{8}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|.)}{ my $e=$1;
+        $e=~/^[Uux](.+)$/ ? chr(hex($1)) :
+        $e eq "0" ? " " : $e eq "a" ? "\a" : $e eq "b" ? "\b" : $e eq "t" ? "\t" :
+        $e eq "n" ? "\n" : $e eq "v" ? "\013" : $e eq "f" ? "\f" : $e eq "r" ? "\r" :
+        $e eq "e" ? "\033" : $e eq "N" ? "\x{85}" : $e eq "_" ? "\x{a0}" :
+        $e eq "L" ? "\x{2028}" : $e eq "P" ? "\x{2029}" : $e }ge'
       return ;;
     \'*)
       i=1
@@ -136,6 +144,15 @@ while IFS= read -r -d '' f; do
   [[ -f "$f" ]] || continue
   checked=$((checked+1))
   rel="$(disp "${f#"$root"/}")"
+
+  # A NUL is removed by command substitution, so it must be caught on the raw
+  # file: otherwise bash prints a warning, the validator never sees it, and the
+  # script exits 0 on YAML every parser rejects.
+  if ! perl -0777 -ne 'exit(/\0/ ? 1 : 0)' "$f"; then
+    printf '%s\n    contains a NUL byte — not parseable YAML\n' "$rel"
+    problems=$((problems+1))
+    continue
+  fi
 
   content="$(read_normalised "$f")"
   first="${content%%$'\n'*}"
@@ -198,6 +215,15 @@ while IFS= read -r -d '' f; do
     raw="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm")"
     case "$raw" in
       \"*|\'*)
+        # YAML 1.2 §5.7 defines exactly these escapes; everything else makes
+        # the document invalid. Enumerating the SPEC rather than the escapes
+        # somebody tried is the same posture as the indicator set below.
+        if [[ "${raw:0:1}" == '"' ]] \
+           && printf '%s' "$raw" | perl -ne 'exit 1 if /\\(?![0abtnvfre "\/\\N_LP]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})/'; then
+          :
+        elif [[ "${raw:0:1}" == '"' ]]; then
+          add_note "${key}: unsupported escape sequence — YAML defines a fixed set; rewrite with new-external.sh"; continue
+        fi
         if tail="$(yaml_quoted_tail "$raw")"; then
           tail="${tail#"${tail%%[![:space:]]*}"}"
           if [[ -n "$tail" && "$tail" != '#'* ]]; then
@@ -250,7 +276,7 @@ while IFS= read -r -d '' f; do
     problems=$((problems+1))
     continue
   fi
-done < <(kb_text_files)
+done < "$TEXTLIST"
 
 # ------------------------------------------------------------------ leak scan
 
@@ -284,7 +310,7 @@ while IFS= read -r -d '' f; do
     printf '    %s\n' "$(disp "${f#"$root"/}")"
     leaks=$((leaks+1))
   fi
-done < <(kb_text_files)
+done < "$TEXTLIST"
 
 # Files the schema does not cover — listed, never fatal. SKILL.md says every
 # file here carries front matter, but a saved PDF cannot, and failing on one
@@ -294,10 +320,16 @@ while IFS= read -r -d '' f; do
   (( unaudited == 0 )) && printf '\nNot audited (no provenance schema for these):\n'
   printf '    %s\n' "$(disp "${f#"$root"/}")"
   unaudited=$((unaudited+1))
-done < <(kb_other_files)
+done < "$OTHERLIST"
 
 # "Checked 0 file(s). Clean." over a non-empty directory is the exact fail-open
 # shape this script exists to prevent, and it was reachable four ways.
+if (( enumerate_failed )); then
+  printf '\nCould not fully enumerate external/ — the audit is INCOMPLETE:\n'
+  sed 's/^/    /' "$FINDERR" | head -5
+  problems=$((problems+1))
+fi
+
 if (( checked == 0 )) && [[ -n "$(ls -A "$root/external" 2>/dev/null)" ]]; then
   printf '\nexternal/ is not empty but 0 files were audited — refusing to report Clean.\n'
   problems=$((problems+1))
