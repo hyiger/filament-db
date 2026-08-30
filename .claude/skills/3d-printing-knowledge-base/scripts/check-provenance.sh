@@ -105,6 +105,18 @@ while IFS= read -r f; do
   # the remedy is to rewrite it with new-external.sh.
   note=""
   add_note() { note="${note}${note:+; }$1"; }
+  # Every line has to be one of the four. Checking only that the four are
+  # PRESENT left the rest of the block unread, so `unexpected: [` sat in an
+  # otherwise valid file and still audited Clean -- invalid YAML certified as
+  # canonical. Claiming a fixed form and then not enforcing it is the weaker
+  # half of both postures.
+  while IFS= read -r line; do
+    [[ -z "${line//[[:space:]]/}" ]] && continue
+    case "$line" in
+      source:*|retrieved:*|trust:*|scope:*) ;;
+      *) add_note "unsupported line: ${line}" ;;
+    esac
+  done <<<"$fm"
   for key in source retrieved trust scope; do
     cnt="$(grep -cE "^${key}:" <<<"$fm")"
     if (( cnt == 0 )); then add_note "${key}: absent"; continue; fi

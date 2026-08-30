@@ -166,13 +166,28 @@ belongs to the NEW colour you are adding. Deleting first destroys the value you 
 ```bash
 # 1. save the ORIGINAL colour's slug off the template before touching anything
 ORIG_SLUG=$(curl -s "$BASE/api/filaments/$TEMPLATE_ID?raw=true" \
-  | jq -r '.filament.settings.openprinttag_slug // .settings.openprinttag_slug')
-# 2. now the template can be unlinked
-curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
-# 3. relink the GENERATED ORIGINAL variant with its own slug, not the new colour's
-curl -s -X POST "$BASE/api/filaments/$ORIG_ID/openprinttag/link" \
-  -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}"
-``` Before promoting anything, look at what else the standalone carries that describes
+  | jq -r '.settings.openprinttag_slug')
+[ -n "$ORIG_SLUG" ] && [ "$ORIG_SLUG" != null ] || echo "nothing linked — skip the rest"
+
+# 2. LINK THE VARIANT FIRST, and only continue if it worked
+LINK=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  "$BASE/api/filaments/$ORIG_ID/openprinttag/link" \
+  -H 'Content-Type: application/json' -d "{\"slug\":\"$ORIG_SLUG\"}")
+
+# 3. only now remove the template's copy
+[ "$LINK" = 200 ] && curl -s -X DELETE "$BASE/api/filaments/$TEMPLATE_ID/openprinttag/link"
+```
+
+**The order is the safety property, and it is the opposite of the obvious one.** Deleting
+first and posting second means any failure in the POST — the OPT catalogue unreachable, the
+slug withdrawn upstream, a plain HTTP error — leaves the link deleted, the variant unlinked,
+and the slug gone from the only record that held it. Linking first is recoverable in both
+directions: a failed POST changes nothing, and a failed DELETE leaves both records linked,
+which is visible and fixable by re-running step 3. Nothing rejects two records sharing a slug
+in the meantime.
+
+Check the status rather than trusting the call. `curl -s` is silent about HTTP errors — it
+exits 0 on a 404 or 500 — so a bare `curl -s` chain reports success while doing nothing. Before promoting anything, look at what else the standalone carries that describes
 its colour rather than its product line — the list above is what has been hit so far, not a
 guarantee it is complete.
 
