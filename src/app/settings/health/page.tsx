@@ -112,7 +112,18 @@ export default function DataHealthPage() {
   // LATER effect, so a cycle finishing in between is delivered to no listener
   // and then seeded as the baseline — invisible to `observe`, while the scans
   // themselves may have read the pre-copy database.
+  //
+  // Claimed by whichever mount scan runs first, via `markScansIssued` below.
+  // It was set in the abrasive effect, which runs SECOND, so the recorded time
+  // was already after the conflict scan's request had gone out — a cycle
+  // completing in between then failed the comparison and that list kept a
+  // pre-copy result. First-writer-wins rather than pinning it to one effect,
+  // so reordering or adding a third scan cannot reintroduce that.
   const scansIssuedAt = useRef(0);
+
+  const markScansIssued = useCallback(() => {
+    if (scansIssuedAt.current === 0) scansIssuedAt.current = Date.now();
+  }, []);
 
   // Every scan of /api/name-conflicts takes a ticket, and only the newest
   // ticket may write. The mount scan and a completion-triggered
@@ -146,6 +157,7 @@ export default function DataHealthPage() {
   // pattern OptResyncDialog established; the CI lint proved the difference).
   useEffect(() => {
     let cancelled = false;
+    markScansIssued();
     const seq = ++scanSeq.current;
     const current = () => !cancelled && seq === scanSeq.current;
     (async () => {
@@ -165,7 +177,7 @@ export default function DataHealthPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [markScansIssued]);
 
   // Refetch helper for the sync watcher, mirroring `load` above. A sync copies
   // filaments and nozzles across, so it can create a mismatch this page is
@@ -192,9 +204,9 @@ export default function DataHealthPage() {
   // set-state-in-effect rule.
   useEffect(() => {
     let cancelled = false;
+    markScansIssued();
     const seq = ++abrasiveSeq.current;
     const current = () => !cancelled && seq === abrasiveSeq.current;
-    scansIssuedAt.current = Date.now();
     (async () => {
       try {
         const res = await fetch("/api/abrasive-nozzles");
@@ -215,7 +227,7 @@ export default function DataHealthPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [markScansIssued]);
 
   // GH #1164, desktop only: the sync service's view of BOTH databases.
   // Same IIFE shape as above for the set-state-in-effect rule.

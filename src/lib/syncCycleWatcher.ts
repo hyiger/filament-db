@@ -42,21 +42,37 @@ export interface SyncCycleWatcher {
  * the abrasive audit shares the all-clear banner, a stale assertion of health.
  *
  * Comparing the seeded stamp against the moment the scans were issued closes
- * that window without a refetch on every mount. It fails toward refetching:
- * an unparseable stamp returns true, because one extra read at mount is
- * bounded and cheap, and staleness is the failure this whole module exists to
- * prevent. A null stamp is NOT unparseable — it means no cycle has ever
- * completed, so there is nothing to have missed.
+ * that window without a refetch on every mount. Everything here fails toward
+ * refetching, because one extra read at mount is bounded and cheap while a
+ * stale all-clear is neither:
+ *
+ *   - A TERMINAL FAILURE (`error`, `partial`) is a cycle ending that carries no
+ *     stamp advance — `sync-service.ts` publishes it with the previous
+ *     `lastSyncAt` — and per-collection error isolation means earlier
+ *     collections may already have copied. There is nothing to compare, and no
+ *     later event will report it, so assume the worst. `offline` is not one of
+ *     these: no cycle ran.
+ *   - EQUAL milliseconds cannot establish ordering, so a tie counts as
+ *     possibly-after. `Date.now()` and a parsed ISO stamp are the same clock at
+ *     the same resolution; `>` would silently prefer the stale answer.
+ *   - An UNPARSEABLE stamp is unknowable, so refetch.
+ *   - A NULL stamp is none of the above — it means no cycle has ever completed,
+ *     so there is nothing to have missed.
+ *
+ * `syncing` needs no special case: the in-flight cycle's ending will reach
+ * `observe`, and a PREVIOUS cycle that ended mid-window still shows up in the
+ * stamp comparison.
  */
 export function seededCycleMayPostdate(
   sample: SyncCycleSample,
   scansIssuedAt: number,
 ): boolean {
+  if (sample.state === "error" || sample.state === "partial") return true;
   const stamp = sample.lastSyncAt ?? null;
   if (stamp === null) return false;
   const at = Date.parse(stamp);
   if (Number.isNaN(at)) return true;
-  return at > scansIssuedAt;
+  return at >= scansIssuedAt;
 }
 
 export function createSyncCycleWatcher(): SyncCycleWatcher {

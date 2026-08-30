@@ -90,9 +90,32 @@ describe("seededCycleMayPostdate", () => {
     expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T03:59:59.000Z" }, T)).toBe(false);
   });
 
-  it("is false for a stamp equal to the issue moment", () => {
-    // The scan was issued at or after that ending, so it read post-copy data.
-    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.000Z" }, T)).toBe(false);
+  it("treats an equal-millisecond stamp as possibly after the scan", () => {
+    // Same clock, same resolution: equality cannot establish which came first,
+    // and preferring the stale answer is the one outcome that costs anything.
+    expect(seededCycleMayPostdate({ lastSyncAt: "2026-08-30T04:00:00.000Z" }, T)).toBe(true);
+  });
+
+  it("refetches after a terminal failure, which advances no stamp", () => {
+    // A failed or partial cycle publishes the PREVIOUS lastSyncAt, and
+    // per-collection isolation means earlier collections may already have
+    // copied — so there is nothing to compare and no later event to wait for.
+    const old = { lastSyncAt: "2026-08-30T03:00:00.000Z" };
+    expect(seededCycleMayPostdate({ ...old, state: "error" }, T)).toBe(true);
+    expect(seededCycleMayPostdate({ ...old, state: "partial" }, T)).toBe(true);
+  });
+
+  it("does not refetch merely because the app is offline or syncing", () => {
+    // offline: no cycle ran. syncing: its ending will reach observe.
+    const old = { lastSyncAt: "2026-08-30T03:00:00.000Z" };
+    expect(seededCycleMayPostdate({ ...old, state: "offline" }, T)).toBe(false);
+    expect(seededCycleMayPostdate({ ...old, state: "syncing" }, T)).toBe(false);
+  });
+
+  it("still catches a previous cycle that ended mid-window while a new one runs", () => {
+    expect(seededCycleMayPostdate(
+      { lastSyncAt: "2026-08-30T04:00:00.001Z", state: "syncing" }, T,
+    )).toBe(true);
   });
 
   it("is true for a cycle that ended while the scans were in flight", () => {
