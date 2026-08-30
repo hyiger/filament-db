@@ -77,6 +77,7 @@ run_case trailing-comment  ok  "$(fm '"https://x" # checked')"
 run_case quoted-null-str   ok  "$(fm '"null"')"
 run_case leading-dash      ok  "$(fm '-Vendor-TDS-rev-3')"
 run_case colon-no-space    ok  "$(fm 'ref:12345')"
+run_case colon-tab-sep     bad "$(printf -- '---\nsource:    Vendor:\trev\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
 run_case non-ascii         ok  "$(fm '"Émile — TDS révision 3"')"
 run_case backslash-tail    ok  "$(fm "\"Vendor TDS rev 3${B}${B}\"")"
 run_case windows-path      ok  "$(fm "\"C:${B}${B}temp${B}${B}tds.pdf\"")"
@@ -151,11 +152,19 @@ rm -rf "$d"
 
 # external/ aliasing a read-only tier is a second write-scope escape: -d
 # follows the link, and the per-file -L check is false for a child that does
-# not exist yet.
+# not exist yet. BOTH the tier root and a descendant of it — an equality-only
+# check let `external -> authored/references` through.
 d="$(mktemp -d)"; mkdir -p "$d/authored"; ln -s authored "$d/external"
 (cd "$d" && bash "$here/new-external.sh" "https://x/tds" esc >/dev/null 2>&1)
 if [[ -f "$d/authored/esc.md" ]]; then
-  fail=$((fail+1)); printf 'FAIL [external-alias] generator wrote into authored/ via a symlinked external/\n'
+  fail=$((fail+1)); printf 'FAIL [external-alias-root] generator wrote into authored/\n'
+else pass=$((pass+1)); fi
+rm -rf "$d"
+
+d="$(mktemp -d)"; mkdir -p "$d/authored/references"; ln -s authored/references "$d/external"
+(cd "$d" && bash "$here/new-external.sh" "https://x/tds" esc >/dev/null 2>&1)
+if [[ -f "$d/authored/references/esc.md" ]]; then
+  fail=$((fail+1)); printf 'FAIL [external-alias-descendant] generator wrote into authored/references/\n'
 else pass=$((pass+1)); fi
 rm -rf "$d"
 

@@ -46,9 +46,13 @@ ext_real="$(cd "$root/external" 2>/dev/null && pwd -P)" || die "cannot resolve e
 for tier in authored filament-db.wiki; do
   [[ -d "$root/$tier" ]] || continue
   tier_real="$(cd "$root/$tier" 2>/dev/null && pwd -P)" || continue
-  [[ "$ext_real" == "$tier_real" ]] \
-    && die "external/ resolves to $tier/, which is READ ONLY. Refusing to write.
+  # Equality alone was not enough: `external -> authored/references` is a
+  # DESCENDANT, not the tier root, and it passed while writing into the same
+  # read-only tree. Match the tier and anything under it.
+  if [[ "$ext_real" == "$tier_real" || "$ext_real" == "$tier_real"/* ]]; then
+    die "external/ resolves inside $tier/, which is READ ONLY. Refusing to write.
   Point external/ at its own directory."
+  fi
 done
 
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \

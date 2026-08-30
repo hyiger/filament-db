@@ -271,12 +271,13 @@ while IFS= read -r -d '' f; do
             add_note "${key}: value is a bare YAML indicator — quote it, or rewrite with new-external.sh"; continue ;;
         esac
         # ": " reopens the line as a nested mapping and a trailing ":" makes it
-        # a key — both unloadable. Strip a trailing comment first, or
+        # a key — both unloadable. The separator is colon + ANY whitespace, so a
+        # tab counts too. Strip a trailing comment first, or
         # `Fiberon # see table 2: page 4` (valid) would trip it.
         plain="${raw%%[[:space:]]#*}"
         plain="${plain%"${plain##*[![:space:]]}"}"
         case "$plain" in
-          *": "*|*:)
+          *": "*|*$'\t'*|*:)
             add_note "${key}: unquoted value contains \": \" or ends in \":\" — quote it, or rewrite with new-external.sh"; continue ;;
         esac ;;
     esac

@@ -172,10 +172,17 @@ case "$cmd" in
     # ambiguity refusal; the substring path below is unchanged for everything
     # else. Trim with a regex, not ltrimstr/rtrimstr (single occurrence only).
     all_json="$(req /api/filaments | as_array)"
+    # Raw equality as well as the case-folded compare: jq's ascii_downcase does
+    # nothing for non-ASCII, so `Émile PLA` was unreachable even when typed
+    # exactly. Residual, stated rather than papered over: a LOWERCASE non-ASCII
+    # query (`émile`) still will not match — jq has no Unicode case folding, and
+    # doing it with a regex would mean interpolating the query as a pattern,
+    # where a name containing `(` or `*` breaks the lookup outright.
     exact="$(printf '%s' "$all_json" | jq -r --arg q "$1" '[.[]
-      | select((.name // "") | ascii_downcase
-               == ($q | ascii_downcase | sub("^\\s+";"") | sub("\\s+$";"")))
-      | (._id // .id)] | if length == 1 then .[0] else empty end')"
+      | (($q | sub("^\\s+";"") | sub("\\s+$";""))) as $t
+      | select((.name // "") == $t
+               or ((.name // "") | ascii_downcase) == ($t | ascii_downcase))
+      | (._id // .id)] | unique | if length == 1 then .[0] else empty end')"
     if [[ -n "$exact" ]]; then
       req "/api/filaments/${exact}"
       exit 0
