@@ -216,13 +216,36 @@ while IFS= read -r -d '' f; do
     case "$raw" in
       \"*|\'*)
         # YAML 1.2 §5.7 defines exactly these escapes; everything else makes
-        # the document invalid. Enumerating the SPEC rather than the escapes
-        # somebody tried is the same posture as the indicator set below.
-        if [[ "${raw:0:1}" == '"' ]] \
-           && printf '%s' "$raw" | perl -ne 'exit 1 if /\\(?![0abtnvfre "\/\\N_LP]|x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|U[0-9a-fA-F]{8})/'; then
-          :
-        elif [[ "${raw:0:1}" == '"' ]]; then
-          add_note "${key}: unsupported escape sequence — YAML defines a fixed set; rewrite with new-external.sh"; continue
+        # the document invalid. Walked STATEFULLY, consuming each escape as a
+        # pair — a regex that inspects every backslash independently reads the
+        # second half of `\\q` as the start of an unsupported `\q`, so the
+        # generator's own `"C:\\query\\vendor.pdf"` failed its own audit.
+        # (An earlier corpus case used `C:\\temp\\tds.pdf` and passed by luck:
+        # `t` happens to be a valid escape letter and `q` does not.)
+        if [[ "${raw:0:1}" == '"' ]]; then
+          perl -e '
+            my $s = shift; my $i = 1; my $n = length $s;
+            while ($i < $n) {
+              my $c = substr($s,$i,1);
+              exit 0 if $c eq q{"};
+              if ($c eq "\\") {
+                my $e = substr($s,$i+1,1);
+                if ($e =~ m{^[0abtnvfre "/\\N_LP]$}) { $i += 2; next }
+                if ($e eq "x" && substr($s,$i+2,2) =~ /^[0-9a-fA-F]{2}$/) { $i += 4; next }
+                if ($e eq "u" && substr($s,$i+2,4) =~ /^([0-9a-fA-F]{4})$/) {
+                  my $cp = hex($1); exit 2 if $cp >= 0xD800 && $cp <= 0xDFFF; $i += 6; next }
+                if ($e eq "U" && substr($s,$i+2,8) =~ /^([0-9a-fA-F]{8})$/) {
+                  my $cp = hex($1);
+                  exit 2 if $cp > 0x10FFFF || ($cp >= 0xD800 && $cp <= 0xDFFF); $i += 10; next }
+                exit 1;
+              }
+              $i++;
+            }
+            exit 0' "$raw"
+          case $? in
+            1) add_note "${key}: unsupported escape sequence — YAML defines a fixed set; rewrite with new-external.sh"; continue ;;
+            2) add_note "${key}: escape is not a Unicode scalar value (out of range, or a surrogate)"; continue ;;
+          esac
         fi
         if tail="$(yaml_quoted_tail "$raw")"; then
           tail="${tail#"${tail%%[![:space:]]*}"}"
@@ -330,7 +353,7 @@ if (( enumerate_failed )); then
   problems=$((problems+1))
 fi
 
-if (( checked == 0 )) && [[ -n "$(ls -A "$root/external" 2>/dev/null)" ]]; then
+if (( checked == 0 && unaudited == 0 )) && [[ -n "$(ls -A "$root/external" 2>/dev/null)" ]]; then
   printf '\nexternal/ is not empty but 0 files were audited — refusing to report Clean.\n'
   problems=$((problems+1))
 fi

@@ -36,6 +36,21 @@ while [[ "$root" != "/" && ! -d "$root/external" ]]; do root="$(dirname "$root")
 [[ -d "$root/external" ]] || die "no external/ directory found above $PWD.
   Create the knowledge-base layout first:  mkdir -p external authored"
 
+# external/ may legitimately be a symlink to another disk, but it must not
+# ALIAS one of the read-only tiers: `external -> authored` passes the -d test
+# above, and the per-file -L check below is false for a child that does not
+# exist yet, so `new-external.sh URL slug` wrote straight into a directory this
+# skill declares READ ONLY. Compare resolved physical paths rather than
+# refusing every symlink, which would break a legitimate relocation.
+ext_real="$(cd "$root/external" 2>/dev/null && pwd -P)" || die "cannot resolve external/"
+for tier in authored filament-db.wiki; do
+  [[ -d "$root/$tier" ]] || continue
+  tier_real="$(cd "$root/$tier" 2>/dev/null && pwd -P)" || continue
+  [[ "$ext_real" == "$tier_real" ]] \
+    && die "external/ resolves to $tier/, which is READ ONLY. Refusing to write.
+  Point external/ at its own directory."
+done
+
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9._-]*$ ]] \
   || die "slug must be lowercase alphanumeric with . _ - only (got: $SLUG)"
 

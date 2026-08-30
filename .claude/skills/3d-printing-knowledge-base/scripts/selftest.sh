@@ -80,6 +80,10 @@ run_case colon-no-space    ok  "$(fm 'ref:12345')"
 run_case non-ascii         ok  "$(fm '"Émile — TDS révision 3"')"
 run_case backslash-tail    ok  "$(fm "\"Vendor TDS rev 3${B}${B}\"")"
 run_case windows-path      ok  "$(fm "\"C:${B}${B}temp${B}${B}tds.pdf\"")"
+# `t` and `d` happen to be valid escape letters, so the case above passed even
+# when escapes were validated by an independent per-backslash regex. `q` is
+# not, which is what actually exercises the stateful walk.
+run_case windows-path-q    ok  "$(fm "\"C:${B}${B}query${B}${B}vendor.pdf\"")"
 run_case apostrophe-single ok  "$(fm "'Vendor''s TDS'")"
 
 # --- leak scan --------------------------------------------------------------
@@ -95,6 +99,9 @@ run_case esc-unknown-q     bad "$(fm "\"${B}q\"")"
 run_case esc-backspace     bad "$(fm '"https://x"' '2026-08-30' "\"${B}background\"")"
 run_case esc-known-newline ok  "$(fm "\"Vendor TDS${B}nrev 3\"")"
 run_case esc-slash         ok  "$(fm "\"https:${B}/${B}/x/tds\"")"
+run_case esc-U-out-of-range bad "$(fm "\"${B}U00110000\"")"
+run_case esc-surrogate     bad "$(fm "\"${B}uD800\"")"
+run_case esc-U-valid       ok  "$(fm "\"caf${B}U000000e9 TDS\"")"
 
 # --- byte-level shapes an editor introduces on its own ----------------------
 run_case crlf              ok  "$(printf -- '---\r\nsource:    "https://x"\r\nretrieved: 2026-08-30\r\ntrust:     background\r\nscope:     "c"\r\n---\r\n\r\n# t\r\n')"
@@ -135,6 +142,23 @@ if [[ -f "$d/authored/leaked.md" ]]; then
 else pass=$((pass+1)); fi
 rm -rf "$d"
 
+# A tree holding only legitimately-unaudited files (a saved PDF) must PASS:
+# they are listed, never fatal, and the zero-audited guard contradicted that.
+d="$(mktemp -d)"; mkdir -p "$d/external"; printf '%%PDF-1.4' > "$d/external/paper.pdf"
+if (cd "$d" && bash "$here/check-provenance.sh" >/dev/null 2>&1); then pass=$((pass+1)); else
+  fail=$((fail+1)); printf 'FAIL [pdf-only-tree] a directory of unaudited files was failed\n'; fi
+rm -rf "$d"
+
+# external/ aliasing a read-only tier is a second write-scope escape: -d
+# follows the link, and the per-file -L check is false for a child that does
+# not exist yet.
+d="$(mktemp -d)"; mkdir -p "$d/authored"; ln -s authored "$d/external"
+(cd "$d" && bash "$here/new-external.sh" "https://x/tds" esc >/dev/null 2>&1)
+if [[ -f "$d/authored/esc.md" ]]; then
+  fail=$((fail+1)); printf 'FAIL [external-alias] generator wrote into authored/ via a symlinked external/\n'
+else pass=$((pass+1)); fi
+rm -rf "$d"
+
 # --- generator round-trip: whatever new-external.sh writes must audit clean --
 gen_case() { # name citation [scope]
   local d; d="$(mktemp -d)"; mkdir -p "$d/external"
@@ -152,6 +176,7 @@ gen_case gen-colon-hash 'Vendor TDS: rev 3 #12'
 gen_case gen-quotes     'He said "hi" in the TDS'
 gen_case gen-backslash  'Vendor TDS rev 3\'
 gen_case gen-winpath    'C:\temp\tds.pdf'
+gen_case gen-winpath-q  'C:\query\vendor.pdf'
 gen_case gen-non-ascii  'Émile — révision 3'
 gen_case gen-scope-hash "https://x/tds" 'chemistry only #1'
 
