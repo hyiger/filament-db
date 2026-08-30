@@ -40,7 +40,9 @@ to stay readable.
 
 The companion `3d-printing-knowledge-base` skill is the **read** path and is deliberately
 read-only. This skill is the **write** path. Its sourcing discipline still applies here: a
-processing parameter you did not retrieve from a real source does not go in the database.
+processing parameter you did not retrieve from a real source does not go in the database —
+and that holds whether or not that skill is installed, since the rule is about where a number
+came from, not about which tool fetched it.
 
 ## The one thing to understand before writing anything
 
