@@ -51,8 +51,19 @@ while IFS= read -r f; do
     # provenance at all passes the audit. Strip surrounding quotes before
     # deciding, and require something left.
     val="$(sed -n "s/^${key}:[[:space:]]*//p" <<<"$fm" | head -1)"
-    val="${val%\"}"; val="${val#\"}"
-    val="${val%\'}"; val="${val#\'}"
+    val="${val%"${val##*[![:space:]]}"}"   # drop trailing whitespace
+    case "$val" in
+      \"*\"|\'*\')
+        # A QUOTED scalar is a string, so its content is whatever is inside --
+        # including the literal word "null", which is odd provenance but is
+        # provenance. Only emptiness disqualifies it.
+        val="${val:1:$((${#val}-2))}" ;;
+      *)
+        # A PLAIN scalar can be a YAML null. A reader resolves `null` or `~` to
+        # no value, so a field spelled that way has no provenance even though
+        # the line is not blank -- which is how a hand-edited file passed.
+        case "$val" in null|Null|NULL|'~') val="" ;; esac ;;
+    esac
     [[ -n "${val//[[:space:]]/}" ]] || missing="${missing}${missing:+ }${key}"
   done
   if [[ -n "$missing" ]]; then
