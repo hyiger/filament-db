@@ -139,7 +139,20 @@ run_case body-path-suppressed ok "$(bodyf '<!-- allow-param-smell: filename word
 
 See /Users/r/My Charts/pa6-cf-bed-temp-chart.pdf')"
 # The marker must require a REASON, so it cannot silence a file invisibly.
-run_case marker-needs-reason bad "$(bodyf '<!-- allow-param-smell -->
+# Three refusal shapes, not one: the original case used the no-colon form and
+# so passed while `<!-- allow-param-smell: -->` — colon, empty reason — still
+# suppressed a real leak. A case that only exercises the easy shape is not
+# coverage.
+run_case marker-no-colon    bad "$(bodyf '<!-- allow-param-smell -->
+
+Set the nozzle temp to 265 C.')"
+run_case marker-empty-reason bad "$(bodyf '<!-- allow-param-smell: -->
+
+Set the nozzle temp to 265 C.')"
+run_case marker-blank-reason bad "$(bodyf '<!-- allow-param-smell:    -->
+
+Set the nozzle temp to 265 C.')"
+run_case marker-tight-spacing ok "$(bodyf '<!--allow-param-smell:filename words-->
 
 Set the nozzle temp to 265 C.')"
 # A bare URL token stays exempt — it is the one strip that cannot be wrong,

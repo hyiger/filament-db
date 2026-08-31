@@ -364,7 +364,11 @@ done < "$TEXTLIST"
 # and `retract` flags "chain retraction in the Doi-Edwards tube model" — both
 # legitimate chemistry. `plate` and `extruder` are excluded for the same reason.
 PARAM_RE='(nozzle|bed|chamber|hotend) temp|extrusion multiplier|pressure advance|volumetric speed|dry(ing)? (temp|time)|first layer temp|flow ratio|linear advance|k factor|shrinkage compensation|fan speed|retraction (length|distance|speed|[0-9])'
-ALLOW_RE='<!--[[:space:]]*allow-param-smell:[[:space:]]*[^>]*-->'
+# The reason must contain a non-whitespace character: `[^>]*` accepted
+# `<!-- allow-param-smell: -->`, so a reasonless marker silenced a real leak
+# while the docs promised it could not. `[^>[:space:]]` then `[^>]*` requires
+# at least one real character without allowing a `>` to close the comment early.
+ALLOW_RE='<!--[[:space:]]*allow-param-smell:[[:space:]]*[^>[:space:]][^>]*-->'
 leaks=0
 suppressed=0
 while IFS= read -r -d '' f; do
