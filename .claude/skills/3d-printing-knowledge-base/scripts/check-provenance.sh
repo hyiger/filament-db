@@ -351,7 +351,22 @@ while IFS= read -r -d '' f; do
   # because the generator QUOTES citations, so the token starts with a quote.
   # \x27 for the apostrophe: a literal ' would close this shell-quoted program.
   # '-' MUST be last in the tr set: '_-|' is a RANGE (0x5F..0x7C) eating a-z.
+  # A citation may contain SPACES, and the token-based strips below then remove
+  # only fragments of it — `"PA6 CF bed temp chart.pdf"` lost `chart.pdf` and
+  # left `bed temp` behind, so the generator again wrote a file its own auditor
+  # rejected. Blank the WHOLE quoted value on the two free-text keys first.
+  #
+  # Gated on the value being a locator END TO END, not merely containing a
+  # slash: the front matter is deliberately scanned (new-external.sh copies
+  # user input verbatim, so a leak can hide in a scope note), and a blanket
+  # strip here would restore exactly the exemption an earlier round removed.
+  # `chemistry only / nozzle temp 265` therefore stays, and is still caught.
   norm="$(printf '%s' "$content" \
+          | perl -0777 -pe 's{^(source|scope):([ \t]*)"([^"]*)"}{
+                               my ($k,$sp,$v)=($1,$2,$3);
+                               ($v =~ m{^(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\)}
+                                || $v =~ m{\.(?:pdf|html?|txt|md|csv|xlsx?|docx?|json)$}i)
+                                 ? "$k:$sp\x22\x22" : "$k:$sp\x22$v\x22" }gme' \
           | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*[A-Za-z]:[\\/]\S*}{ }g;

@@ -118,6 +118,15 @@ run_case loc-unc-path      ok  "$(lk '"\\\\nas01\\shared\\pa6-cf-drying-temp.pdf
 # ...and the strip must stay locator-SHAPED. A whole-token strip would drop
 # this, which is an ordinary way to write a real leak.
 run_case leak-slash-pair   bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nnozzle/bed temp 265/100 here.\n')"
+# A citation may contain SPACES; token-based strips removed only fragments and
+# left the parameter words behind.
+run_case loc-spaced-file   ok  "$(lk '"PA6 CF bed temp chart.pdf"')"
+run_case loc-spaced-path   ok  "$(lk '"/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf"')"
+# ...but the whole-value strip must stay gated on the value being a locator END
+# TO END. The front matter is scanned on purpose — new-external.sh copies user
+# input verbatim — so prose in a scope note must still be reachable.
+run_case leak-in-scope     bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "nozzle temp 265 for reference"\n---\n\nInert body.\n')"
+run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "chemistry only / nozzle temp 265"\n---\n\nInert body.\n')"
 
 # --- YAML escape semantics (the set is closed; the catch-all was not) -------
 run_case esc-U-8digit      bad "$(fm "\"${B}U00000020\"")"
