@@ -364,11 +364,18 @@ done < "$TEXTLIST"
 # and `retract` flags "chain retraction in the Doi-Edwards tube model" — both
 # legitimate chemistry. `plate` and `extruder` are excluded for the same reason.
 PARAM_RE='(nozzle|bed|chamber|hotend) temp|extrusion multiplier|pressure advance|volumetric speed|dry(ing)? (temp|time)|first layer temp|flow ratio|linear advance|k factor|shrinkage compensation|fan speed|retraction (length|distance|speed|[0-9])'
-# The reason must contain a non-whitespace character: `[^>]*` accepted
-# `<!-- allow-param-smell: -->`, so a reasonless marker silenced a real leak
-# while the docs promised it could not. `[^>[:space:]]` then `[^>]*` requires
-# at least one real character without allowing a `>` to close the comment early.
-ALLOW_RE='<!--[[:space:]]*allow-param-smell:[[:space:]]*[^>[:space:]][^>]*-->'
+# The reason must contain a real character. Checked in perl, not with a bash
+# `[[:space:]]` class: under the C locale bash does not treat NBSP (U+00A0),
+# narrow NBSP (U+202F) or the ideographic space as whitespace, so a marker
+# holding only one of those silenced a real leak while the docs promised it
+# could not — and U+202F is the very character this repo's "Space" number
+# format emits, so it is a plausible paste. `\p{Space}` under a decoded string
+# covers the whole class.
+has_suppression_reason() {
+  printf '%s' "$1" | perl -CSD -0777 -ne '
+      while (/<!--\s*allow-param-smell:([^>]*)-->/g) { exit 0 if $1 =~ /[^\s\p{Space}]/ }
+      exit 1' 2>/dev/null
+}
 leaks=0
 suppressed=0
 while IFS= read -r -d '' f; do
@@ -378,7 +385,7 @@ while IFS= read -r -d '' f; do
   # The escape hatch. Requires a REASON after the colon, so the marker records
   # why rather than merely silencing; listed in the output so a file cannot opt
   # out invisibly.
-  if [[ "$content" =~ $ALLOW_RE ]]; then
+  if has_suppression_reason "$content"; then
     (( suppressed == 0 )) && printf '\nParameter scan suppressed by an in-file marker:\n'
     printf '    %s\n' "$(disp "${f#"$root"/}")"
     suppressed=$((suppressed+1))

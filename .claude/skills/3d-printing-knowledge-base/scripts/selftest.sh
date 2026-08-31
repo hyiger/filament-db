@@ -152,6 +152,12 @@ Set the nozzle temp to 265 C.')"
 run_case marker-blank-reason bad "$(bodyf '<!-- allow-param-smell:    -->
 
 Set the nozzle temp to 265 C.')"
+# Bash's [[:space:]] is ASCII-only under the C locale, so these three silenced
+# a real leak after the ASCII fix. U+202F is the character this repo's "Space"
+# number format emits, which makes it a plausible paste rather than a curio.
+run_case marker-nbsp-reason  bad "$(bodyf "$(printf '<!-- allow-param-smell: \302\240 -->\n\nSet the nozzle temp to 265 C.')")"
+run_case marker-nnbsp-reason bad "$(bodyf "$(printf '<!-- allow-param-smell: \342\200\257 -->\n\nSet the nozzle temp to 265 C.')")"
+run_case marker-ideo-reason  bad "$(bodyf "$(printf '<!-- allow-param-smell: \343\200\200 -->\n\nSet the nozzle temp to 265 C.')")"
 run_case marker-tight-spacing ok "$(bodyf '<!--allow-param-smell:filename words-->
 
 Set the nozzle temp to 265 C.')"
