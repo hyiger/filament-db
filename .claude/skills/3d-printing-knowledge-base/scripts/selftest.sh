@@ -139,6 +139,9 @@ run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrie
 # `source:` is blanked wholesale and `scope:` is scanned as prose, so a scope
 # that merely STARTS with a locator must still have its prose read — blanking
 # on a prefix match hid a real leak.
+# The source exemption is for the FRONT-MATTER field only — a body line that
+# merely begins with that word is prose like any other.
+run_case leak-body-source-line bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nsource: nozzle temp 265 C\n')"
 run_case leak-scope-after-locator bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "~/notes then nozzle temp 265"\n---\n\nInert body.\n')"
 # (the escaped-quote citation is exercised end-to-end via gen_case below,
 #  which is the faithful test: the generator is what emits the \" form)

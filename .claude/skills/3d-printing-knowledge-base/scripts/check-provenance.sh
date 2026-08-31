@@ -375,12 +375,19 @@ while IFS= read -r -d '' f; do
   # escaped quote in `PA6 \"CF\" chart.pdf` — because whether a spaced string
   # is a path or a sentence is not decidable from its shape.
   #
+  # Scoped to the FRONT MATTER, not the whole document: a bare `/gm` also
+  # erased body lines beginning `source:`, so `source: nozzle temp 265 C` in
+  # the prose was hidden — the exemption is for the metadata field, and a body
+  # line that merely starts with that word is prose like any other.
+  #
   # The residual is stated rather than hidden: a processing parameter written
   # into the SOURCE field is not scanned. That is a citation slot, the value
   # stays visible in the file, and `scope` — the field that actually holds
   # prose — is still covered.
   norm="$(printf '%s' "$content" \
-          | perl -0777 -pe 's{^source:.*$}{source:}gm' \
+          | perl -0777 -pe 's{\A---\n(.*?)\n---[ \t]*$}{
+                               my $fm = $1; $fm =~ s{^source:.*$}{source:}gm;
+                               "---\n$fm\n---" }sme' \
           | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*[A-Za-z]:[\\/]\S*}{ }g;
