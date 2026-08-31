@@ -64,6 +64,14 @@ run_case no-space-colon    bad "$(printf -- '---\nsource:https://x\nretrieved:20
 run_case unterminated-fm   bad "$(printf -- '---\nsource:    "x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n\n# t\n')"
 run_case no-front-matter   bad "$(printf -- '# just a heading\n\nBody.\n')"
 run_case bad-date          bad "$(fm '"https://x"' '30-08-2026')"
+# Right shape, not a real date — the field exists to say WHEN, so an
+# impossible one cannot answer that. Leap years must still pass.
+run_case impossible-feb30  bad "$(fm '"https://x"' '2026-02-30')"
+run_case impossible-month  bad "$(fm '"https://x"' '2026-99-99')"
+run_case leap-day-ok       ok  "$(fm '"https://x"' '2024-02-29')"
+run_case non-leap-feb28-ok ok  "$(fm '"https://x"' '2026-02-28')"
+run_case century-leap-ok   ok  "$(fm '"https://x"' '2000-02-29')"
+run_case century-nonleap   bad "$(fm '"https://x"' '1900-02-29')"
 run_case bad-trust         bad "$(fm '"https://x"' '2026-08-30' 'authored')"
 
 # --- legitimate input that MUST pass (false positives are the worse bug) ----

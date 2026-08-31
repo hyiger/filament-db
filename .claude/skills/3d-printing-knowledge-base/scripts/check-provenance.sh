@@ -290,8 +290,21 @@ while IFS= read -r -d '' f; do
     # validly quoted `retrieved: "2026-08-30"`.
     case "$key" in
       retrieved)
-        [[ "$val" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
-          || add_note "retrieved is not YYYY-MM-DD: ${val}" ;;
+        # Shape AND calendar. `2026-02-30` and `2026-99-99` have the right digit
+        # layout and are not dates, and this field's whole job is saying when a
+        # source was fetched — an impossible one cannot answer that. The app
+        # itself hit this on spool dates (GH #372) for the same reason. Leap
+        # years handled explicitly rather than trusting a library to reject
+        # rather than silently normalise Feb 30 into March.
+        if ! printf '%s' "$val" | perl -ne '
+              my ($y,$m,$d) = /^(\d{4})-(\d{2})-(\d{2})$/ or exit 1;
+              exit 1 if $m < 1 || $m > 12 || $d < 1;
+              my @dim = (31,28,31,30,31,30,31,31,30,31,30,31);
+              $dim[1] = 29 if ($y % 4 == 0 && $y % 100 != 0) || $y % 400 == 0;
+              exit 1 if $d > $dim[$m-1];
+              exit 0'; then
+          add_note "retrieved is not a real YYYY-MM-DD date: ${val}"
+        fi ;;
       trust)
         [[ "$val" == "background" ]] \
           || add_note "trust must be \"background\" in external/ (got: ${val})" ;;
