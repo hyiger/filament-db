@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. Authentication is off by default; deployments that set the FILAMENTDB_API_KEY environment variable require `Authorization: Bearer <key>` on every /api request (see the bearerAuth security scheme). Because the gate is optional and all-or-nothing, it is modelled as an optional top-level requirement (anonymous OR bearerAuth) rather than per-operation, so tooling sends the token when one is configured and works unauthenticated when none is.",
-    "version": "1.79.0",
+    "version": "1.80.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
