@@ -136,6 +136,12 @@ run_case loc-spaced-path   ok  "$(lk '"/Users/r/My Charts/pa6-cf-bed-temp-chart.
 # input verbatim — so prose in a scope note must still be reachable.
 run_case leak-in-scope     bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "nozzle temp 265 for reference"\n---\n\nInert body.\n')"
 run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "chemistry only / nozzle temp 265"\n---\n\nInert body.\n')"
+# `source:` is blanked wholesale and `scope:` is scanned as prose, so a scope
+# that merely STARTS with a locator must still have its prose read — blanking
+# on a prefix match hid a real leak.
+run_case leak-scope-after-locator bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "~/notes then nozzle temp 265"\n---\n\nInert body.\n')"
+# (the escaped-quote citation is exercised end-to-end via gen_case below,
+#  which is the faithful test: the generator is what emits the \" form)
 
 # --- YAML escape semantics (the set is closed; the catch-all was not) -------
 run_case esc-U-8digit      bad "$(fm "\"${B}U00000020\"")"
@@ -252,6 +258,9 @@ gen_case gen-winpath    'C:\temp\tds.pdf'
 gen_case gen-winpath-q  'C:\query\vendor.pdf'
 gen_case gen-non-ascii  'Émile — révision 3'
 gen_case gen-scope-hash "https://x/tds" 'chemistry only #1'
+gen_case gen-spaced-file  'PA6 CF bed temp chart.pdf'
+gen_case gen-spaced-path  '/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf'
+gen_case gen-escaped-quote 'PA6 "CF" bed temp chart.pdf'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
