@@ -93,14 +93,23 @@ esac
 # accepting them here would make the generator produce a file its own auditor
 # refuses. CR/LF were already refused above; this is the rest of the class.
 assert_printable() {
+  local rc=0
   printf '%s' "$1" | perl -e 'use Encode(); binmode(STDIN,":raw");
     my $s = do { local $/; <STDIN> }; $s = "" unless defined $s;
     my $d = eval { Encode::decode("UTF-8",$s,Encode::FB_CROAK()) }; exit 1 unless defined $d;
     for my $c (split //,$d) { my $o=ord $c;
       next if $o==0x09; next if $o>=0x20 && $o<=0x7E;
-      next if $o==0x85; next if $o>=0xA0 && $o<=0xD7FF;
+      exit 2 if $o==0x85 || $o==0x2028 || $o==0x2029;
+      next if $o>=0xA0 && $o<=0xD7FF;
       next if $o>=0xE000 && $o<=0xFFFD; next if $o>=0x10000 && $o<=0x10FFFF; exit 1 }
-    exit 0' || die "$2 contains a control character or invalid UTF-8"
+    exit 0' || rc=$?
+  case $rc in
+    0) ;;
+    2) die "$2 contains a YAML line break (U+0085 NEL, U+2028, or U+2029).
+  YAML treats these as line terminators, so the value would silently split
+  across lines. Use a plain space." ;;
+    *) die "$2 contains a control character or invalid UTF-8" ;;
+  esac
 }
 assert_printable "$SRC" "source"
 assert_printable "$SCOPE" "scope"

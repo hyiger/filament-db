@@ -306,5 +306,56 @@ gen_case gen-non-ascii  'Émile — révision 3'
 gen_case gen-scope-hash "https://x/tds" 'chemistry only #1'
 gen_case gen-escaped-quote 'PA6 "CF" bed temp chart.pdf'
 
+# --- the generator/auditor contract -----------------------------------------
+# gen_case above asserts "valid input round-trips". This asserts the weaker but
+# much broader invariant that actually caught the bug it was written for: for
+# ANY input, either the generator REFUSES it or the auditor reports the result
+# clean. What must never happen is the generator exiting 0 on a file its own
+# auditor then rejects -- the user gets a success message and a broken file,
+# and the two tools disagree about the same bytes.
+#
+# The point is that a case here does not have to decide in advance WHICH side
+# should catch a given input. Three commits running, a validation rule was
+# tightened in one script and not its sibling; each time the gap was invisible
+# because no test crossed the two. Add nasty inputs here freely -- passing
+# costs nothing and the contradiction cannot hide.
+gen_contract() { # name citation [scope]
+  local d out rc; d="$(mktemp -d)"; mkdir -p "$d/external"
+  if ! (cd "$d" && bash "$here/new-external.sh" "$2" "gen$RANDOM" ${3:+"$3"}) >/dev/null 2>&1; then
+    pass=$((pass+1)); rm -rf "$d"; return   # refused up front: contract held
+  fi
+  out="$(cd "$d" && bash "$here/check-provenance.sh" 2>&1)"; rc=$?
+  rm -rf "$d"
+  if (( rc == 0 )); then pass=$((pass+1)); else
+    fail=$((fail+1))
+    printf 'FAIL [%s] generator ACCEPTED input its own auditor rejects:\n%s\n\n' "$1" "$out"
+  fi
+}
+
+# YAML line breaks: legal characters, but a parser splits the line on them, so
+# the value the auditor validated is not the value a reader gets.
+gen_contract ct-nel        "$(printf 'foo\xc2\x85bar')"
+gen_contract ct-ls         "$(printf 'foo\xe2\x80\xa8bar')"
+gen_contract ct-ps         "$(printf 'foo\xe2\x80\xa9bar')"
+gen_contract ct-nel-scope  'https://x/tds' "$(printf 'chemistry\xc2\x85only')"
+gen_contract ct-bel        "$(printf 'foo\x07bar')"
+gen_contract ct-del        "$(printf 'foo\x7fbar')"
+gen_contract ct-nbsp       "$(printf 'foo\xc2\xa0bar')"
+gen_contract ct-badutf8    "$(printf 'foo\xffbar')"
+gen_contract ct-lone-surro "$(printf 'foo\xed\xa0\x80bar')"
+# YAML-significant prose and quoting shapes.
+gen_contract ct-leading-hash   '#not-a-comment'
+gen_contract ct-leading-dash   '- looks like a list item'
+gen_contract ct-leading-quote  '"unbalanced'
+gen_contract ct-trailing-bs    'ends with backslash\'
+gen_contract ct-yaml-bool      'yes'
+gen_contract ct-yaml-null      '~'
+gen_contract ct-brace          '{a: b}'
+gen_contract ct-anchor         '&anchor value'
+gen_contract ct-tab            "$(printf 'has\ttab')"
+gen_contract ct-fake-key       'x" \n retrieved: "1999-01-01'
+gen_contract ct-emoji          'TDS 📄 revision 3'
+gen_contract ct-rtl            "$(printf 'TDS \xd7\xa2\xd7\x91\xd7\xa8\xd7\x99\xd7\xaa')"
+
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
 (( fail == 0 ))
