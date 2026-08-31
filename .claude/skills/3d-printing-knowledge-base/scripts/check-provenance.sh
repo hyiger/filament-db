@@ -189,12 +189,20 @@ while IFS= read -r -d '' f; do
   # and libyaml refuses the whole file — but a line-oriented reader sees text.
   # An ALLOW-list of what YAML permits, not a deny-list of C0+DEL: a deny-list
   # leaves C1 and invalid UTF-8 open, which is the identical failure again.
+  #
+  # U+0085 NEL, U+2028 and U+2029 are REJECTED, reversing an earlier note here
+  # that called them harmless. They are legal characters, but YAML treats them
+  # as LINE BREAKS: `source: foo<NEL>bar` is two lines to a parser and one line
+  # to these checks, and a reader ends up with `foobar` while the auditor
+  # validated `foo<NEL>bar`. What the auditor blesses has to be what the reader
+  # gets.
   if ! printf '%s' "$fm" | perl -e 'use Encode(); binmode(STDIN,":raw");
     my $s = do { local $/; <STDIN> }; $s = "" unless defined $s;
     my $d = eval { Encode::decode("UTF-8",$s,Encode::FB_CROAK()) }; exit 1 unless defined $d;
     for my $c (split //,$d) { my $o=ord $c;
       next if $o==0x09||$o==0x0A||$o==0x0D; next if $o>=0x20 && $o<=0x7E;
-      next if $o==0x85; next if $o>=0xA0 && $o<=0xD7FF;
+      exit 1 if $o==0x85 || $o==0x2028 || $o==0x2029;
+      next if $o>=0xA0 && $o<=0xD7FF;
       next if $o>=0xE000 && $o<=0xFFFD; next if $o>=0x10000 && $o<=0x10FFFF; exit 1 }
     exit 0'; then
     add_note "front matter contains a control character or invalid UTF-8 — rewrite with new-external.sh"

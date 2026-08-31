@@ -23,6 +23,17 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # which the auditor's non-whitespace test reads as content because the quotes
 # are content. The result is a tier-4 file with no provenance that reports
 # Clean, which is the one thing this pair of scripts exists to make impossible.
+# perl became a hard dependency of this script when the emptiness test went
+# Unicode-aware. Without the guard a missing perl makes every real_content call
+# fail, and the caller reports "source must not be empty" for a perfectly good
+# URL — an error naming the wrong problem entirely. check-provenance.sh has had
+# this guard since it took the same dependency; adding it to one script and not
+# its sibling is a mistake this pair has now made three times.
+if ! command -v perl >/dev/null 2>&1; then
+  printf 'ERROR: perl is required (Unicode-aware validation of source and scope).\n' >&2
+  exit 1
+fi
+
 # Unicode-aware: bash's [[:space:]] is ASCII-only under the C locale, so an
 # NBSP-only citation passed here AND passed the auditor. Same test both sides.
 real_content() { printf '%s' "$1" | perl -CSD -0777 -ne 'exit(/[^\s\p{Space}]/ ? 0 : 1)' 2>/dev/null; }

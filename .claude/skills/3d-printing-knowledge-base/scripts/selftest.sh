@@ -195,6 +195,13 @@ run_case esc-U-valid       ok  "$(fm "\"caf${B}U000000e9 TDS\"")"
 # --- byte-level shapes an editor introduces on its own ----------------------
 run_case crlf              ok  "$(printf -- '---\r\nsource:    "https://x"\r\nretrieved: 2026-08-30\r\ntrust:     background\r\nscope:     "c"\r\n---\r\n\r\n# t\r\n')"
 run_case bom               ok  "$(printf -- '\xEF\xBB\xBF---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+# NEL, LS and PS are legal characters that YAML treats as LINE BREAKS, so the
+# value a reader receives differs from the one these line-oriented checks saw.
+run_case yaml-nel          bad "$(printf -- '---\nsource:    foo\302\205bar\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+run_case yaml-ls           bad "$(printf -- '---\nsource:    foo\342\200\250bar\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+run_case yaml-ps           bad "$(printf -- '---\nsource:    foo\342\200\251bar\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
+# ...while ordinary accented text and punctuation must keep passing.
+run_case non-ascii-rich    ok  "$(fm '"Émile — révision 3 · café"')"
 run_case control-char      bad "$(printf -- '---\nsource:    "a\x01b"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
 
 # --- enumeration and write-scope --------------------------------------------
