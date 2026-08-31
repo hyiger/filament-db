@@ -119,7 +119,10 @@ case "$cmd" in
     ;;
 
   get)
-    [[ $# -ge 1 ]] || die "usage: fdb.sh get <path>"
+    # EXACTLY one, not at-least-one. An unquoted multi-word argument silently
+    # dropped everything after the first word, and this wrapper exists to
+    # refuse ambiguity rather than answer a question it was not asked.
+    [[ $# -eq 1 ]] || die "usage: fdb.sh get <path>   (one argument; quote it if it contains spaces)"
     req "$1"
     ;;
 
@@ -153,7 +156,7 @@ case "$cmd" in
     ;;
 
   find)
-    [[ $# -ge 1 ]] || die "usage: fdb.sh find <substring>"
+    [[ $# -eq 1 ]] || die "usage: fdb.sh find <substring>   (one argument; quote a multi-word name)"
     req /api/filaments | as_array | jq --arg q "$1" '[.[]
       | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))
       | { id: (._id // .id), name,
@@ -165,7 +168,11 @@ case "$cmd" in
     ;;
 
   detail)
-    [[ $# -ge 1 ]] || die "usage: fdb.sh detail <substring>"
+    # Sharpened by the exact-name short-circuit below: before it, an unquoted
+    # `detail PLA Basic` fell through to the substring path and was refused as
+    # ambiguous. With exact matching, a record named exactly `PLA` is returned
+    # instead — the wrong filament's calibration values, silently.
+    [[ $# -eq 1 ]] || die "usage: fdb.sh detail <name>   (one argument; quote a multi-word name)"
     # A TEMPLATE's name is a prefix of every one of its variants, so no
     # narrower substring exists and 11 of 12 templates in a real library were
     # unreachable by this command. An exact name match short-circuits the
