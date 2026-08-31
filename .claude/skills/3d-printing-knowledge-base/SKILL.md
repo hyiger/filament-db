@@ -133,6 +133,20 @@ you meant, so prefer the generator over hand-writing this block.
 A file in `external/` without front matter is untrusted — flag it to the user
 rather than reading from it. `scripts/check-provenance.sh` audits the directory.
 
+It also smells for processing parameters, since tier 4 must never carry them.
+That half is a **heuristic** and says so: it matches phrases like "nozzle temp"
+in the prose, so a citation whose filename happens to contain those words —
+`.../pa6-cf-bed-temp-chart.pdf` — will trip it. When that happens and the text
+really is a citation rather than a setting, say so in the file:
+
+```
+<!-- allow-param-smell: filename contains the words, not a processing value -->
+```
+
+The reason is required, and suppressed files are listed in the audit output, so
+a file cannot opt out silently. Prefer the marker over rewording a citation:
+the point is that the exception is visible to the next reader.
+
 **Licensing.** Much external material is copyleft (Wikipedia is CC BY-SA).
 Keeping it in `external/`, out of the published wiki, and attributed in front
 matter is what keeps that manageable. Never copy external content into

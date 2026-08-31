@@ -336,91 +336,75 @@ done < "$TEXTLIST"
 
 # Process parameters that must never live in external/ (tier 4).
 #
-# Anchors avoid the bare stems deliberately: `shrink` flags "reduces shrinkage
-# anisotropy" and `retract` flags "chain retraction in the Doi-Edwards tube
-# model" — both legitimate chemistry background, and with no allowlist a false
-# positive makes the audit permanently red with no remedy. `plate` and
-# `extruder` are excluded for the same reason.
+# A HEURISTIC, and deliberately a simple one. It used to strip locators before
+# scanning, so that a citation like `.../pa6-cf-bed-temp-chart` did not
+# synthesise the phrase "bed temp" once the tr flattens hyphens. That strip
+# grew an arm per citation shape over seven review rounds — scheme, POSIX path,
+# Windows path, UNC, tilde, bare filename, spaces, escaped quotes, three
+# delimiters — and the set never closed, because parsing citation syntax out of
+# free prose is open-ended: markdown links, angle brackets and href attributes
+# were next. Two of those arms also introduced MISSES while fixing false
+# positives, which is the worst possible trade for a scan like this.
+#
+# So the guessing is gone. What remains is the part that cannot be wrong, plus
+# an explicit escape hatch:
+#
+#   - `source:` is blanked, `scope:` is scanned. That is the field definitions,
+#     not a shape heuristic: a source is a citation, a scope is prose.
+#   - A bare URL token is dropped. `\S*` stops at whitespace, so it can only
+#     ever consume one unbroken token — `foo://nozzle temp 265` keeps its prose.
+#   - Anything else that trips the scan wrongly is silenced per file, in the
+#     file, with a stated reason.
+#
+# The trade is deliberate: a body citation whose filename contains
+# parameter-like words now flags, and the remedy is one line the reader can
+# see. That is better than a regex nobody can audit by eye.
+#
+# Anchors avoid the bare stems: `shrink` flags "reduces shrinkage anisotropy"
+# and `retract` flags "chain retraction in the Doi-Edwards tube model" — both
+# legitimate chemistry. `plate` and `extruder` are excluded for the same reason.
 PARAM_RE='(nozzle|bed|chamber|hotend) temp|extrusion multiplier|pressure advance|volumetric speed|dry(ing)? (temp|time)|first layer temp|flow ratio|linear advance|k factor|shrinkage compensation|fan speed|retraction (length|distance|speed|[0-9])'
+ALLOW_RE='<!--[[:space:]]*allow-param-smell:[[:space:]]*[^>]*-->'
 leaks=0
+suppressed=0
 while IFS= read -r -d '' f; do
   [[ -f "$f" ]] || continue
   content="$(read_normalised "$f")"
-  # Scan the WHOLE file — front matter and HTML comments included. The comment
-  # strip was a blind spot the generator's own template pointed writers into
-  # ("Body goes here." sat inside the comment), and one stray "<!--" in prose
-  # swallowed everything to the next "-->". The front-matter strip exempted
-  # source:/scope:, which new-external.sh copies verbatim from user input.
+
+  # The escape hatch. Requires a REASON after the colon, so the marker records
+  # why rather than merely silencing; listed in the output so a file cannot opt
+  # out invisibly.
+  if [[ "$content" =~ $ALLOW_RE ]]; then
+    (( suppressed == 0 )) && printf '\nParameter scan suppressed by an in-file marker:\n'
+    printf '    %s\n' "$(disp "${f#"$root"/}")"
+    suppressed=$((suppressed+1))
+    continue
+  fi
+
+  # Scan the whole file — front matter and HTML comments included. The comment
+  # strip was a blind spot the generator's own template pointed writers into,
+  # and one stray "<!--" swallowed everything to the next "-->".
   #
-  # LOCATORS are dropped first: once `-` maps to space, a citation such as
-  # .../pa6-cf-bed-temp-chart synthesises the phrase "bed temp". Exempting only
-  # `http(s)://` meant the GENERATOR wrote files its own auditor rejected — a
-  # Windows path, a POSIX path, a file:// URL and a bare .pdf all flagged.
-  #
-  # A DELIMITED path in BODY prose is consumed, because the delimiters make its
-  # extent explicit. All three ordinary ones — " ' and ` — with a backreference
-  # so the closing delimiter must match the opening one; recognising only the
-  # double quote left the same false positive for single-quoted and
-  # backticked citations, which markdown prose uses at least as often. — which is precisely what the front-matter case lacked and
-  # why guessing there kept failing. `See "/Users/r/My Charts/x-bed-temp.pdf"
-  # for it.` otherwise lost only the last fragment and left `bed temp`.
-  # Gated on the content STARTING as a locator, not merely containing a slash:
-  # `"nozzle/bed temp 265/100"` has a slash and is prose, and must stay scanned.
-  # The span is `(?:[^"\\]|\\.)*`, the standard escape-aware quoted-string
-  # idiom — a plain `[^"]*` stops at an ESCAPED quote, which is the same
-  # non-stateful capture bug already fixed twice elsewhere in this file. Using
-  # the idiom rather than another hand-rolled walk is what stops it recurring.
-  # Body ONLY: applying it to the front matter too re-hid
-  # `scope: "~/notes then nozzle temp 265"`, the exact miss fixed two commits
-  # ago — the front matter is governed by the field-role split above instead.
-  #
-  # Locator SHAPES, not "any token containing a slash": the blunt version
-  # silently drops `nozzle/bed temp 265/100`, an ordinary way to write a real
-  # leak. A token qualifies only with a scheme, a leading / ~/ ./ ../, a drive
-  # letter, a backslash, a dotted host before a slash, or a document extension
-  # — none of which `nozzle/bed` has. The leading [\x22\x27([] run is required
-  # because the generator QUOTES citations, so the token starts with a quote.
-  # \x27 for the apostrophe: a literal ' would close this shell-quoted program.
+  # `source:` blanked in the FRONT MATTER only: a body line beginning with that
+  # word is prose like any other.
   # '-' MUST be last in the tr set: '_-|' is a RANGE (0x5F..0x7C) eating a-z.
-  # `source:` is blanked WHOLESALE; `scope:` is scanned as prose. That split is
-  # the field definitions, not a heuristic: a source is a citation and is never
-  # prose, while a scope is "what this file may be used for" and is nothing but
-  # prose. Trying instead to decide whether a quoted VALUE was locator-shaped
-  # produced three separate defects in one commit — a prefix match blanked
-  # `~/notes then nozzle temp 265` and hid a real leak, an extension match hid
-  # `nozzle temp 265 see chart.pdf`, and the `[^"]*` capture stopped at the
-  # escaped quote in `PA6 \"CF\" chart.pdf` — because whether a spaced string
-  # is a path or a sentence is not decidable from its shape.
-  #
-  # Scoped to the FRONT MATTER, not the whole document: a bare `/gm` also
-  # erased body lines beginning `source:`, so `source: nozzle temp 265 C` in
-  # the prose was hidden — the exemption is for the metadata field, and a body
-  # line that merely starts with that word is prose like any other.
-  #
-  # The residual is stated rather than hidden: a processing parameter written
-  # into the SOURCE field is not scanned. That is a citation slot, the value
-  # stays visible in the file, and `scope` — the field that actually holds
-  # prose — is still covered.
   norm="$(printf '%s' "$content" \
-          | perl -0777 -pe 's{\A(---\n)(.*?)(\n---[ \t]*\n?)(.*)\z}{
-                               my ($o,$fm,$c,$body) = ($1,$2,$3,$4);
-                               $fm   =~ s{^source:.*$}{source:}gm;
-                               $body =~ s{([\x22\x27\x60])(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))(?:(?!\1)[^\\]|\\.)*\1}{ }g;
-                               "$o$fm$c$body" }se' \
-          | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
-                             s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
-                             s{(?<!\S)[\x22\x27(\[]*[A-Za-z]:[\\/]\S*}{ }g;
-                             s{(?<!\S)\S*\\\S*}{ }g;
-                             s{(?<!\S)[\x22\x27(\[]*[\w.-]+\.[A-Za-z]{2,}/\S*}{ }g;
-                             s{(?<!\S)[\x22\x27(\[]*[\w.-]+\.(?:pdf|html?|txt|md|csv|xlsx?|docx?|json)[\x22\x27)\]]*(?!\w)}{ }g' \
+          | perl -0777 -pe 's{\A(---\n)(.*?)(\n---[ \t]*\n?)}{
+                              my ($o,$fm,$c) = ($1,$2,$3);
+                              $fm =~ s{^source:.*$}{source:}gm;
+                              "$o$fm$c" }se' \
+          | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g' \
           | tr 'A-Z' 'a-z' | tr '_|:-' '    ' | tr -s '[:space:]' ' ')"
   [[ -z "${norm//[[:space:]]/}" ]] && continue
   if grep -qE "$PARAM_RE" <<<"$norm"; then
     (( leaks == 0 )) && printf '\nPossible processing parameters in external/ (tier 4 must not carry these):\n'
     printf '    %s\n' "$(disp "${f#"$root"/}")"
+    printf '      if this is a citation rather than a parameter, add to the file:\n'
+    printf '      <!-- allow-param-smell: why this is not a processing value -->\n'
     leaks=$((leaks+1))
   fi
 done < "$TEXTLIST"
+
 
 # Files the schema does not cover — listed, never fatal. SKILL.md says every
 # file here carries front matter, but a saved PDF cannot, and failing on one

@@ -117,20 +117,11 @@ run_case url-with-temp-ok  ok  "$(printf -- '---\nsource:    "https://x.com/pa6-
 # Only http(s) was exempt, so every other locator shape a person cites was
 # flattened by the tr into a parameter phrase — and the GENERATOR writes these.
 lk() { printf -- '---\nsource:    %s\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nInert body.\n' "$1"; }
-run_case loc-windows-path  ok  "$(lk '"C:\\Users\\r\\TDS\\pa6-cf-nozzle-temp-chart.pdf"')"
-run_case loc-posix-path    ok  "$(lk '"/Users/r/TDS/pa6-cf-bed-temp-chart.pdf"')"
-run_case loc-file-url      ok  "$(lk '"file:///Users/r/TDS/pa6-cf-bed-temp.pdf"')"
-run_case loc-tilde-path    ok  "$(lk '"~/TDS/pa6-cf-drying-temp.pdf"')"
-run_case loc-bare-filename ok  "$(lk '"pa6-cf-drying-temp-chart.pdf"')"
-run_case loc-schemeless    ok  "$(lk '"www.x.com/guides/pa6-cf-bed-temp-chart"')"
-run_case loc-unc-path      ok  "$(lk '"\\\\nas01\\shared\\pa6-cf-drying-temp.pdf"')"
 # ...and the strip must stay locator-SHAPED. A whole-token strip would drop
 # this, which is an ordinary way to write a real leak.
 run_case leak-slash-pair   bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nnozzle/bed temp 265/100 here.\n')"
 # A citation may contain SPACES; token-based strips removed only fragments and
 # left the parameter words behind.
-run_case loc-spaced-file   ok  "$(lk '"PA6 CF bed temp chart.pdf"')"
-run_case loc-spaced-path   ok  "$(lk '"/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf"')"
 # ...but the whole-value strip must stay gated on the value being a locator END
 # TO END. The front matter is scanned on purpose — new-external.sh copies user
 # input verbatim — so prose in a scope note must still be reachable.
@@ -139,16 +130,22 @@ run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrie
 # `source:` is blanked wholesale and `scope:` is scanned as prose, so a scope
 # that merely STARTS with a locator must still have its prose read — blanking
 # on a prefix match hid a real leak.
-# A quoted path in BODY prose: the quotes make its extent explicit, so it can
-# be consumed whole — but only when the content STARTS as a locator, or quoted
-# prose containing a slash would be swallowed with it.
-run_case body-quoted-path  ok  "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf" for it.\n')"
-run_case body-esc-quote-path ok "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/My Charts/PA6 \\"CF\\" bed temp chart.pdf" here.\n')"
-run_case body-single-quoted-path ok "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee %s/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf%s for it.\n' "'" "'")"
-run_case body-backtick-path   ok "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee `/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf` here.\n')"
-run_case body-single-q-prose bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nHe wrote %snozzle/bed temp 265/100%s there.\n' "'" "'")"
-run_case body-leak-after-path bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/x.pdf" and also nozzle temp 265 C.\n')"
-run_case body-quoted-prose bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nThe note said "nozzle/bed temp 265/100" exactly.\n')"
+# Locator stripping is GONE (see check-provenance.sh). A body citation whose
+# filename carries parameter-like words now flags, and the remedy is an
+# in-file marker — explicit and auditable, rather than a regex nobody can read.
+bodyf() { printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n%s\n' "$1"; }
+run_case body-path-now-flags bad "$(bodyf 'See /Users/r/My Charts/pa6-cf-bed-temp-chart.pdf')"
+run_case body-path-suppressed ok "$(bodyf '<!-- allow-param-smell: filename words, not a setting -->
+
+See /Users/r/My Charts/pa6-cf-bed-temp-chart.pdf')"
+# The marker must require a REASON, so it cannot silence a file invisibly.
+run_case marker-needs-reason bad "$(bodyf '<!-- allow-param-smell -->
+
+Set the nozzle temp to 265 C.')"
+# A bare URL token stays exempt — it is the one strip that cannot be wrong,
+# because \S* stops at whitespace and can only consume one token.
+run_case body-url-exempt     ok  "$(bodyf 'See https://x.com/pa6-cf-bed-temp-chart for it.')"
+run_case url-cannot-swallow  bad "$(bodyf 'A url foo://nozzle then nozzle temp 265 C.')"
 
 # The source exemption is for the FRONT-MATTER field only — a body line that
 # merely begins with that word is prose like any other.
@@ -272,8 +269,6 @@ gen_case gen-winpath    'C:\temp\tds.pdf'
 gen_case gen-winpath-q  'C:\query\vendor.pdf'
 gen_case gen-non-ascii  'Émile — révision 3'
 gen_case gen-scope-hash "https://x/tds" 'chemistry only #1'
-gen_case gen-spaced-file  'PA6 CF bed temp chart.pdf'
-gen_case gen-spaced-path  '/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf'
 gen_case gen-escaped-quote 'PA6 "CF" bed temp chart.pdf'
 
 printf '\n%d passed, %d failed\n' "$pass" "$fail"
