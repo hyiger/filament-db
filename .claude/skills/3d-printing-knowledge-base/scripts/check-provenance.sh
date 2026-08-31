@@ -357,8 +357,11 @@ while IFS= read -r -d '' f; do
   # `http(s)://` meant the GENERATOR wrote files its own auditor rejected — a
   # Windows path, a POSIX path, a file:// URL and a bare .pdf all flagged.
   #
-  # A QUOTED path in BODY prose is consumed, because the quotes make its
-  # extent explicit — which is precisely what the front-matter case lacked and
+  # A DELIMITED path in BODY prose is consumed, because the delimiters make its
+  # extent explicit. All three ordinary ones — " ' and ` — with a backreference
+  # so the closing delimiter must match the opening one; recognising only the
+  # double quote left the same false positive for single-quoted and
+  # backticked citations, which markdown prose uses at least as often. — which is precisely what the front-matter case lacked and
   # why guessing there kept failing. `See "/Users/r/My Charts/x-bed-temp.pdf"
   # for it.` otherwise lost only the last fragment and left `bed temp`.
   # Gated on the content STARTING as a locator, not merely containing a slash:
@@ -402,7 +405,7 @@ while IFS= read -r -d '' f; do
           | perl -0777 -pe 's{\A(---\n)(.*?)(\n---[ \t]*\n?)(.*)\z}{
                                my ($o,$fm,$c,$body) = ($1,$2,$3,$4);
                                $fm   =~ s{^source:.*$}{source:}gm;
-                               $body =~ s{"(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))(?:[^"\\]|\\.)*"}{ }g;
+                               $body =~ s{([\x22\x27\x60])(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))(?:(?!\1)[^\\]|\\.)*\1}{ }g;
                                "$o$fm$c$body" }se' \
           | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
