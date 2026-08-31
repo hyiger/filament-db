@@ -14,7 +14,7 @@
 
 set -uo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-pass=0; fail=0
+pass=0; fail=0; skip=0
 
 # Each case runs in a fresh tree so files cannot interact.
 run_case() { # name expect(ok|bad) file-body...
@@ -58,6 +58,15 @@ run_case junk-after-quote  bad "$(fm '"https://x" [')"
 run_case unterminated-q    bad "$(fm '"https://x')"
 run_case colon-space-value bad "$(fm 'Vendor TDS: rev 3')"
 run_case trailing-colon    bad "$(fm 'Vendor TDS:')"
+
+# --- lone CR is a YAML line break (5.4), not a printable character ----------
+# Only CRLF was normalised, so `source: "foo<CR>bar"` stayed one line to every
+# check here while a parser read back a different citation.
+CR="$(printf '\r')"
+run_case cr-in-quoted      bad "$(fm "\"foo${CR}bar\"")"
+run_case cr-in-plain       bad "$(fm "foo${CR}bar")"
+run_case cr-forges-key     bad "$(fm "\"x\"${CR}trust: authored")"
+run_case cr-trailing       ok  "$(printf -- '---\r\nsource:    "https://x/a"\r\nretrieved: 2026-08-30\r\ntrust:     background\r\nscope:     "chem"\r\n---\r\n\r\nBody.\r\n')"
 run_case duplicate-key     bad "$(printf -- '---\nsource:    https://x\nsource:    null\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\n# t\n')"
 run_case extra-line        bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\nunexpected: [\n---\n\n# t\n')"
 run_case no-space-colon    bad "$(printf -- '---\nsource:https://x\nretrieved:2026-08-30\ntrust:background\nscope:c\n---\n\n# t\n')"
@@ -356,6 +365,102 @@ gen_contract ct-tab            "$(printf 'has\ttab')"
 gen_contract ct-fake-key       'x" \n retrieved: "1999-01-01'
 gen_contract ct-emoji          'TDS 📄 revision 3'
 gen_contract ct-rtl            "$(printf 'TDS \xd7\xa2\xd7\x91\xd7\xa8\xd7\x99\xd7\xaa')"
+# Scopes that trip the parameter-leak heuristic. The contract missed this class
+# entirely because the only hostile scope above is a YAML line break, and the
+# generator happily wrote a file its own auditor then rejected.
+gen_contract ct-scope-nozzle 'https://x/tds' 'nozzle temp 265'
+gen_contract ct-scope-bed    'https://x/tds' 'bed 80C guidance'
+gen_contract ct-scope-dry    'https://x/tds' 'drying 4h at 70'
+gen_contract ct-scope-em     'https://x/tds' 'extrusion multiplier 0.98'
+gen_contract ct-scope-mvs    'https://x/tds' 'max volumetric speed 12'
+gen_contract ct-scope-pa     'https://x/tds' 'pressure advance 0.04'
+gen_contract ct-scope-ok     'https://x/tds' 'chemistry and history only'
+# The same phrases in the CITATION, which is scanned differently from the scope.
+gen_contract ct-src-nozzle   'Vendor TDS nozzle temp 265'
+gen_contract ct-src-bed      'Vendor sheet bed 80C'
 
-printf '\n%d passed, %d failed\n' "$pass" "$fail"
+# --- oracle: what the auditor blesses is what a READER gets ------------------
+# The contract above proves the two scripts agree with each OTHER. It cannot
+# catch them agreeing on something a real YAML parser reads differently -- which
+# is exactly what the U+0085 bug was: both tools saw one line, a parser saw two,
+# and the file the auditor certified resolved to a different citation.
+#
+# So when a real parser is available, re-read every generator-produced,
+# auditor-clean file and require the four fields to come back byte-identical to
+# what went in. OPTIONAL by design: the corpus has to run on a bare box, so a
+# missing parser skips these rather than failing. Skipped cases are reported and
+# NOT counted as passes -- a dependency silently turning a check into a no-op is
+# the failure mode this whole file exists to prevent.
+oracle_case() { # name citation
+  if [[ -z "${ORACLE:-}" ]]; then skip=$((skip+1)); return; fi
+  local d slug out got; d="$(mktemp -d)"; mkdir -p "$d/external"; slug="or$RANDOM"
+  if ! (cd "$d" && bash "$here/new-external.sh" "$2" "$slug") >/dev/null 2>&1; then
+    skip=$((skip+1)); rm -rf "$d"; return          # refusal is the contract's business
+  fi
+  if ! (cd "$d" && bash "$here/check-provenance.sh") >/dev/null 2>&1; then
+    skip=$((skip+1)); rm -rf "$d"; return
+  fi
+  got="$(sed -n '/^---$/,/^---$/p' "$d/external/$slug.md" | sed '1d;$d' \
+         | _oracle_run 2>/dev/null)"
+  rm -rf "$d"
+  if [[ "$got" == "$2" ]]; then pass=$((pass+1)); else
+    fail=$((fail+1))
+    printf 'FAIL [%s] a real YAML parser reads back a different value:\n  wrote: %s\n  read : %s\n\n' \
+      "$1" "$2" "$got"
+  fi
+}
+
+ORACLE=""
+# Build the oracle, then SMOKE-TEST it on a known-good block and only adopt it
+# if it round-trips. An availability probe is not the same thing as the oracle
+# working: `ruby -ryaml -e ""` succeeded on a stock macOS ruby whose YAML then
+# raised NameError on Date, so every oracle case FAILED where it should have
+# skipped. Testing the artifact itself cannot drift from what the artifact needs.
+_orc="$(mktemp)"; cat >"$_orc" <<'RUBY'
+require 'yaml'
+require 'date'
+d = begin; YAML.safe_load(STDIN.read, permitted_classes: [Date]); rescue; nil; end
+print(d.is_a?(Hash) && d['source'].is_a?(String) ? d['source'] : "<unparseable>")
+RUBY
+if command -v ruby >/dev/null 2>&1 && [[ "$(printf 'source: "https://x/a"\nretrieved: "2026-01-01"\ntrust: background\nscope: "c"\n' \
+      | ruby "$_orc" 2>/dev/null)" == "https://x/a" ]]; then
+  ORACLE="$_orc"; trap 'rm -f "$_orc"' EXIT
+else
+  rm -f "$_orc"
+fi
+_oracle_run() { ruby "$ORACLE"; }
+
+oracle_case or-url        'https://en.wikipedia.org/wiki/Polyphenylene_sulfide'
+oracle_case or-colon-hash 'Vendor TDS: rev 3 #12'
+oracle_case or-quotes     'He said "hi" in the TDS'
+oracle_case or-backslash  'Vendor TDS rev 3\'
+oracle_case or-winpath    'C:\temp\tds.pdf'
+oracle_case or-esc-u      'a\u0041b'
+oracle_case or-esc-x      'a\x41b'
+oracle_case or-dq-esc     'a\"b'
+oracle_case or-tab        "$(printf 'has\ttab')"
+oracle_case or-nonascii   'Émile — révision 3'
+oracle_case or-cjk        'ポリカーボネート TDS'
+oracle_case or-rtl        "$(printf 'TDS \xd7\xa2\xd7\x91\xd7\xa8\xd7\x99\xd7\xaa')"
+oracle_case or-emoji      'TDS 📄 revision 3'
+oracle_case or-nbsp       "$(printf 'a\xc2\xa0b')"
+oracle_case or-zwsp       "$(printf 'a\xe2\x80\x8bb')"
+oracle_case or-bidi       "$(printf 'a\xe2\x80\xaeb')"
+oracle_case or-yaml-bool  'yes'
+oracle_case or-tilde      '~'
+oracle_case or-brace      '{a: b}'
+oracle_case or-anchor     '&anchor value'
+oracle_case or-pct        '%YAML 1.2'
+oracle_case or-dashes     '--- '
+oracle_case or-forge      'x" 
+ trust: "authored'
+
+
+if (( skip > 0 )); then
+  printf '\n%d passed, %d failed, %d skipped' "$pass" "$fail" "$skip"
+  [[ -z "${ORACLE:-}" ]] && printf ' (no ruby+yaml: parser-oracle checks did not run)'
+  printf '\n'
+else
+  printf '\n%d passed, %d failed\n' "$pass" "$fail"
+fi
 (( fail == 0 ))

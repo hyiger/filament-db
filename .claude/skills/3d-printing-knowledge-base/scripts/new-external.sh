@@ -157,4 +157,26 @@ _Write the body below this line — outside the comment. Leave everything above 
 -->
 EOF
 
+# Audit the file just written, before claiming success. Mirroring the auditor's
+# rules here by hand is what failed three commits running: a rule tightened on
+# one side and not the other, each gap invisible because nothing crossed them.
+# Running the real auditor on the real output makes "the generator never reports
+# success on a file its own auditor rejects" true by construction -- including
+# for rules that do not exist yet.
+#
+# The file is deliberately KEPT on failure. The commonest cause is a scope whose
+# wording trips the parameter-leak heuristic, and both remedies (reword it, or
+# add the documented suppression marker) need the file to still be there.
+audit="${BASH_SOURCE[0]%/*}/check-provenance.sh"
+if [[ -x "$audit" || -f "$audit" ]]; then
+  if ! audit_out="$(bash "$audit" "$out" 2>&1)"; then
+    printf '%s\n' "$audit_out" >&2
+    die "wrote $out, but it does not pass check-provenance.sh (see above).
+  The file was kept so you can fix it. If the scope wording tripped the
+  parameter-leak heuristic and the file genuinely holds no processing
+  parameters, either reword the scope or add this line to the body:
+    <!-- allow-param-smell: why this phrasing is not a parameter -->"
+  fi
+fi
+
 printf 'Created %s\n' "$out"

@@ -45,6 +45,21 @@ fi
 TEXTLIST="$(mktemp)"; OTHERLIST="$(mktemp)"; FINDERR="$(mktemp)"
 trap 'rm -f "$TEXTLIST" "$OTHERLIST" "$FINDERR"' EXIT
 enumerate_failed=0
+
+# Explicit paths audit exactly those files. This exists so new-external.sh can
+# check the one file it just wrote: auditing the whole directory there would
+# fail the generator for somebody else's pre-existing problem, and reporting
+# success without auditing at all is how the generator came to emit files its
+# own auditor rejected.
+if (( $# > 0 )); then
+  for a in "$@"; do
+    if [[ ! -f "$a" ]]; then
+      printf 'ERROR: not a file: %s\n' "$a" >&2; exit 1
+    fi
+    printf '%s\0' "$a"
+  done > "$TEXTLIST"
+  : > "$OTHERLIST"
+else
 find -L "$root/external" -type f \
   \( -iname '*.md' -o -iname '*.markdown' -o -iname '*.txt' \) -print0 \
   2>"$FINDERR" | LC_ALL=C sort -z > "$TEXTLIST" || enumerate_failed=1
@@ -53,6 +68,7 @@ find -L "$root/external" -type f \
   ! -iname '*.md' ! -iname '*.markdown' ! -iname '*.txt' ! -name '.*' -print0 \
   2>>"$FINDERR" | LC_ALL=C sort -z > "$OTHERLIST" || enumerate_failed=1
 [[ -s "$FINDERR" ]] && enumerate_failed=1
+fi
 
 # Unicode-aware "is there anything here". Bash's [[:space:]] is ASCII-only
 # under the C locale, so NBSP, narrow NBSP and the ideographic space all read
@@ -69,7 +85,11 @@ disp() { printf '%s' "$1" | perl -pe 's/\\/\\\\/g; s/\n/\\n/g; s/\t/\\t/g; s/\r/
 # MEANS, but either made intact front matter report as "no front matter" — a
 # verdict that is false about the file. Byte-level escapes: perl reads bytes
 # here, so the BOM is \xEF\xBB\xBF, not \x{FEFF}.
-read_normalised() { perl -0777 -pe 's/^\xEF\xBB\xBF//; s/\r\n/\n/g' "$1"; }
+# YAML 1.2 (5.4) counts CR, LF and CRLF alike as line breaks, so a LONE CR has
+# to normalise too. Handling only CRLF meant `source: "foo<CR>bar"` stayed one
+# line to every check here while a real parser read back `foo bar` -- a
+# different citation than the one this script certified.
+read_normalised() { perl -0777 -pe 's/^\xEF\xBB\xBF//; s/\r\n?/\n/g' "$1"; }
 
 # ------------------------------------------------------------ scalar decoding
 
@@ -200,7 +220,7 @@ while IFS= read -r -d '' f; do
     my $s = do { local $/; <STDIN> }; $s = "" unless defined $s;
     my $d = eval { Encode::decode("UTF-8",$s,Encode::FB_CROAK()) }; exit 1 unless defined $d;
     for my $c (split //,$d) { my $o=ord $c;
-      next if $o==0x09||$o==0x0A||$o==0x0D; next if $o>=0x20 && $o<=0x7E;
+      next if $o==0x09||$o==0x0A; next if $o>=0x20 && $o<=0x7E;
       exit 1 if $o==0x85 || $o==0x2028 || $o==0x2029;
       next if $o>=0xA0 && $o<=0xD7FF;
       next if $o>=0xE000 && $o<=0xFFFD; next if $o>=0x10000 && $o<=0x10FFFF; exit 1 }
