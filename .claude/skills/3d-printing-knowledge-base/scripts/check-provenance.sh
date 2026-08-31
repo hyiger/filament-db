@@ -363,6 +363,10 @@ while IFS= read -r -d '' f; do
   # for it.` otherwise lost only the last fragment and left `bed temp`.
   # Gated on the content STARTING as a locator, not merely containing a slash:
   # `"nozzle/bed temp 265/100"` has a slash and is prose, and must stay scanned.
+  # The span is `(?:[^"\\]|\\.)*`, the standard escape-aware quoted-string
+  # idiom — a plain `[^"]*` stops at an ESCAPED quote, which is the same
+  # non-stateful capture bug already fixed twice elsewhere in this file. Using
+  # the idiom rather than another hand-rolled walk is what stops it recurring.
   # Body ONLY: applying it to the front matter too re-hid
   # `scope: "~/notes then nozzle temp 265"`, the exact miss fixed two commits
   # ago — the front matter is governed by the field-role split above instead.
@@ -398,7 +402,7 @@ while IFS= read -r -d '' f; do
           | perl -0777 -pe 's{\A(---\n)(.*?)(\n---[ \t]*\n?)(.*)\z}{
                                my ($o,$fm,$c,$body) = ($1,$2,$3,$4);
                                $fm   =~ s{^source:.*$}{source:}gm;
-                               $body =~ s{"(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))[^"]*"}{ }g;
+                               $body =~ s{"(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))(?:[^"\\]|\\.)*"}{ }g;
                                "$o$fm$c$body" }se' \
           | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;

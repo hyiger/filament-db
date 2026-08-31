@@ -143,6 +143,8 @@ run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrie
 # be consumed whole — but only when the content STARTS as a locator, or quoted
 # prose containing a slash would be swallowed with it.
 run_case body-quoted-path  ok  "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf" for it.\n')"
+run_case body-esc-quote-path ok "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/My Charts/PA6 \\"CF\\" bed temp chart.pdf" here.\n')"
+run_case body-leak-after-path bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/x.pdf" and also nozzle temp 265 C.\n')"
 run_case body-quoted-prose bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nThe note said "nozzle/bed temp 265/100" exactly.\n')"
 
 # The source exemption is for the FRONT-MATTER field only — a body line that
