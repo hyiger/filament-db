@@ -155,6 +155,15 @@ Set the nozzle temp to 265 C.')"
 # Bash's [[:space:]] is ASCII-only under the C locale, so these three silenced
 # a real leak after the ASCII fix. U+202F is the character this repo's "Space"
 # number format emits, which makes it a plausible paste rather than a curio.
+# The same Unicode-whitespace hole existed in the FIELD emptiness test, not
+# just the suppression reason — fixed in one place and left in two others.
+run_case nbsp-only-source  bad "$(fm "\"$(printf '\302\240')\"")"
+run_case nbsp-only-scope   bad "$(fm '"https://x"' '2026-08-30' 'background' "\"$(printf '\302\240')\"")"
+# Command substitution strips a decoded TRAILING NEWLINE, so `background\n`
+# compared equal to `background` and a file a YAML reader sees differently
+# audited clean.
+run_case trailing-nl-trust bad "$(fm '"https://x"' '2026-08-30' "\"background${B}n\"")"
+run_case trailing-nl-date  bad "$(fm '"https://x"' "\"2026-08-30${B}n\"")"
 run_case marker-nbsp-reason  bad "$(bodyf "$(printf '<!-- allow-param-smell: \302\240 -->\n\nSet the nozzle temp to 265 C.')")"
 run_case marker-nnbsp-reason bad "$(bodyf "$(printf '<!-- allow-param-smell: \342\200\257 -->\n\nSet the nozzle temp to 265 C.')")"
 run_case marker-ideo-reason  bad "$(bodyf "$(printf '<!-- allow-param-smell: \343\200\200 -->\n\nSet the nozzle temp to 265 C.')")"

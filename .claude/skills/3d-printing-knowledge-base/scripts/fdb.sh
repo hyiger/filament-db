@@ -157,6 +157,10 @@ case "$cmd" in
 
   find)
     [[ $# -eq 1 ]] || die "usage: fdb.sh find <substring>   (one argument; quote a multi-word name)"
+    # An EMPTY argument makes contains("") match every record, so a
+    # single-record database returns that record and its calibration
+    # values for a lookup that named nothing.
+    [[ -n "${1//[[:space:]]/}" ]] || die "usage: fdb.sh find <name>   (the name must not be empty)"
     req /api/filaments | as_array | jq --arg q "$1" '[.[]
       | select((.name // "") | ascii_downcase | contains($q | ascii_downcase))
       | { id: (._id // .id), name,
@@ -173,6 +177,10 @@ case "$cmd" in
     # ambiguous. With exact matching, a record named exactly `PLA` is returned
     # instead — the wrong filament's calibration values, silently.
     [[ $# -eq 1 ]] || die "usage: fdb.sh detail <name>   (one argument; quote a multi-word name)"
+    # An EMPTY argument makes contains("") match every record, so a
+    # single-record database returns that record and its calibration
+    # values for a lookup that named nothing.
+    [[ -n "${1//[[:space:]]/}" ]] || die "usage: fdb.sh detail <name>   (the name must not be empty)"
     # A TEMPLATE's name is a prefix of every one of its variants, so no
     # narrower substring exists and 11 of 12 templates in a real library were
     # unreachable by this command. An exact name match short-circuits the

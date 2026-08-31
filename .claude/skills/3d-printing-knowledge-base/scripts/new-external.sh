@@ -23,12 +23,15 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # which the auditor's non-whitespace test reads as content because the quotes
 # are content. The result is a tier-4 file with no provenance that reports
 # Clean, which is the one thing this pair of scripts exists to make impossible.
-[[ -n "${1//[[:space:]]/}" ]] || die "source must not be empty (got: '$1')"
+# Unicode-aware: bash's [[:space:]] is ASCII-only under the C locale, so an
+# NBSP-only citation passed here AND passed the auditor. Same test both sides.
+real_content() { printf '%s' "$1" | perl -CSD -0777 -ne 'exit(/[^\s\p{Space}]/ ? 0 : 1)' 2>/dev/null; }
+real_content "$1" || die "source must not be empty (got: '$1')"
 
 SRC="$1"
 SLUG="$2"
 SCOPE="${3:-chemistry and background only — no processing parameters}"
-[[ -n "${SCOPE//[[:space:]]/}" ]] || die "scope must not be empty"
+real_content "$SCOPE" || die "scope must not be empty"
 
 # Locate the knowledge-base root: the dir containing external/.
 root="$PWD"

@@ -54,6 +54,14 @@ find -L "$root/external" -type f \
   2>>"$FINDERR" | LC_ALL=C sort -z > "$OTHERLIST" || enumerate_failed=1
 [[ -s "$FINDERR" ]] && enumerate_failed=1
 
+# Unicode-aware "is there anything here". Bash's [[:space:]] is ASCII-only
+# under the C locale, so NBSP, narrow NBSP and the ideographic space all read
+# as content — the same defect fixed for suppression reasons, which was left
+# standing in the two places that decide whether a FIELD is empty.
+has_real_content() {
+  printf '%s' "$1" | perl -CSD -0777 -ne 'exit(/[^\s\p{Space}]/ ? 0 : 1)' 2>/dev/null
+}
+
 # A path may contain a newline, which would split or forge a report line.
 disp() { printf '%s' "$1" | perl -pe 's/\\/\\\\/g; s/\n/\\n/g; s/\t/\\t/g; s/\r/\\r/g'; }
 
@@ -284,8 +292,11 @@ while IFS= read -r -d '' f; do
             add_note "${key}: unquoted value contains \": \" or ends in \":\" — quote it, or rewrite with new-external.sh"; continue ;;
         esac ;;
     esac
-    val="$(yaml_scalar "$raw")"
-    if [[ -z "${val//[[:space:]]/}" ]]; then add_note "${key}: empty"; continue; fi
+    # The `printf x` guard preserves a decoded TRAILING NEWLINE, which command
+    # substitution otherwise strips — so `trust: "background\n"` compared equal
+    # to `background` and a file a YAML reader sees differently audited clean.
+    val="$(yaml_scalar "$raw"; printf x)"; val="${val%x}"
+    if ! has_real_content "$val"; then add_note "${key}: empty"; continue; fi
     # A YAML BOOLEAN is never a citation or a scope. Unquoted `true`, `no`,
     # `off` and friends load as booleans, not strings, and there is no reading
     # under which they are provenance — so this is the half of "implicitly
@@ -311,7 +322,9 @@ while IFS= read -r -d '' f; do
         # years handled explicitly rather than trusting a library to reject
         # rather than silently normalise Feb 30 into March.
         if ! printf '%s' "$val" | perl -ne '
-              my ($y,$m,$d) = /^(\d{4})-(\d{2})-(\d{2})$/ or exit 1;
+              # \A..\z, not ^..$ — in perl the $ anchor matches BEFORE a trailing
+              # newline, so a decoded "2026-08-30\n" satisfied ^...$ and passed.
+              my ($y,$m,$d) = /\A(\d{4})-(\d{2})-(\d{2})\z/ or exit 1;
               exit 1 if $m < 1 || $m > 12 || $d < 1;
               my @dim = (31,28,31,30,31,30,31,31,30,31,30,31);
               $dim[1] = 29 if ($y % 4 == 0 && $y % 100 != 0) || $y % 400 == 0;
