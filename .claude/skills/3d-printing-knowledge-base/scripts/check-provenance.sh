@@ -286,6 +286,20 @@ while IFS= read -r -d '' f; do
     esac
     val="$(yaml_scalar "$raw")"
     if [[ -z "${val//[[:space:]]/}" ]]; then add_note "${key}: empty"; continue; fi
+    # A YAML BOOLEAN is never a citation or a scope. Unquoted `true`, `no`,
+    # `off` and friends load as booleans, not strings, and there is no reading
+    # under which they are provenance — so this is the half of "implicitly
+    # typed" worth enforcing. NUMBERS are deliberately still accepted: an
+    # unquoted ISBN (9780123456789) or a bare year is a citation someone
+    # plausibly writes, and rejecting those would be a false positive, which
+    # for this pair of scripts is the worse failure.
+    if [[ "$key" == source || "$key" == scope ]] && [[ "${raw:0:1}" != '"' && "${raw:0:1}" != "'" ]]; then
+      case "$val" in
+        y|Y|yes|Yes|YES|n|N|no|No|NO|true|True|TRUE|false|False|FALSE|on|On|ON|off|Off|OFF)
+          add_note "${key}: a YAML boolean is not provenance — quote it if that is the literal text"
+          continue ;;
+      esac
+    fi
     # Both validate the DECODED value; matching serialized text rejected a
     # validly quoted `retrieved: "2026-08-30"`.
     case "$key" in
