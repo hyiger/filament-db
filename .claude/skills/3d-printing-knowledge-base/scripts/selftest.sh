@@ -105,6 +105,19 @@ run_case leak-in-comment   bad "$(printf -- '---\nsource:    "https://x"\nretrie
 run_case leak-underscored  bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSet bed_temperature to 100.\n')"
 run_case chemistry-ok      ok  "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nPA6 reduces shrinkage anisotropy; chain retraction in the Doi-Edwards tube model.\n')"
 run_case url-with-temp-ok  ok  "$(printf -- '---\nsource:    "https://x.com/pa6-cf-bed-temp-chart"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nInert body.\n')"
+# Only http(s) was exempt, so every other locator shape a person cites was
+# flattened by the tr into a parameter phrase — and the GENERATOR writes these.
+lk() { printf -- '---\nsource:    %s\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nInert body.\n' "$1"; }
+run_case loc-windows-path  ok  "$(lk '"C:\\Users\\r\\TDS\\pa6-cf-nozzle-temp-chart.pdf"')"
+run_case loc-posix-path    ok  "$(lk '"/Users/r/TDS/pa6-cf-bed-temp-chart.pdf"')"
+run_case loc-file-url      ok  "$(lk '"file:///Users/r/TDS/pa6-cf-bed-temp.pdf"')"
+run_case loc-tilde-path    ok  "$(lk '"~/TDS/pa6-cf-drying-temp.pdf"')"
+run_case loc-bare-filename ok  "$(lk '"pa6-cf-drying-temp-chart.pdf"')"
+run_case loc-schemeless    ok  "$(lk '"www.x.com/guides/pa6-cf-bed-temp-chart"')"
+run_case loc-unc-path      ok  "$(lk '"\\\\nas01\\shared\\pa6-cf-drying-temp.pdf"')"
+# ...and the strip must stay locator-SHAPED. A whole-token strip would drop
+# this, which is an ordinary way to write a real leak.
+run_case leak-slash-pair   bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nnozzle/bed temp 265/100 here.\n')"
 
 # --- YAML escape semantics (the set is closed; the catch-all was not) -------
 run_case esc-U-8digit      bad "$(fm "\"${B}U00000020\"")"

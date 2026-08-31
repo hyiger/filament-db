@@ -338,11 +338,26 @@ while IFS= read -r -d '' f; do
   # swallowed everything to the next "-->". The front-matter strip exempted
   # source:/scope:, which new-external.sh copies verbatim from user input.
   #
-  # URLs are dropped first: once `-` maps to space, a citation link such as
-  # .../pa6-cf-bed-temp-chart would false-positive.
+  # LOCATORS are dropped first: once `-` maps to space, a citation such as
+  # .../pa6-cf-bed-temp-chart synthesises the phrase "bed temp". Exempting only
+  # `http(s)://` meant the GENERATOR wrote files its own auditor rejected — a
+  # Windows path, a POSIX path, a file:// URL and a bare .pdf all flagged.
+  #
+  # Locator SHAPES, not "any token containing a slash": the blunt version
+  # silently drops `nozzle/bed temp 265/100`, an ordinary way to write a real
+  # leak. A token qualifies only with a scheme, a leading / ~/ ./ ../, a drive
+  # letter, a backslash, a dotted host before a slash, or a document extension
+  # — none of which `nozzle/bed` has. The leading [\x22\x27([] run is required
+  # because the generator QUOTES citations, so the token starts with a quote.
+  # \x27 for the apostrophe: a literal ' would close this shell-quoted program.
   # '-' MUST be last in the tr set: '_-|' is a RANGE (0x5F..0x7C) eating a-z.
   norm="$(printf '%s' "$content" \
-          | perl -0777 -pe 's{\bhttps?://\S+}{ }g' \
+          | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
+                             s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
+                             s{(?<!\S)[\x22\x27(\[]*[A-Za-z]:[\\/]\S*}{ }g;
+                             s{(?<!\S)\S*\\\S*}{ }g;
+                             s{(?<!\S)[\x22\x27(\[]*[\w.-]+\.[A-Za-z]{2,}/\S*}{ }g;
+                             s{(?<!\S)[\x22\x27(\[]*[\w.-]+\.(?:pdf|html?|txt|md|csv|xlsx?|docx?|json)[\x22\x27)\]]*(?!\w)}{ }g' \
           | tr 'A-Z' 'a-z' | tr '_|:-' '    ' | tr -s '[:space:]' ' ')"
   [[ -z "${norm//[[:space:]]/}" ]] && continue
   if grep -qE "$PARAM_RE" <<<"$norm"; then
