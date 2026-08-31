@@ -139,6 +139,12 @@ run_case leak-scope-slash  bad "$(printf -- '---\nsource:    "https://x"\nretrie
 # `source:` is blanked wholesale and `scope:` is scanned as prose, so a scope
 # that merely STARTS with a locator must still have its prose read — blanking
 # on a prefix match hid a real leak.
+# A quoted path in BODY prose: the quotes make its extent explicit, so it can
+# be consumed whole — but only when the content STARTS as a locator, or quoted
+# prose containing a slash would be swallowed with it.
+run_case body-quoted-path  ok  "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nSee "/Users/r/My Charts/pa6-cf-bed-temp-chart.pdf" for it.\n')"
+run_case body-quoted-prose bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nThe note said "nozzle/bed temp 265/100" exactly.\n')"
+
 # The source exemption is for the FRONT-MATTER field only — a body line that
 # merely begins with that word is prose like any other.
 run_case leak-body-source-line bad "$(printf -- '---\nsource:    "https://x"\nretrieved: 2026-08-30\ntrust:     background\nscope:     "c"\n---\n\nsource: nozzle temp 265 C\n')"

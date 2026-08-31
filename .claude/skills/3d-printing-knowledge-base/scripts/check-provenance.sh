@@ -357,6 +357,16 @@ while IFS= read -r -d '' f; do
   # `http(s)://` meant the GENERATOR wrote files its own auditor rejected — a
   # Windows path, a POSIX path, a file:// URL and a bare .pdf all flagged.
   #
+  # A QUOTED path in BODY prose is consumed, because the quotes make its
+  # extent explicit — which is precisely what the front-matter case lacked and
+  # why guessing there kept failing. `See "/Users/r/My Charts/x-bed-temp.pdf"
+  # for it.` otherwise lost only the last fragment and left `bed temp`.
+  # Gated on the content STARTING as a locator, not merely containing a slash:
+  # `"nozzle/bed temp 265/100"` has a slash and is prose, and must stay scanned.
+  # Body ONLY: applying it to the front matter too re-hid
+  # `scope: "~/notes then nozzle temp 265"`, the exact miss fixed two commits
+  # ago — the front matter is governed by the field-role split above instead.
+  #
   # Locator SHAPES, not "any token containing a slash": the blunt version
   # silently drops `nozzle/bed temp 265/100`, an ordinary way to write a real
   # leak. A token qualifies only with a scheme, a leading / ~/ ./ ../, a drive
@@ -385,9 +395,11 @@ while IFS= read -r -d '' f; do
   # stays visible in the file, and `scope` — the field that actually holds
   # prose — is still covered.
   norm="$(printf '%s' "$content" \
-          | perl -0777 -pe 's{\A---\n(.*?)\n---[ \t]*$}{
-                               my $fm = $1; $fm =~ s{^source:.*$}{source:}gm;
-                               "---\n$fm\n---" }sme' \
+          | perl -0777 -pe 's{\A(---\n)(.*?)(\n---[ \t]*\n?)(.*)\z}{
+                               my ($o,$fm,$c,$body) = ($1,$2,$3,$4);
+                               $fm   =~ s{^source:.*$}{source:}gm;
+                               $body =~ s{"(?=(?:[A-Za-z][A-Za-z0-9+.-]*://|~?/|\.{1,2}/|[A-Za-z]:[\\/]|\\\\))[^"]*"}{ }g;
+                               "$o$fm$c$body" }se' \
           | perl -0777 -pe 's{\b[A-Za-z][A-Za-z0-9+.-]*://\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*(?:~|\.{1,2})?/\S*}{ }g;
                              s{(?<!\S)[\x22\x27(\[]*[A-Za-z]:[\\/]\S*}{ }g;
