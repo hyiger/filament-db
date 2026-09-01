@@ -150,13 +150,40 @@ export async function POST(request: NextRequest) {
   const locationId = str(body.locationId);
   const printer = str(body.printer);
 
-  // Wrong-typed optional fields are refused rather than coerced away by str()
-  // / ignored by resolveFormat. Silently dropping them prints a label the
-  // caller did not ask for — the same failure shape as the dryRun and preset
-  // cases below, found by the input-surface invariant test.
-  if (body.printer !== undefined && typeof body.printer !== "string") {
-    return errorResponse("printer must be a string.", 400);
+  // STRUCTURAL VALIDATION, done once for the whole surface.
+  //
+  // Three review rounds each found another field that was silently coerced
+  // rather than refused, because `str()` maps ANY non-string to null: the
+  // field then reads as "omitted", the request succeeds, and a label prints
+  // that the caller never asked for. Printing is irreversible, so this route
+  // refuses malformed input rather than interpreting it. Adding a field means
+  // adding it to one of these lists.
+
+  // (a) Unknown top-level keys. This is what catches a misspelled
+  // safety-critical field -- `dryrun: true` would otherwise leave dryRun
+  // false and PRINT. Strict rather than lenient, deliberately.
+  const KNOWN_FIELDS = new Set([
+    "instanceId", "locationId", "printer", "preset", "format", "qrMode", "baseUrl", "dryRun",
+  ]);
+  const unknownFields = Object.keys(body).filter((k) => !KNOWN_FIELDS.has(k));
+  if (unknownFields.length > 0) {
+    return errorResponse(
+      `Unknown field(s): ${unknownFields.join(", ")}. Allowed: ${[...KNOWN_FIELDS].join(", ")}.`,
+      400,
+    );
   }
+
+  // (b) Every optional STRING field, type-checked BEFORE str() can coerce it
+  // away. Applies to all of them, not the subset a given review happened to
+  // name.
+  for (const field of ["instanceId", "locationId", "printer", "preset", "baseUrl"] as const) {
+    const value = (body as Record<string, unknown>)[field];
+    if (value !== undefined && typeof value !== "string") {
+      return errorResponse(`${field} must be a string.`, 400);
+    }
+  }
+
+  // (c) The two non-string fields.
   if (
     body.format !== undefined &&
     (typeof body.format !== "object" || body.format === null || Array.isArray(body.format))

@@ -189,53 +189,71 @@ describe("POST /api/labels/print", () => {
   });
 
   describe("no caller input escapes as a 5xx (GH #1195 class invariant)", () => {
-    // Three review rounds each found another input that surfaced as a 500 or,
-    // worse, was silently reinterpreted into a REAL print. Fixing them one at a
-    // time kept missing siblings, so this enumerates the whole PrintBody
-    // surface and asserts the invariant directly: a malformed value is always
-    // a 4xx (or 501 for an unimplemented capability) and never a 5xx, and
-    // never a successful print.
-    const MALFORMED: Array<[string, Record<string, unknown>]> = [
-      ["instanceId wrong type", { instanceId: 42 }],
-      ["instanceId over the 128-char bound", { instanceId: "a".repeat(129) }],
-      ["locationId not an ObjectId", { locationId: "nope" }],
-      ["locationId wrong type", { locationId: 42 }],
-      ["printer wrong type", { instanceId: "PLACEHOLDER", printer: 42 }],
-      ["printer legacy serial", { instanceId: "PLACEHOLDER", printer: "/dev/tty.X" }],
-      ["printer bad scheme", { instanceId: "PLACEHOLDER", printer: "ipp://x/y" }],
-      ["preset unknown", { instanceId: "PLACEHOLDER", preset: "nope" }],
-      ["preset inherited from Object.prototype", { instanceId: "PLACEHOLDER", preset: "constructor" }],
-      ["preset toString", { instanceId: "PLACEHOLDER", preset: "toString" }],
-      ["qrMode wrong case", { instanceId: "PLACEHOLDER", qrMode: "URL" }],
-      ["qrMode unknown", { instanceId: "PLACEHOLDER", qrMode: "nope" }],
-      ["qrMode wrong type", { instanceId: "PLACEHOLDER", qrMode: 1 }],
-      ["dryRun string", { instanceId: "PLACEHOLDER", printer: "FilamentDB_Label", dryRun: "true" }],
-      ["dryRun number", { instanceId: "PLACEHOLDER", printer: "FilamentDB_Label", dryRun: 1 }],
-      ["baseUrl not http(s)", { locationId: "PLACEHOLDER_LOC", baseUrl: "ftp://x/" }],
-      ["baseUrl unparseable", { locationId: "PLACEHOLDER_LOC", baseUrl: "::::" }],
-      ["format vertical orientation", { instanceId: "PLACEHOLDER", format: { orientation: "vertical" } }],
-      ["format empties every line", {
-        instanceId: "PLACEHOLDER",
+    // Four review rounds each found another input that surfaced as a 500 or,
+    // worse, was silently reinterpreted into a REAL print. The root cause is
+    // uniform: `str()` maps any non-string to null, so a wrong-typed field
+    // reads as "omitted" and the request succeeds having ignored it.
+    //
+    // TEST DESIGN (this is the part the first version got wrong): every case
+    // rides on an OTHERWISE-VALID request, so the field under test is the only
+    // reason it can fail. The first version tested each malformed field in
+    // isolation, where e.g. `instanceId: 42` failed as "no subject" — passing
+    // for the wrong reason and hiding that the value had been silently
+    // coerced. A wrong-typed subject WITH a valid counterpart still printed.
+    const bad = (patch: Record<string, unknown>) => patch;
+
+    const CASES: Array<[string, Record<string, unknown>]> = [
+      // Wrong-typed fields, each alongside an otherwise-valid request.
+      ["instanceId wrong type (valid locationId present)", bad({ instanceId: 42, locationId: "PLACEHOLDER_LOC" })],
+      ["locationId wrong type (valid instanceId present)", bad({ locationId: 42 })],
+      ["preset wrong type", bad({ preset: 42 })],
+      ["baseUrl wrong type", bad({ baseUrl: 42, qrMode: "url" })],
+      ["printer wrong type", bad({ printer: 42 })],
+      ["format wrong type", bad({ format: "nope" })],
+      ["format is an array", bad({ format: [] })],
+      ["dryRun string", bad({ dryRun: "true", printer: "FilamentDB_Label" })],
+      ["dryRun number", bad({ dryRun: 1, printer: "FilamentDB_Label" })],
+      // Misspelled safety-critical field: without the unknown-key check this
+      // leaves dryRun false and PRINTS.
+      ["misspelled dryrun", bad({ dryrun: true, printer: "FilamentDB_Label" })],
+      ["unknown field", bad({ nonsense: 1 })],
+      // Value-domain failures.
+      ["instanceId over the 128-char bound", bad({ instanceId: "a".repeat(129) })],
+      ["locationId not an ObjectId", bad({ instanceId: undefined, locationId: "nope" })],
+      ["preset unknown", bad({ preset: "nope" })],
+      ["preset inherited from Object.prototype", bad({ preset: "constructor" })],
+      ["preset toString", bad({ preset: "toString" })],
+      ["qrMode wrong case", bad({ qrMode: "URL" })],
+      ["qrMode unknown", bad({ qrMode: "nope" })],
+      ["qrMode wrong type", bad({ qrMode: 1 })],
+      ["baseUrl not http(s)", bad({ baseUrl: "ftp://x/", qrMode: "url" })],
+      ["baseUrl unparseable", bad({ baseUrl: "::::", qrMode: "url" })],
+      ["format vertical orientation", bad({ format: { orientation: "vertical" } })],
+      ["format selects no QR and no non-empty fields", bad({
         format: { lines: ["colorName"], qr: { enabled: false, placement: "left" } },
-      }],
-      ["format wrong type", { instanceId: "PLACEHOLDER", format: "nope" }],
-      ["both subjects", { instanceId: "PLACEHOLDER", locationId: "PLACEHOLDER_LOC" }],
-      ["neither subject", {}],
+      })],
+      ["both subjects", bad({ locationId: "PLACEHOLDER_LOC" })],
+      ["neither subject", bad({ instanceId: undefined })],
     ];
 
-    it.each(MALFORMED)("%s → 4xx/501, never 5xx and never a print", async (_label, patch) => {
-      const body: Record<string, unknown> = { dryRun: true, ...patch };
-      // Substitute the real ids the table refers to symbolically.
-      if (body.instanceId === "PLACEHOLDER") body.instanceId = instanceId;
+    it.each(CASES)("%s → refused, never 5xx and never a print", async (_label, patch) => {
+      // Base is a request that WOULD succeed, so only the patch can break it.
+      const body: Record<string, unknown> = { instanceId, dryRun: true, ...patch };
       if (body.locationId === "PLACEHOLDER_LOC") body.locationId = locationId;
+      if (body.instanceId === undefined) delete body.instanceId;
+
       const res = await post(body);
-      // 501 is legitimate for a well-formed request naming a capability the
-      // server renderer does not implement; everything else must be 4xx.
-      expect(res.status === 501 || res.status < 500).toBe(true);
-      // A malformed request must not have produced a label either.
-      if (res.status === 200) {
-        throw new Error(`malformed input was accepted: ${JSON.stringify(body)}`);
-      }
+      // 501 is legitimate for a well-formed request naming an unimplemented
+      // capability; everything else must be 4xx.
+      expect(res.status === 501 || (res.status >= 400 && res.status < 500)).toBe(true);
+      expect(res.status).not.toBe(200);
+    });
+
+    it("the base request the cases are built on actually succeeds", async () => {
+      // Without this, a base that silently 400s would make every case above
+      // pass vacuously.
+      const res = await post({ instanceId, dryRun: true });
+      expect(res.status).toBe(200);
     });
   });
 
