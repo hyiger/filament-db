@@ -7103,8 +7103,83 @@
                   },
                   "format": {
                     "type": "object",
-                    "description": "Explicit LabelFormat overrides applied over the preset, then normalized.",
-                    "additionalProperties": true
+                    "description": "Partial LabelFormat override, applied over the preset. Validated STRICTLY: unknown keys at either level, wrong types, invalid enum values and an empty `lines` list are 400s. This is deliberately stricter than the persistence normalizer, which coerces unknown values to defaults \u2014 for a print request that would silently produce a label the caller did not ask for. Omit any member to keep the preset's value.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "qr": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "description": "Draw the QR at all."
+                          },
+                          "placement": {
+                            "type": "string",
+                            "enum": [
+                              "left",
+                              "right"
+                            ]
+                          }
+                        }
+                      },
+                      "lines": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Ordered text fields, stacked top to bottom. Must not be empty \u2014 omit to use the default.",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "name",
+                            "vendor",
+                            "type",
+                            "vendorType",
+                            "colorName"
+                          ]
+                        }
+                      },
+                      "font": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "family": {
+                            "type": "string",
+                            "enum": [
+                              "sans",
+                              "serif",
+                              "mono",
+                              "condensed"
+                            ]
+                          },
+                          "size": {
+                            "type": "string",
+                            "enum": [
+                              "s",
+                              "m",
+                              "l"
+                            ]
+                          }
+                        }
+                      },
+                      "orientation": {
+                        "type": "string",
+                        "enum": [
+                          "horizontal",
+                          "vertical"
+                        ],
+                        "description": "\"vertical\" is accepted by the schema but not implemented by the server renderer \u2014 it returns 501."
+                      },
+                      "invert": {
+                        "type": "boolean",
+                        "description": "White text on a black background. The QR stays dark-on-light so it still scans."
+                      },
+                      "maxLinesPerField": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3,
+                        "description": "Max lines a single field may word-wrap across."
+                      }
+                    }
                   },
                   "qrMode": {
                     "type": "string",

@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   composeLabelLines,
@@ -282,6 +283,12 @@ describe("validateLabelFormatOverride (GH #1195)", () => {
     expect(validateLabelFormatOverride({ orientation: "sideways" })).toMatch(/orientation/);
   });
 
+  it("rejects an explicitly empty lines list, which the normalizer would refill", () => {
+    // normalizeLabelFormat turns [] into ["name"], so accepting it would print
+    // the filament name on a label the caller asked to be QR-only.
+    expect(validateLabelFormatOverride({ lines: [] })).toMatch(/must not be empty/);
+  });
+
   it("rejects bad lines arrays", () => {
     expect(validateLabelFormatOverride({ lines: "name" })).toMatch(/must be an array/);
     expect(validateLabelFormatOverride({ lines: ["nope"] })).toMatch(/lines entries/);
@@ -297,5 +304,56 @@ describe("validateLabelFormatOverride (GH #1195)", () => {
 
   it("rejects a non-boolean invert", () => {
     expect(validateLabelFormatOverride({ invert: "yes" })).toMatch(/invert must be a boolean/);
+  });
+});
+
+describe("OpenAPI format schema matches the handler (GH #1195)", () => {
+  // The round-6 review found the published contract had drifted from the
+  // route: `format` was declared additionalProperties:true with no properties
+  // while the handler validated every member strictly, so a schema-valid
+  // request got an undocumented 400 and clients could not discover the fields.
+  // This pins the two together rather than relying on remembering.
+  const spec = JSON.parse(readFileSync("public/openapi.json", "utf8")) as Record<string, never>;
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const fmt = (spec as any).paths["/api/labels/print"].post.requestBody.content[
+    "application/json"
+  ].schema.properties.format;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  it("documents the nested shape and forbids unknown keys", () => {
+    expect(fmt.additionalProperties).toBe(false);
+    expect(Object.keys(fmt.properties).sort()).toEqual([
+      "font", "invert", "lines", "maxLinesPerField", "orientation", "qr",
+    ]);
+    expect(fmt.properties.qr.additionalProperties).toBe(false);
+    expect(fmt.properties.font.additionalProperties).toBe(false);
+  });
+
+  it("accepts every value the spec declares legal", () => {
+    const legal: unknown[] = [
+      ...fmt.properties.qr.properties.placement.enum.map((p: string) => ({ qr: { placement: p } })),
+      ...fmt.properties.lines.items.enum.map((l: string) => ({ lines: [l] })),
+      ...fmt.properties.font.properties.family.enum.map((f: string) => ({ font: { family: f } })),
+      ...fmt.properties.font.properties.size.enum.map((s: string) => ({ font: { size: s } })),
+      ...fmt.properties.orientation.enum.map((o: string) => ({ orientation: o })),
+      { invert: true },
+      { qr: { enabled: false } },
+    ];
+    for (let n = fmt.properties.maxLinesPerField.minimum; n <= fmt.properties.maxLinesPerField.maximum; n++) {
+      legal.push({ maxLinesPerField: n });
+    }
+    for (const value of legal) {
+      expect(validateLabelFormatOverride(value)).toBeNull();
+    }
+  });
+
+  it("keeps the documented bounds in step with the validator", () => {
+    // Off-by-one on either side would let the spec promise something the
+    // handler refuses, which is the drift this suite exists to catch.
+    const { minimum, maximum } = fmt.properties.maxLinesPerField;
+    expect(validateLabelFormatOverride({ maxLinesPerField: minimum - 1 })).not.toBeNull();
+    expect(validateLabelFormatOverride({ maxLinesPerField: maximum + 1 })).not.toBeNull();
+    expect(fmt.properties.lines.minItems).toBe(1);
+    expect(validateLabelFormatOverride({ lines: [] })).not.toBeNull();
   });
 });

@@ -244,6 +244,14 @@ export function validateLabelFormatOverride(raw: unknown): string | null {
 
   if (o.lines !== undefined) {
     if (!Array.isArray(o.lines)) return "format.lines must be an array.";
+    // An EXPLICIT empty list is not "no preference": normalizeLabelFormat
+    // replaces it with DEFAULT_LABEL_FORMAT.lines (["name"]), so a caller
+    // asking for a QR-only label would get the filament name printed too.
+    // Omit `lines` to accept the default; use qr.enabled + a field list to say
+    // what you actually want.
+    if (o.lines.length === 0) {
+      return "format.lines must not be empty — omit it to use the default.";
+    }
     for (const l of o.lines) {
       if (typeof l !== "string" || !(FIELD_IDS as string[]).includes(l)) {
         return `format.lines entries must be one of: ${FIELD_IDS.join(", ")}.`;

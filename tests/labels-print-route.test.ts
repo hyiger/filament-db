@@ -244,6 +244,7 @@ describe("POST /api/labels/print", () => {
       ["format.maxLinesPerField over the cap", bad({ format: { maxLinesPerField: 99 } })],
       ["format.maxLinesPerField non-integer", bad({ format: { maxLinesPerField: 1.5 } })],
       ["format unknown top-level key", bad({ format: { nope: 1 } })],
+      ["format.lines explicitly empty", bad({ format: { lines: [] } })],
       ["format selects no QR and no non-empty fields", bad({
         format: { lines: ["colorName"], qr: { enabled: false, placement: "left" } },
       })],
