@@ -436,6 +436,27 @@ async function resolveSrvUri(uri: string): Promise<string> {
 const LOCAL_PRINT_TOKEN = randomBytes(32).toString("hex");
 
 function writeLocalPrintToken(): void {
+  // DEV: `npm run electron:dev` starts Next as a SIBLING process via
+  // concurrently, and startProductionServer() is skipped when !app.isPackaged
+  // — so the server never receives FILAMENTDB_LOCAL_PRINT_TOKEN and the print
+  // route answers 404 no matter what this file says. Publishing a token the
+  // server cannot accept is worse than publishing none: a CLI reads it, sends
+  // it, and gets a 404 that looks like a bug rather than "not enabled here"
+  // (GH #1195). Set the env var on the dev server yourself to use the route in
+  // development.
+  if (isDev) {
+    try {
+      fs.rmSync(path.join(app.getPath("userData"), "local-print-token"), { force: true });
+    } catch {
+      /* best effort — a stale file from a packaged run must not linger and
+         advertise a token this dev server will reject. */
+    }
+    console.log(
+      "[label-print] dev mode: print API token not published. To use it, start " +
+        "the dev server with FILAMENTDB_LOCAL_PRINT_TOKEN set.",
+    );
+    return;
+  }
   try {
     const target = path.join(app.getPath("userData"), "local-print-token");
     // mode on write does not apply to an existing file; chmod explicitly so a

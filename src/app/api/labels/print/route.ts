@@ -14,6 +14,7 @@ import {
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
   normalizeLabelFormat,
+  validateLabelFormatOverride,
   type LabelFilament,
   type LabelFormat,
 } from "@/lib/labelFormat";
@@ -183,13 +184,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // (c) The two non-string fields.
-  if (
-    body.format !== undefined &&
-    (typeof body.format !== "object" || body.format === null || Array.isArray(body.format))
-  ) {
-    return errorResponse("format must be an object.", 400);
-  }
+  // (c) The nested format override, validated STRICTLY. normalizeLabelFormat
+  // is a persistence normalizer -- it coerces anything unrecognised to a
+  // default so an old stored format still loads -- which is wrong for a
+  // request: `{ qr: { enabled: "false" } }` would silently become the default
+  // `true` and PRINT a QR the caller tried to disable.
+  const formatError = validateLabelFormatOverride(body.format);
+  if (formatError) return errorResponse(formatError, 400);
   // Strict boolean: a caller that serialized dryRun as the STRING "true" would
   // otherwise fall through to false and physically print. Printing is
   // irreversible and the OpenAPI contract declares a boolean, so a present

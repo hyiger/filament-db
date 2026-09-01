@@ -229,6 +229,21 @@ describe("POST /api/labels/print", () => {
       ["baseUrl not http(s)", bad({ baseUrl: "ftp://x/", qrMode: "url" })],
       ["baseUrl unparseable", bad({ baseUrl: "::::", qrMode: "url" })],
       ["format vertical orientation", bad({ format: { orientation: "vertical" } })],
+      // Nested format overrides: normalizeLabelFormat would COERCE each of
+      // these to a default and print something the caller did not ask for.
+      ["format.qr.enabled wrong type", bad({ format: { qr: { enabled: "false" } } })],
+      ["format.qr.placement invalid", bad({ format: { qr: { placement: "middle" } } })],
+      ["format.qr unknown nested key", bad({ format: { qr: { enabled: true, nope: 1 } } })],
+      ["format.font.family invalid", bad({ format: { font: { family: "comic" } } })],
+      ["format.font.size invalid", bad({ format: { font: { size: "xxl" } } })],
+      ["format.lines unknown field id", bad({ format: { lines: ["nope"] } })],
+      ["format.lines not an array", bad({ format: { lines: "name" } })],
+      ["format.orientation invalid", bad({ format: { orientation: "sideways" } })],
+      ["format.invert wrong type", bad({ format: { invert: "yes" } })],
+      ["format.maxLinesPerField zero", bad({ format: { maxLinesPerField: 0 } })],
+      ["format.maxLinesPerField over the cap", bad({ format: { maxLinesPerField: 99 } })],
+      ["format.maxLinesPerField non-integer", bad({ format: { maxLinesPerField: 1.5 } })],
+      ["format unknown top-level key", bad({ format: { nope: 1 } })],
       ["format selects no QR and no non-empty fields", bad({
         format: { lines: ["colorName"], qr: { enabled: false, placement: "left" } },
       })],

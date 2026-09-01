@@ -185,6 +185,87 @@ function oneOf<T extends string>(value: unknown, allowed: T[], fallback: T): T {
  * older/newer version) into a valid LabelFormat, falling back to the default
  * for any missing/invalid field. Always returns a usable format.
  */
+/**
+ * Strictly validate a CALLER-SUPPLIED partial LabelFormat.
+ *
+ * `normalizeLabelFormat` below is a PERSISTENCE normalizer: it coerces
+ * anything unrecognised to a default so a hand-edited or older stored format
+ * still loads. That is right for storage and wrong for a request — a caller
+ * sending `{ qr: { enabled: "false" } }` would have it silently become the
+ * default `true` and PRINT a QR they tried to disable (GH #1195). Misspelled
+ * nested keys and invalid enum values degrade the same way.
+ *
+ * Returns a human-readable reason, or null when the override is acceptable.
+ * Only checks the shape; `normalizeLabelFormat` still runs afterwards to fill
+ * in whatever the caller omitted.
+ */
+export function validateLabelFormatOverride(raw: unknown): string | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return "format must be an object.";
+  }
+  const o = raw as Record<string, unknown>;
+
+  const allowed = ["qr", "lines", "font", "orientation", "invert", "maxLinesPerField"];
+  const unknown = Object.keys(o).filter((k) => !allowed.includes(k));
+  if (unknown.length > 0) {
+    return `format has unknown field(s): ${unknown.join(", ")}. Allowed: ${allowed.join(", ")}.`;
+  }
+
+  if (o.qr !== undefined) {
+    if (typeof o.qr !== "object" || o.qr === null || Array.isArray(o.qr)) {
+      return "format.qr must be an object.";
+    }
+    const qr = o.qr as Record<string, unknown>;
+    const qrUnknown = Object.keys(qr).filter((k) => !["enabled", "placement"].includes(k));
+    if (qrUnknown.length > 0) return `format.qr has unknown field(s): ${qrUnknown.join(", ")}.`;
+    if (qr.enabled !== undefined && typeof qr.enabled !== "boolean") {
+      return "format.qr.enabled must be a boolean.";
+    }
+    if (qr.placement !== undefined && qr.placement !== "left" && qr.placement !== "right") {
+      return 'format.qr.placement must be "left" or "right".';
+    }
+  }
+
+  if (o.font !== undefined) {
+    if (typeof o.font !== "object" || o.font === null || Array.isArray(o.font)) {
+      return "format.font must be an object.";
+    }
+    const font = o.font as Record<string, unknown>;
+    const fUnknown = Object.keys(font).filter((k) => !["family", "size"].includes(k));
+    if (fUnknown.length > 0) return `format.font has unknown field(s): ${fUnknown.join(", ")}.`;
+    if (font.family !== undefined && !(FONT_FAMILIES as string[]).includes(font.family as string)) {
+      return `format.font.family must be one of: ${FONT_FAMILIES.join(", ")}.`;
+    }
+    if (font.size !== undefined && !(FONT_SIZES as string[]).includes(font.size as string)) {
+      return `format.font.size must be one of: ${FONT_SIZES.join(", ")}.`;
+    }
+  }
+
+  if (o.lines !== undefined) {
+    if (!Array.isArray(o.lines)) return "format.lines must be an array.";
+    for (const l of o.lines) {
+      if (typeof l !== "string" || !(FIELD_IDS as string[]).includes(l)) {
+        return `format.lines entries must be one of: ${FIELD_IDS.join(", ")}.`;
+      }
+    }
+  }
+
+  if (o.orientation !== undefined && o.orientation !== "horizontal" && o.orientation !== "vertical") {
+    return 'format.orientation must be "horizontal" or "vertical".';
+  }
+  if (o.invert !== undefined && typeof o.invert !== "boolean") {
+    return "format.invert must be a boolean.";
+  }
+  if (o.maxLinesPerField !== undefined) {
+    const n = o.maxLinesPerField;
+    if (typeof n !== "number" || !Number.isInteger(n) || n < 1 || n > MAX_LINES_PER_FIELD) {
+      return `format.maxLinesPerField must be an integer between 1 and ${MAX_LINES_PER_FIELD}.`;
+    }
+  }
+  return null;
+}
+
 export function normalizeLabelFormat(input: unknown): LabelFormat {
   const o = (input ?? {}) as Record<string, unknown>;
   const qr = (o.qr ?? {}) as Record<string, unknown>;

@@ -4,6 +4,7 @@ import {
   composeWrappedLabelLines,
   wrapLabelLine,
   normalizeLabelFormat,
+  validateLabelFormatOverride,
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
   MAX_LINES_PER_FIELD,
@@ -231,5 +232,70 @@ describe("composeWrappedLabelLines (#745)", () => {
     expect(composeWrappedLabelLines(fil, legacy as LabelFormat)).toEqual([
       "Polymaker Panchroma Gradient Matte PLA Wood",
     ]);
+  });
+});
+
+describe("validateLabelFormatOverride (GH #1195)", () => {
+  // normalizeLabelFormat is a PERSISTENCE normalizer — it coerces anything
+  // unrecognised to a default so an old stored format still loads. Using it to
+  // validate a REQUEST silently turned malformed input into a printed label
+  // the caller never asked for. These pin the strict request-shape check.
+  it("accepts an omitted override", () => {
+    expect(validateLabelFormatOverride(undefined)).toBeNull();
+  });
+
+  it("accepts a valid partial override", () => {
+    expect(
+      validateLabelFormatOverride({ qr: { enabled: false }, font: { size: "l" } }),
+    ).toBeNull();
+  });
+
+  it("rejects a non-object", () => {
+    for (const v of ["nope", 42, [], null]) {
+      expect(validateLabelFormatOverride(v)).toMatch(/must be an object/);
+    }
+  });
+
+  it("rejects a boolean sent as a string, which the normalizer would default to true", () => {
+    expect(validateLabelFormatOverride({ qr: { enabled: "false" } })).toMatch(
+      /qr\.enabled must be a boolean/,
+    );
+  });
+
+  it("rejects a nested qr/font that is not an object", () => {
+    for (const v of ["nope", 42, [], null]) {
+      expect(validateLabelFormatOverride({ qr: v })).toMatch(/qr must be an object/);
+      expect(validateLabelFormatOverride({ font: v })).toMatch(/font must be an object/);
+    }
+  });
+
+  it("rejects unknown keys at both levels rather than ignoring them", () => {
+    expect(validateLabelFormatOverride({ nope: 1 })).toMatch(/unknown field/);
+    expect(validateLabelFormatOverride({ qr: { nope: 1 } })).toMatch(/qr has unknown field/);
+    expect(validateLabelFormatOverride({ font: { nope: 1 } })).toMatch(/font has unknown field/);
+  });
+
+  it("rejects invalid enum values", () => {
+    expect(validateLabelFormatOverride({ qr: { placement: "middle" } })).toMatch(/placement/);
+    expect(validateLabelFormatOverride({ font: { family: "comic" } })).toMatch(/family/);
+    expect(validateLabelFormatOverride({ font: { size: "xxl" } })).toMatch(/size/);
+    expect(validateLabelFormatOverride({ orientation: "sideways" })).toMatch(/orientation/);
+  });
+
+  it("rejects bad lines arrays", () => {
+    expect(validateLabelFormatOverride({ lines: "name" })).toMatch(/must be an array/);
+    expect(validateLabelFormatOverride({ lines: ["nope"] })).toMatch(/lines entries/);
+    expect(validateLabelFormatOverride({ lines: [1] })).toMatch(/lines entries/);
+  });
+
+  it("bounds maxLinesPerField to a sane integer range", () => {
+    for (const n of [0, -1, 99, 1.5, "2"]) {
+      expect(validateLabelFormatOverride({ maxLinesPerField: n })).toMatch(/maxLinesPerField/);
+    }
+    expect(validateLabelFormatOverride({ maxLinesPerField: MAX_LINES_PER_FIELD })).toBeNull();
+  });
+
+  it("rejects a non-boolean invert", () => {
+    expect(validateLabelFormatOverride({ invert: "yes" })).toMatch(/invert must be a boolean/);
   });
 });
