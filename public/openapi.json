@@ -7174,7 +7174,7 @@
             }
           },
           "400": {
-            "description": "Bad body: not a JSON object, no subject or both, unknown preset, missing printer, an unusable print target (legacy serial setting or a non-usb:// scheme), an unresolvable base URL, or content that cannot fit 24mm tape (too many fields/lines, an over-budget QR, or text that produces no printable output)."
+            "description": "Bad request. Covers: a body that is not a JSON object; no subject or both; a field of the wrong type (printer, format, dryRun, qrMode); an instanceId over 128 characters; a locationId that is not a valid id; an unknown preset (inherited Object.prototype names are rejected); an unusable print target (legacy serial setting or a non-usb:// scheme); an unresolvable base URL; or content that cannot fit 24mm tape - too many fields/lines, an over-budget or unencodable QR, text that produces no printable output, or a format that selects no QR and no non-empty fields."
           },
           "403": {
             "description": "Missing or incorrect local print token."

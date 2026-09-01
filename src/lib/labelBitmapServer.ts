@@ -118,6 +118,19 @@ export class LabelDoesNotFitError extends Error {
   }
 }
 
+/**
+ * Thrown for a format the server renderer does not implement. Distinct from
+ * LabelDoesNotFitError (caller asked for too much) and from
+ * RendererUnavailableError (this build cannot render at all): the request is
+ * well-formed and the backend is fine, the feature simply is not here yet.
+ */
+export class RendererCapabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "RendererCapabilityError";
+  }
+}
+
 /** Thrown when the native image backend cannot be loaded on this build. */
 export class RendererUnavailableError extends Error {
   constructor(cause: unknown) {
@@ -225,7 +238,7 @@ export async function renderLabelRaster(
     // The browser twin supports it; this one does not yet. Fail loudly
     // rather than silently printing a horizontal label the caller did not
     // ask for.
-    throw new Error(
+    throw new RendererCapabilityError(
       "Vertical text orientation is not supported by the server renderer yet — " +
         "print from the app, or use a horizontal format.",
     );
@@ -234,7 +247,13 @@ export async function renderLabelRaster(
   const lines = composeWrappedLabelLines(opts.filament, format);
   const qrEnabled = format.qr.enabled;
   if (!qrEnabled && lines.length === 0) {
-    throw new Error("Nothing to print: the format has no QR and no non-empty text fields.");
+    // Reachable with valid input: e.g. lines:["colorName"] on a filament whose
+    // colorName is null, with the QR disabled. The request can never succeed
+    // without changing the format or the data, so it is a 400 -- a 500 would
+    // tell an automated caller to retry forever.
+    throw new LabelDoesNotFitError(
+      "Nothing to print: the format has no QR and no non-empty text fields.",
+    );
   }
 
   /* --- QR --- */

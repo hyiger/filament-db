@@ -7,6 +7,7 @@ import { errorResponse, errorResponseFromCaught, getErrorMessage } from "@/lib/a
 import {
   renderLabelRaster,
   LabelDoesNotFitError,
+  RendererCapabilityError,
   RendererUnavailableError,
 } from "@/lib/labelBitmapServer";
 import {
@@ -105,7 +106,14 @@ function resolveFormat(body: PrintBody): LabelFormat | { error: string } {
   let merged: Record<string, unknown> = { ...DEFAULT_LABEL_FORMAT };
   const preset = str(body.preset);
   if (preset) {
-    const entry = LABEL_PRESETS[preset];
+    // hasOwnProperty, not a bare lookup: LABEL_PRESETS is an ordinary object,
+    // so "constructor" / "toString" / "valueOf" resolve up the prototype chain
+    // to a truthy value, slip past the unknown-preset 400, and then contribute
+    // an undefined `patch` -- printing the DEFAULT layout for a preset the
+    // caller never asked for. The repo has form here (GH #1026).
+    const entry = Object.prototype.hasOwnProperty.call(LABEL_PRESETS, preset)
+      ? LABEL_PRESETS[preset]
+      : undefined;
     if (!entry) {
       return {
         error: `Unknown preset "${preset}". Valid presets: ${Object.keys(LABEL_PRESETS).join(", ")}.`,
@@ -142,6 +150,19 @@ export async function POST(request: NextRequest) {
   const locationId = str(body.locationId);
   const printer = str(body.printer);
 
+  // Wrong-typed optional fields are refused rather than coerced away by str()
+  // / ignored by resolveFormat. Silently dropping them prints a label the
+  // caller did not ask for — the same failure shape as the dryRun and preset
+  // cases below, found by the input-surface invariant test.
+  if (body.printer !== undefined && typeof body.printer !== "string") {
+    return errorResponse("printer must be a string.", 400);
+  }
+  if (
+    body.format !== undefined &&
+    (typeof body.format !== "object" || body.format === null || Array.isArray(body.format))
+  ) {
+    return errorResponse("format must be an object.", 400);
+  }
   // Strict boolean: a caller that serialized dryRun as the STRING "true" would
   // otherwise fall through to false and physically print. Printing is
   // irreversible and the OpenAPI contract declares a boolean, so a present
@@ -171,6 +192,13 @@ export async function POST(request: NextRequest) {
       `instanceId must be ${MAX_INSTANCE_ID_LENGTH} characters or fewer.`,
       400,
     );
+  }
+  // Anything other than the exact string "url" silently fell into the
+  // instanceId branch -- including a "URL" typo -- so a non-dry run printed a
+  // real label carrying the wrong QR payload. The OpenAPI schema declares an
+  // enum; enforce it.
+  if (body.qrMode !== undefined && body.qrMode !== "url" && body.qrMode !== "instanceId") {
+    return errorResponse('qrMode must be "instanceId" or "url".', 400);
   }
   if (locationId && !mongoose.isValidObjectId(locationId)) {
     // Otherwise Mongoose raises a CastError from the findOne below and the
@@ -281,6 +309,12 @@ export async function POST(request: NextRequest) {
     // server fault — a 500 would tell an automated caller to retry it forever.
     if (err instanceof LabelDoesNotFitError) {
       return errorResponse(err.message, 400);
+    }
+    // A well-formed request for a feature the server renderer does not
+    // implement (e.g. vertical text). The route pre-checks the known case, so
+    // this is the backstop for any path that reaches the renderer directly.
+    if (err instanceof RendererCapabilityError) {
+      return errorResponse(err.message, 501);
     }
     if (/not supported on platform/i.test(getErrorMessage(err))) {
       return errorResponse(getErrorMessage(err), 501);

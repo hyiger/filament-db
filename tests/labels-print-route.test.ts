@@ -188,6 +188,57 @@ describe("POST /api/labels/print", () => {
     });
   });
 
+  describe("no caller input escapes as a 5xx (GH #1195 class invariant)", () => {
+    // Three review rounds each found another input that surfaced as a 500 or,
+    // worse, was silently reinterpreted into a REAL print. Fixing them one at a
+    // time kept missing siblings, so this enumerates the whole PrintBody
+    // surface and asserts the invariant directly: a malformed value is always
+    // a 4xx (or 501 for an unimplemented capability) and never a 5xx, and
+    // never a successful print.
+    const MALFORMED: Array<[string, Record<string, unknown>]> = [
+      ["instanceId wrong type", { instanceId: 42 }],
+      ["instanceId over the 128-char bound", { instanceId: "a".repeat(129) }],
+      ["locationId not an ObjectId", { locationId: "nope" }],
+      ["locationId wrong type", { locationId: 42 }],
+      ["printer wrong type", { instanceId: "PLACEHOLDER", printer: 42 }],
+      ["printer legacy serial", { instanceId: "PLACEHOLDER", printer: "/dev/tty.X" }],
+      ["printer bad scheme", { instanceId: "PLACEHOLDER", printer: "ipp://x/y" }],
+      ["preset unknown", { instanceId: "PLACEHOLDER", preset: "nope" }],
+      ["preset inherited from Object.prototype", { instanceId: "PLACEHOLDER", preset: "constructor" }],
+      ["preset toString", { instanceId: "PLACEHOLDER", preset: "toString" }],
+      ["qrMode wrong case", { instanceId: "PLACEHOLDER", qrMode: "URL" }],
+      ["qrMode unknown", { instanceId: "PLACEHOLDER", qrMode: "nope" }],
+      ["qrMode wrong type", { instanceId: "PLACEHOLDER", qrMode: 1 }],
+      ["dryRun string", { instanceId: "PLACEHOLDER", printer: "FilamentDB_Label", dryRun: "true" }],
+      ["dryRun number", { instanceId: "PLACEHOLDER", printer: "FilamentDB_Label", dryRun: 1 }],
+      ["baseUrl not http(s)", { locationId: "PLACEHOLDER_LOC", baseUrl: "ftp://x/" }],
+      ["baseUrl unparseable", { locationId: "PLACEHOLDER_LOC", baseUrl: "::::" }],
+      ["format vertical orientation", { instanceId: "PLACEHOLDER", format: { orientation: "vertical" } }],
+      ["format empties every line", {
+        instanceId: "PLACEHOLDER",
+        format: { lines: ["colorName"], qr: { enabled: false, placement: "left" } },
+      }],
+      ["format wrong type", { instanceId: "PLACEHOLDER", format: "nope" }],
+      ["both subjects", { instanceId: "PLACEHOLDER", locationId: "PLACEHOLDER_LOC" }],
+      ["neither subject", {}],
+    ];
+
+    it.each(MALFORMED)("%s → 4xx/501, never 5xx and never a print", async (_label, patch) => {
+      const body: Record<string, unknown> = { dryRun: true, ...patch };
+      // Substitute the real ids the table refers to symbolically.
+      if (body.instanceId === "PLACEHOLDER") body.instanceId = instanceId;
+      if (body.locationId === "PLACEHOLDER_LOC") body.locationId = locationId;
+      const res = await post(body);
+      // 501 is legitimate for a well-formed request naming a capability the
+      // server renderer does not implement; everything else must be 4xx.
+      expect(res.status === 501 || res.status < 500).toBe(true);
+      // A malformed request must not have produced a label either.
+      if (res.status === 200) {
+        throw new Error(`malformed input was accepted: ${JSON.stringify(body)}`);
+      }
+    });
+  });
+
   describe("subject resolution", () => {
     it("404s an instanceId that matches nothing", async () => {
       const res = await post({ instanceId: "0000000000", dryRun: true });
