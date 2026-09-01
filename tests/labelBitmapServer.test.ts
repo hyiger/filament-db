@@ -3,6 +3,7 @@ import {
   renderLabelRaster,
   LabelDoesNotFitError,
   RendererUnavailableError,
+  causeMessage,
   escapeXml,
   fitFontPx,
   HORIZONTAL_PADDING_DOTS,
@@ -86,6 +87,14 @@ describe("native backend unavailable (GH #1195)", () => {
 
   it("stringifies a non-Error cause rather than printing [object Object]", () => {
     expect(new RendererUnavailableError("boom").message).toContain("boom");
+  });
+
+  it("coerces both Error and non-Error rejections to a usable message", () => {
+    // Rejections are not guaranteed to be Errors; losing the reason to
+    // "[object Object]" would strip the only diagnostic an operator gets.
+    expect(causeMessage(new Error("real cause"))).toBe("real cause");
+    expect(causeMessage("thrown string")).toBe("thrown string");
+    expect(causeMessage(42)).toBe("42");
   });
 
   it("rejects with it when the module cannot load, and does not cache the failure", async () => {
@@ -285,6 +294,14 @@ describe("renderLabelRaster", () => {
     // width, a long run of them printed a large stretch of blank tape.
     await expect(
       renderLabelRaster({ filament: { name: "\u200b\u200b\u200b" }, qrPayload: "abc" }),
+    ).rejects.toBeInstanceOf(LabelDoesNotFitError);
+  });
+
+  it("classifies a payload past QR capacity as a fit failure, not a raw throw", async () => {
+    // The encoder refuses past version 40 and throws BEFORE the dot-budget
+    // check can run, so without wrapping this surfaced as a generic 500.
+    await expect(
+      renderLabelRaster({ filament: { name: "x" }, qrPayload: "z".repeat(3000) }),
     ).rejects.toBeInstanceOf(LabelDoesNotFitError);
   });
 

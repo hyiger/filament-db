@@ -20,6 +20,7 @@ import { encodeLabel, packGrayscaleBitmap, type TapeWidthMm } from "@/lib/labelE
 import { printLabel, rejectUnusablePrintTarget } from "@/lib/labelTransport";
 import { buildLocationDeepLink, buildFilamentDeepLink } from "@/lib/labelDeepLink";
 import { isLoopbackHostname } from "@/lib/loopbackHost";
+import mongoose from "mongoose";
 
 /**
  * POST /api/labels/print — print a Brother PT-P710BT label for a spool or a
@@ -66,6 +67,15 @@ interface PrintBody {
 function str(v: unknown): string | null {
   return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
 }
+
+/**
+ * matchFilament's docblock states its inputs are "assumed already
+ * trimmed/length-bounded by the caller" — it builds case-insensitive MongoDB
+ * regexes from them, so an unbounded value would have the driver compile and
+ * send a huge regex. `/api/filaments/match` applies this same 128-char cap
+ * (GH #513); this route is the second caller and must too.
+ */
+const MAX_INSTANCE_ID_LENGTH = 128;
 
 /** Resolve the base the QR should point at, preferring an explicit value. */
 function resolveBaseUrl(explicit: string | null, request: NextRequest): string | null {
@@ -132,6 +142,13 @@ export async function POST(request: NextRequest) {
   const locationId = str(body.locationId);
   const printer = str(body.printer);
 
+  // Strict boolean: a caller that serialized dryRun as the STRING "true" would
+  // otherwise fall through to false and physically print. Printing is
+  // irreversible and the OpenAPI contract declares a boolean, so a present
+  // non-boolean is a 400 rather than a silent real print.
+  if (body.dryRun !== undefined && typeof body.dryRun !== "boolean") {
+    return errorResponse("dryRun must be a boolean.", 400);
+  }
   const dryRun = body.dryRun === true;
   if (!printer && !dryRun) {
     return errorResponse(
@@ -148,6 +165,18 @@ export async function POST(request: NextRequest) {
   }
   if (!!instanceId === !!locationId) {
     return errorResponse("Provide exactly one of instanceId or locationId.", 400);
+  }
+  if (instanceId && instanceId.length > MAX_INSTANCE_ID_LENGTH) {
+    return errorResponse(
+      `instanceId must be ${MAX_INSTANCE_ID_LENGTH} characters or fewer.`,
+      400,
+    );
+  }
+  if (locationId && !mongoose.isValidObjectId(locationId)) {
+    // Otherwise Mongoose raises a CastError from the findOne below and the
+    // outer catch maps it to a 500 — telling an automated caller to retry a
+    // permanently invalid id.
+    return errorResponse("locationId is not a valid id.", 400);
   }
 
   const fmt = resolveFormat(body);

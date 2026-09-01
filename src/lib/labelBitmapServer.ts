@@ -98,6 +98,15 @@ export interface ServerLabelRaster {
 }
 
 /**
+ * Coerce a thrown value to a message. Rejections are not guaranteed to be
+ * Errors (a library can throw a string), and losing the underlying reason to
+ * "[object Object]" would strip the only diagnostic an operator gets.
+ */
+export function causeMessage(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
  * Thrown when the requested content cannot physically fit the tape. This is a
  * CALLER problem (too many fields/lines for 24mm), so the route answers 400 —
  * distinct from RendererUnavailableError, which is a build/platform problem.
@@ -116,7 +125,7 @@ export class RendererUnavailableError extends Error {
       "Server-side label rendering is unavailable on this build: the native image " +
         "backend (sharp) could not be loaded for this platform/architecture. " +
         "Print from the app instead. " +
-        `Underlying error: ${cause instanceof Error ? cause.message : String(cause)}`,
+        `Underlying error: ${causeMessage(cause)}`,
     );
     this.name = "RendererUnavailableError";
   }
@@ -166,12 +175,23 @@ async function renderQrTile(
   payload: string,
   ecc: "L" | "M" | "Q" | "H",
 ): Promise<{ png: Buffer; dots: number }> {
-  const probe = await QRCode.toBuffer(payload, {
-    errorCorrectionLevel: ecc,
-    margin: QR_QUIET_ZONE_MODULES,
-    scale: 1,
-    color: { dark: "#000000", light: "#FFFFFF" },
-  });
+  // The encoder itself refuses a payload past QR version 40 capacity, and it
+  // throws BEFORE probeWidth exists — so the dot-budget check below would never
+  // run and the caller would get a generic 500 instead of the documented 400.
+  // Same class of problem (asked for more than fits), so same typed error.
+  let probe: Buffer;
+  try {
+    probe = await QRCode.toBuffer(payload, {
+      errorCorrectionLevel: ecc,
+      margin: QR_QUIET_ZONE_MODULES,
+      scale: 1,
+      color: { dark: "#000000", light: "#FFFFFF" },
+    });
+  } catch (err) {
+    throw new LabelDoesNotFitError(
+      `QR payload (${payload.length} chars) cannot be encoded: ${causeMessage(err)}`,
+    );
+  }
   const probeWidth = (await sharp(probe).metadata()).width!;
   if (probeWidth > BAND_DOTS) {
     throw new LabelDoesNotFitError(

@@ -129,6 +129,37 @@ describe("POST /api/labels/print", () => {
       expect((await res.json()).error).toMatch(/printer is required/i);
     });
 
+    it("400s a non-boolean dryRun instead of silently printing", async () => {
+      // The string "true" would fall through to `=== true` as false and
+      // trigger a REAL print. Printing is irreversible, so a malformed value
+      // must be refused rather than reinterpreted.
+      const res = await post({ instanceId, printer: "FilamentDB_Label", dryRun: "true" });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/dryRun must be a boolean/i);
+    });
+
+    it("still accepts an omitted dryRun as a real print request", async () => {
+      // The strict check must not reject the common case of leaving it out.
+      const res = await post({ instanceId });
+      // 400 for the MISSING PRINTER, not for dryRun.
+      expect((await res.json()).error).toMatch(/printer is required/i);
+      expect(res.status).toBe(400);
+    });
+
+    it("400s an over-long instanceId rather than handing it to a regex builder", async () => {
+      // matchFilament documents that callers must length-bound its inputs; it
+      // builds case-insensitive Mongo regexes from them (GH #513).
+      const res = await post({ instanceId: "a".repeat(129), dryRun: true });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/128 characters/i);
+    });
+
+    it("400s a malformed locationId instead of 500ing on a CastError", async () => {
+      const res = await post({ locationId: "not-an-object-id", dryRun: true });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/not a valid id/i);
+    });
+
     it("400s an unknown preset and names the valid ones", async () => {
       const res = await post({ instanceId, preset: "nope", dryRun: true });
       expect(res.status).toBe(400);
