@@ -463,8 +463,33 @@ export async function disableBidi(printerName: string): Promise<DisableBidiResul
  * be mistaken for a CUPS queue name (which can't even contain `/`) and fail
  * obscurely. Detect them so we can prompt the user to reselect.
  */
-function isLegacySerialTarget(target: string): boolean {
+export function isLegacySerialTarget(target: string): boolean {
   return /^\/dev\//.test(target) || /^COM\d+$/i.test(target);
+}
+
+/**
+ * Reject a print target the transport is guaranteed to refuse, so a CALLER can
+ * answer 400 instead of letting printLabel throw into a 500 (GH #1195).
+ *
+ * Deliberately mirrors printLabel/printCups's own refusals rather than adding
+ * new policy: a legacy serial setting, and any URL scheme other than usb://
+ * (GH #623). Returns null when the target is acceptable. Keep in lockstep with
+ * the throws in printLabel and printCups.
+ */
+export function rejectUnusablePrintTarget(
+  target: string,
+  kind: LabelPrinterKind = "brother",
+): string | null {
+  if (isLegacySerialTarget(target)) {
+    return kind === "tspl"
+      ? `"${target}" is a serial-port setting, which is not a valid print target.`
+      : `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
+          `The PT-P710BT prints over USB — select the printer again in Settings.`;
+  }
+  if (!/^usb:\/\//i.test(target) && /^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
+    return `Unsupported print target "${target}" — only usb:// devices and installed print queues are supported.`;
+  }
+  return null;
 }
 
 /**

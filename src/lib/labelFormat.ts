@@ -68,6 +68,30 @@ export const FONT_STACKS: Record<LabelFontFamily, string> = {
 export const FONT_SIZE_DOTS: Record<LabelFontSize, number> = { s: 28, m: 40, l: 54 };
 
 /**
+ * Line box height as a multiple of font px.
+ *
+ * Lives here, not in a renderer, because BOTH renderers need it and both need
+ * to agree: src/lib/labelBitmap.ts (browser canvas) and
+ * src/lib/labelBitmapServer.ts (Node/sharp). It used to be declared separately
+ * in each, which is precisely how they drifted apart (GH #1195).
+ */
+export const LINE_LEADING = 1.18;
+
+/**
+ * Convert a size token to the starting FONT SIZE in dots.
+ *
+ * `FONT_SIZE_DOTS` is a text *height* (a line box), not a font size, so it
+ * must be divided by the leading before it is used as one. Getting this wrong
+ * is not cosmetic: passing the raw constant renders ~21% larger type than the
+ * app's own preview at the default format, which is exactly the preview-vs-print
+ * drift the Brother pipeline is meant to avoid. Both renderers call this so the
+ * derivation exists in one place.
+ */
+export function baseFontPx(size: LabelFontSize): number {
+  return Math.floor(FONT_SIZE_DOTS[size] / LINE_LEADING);
+}
+
+/**
  * Named layout presets — applied as a partial over the current format.
  *
  * GH #1007 F3: carry an i18n KEY (not a hardcoded English label) so the editor

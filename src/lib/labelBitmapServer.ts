@@ -7,14 +7,20 @@
  * (`scripts/print-label.ts`) and the print API (`src/app/api/labels/print`).
  *
  * WHAT IS SHARED, AND WHAT IS NOT. Everything that decides what the label
- * SAYS and how it is proportioned is imported from `labelFormat.ts` and used
- * unchanged: `composeWrappedLabelLines` (field selection, presets like
- * `vendorOverType`, per-field wrapping), `FONT_STACKS`, `FONT_SIZE_DOTS`,
- * and the auto-fit math (band / lines, LINE_LEADING). Only the final act of
+ * SAYS and how it is proportioned comes from `labelFormat.ts`, which BOTH
+ * twins import: `composeWrappedLabelLines` (field selection, presets like
+ * `vendorOverType`, per-field wrapping), `FONT_STACKS`, `LINE_LEADING`, and
+ * `baseFontPx()` — the size-token-to-font-px derivation. Only the final act of
  * putting ink on pixels differs — canvas `fillText` there, SVG through sharp
- * here — because that step cannot run without a DOM. Keep the geometry
- * constants below in lockstep with labelBitmap.ts; they are the contract
- * that keeps the on-screen preview and the printed tape agreeing.
+ * here — because that step cannot run without a DOM.
+ *
+ * `baseFontPx()` and `LINE_LEADING` live in labelFormat.ts specifically because
+ * they used to be duplicated per renderer, and the duplication drifted: this
+ * file passed the raw `FONT_SIZE_DOTS` (a line-box HEIGHT) where the browser
+ * divided it by the leading first, so the API printed ~21% larger type than
+ * the app's own preview at the default format (GH #1195). Do not re-inline
+ * either one. The padding/gap constants below are still per-renderer and must
+ * be kept in lockstep with labelBitmap.ts by hand.
  *
  * GEOMETRY (24mm tape, 180 dpi)
  *   - Print head 128 dots (PRINT_HEAD_DOTS). Content is composed in
@@ -25,17 +31,27 @@
  *
  * NOT client-safe: `sharp` must never reach the browser bundle. Import only
  * from route handlers and CLIs.
+ *
+ * SHARP IS LOADED LAZILY, AND THAT IS DELIBERATE (GH #1195). `sharp` resolves
+ * a native binary from `@img/sharp-<platform>-<arch>` at require time and
+ * THROWS if the matching package is absent — there is no JS fallback in a
+ * packaged build. Three release legs are cross-builds that package the
+ * runner's node_modules verbatim (`npmRebuild: false`), so they can ship the
+ * wrong arch. With a top-level import that failure happens at MODULE LOAD, so
+ * every request — including `dryRun` — dies as an opaque 500 before any
+ * handler code runs. Loading inside the render call turns it into one
+ * catchable, nameable error the route answers with 501.
  */
 
-import sharp from "sharp";
-import type { OverlayOptions } from "sharp";
+import type { OverlayOptions, default as SharpModule } from "sharp";
 import QRCode from "qrcode";
 import { PRINT_HEAD_DOTS } from "./labelEncoder";
 import {
   composeWrappedLabelLines,
+  baseFontPx as deriveBaseFontPx,
   DEFAULT_LABEL_FORMAT,
   FONT_STACKS,
-  FONT_SIZE_DOTS,
+  LINE_LEADING,
   type LabelFilament,
   type LabelFormat,
 } from "./labelFormat";
@@ -46,8 +62,6 @@ export const VERTICAL_PADDING_DOTS = 6;
 export const HORIZONTAL_PADDING_DOTS = 14;
 /** Gap between the QR block and the text band, in dots. */
 export const QR_TEXT_GAP_DOTS = 12;
-/** Line box height as a multiple of font px. Mirrors labelBitmap.ts. */
-export const LINE_LEADING = 1.18;
 /** QR spec requires a 4-module quiet zone for reliable scanning. */
 const QR_QUIET_ZONE_MODULES = 4;
 /** Cross-axis budget shared by the QR and the stacked text lines. */
@@ -75,6 +89,37 @@ export interface ServerLabelRaster {
   lines: string[];
 }
 
+/** Thrown when the native image backend cannot be loaded on this build. */
+export class RendererUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "Server-side label rendering is unavailable on this build: the native image " +
+        "backend (sharp) could not be loaded for this platform/architecture. " +
+        "Print from the app instead. " +
+        `Underlying error: ${cause instanceof Error ? cause.message : String(cause)}`,
+    );
+    this.name = "RendererUnavailableError";
+  }
+}
+
+let sharpPromise: Promise<typeof SharpModule> | null = null;
+
+/**
+ * Resolve `sharp` once, converting a native-binary load failure into a typed
+ * error. Cached on success only, so a transient failure can be retried.
+ */
+async function loadSharp(): Promise<typeof SharpModule> {
+  if (!sharpPromise) {
+    sharpPromise = import("sharp")
+      .then((m) => m.default)
+      .catch((err) => {
+        sharpPromise = null;
+        throw new RendererUnavailableError(err);
+      });
+  }
+  return sharpPromise;
+}
+
 export function escapeXml(s: string): string {
   return s.replace(/[<>&"']/g, (c) => ({
     "<": "&lt;",
@@ -97,6 +142,7 @@ export function fitFontPx(lineCount: number, baseFontPx: number): number {
 
 /** Render the QR at the largest integer module scale fitting the band. */
 async function renderQrTile(
+  sharp: typeof SharpModule,
   payload: string,
   ecc: "L" | "M" | "Q" | "H",
 ): Promise<{ png: Buffer; dots: number }> {
@@ -133,6 +179,7 @@ async function renderQrTile(
 export async function renderLabelRaster(
   opts: ServerRenderOpts,
 ): Promise<ServerLabelRaster> {
+  const sharp = await loadSharp();
   const format = opts.format ?? DEFAULT_LABEL_FORMAT;
   if (format.orientation === "vertical") {
     // The browser twin supports it; this one does not yet. Fail loudly
@@ -154,7 +201,7 @@ export async function renderLabelRaster(
   let qrPng: Buffer | null = null;
   let qrDots = 0;
   if (qrEnabled) {
-    const tile = await renderQrTile(opts.qrPayload, opts.qrErrorCorrection ?? "M");
+    const tile = await renderQrTile(sharp, opts.qrPayload, opts.qrErrorCorrection ?? "M");
     qrPng = tile.png;
     qrDots = tile.dots;
   }
@@ -167,7 +214,7 @@ export async function renderLabelRaster(
   let textWidth = 0;
   let textHeight = 0;
   if (lines.length > 0) {
-    const fontPx = fitFontPx(lines.length, FONT_SIZE_DOTS[format.font.size]);
+    const fontPx = fitFontPx(lines.length, deriveBaseFontPx(format.font.size));
     const lineBox = Math.ceil(fontPx * LINE_LEADING);
     const blockHeight = lineBox * lines.length;
     const fontStack = FONT_STACKS[format.font.family];

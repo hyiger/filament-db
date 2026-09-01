@@ -1,17 +1,20 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   renderLabelRaster,
+  RendererUnavailableError,
   escapeXml,
   fitFontPx,
-  LINE_LEADING,
   HORIZONTAL_PADDING_DOTS,
   VERTICAL_PADDING_DOTS,
   QR_TEXT_GAP_DOTS,
 } from "@/lib/labelBitmapServer";
 import { PRINT_HEAD_DOTS, packGrayscaleBitmap, encodeLabel } from "@/lib/labelEncoder";
 import {
+  baseFontPx,
   DEFAULT_LABEL_FORMAT,
+  FONT_SIZE_DOTS,
   LABEL_PRESETS,
+  LINE_LEADING,
   normalizeLabelFormat,
   type LabelFormat,
 } from "@/lib/labelFormat";
@@ -61,6 +64,72 @@ describe("fitFontPx", () => {
   it("passes the base size straight through for an empty line list", () => {
     // Guards the division: a zero line count would otherwise divide by zero.
     expect(fitFontPx(0, 40)).toBe(40);
+  });
+});
+
+describe("native backend unavailable (GH #1195)", () => {
+  // sharp resolves @img/sharp-<os>-<cpu> at require time and THROWS when the
+  // matching package is absent -- which is exactly what a cross-built release
+  // artifact ships. It is loaded lazily so that failure is ONE catchable error
+  // the route answers with 501, rather than a module-load crash that 500s
+  // every request including dryRun.
+  it("wraps the underlying cause in a typed, actionable error", () => {
+    const e = new RendererUnavailableError(new Error("Could not load the \"sharp\" module"));
+    expect(e).toBeInstanceOf(Error);
+    expect(e.name).toBe("RendererUnavailableError");
+    expect(e.message).toMatch(/native image/i);
+    expect(e.message).toMatch(/Print from the app/i);
+    // The operator needs the real cause, not just our wrapper's prose.
+    expect(e.message).toContain('Could not load the "sharp" module');
+  });
+
+  it("stringifies a non-Error cause rather than printing [object Object]", () => {
+    expect(new RendererUnavailableError("boom").message).toContain("boom");
+  });
+
+  it("rejects with it when the module cannot load, and does not cache the failure", async () => {
+    vi.resetModules();
+    vi.doMock("sharp", () => {
+      throw new Error("Could not load the \"sharp\" module using the linux-arm64 runtime");
+    });
+    const mod = await import("@/lib/labelBitmapServer");
+    await expect(
+      mod.renderLabelRaster({ filament: { name: "X" }, qrPayload: "abc" }),
+    ).rejects.toBeInstanceOf(mod.RendererUnavailableError);
+    // Not cached on failure — a second call must retry, not replay a rejected
+    // promise, or a transient load error would be permanent for the process.
+    await expect(
+      mod.renderLabelRaster({ filament: { name: "X" }, qrPayload: "abc" }),
+    ).rejects.toThrow(/native image/i);
+    vi.doUnmock("sharp");
+    vi.resetModules();
+  });
+});
+
+describe("browser/server font parity (GH #1195 regression)", () => {
+  // The server renderer originally passed FONT_SIZE_DOTS straight into
+  // fitFontPx while the browser twin divided it by LINE_LEADING first, so the
+  // API printed ~21% larger type than the app's own preview at the default
+  // format. Both now call baseFontPx(); these pin that they agree AND that
+  // the conversion is actually happening.
+  it("derives a font size from the line-box height, not the raw constant", () => {
+    for (const size of ["s", "m", "l"] as const) {
+      expect(baseFontPx(size)).toBe(Math.floor(FONT_SIZE_DOTS[size] / LINE_LEADING));
+      // The bug was using the raw value; for every size these must differ.
+      expect(baseFontPx(size)).toBeLessThan(FONT_SIZE_DOTS[size]);
+    }
+  });
+
+  it("pins the default format's fitted size, the case the bug hit hardest", () => {
+    // DEFAULT_LABEL_FORMAT is sans/m with one line. Pre-fix this was 40.
+    expect(fitFontPx(1, baseFontPx("m"))).toBe(33);
+  });
+
+  it("keeps the shared leading a single source of truth", () => {
+    // Re-declaring LINE_LEADING in a renderer is how the two drifted apart.
+    // It must come from labelFormat, which both twins import.
+    expect(LINE_LEADING).toBeGreaterThan(1);
+    expect(baseFontPx("m")).toBe(Math.floor(40 / LINE_LEADING));
   });
 });
 

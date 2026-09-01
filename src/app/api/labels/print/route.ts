@@ -4,7 +4,7 @@ import Location from "@/models/Location";
 import { matchFilament } from "@/lib/matchFilament";
 import { assertLocalPrintToken } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, getErrorMessage } from "@/lib/apiErrorHandler";
-import { renderLabelRaster } from "@/lib/labelBitmapServer";
+import { renderLabelRaster, RendererUnavailableError } from "@/lib/labelBitmapServer";
 import {
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
@@ -13,7 +13,7 @@ import {
   type LabelFormat,
 } from "@/lib/labelFormat";
 import { encodeLabel, packGrayscaleBitmap, type TapeWidthMm } from "@/lib/labelEncoder";
-import { printLabel } from "@/lib/labelTransport";
+import { printLabel, rejectUnusablePrintTarget } from "@/lib/labelTransport";
 import { buildLocationDeepLink, buildFilamentDeepLink } from "@/lib/labelDeepLink";
 import { isLoopbackHostname } from "@/lib/loopbackHost";
 
@@ -109,12 +109,20 @@ export async function POST(request: NextRequest) {
   const gate = assertLocalPrintToken(request);
   if (gate) return gate;
 
-  let body: PrintBody;
+  let parsed: unknown;
   try {
-    body = await request.json();
+    parsed = await request.json();
   } catch {
     return errorResponse("Invalid JSON in request body", 400);
   }
+  // `request.json()` returns null for a literal `null` body without throwing,
+  // and an array/number/string parses fine too. Without this the field reads
+  // below raise an uncaught TypeError OUTSIDE the try, so the caller gets an
+  // empty framework 500 instead of the 400 the contract promises.
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return errorResponse("Request body must be a JSON object", 400);
+  }
+  const body = parsed as PrintBody;
 
   const instanceId = str(body.instanceId);
   const locationId = str(body.locationId);
@@ -128,6 +136,12 @@ export async function POST(request: NextRequest) {
       400,
     );
   }
+  if (printer) {
+    // The transport THROWS on these, which the catch below would map to a 500 —
+    // telling an automated caller to retry input that can never succeed.
+    const bad = rejectUnusablePrintTarget(printer, "brother");
+    if (bad) return errorResponse(bad, 400);
+  }
   if (!!instanceId === !!locationId) {
     return errorResponse("Provide exactly one of instanceId or locationId.", 400);
   }
@@ -135,6 +149,16 @@ export async function POST(request: NextRequest) {
   const fmt = resolveFormat(body);
   if ("error" in fmt) return errorResponse(fmt.error as string, 400);
   const resolved = fmt as LabelFormat;
+  if (resolved.orientation === "vertical") {
+    // normalizeLabelFormat blesses it (it is a first-class LabelOrientation),
+    // but the server renderer cannot do it. That is a capability gap, not a
+    // malformed request, and not a server fault -- 501, like the platform case.
+    return errorResponse(
+      "Vertical text orientation is not implemented by the print API — print from the app, " +
+        "or use a horizontal format.",
+      501,
+    );
+  }
 
   try {
     await dbConnect();
@@ -213,6 +237,12 @@ export async function POST(request: NextRequest) {
         : undefined,
     });
   } catch (err) {
+    // 501 = "this build/platform cannot do it", which is true for both the
+    // unsupported-OS case and a missing native image backend. Neither is a
+    // server fault and neither is worth an automated caller retrying.
+    if (err instanceof RendererUnavailableError) {
+      return errorResponse(err.message, 501);
+    }
     if (/not supported on platform/i.test(getErrorMessage(err))) {
       return errorResponse(getErrorMessage(err), 501);
     }
