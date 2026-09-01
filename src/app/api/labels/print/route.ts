@@ -55,6 +55,8 @@ interface PrintBody {
   preset?: unknown;
   /** Explicit LabelFormat overrides, applied over the preset and validated. */
   format?: unknown;
+  /** Render and report, but send nothing to the printer. */
+  dryRun?: unknown;
 }
 
 function str(v: unknown): string | null {
@@ -118,9 +120,11 @@ export async function POST(request: NextRequest) {
   const locationId = str(body.locationId);
   const printer = str(body.printer);
 
-  if (!printer) {
+  const dryRun = body.dryRun === true;
+  if (!printer && !dryRun) {
     return errorResponse(
-      "printer is required — a CUPS queue name (e.g. \"FilamentDB_Label\") or a usb:// device URI.",
+      "printer is required — a CUPS queue name (e.g. \"FilamentDB_Label\") or a usb:// device URI. " +
+        "Pass dryRun:true to render without printing.",
       400,
     );
   }
@@ -191,11 +195,12 @@ export async function POST(request: NextRequest) {
       autoCut: true,
     });
 
-    await printLabel(printer, Buffer.from(bytes), "brother");
+    if (!dryRun) await printLabel(printer!, Buffer.from(bytes), "brother");
 
     return NextResponse.json({
       ok: true,
-      printer,
+      dryRun,
+      printer: dryRun ? null : printer,
       lines,
       qrPayload,
       rasterLines,
