@@ -102,6 +102,29 @@ jobs:
           npm run electron:fixlinks
           npm run electron:compile
 
+      # GH #1195: sharp resolves @img/sharp-<platform>-<arch> at require time
+      # and THROWS if absent — there is no JS fallback in a packaged build.
+      # A route now imports it, so Next's tracing copies sharp into
+      # .next/standalone/node_modules and electron:fixlinks carries that into
+      # `standalone/`, which electron-builder ships. Node resolves
+      # standalone/node_modules BEFORE the app's root node_modules, so on the
+      # three CROSS legs that traced copy is the runner's arch and wins.
+      #
+      # This must run AFTER the build (the tree it patches does not exist
+      # before) and BEFORE packaging. It cannot be done by installing the
+      # target arch ahead of the build: `npm install --os/--cpu` re-resolves
+      # EVERY optional dependency, which swaps lightningcss/@tailwindcss/oxide
+      # too and the build then dies on a missing lightningcss .node.
+      - name: Install target-arch sharp into the standalone tree (cross-builds)
+        if: matrix.platform == 'mac-x64-cross' || matrix.platform == 'win-arm64-cross' || matrix.platform == 'linux-arm64'
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            mac-x64-cross)   node scripts/install-sharp-arch.mjs --platform darwin --arch x64 ;;
+            win-arm64-cross) node scripts/install-sharp-arch.mjs --platform win32  --arch arm64 ;;
+            linux-arm64)     node scripts/install-sharp-arch.mjs --platform linux  --arch arm64 ;;
+          esac
+
       # macOS code signing + notarization. Exports the signing env (via
       # $GITHUB_ENV) consumed by the mac packaging steps below. When the secrets
       # aren't configured, it disables auto-discovery so the build is UNSIGNED —
@@ -173,12 +196,6 @@ jobs:
           $archName = switch ($machine) { 0x8664 {"x64"} 0xAA64 {"arm64"} default {"unknown:0x{0:X4}" -f $_} }
           Write-Host "pcsclite.node arch: $archName (machine=0x$('{0:X4}' -f $machine))"
           if ($archName -ne "arm64") { throw "pcsclite.node was rebuilt as $archName, expected arm64" }
-          # GH #1195: sharp's native binary is arch-specific with no fallback,
-          # and `npm ci` on this x64 runner only fetched @img/sharp-win32-x64.
-          npm install --no-save --os=win32 --cpu=arm64 sharp
-          if (-not (Test-Path "node_modules/@img/sharp-win32-arm64")) {
-            throw "@img/sharp-win32-arm64 missing after cross-install"
-          }
           # GH #586: --publish never so electron-builder can't upload this job's
           # arch-less `latest.yml` (the Windows update channel) to the release
           # in any draft-timing window. softprops still uploads the arm64
@@ -200,15 +217,6 @@ jobs:
           # fast rather than shipping an arm64 binary inside an x64 dmg.
           file node_modules/@pokusew/pcsclite/build/Release/pcsclite.node | tee /tmp/arch-check.txt
           grep -q "x86_64" /tmp/arch-check.txt
-          # GH #1195: sharp resolves a native binary from @img/sharp-<os>-<cpu>
-          # at require time and THROWS if it is absent -- there is no JS
-          # fallback in a packaged build. `npm ci` on this arm64 runner only
-          # installed @img/sharp-darwin-arm64, so an x64 dmg would ship the
-          # wrong one and POST /api/labels/print would 501 on every Intel Mac.
-          # merge-mac-metadata routes every Intel Mac to this artifact.
-          npm install --no-save --os=darwin --cpu=x64 sharp
-          test -d node_modules/@img/sharp-darwin-x64 \
-            || { echo "::error::@img/sharp-darwin-x64 missing after cross-install"; exit 1; }
           # Notarize only when the Prepare step set the flag (i.e. secrets exist).
           NOTARIZE_FLAG=""
           [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
@@ -223,15 +231,6 @@ jobs:
         if: matrix.platform == 'linux-arm64'
         run: |
           npx electron-rebuild -f -o @pokusew/pcsclite --arch=arm64
-          # GH #1195: see the macOS x64 step -- sharp's native binary is
-          # arch-specific and has no fallback.
-          # --libc is explicit: @img/sharp-linux-arm64 declares libc=glibc, and
-          # without it the package is filtered out on any runner whose libc npm
-          # does not detect as glibc. ubuntu-latest is glibc, so this states the
-          # requirement rather than changing it.
-          npm install --no-save --os=linux --cpu=arm64 --libc=glibc sharp
-          test -d node_modules/@img/sharp-linux-arm64 \
-            || { echo "::error::@img/sharp-linux-arm64 missing after cross-install"; exit 1; }
           npx electron-builder --config electron-builder.yml --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

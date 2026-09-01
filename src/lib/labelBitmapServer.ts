@@ -68,6 +68,14 @@ const QR_QUIET_ZONE_MODULES = 4;
 const BAND_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS;
 /** Floor on auto-fit font size, matching the browser renderer. */
 const MIN_FONT_PX = 8;
+/**
+ * Width of the oversize canvas the text block is rasterized onto before being
+ * trimmed to its ink box. Without a DOM there is no measureText, so the
+ * rasterizer decides the extent. Must stay comfortably wider than any label:
+ * text that reaches this edge is CLIPPED, and a trim that removes nothing
+ * means no ink was produced at all — both are refused below.
+ */
+const TEXT_MEASURE_CANVAS_DOTS = 4000;
 
 export interface ServerRenderOpts {
   filament: LabelFilament;
@@ -87,6 +95,18 @@ export interface ServerLabelRaster {
   cols: number;
   /** The composed text lines, for logging/telemetry. */
   lines: string[];
+}
+
+/**
+ * Thrown when the requested content cannot physically fit the tape. This is a
+ * CALLER problem (too many fields/lines for 24mm), so the route answers 400 —
+ * distinct from RendererUnavailableError, which is a build/platform problem.
+ */
+export class LabelDoesNotFitError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LabelDoesNotFitError";
+  }
 }
 
 /** Thrown when the native image backend cannot be loaded on this build. */
@@ -154,7 +174,7 @@ async function renderQrTile(
   });
   const probeWidth = (await sharp(probe).metadata()).width!;
   if (probeWidth > BAND_DOTS) {
-    throw new Error(
+    throw new LabelDoesNotFitError(
       `QR payload (${payload.length} chars) needs ${probeWidth} dots including the ` +
         `required 4-module quiet zone — exceeds the ${BAND_DOTS}-dot budget for 24mm tape.`,
     );
@@ -228,11 +248,47 @@ export async function renderLabelRaster(
       .join("");
     // Oversize canvas + trim: we cannot measure text without a DOM, so let
     // the rasterizer decide the ink extent.
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="${blockHeight}">${tspans}</svg>`;
+    // GH #954 / #1195: check the COMPOSED block height, before rasterizing.
+    // fitFontPx bottoms out at MIN_FONT_PX, so enough stacked lines exceed the
+    // 128-dot print head (13 lines at 8px is 130) and the centering offset
+    // below would go negative. Measuring the DECLARED height rather than the
+    // trimmed one is deliberate and matches the browser twin, which uses its
+    // canvas height: at this size the glyphs can rasterize to nothing at all,
+    // so a trimmed measurement collapses to 1x1 and reports "fits" for a label
+    // whose text is simply missing.
+    if (blockHeight > PRINT_HEAD_DOTS) {
+      throw new LabelDoesNotFitError(
+        "Label text does not fit the tape at the minimum font size — reduce the " +
+          "number of fields/lines or shorten the text.",
+      );
+    }
+
+    const svg =
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${TEXT_MEASURE_CANVAS_DOTS}" ` +
+      `height="${blockHeight}">${tspans}</svg>`;
     textPng = await sharp(Buffer.from(svg)).threshold(128).trim({ threshold: 250 }).png().toBuffer();
     const meta = await sharp(textPng).metadata();
     textWidth = meta.width!;
     textHeight = meta.height!;
+
+    // Two failure modes the trim-based measurement cannot otherwise report,
+    // both of which used to print a plausible-looking but wrong label:
+    //
+    // (a) NO INK. A name of only glyphless characters (a zero-width space is
+    //     not stripped by String.trim — it lacks the White_Space property)
+    //     rasterizes to nothing, so trim removes NOTHING and hands back the
+    //     full measure canvas. That printed a ~59cm stretch of blank tape.
+    // (b) CLIPPED. Text that actually reaches the canvas edge has been cut off
+    //     silently, so the printed label is missing characters.
+    //
+    // Both present as "trimmed width == canvas width", so one check covers
+    // them; the degenerate 1x1 case is kept as a belt-and-braces guard.
+    if (textWidth >= TEXT_MEASURE_CANVAS_DOTS || textWidth <= 1 || textHeight <= 1) {
+      throw new LabelDoesNotFitError(
+        "Label text could not be rendered — it produced no printable output, or " +
+          "is too long for the tape. Shorten the text or reduce the fields/lines.",
+      );
+    }
   }
 
   /* --- compose --- */

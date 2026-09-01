@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   renderLabelRaster,
+  LabelDoesNotFitError,
   RendererUnavailableError,
   escapeXml,
   fitFontPx,
@@ -255,6 +256,55 @@ describe("renderLabelRaster", () => {
     expect(out.lines).toEqual([]);
     expect(out.rasterLines).toBeGreaterThan(0);
     expect(out.cols).toBe(PRINT_HEAD_DOTS);
+  });
+
+  it("refuses a text block taller than the print band instead of a negative composite offset", async () => {
+    // GH #954 / #1195: fitFontPx bottoms out at MIN_FONT_PX, so enough stacked
+    // lines exceed the 128-dot head (13 lines at 8px = 130). The canvas height
+    // is fixed, so the centering offset goes negative — which sharp's
+    // composite rejects, surfacing as an opaque 500. Mirrors the browser twin.
+    const wordy = "alpha bravo charlie delta echo foxtrot golf hotel india";
+    await expect(
+      renderLabelRaster({
+        filament: { name: wordy, vendor: wordy, type: wordy, colorName: wordy },
+        qrPayload: "abc",
+        format: fmt({
+          lines: ["name", "vendor", "type", "vendorType", "colorName"],
+          maxLinesPerField: 3,
+          font: { family: "sans", size: "l" },
+        }),
+      }),
+    ).rejects.toBeInstanceOf(LabelDoesNotFitError);
+  });
+
+  it("refuses a glyphless name instead of printing blank tape", async () => {
+    // A zero-width space is NOT stripped by String.trim (it lacks the
+    // White_Space property), so it survives composeLabelLines as a non-empty
+    // line and rasterizes to no ink. Pre-guard this printed a label whose text
+    // was silently missing -- and, because the label length follows the text
+    // width, a long run of them printed a large stretch of blank tape.
+    await expect(
+      renderLabelRaster({ filament: { name: "\u200b\u200b\u200b" }, qrPayload: "abc" }),
+    ).rejects.toBeInstanceOf(LabelDoesNotFitError);
+  });
+
+  it("classifies an over-budget QR as a fit failure too", async () => {
+    // Same class of caller error — asked for more than the tape holds — so the
+    // route can map one error type to 400 rather than sniffing messages.
+    await expect(
+      renderLabelRaster({ filament: { name: "x" }, qrPayload: "z".repeat(1200) }),
+    ).rejects.toBeInstanceOf(LabelDoesNotFitError);
+  });
+
+  it("still renders a demanding but feasible multi-line label", async () => {
+    // The guard must refuse only genuine overflow -- four short lines fit.
+    const out = await renderLabelRaster({
+      filament: { name: "Galaxy", vendor: "Prusa", type: "PLA", colorName: "Black" },
+      qrPayload: "abc",
+      format: fmt({ lines: ["name", "vendor", "type", "colorName"], maxLinesPerField: 1 }),
+    });
+    expect(out.lines).toHaveLength(4);
+    expect(out.rasterLines).toBeGreaterThan(0);
   });
 
   it("throws rather than clipping when the QR exceeds the 24mm tape budget", async () => {

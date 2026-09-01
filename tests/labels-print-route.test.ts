@@ -198,6 +198,48 @@ describe("POST /api/labels/print", () => {
       expect(body.qrPayload).toContain(`/inventory?location=${locationId}`);
     });
 
+    it("400s a format that cannot fit the tape, rather than 500ing", async () => {
+      // Enough fields x wrapped lines drives fitFontPx to its floor and the
+      // composed block past the 128-dot print head. That is the caller asking
+      // for more than 24mm holds -- a bad request, not a server fault, and a
+      // 500 would tell an automated caller to retry it forever.
+      const wordy = "alpha bravo charlie delta echo foxtrot golf hotel india";
+      const iid = "beefbeef01";
+      await Filament.create({
+        name: wordy,
+        vendor: wordy,
+        type: wordy,
+        colorName: wordy,
+        spools: [{ totalWeight: 1000, instanceId: iid }],
+      });
+      const res = await post({
+        instanceId: iid,
+        dryRun: true,
+        format: {
+          lines: ["name", "vendor", "type", "vendorType", "colorName"],
+          maxLinesPerField: 3,
+          font: { family: "sans", size: "l" },
+        },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/does not fit|could not be rendered/i);
+    });
+
+    it("reduces baseUrl to its origin, so a long path cannot inflate the QR", async () => {
+      // The renderer refuses a QR past the tape's dot budget. This pins that a
+      // caller cannot reach that refusal through baseUrl: only the origin is
+      // used, so the payload length stays bounded by the deep-link shape.
+      const res = await post({
+        locationId,
+        baseUrl: `http://example.com/${"x".repeat(1200)}`,
+        dryRun: true,
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.qrPayload).toBe(`http://example.com/inventory?location=${locationId}`);
+      expect(body.qrPayload).not.toContain("xxxx");
+    });
+
     it("warns when the QR would point at a loopback host", async () => {
       const res = await post({
         locationId,

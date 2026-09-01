@@ -4,7 +4,11 @@ import Location from "@/models/Location";
 import { matchFilament } from "@/lib/matchFilament";
 import { assertLocalPrintToken } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, getErrorMessage } from "@/lib/apiErrorHandler";
-import { renderLabelRaster, RendererUnavailableError } from "@/lib/labelBitmapServer";
+import {
+  renderLabelRaster,
+  LabelDoesNotFitError,
+  RendererUnavailableError,
+} from "@/lib/labelBitmapServer";
 import {
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
@@ -242,6 +246,12 @@ export async function POST(request: NextRequest) {
     // server fault and neither is worth an automated caller retrying.
     if (err instanceof RendererUnavailableError) {
       return errorResponse(err.message, 501);
+    }
+    // The caller asked for more than 24mm tape can hold (too many fields/lines,
+    // or a QR payload past the band budget). That is a bad request, not a
+    // server fault — a 500 would tell an automated caller to retry it forever.
+    if (err instanceof LabelDoesNotFitError) {
+      return errorResponse(err.message, 400);
     }
     if (/not supported on platform/i.test(getErrorMessage(err))) {
       return errorResponse(getErrorMessage(err), 501);
