@@ -7064,6 +7064,129 @@
           }
         }
       }
+    },
+    "/api/labels/print": {
+      "post": {
+        "tags": [
+          "Labels"
+        ],
+        "summary": "Print a Brother PT-P710BT label for a spool or a location",
+        "description": "Renders a 24mm tape label server-side and sends it to the OS print system. Provide exactly one subject: `instanceId` (the per-spool identity from #732) or `locationId`.\n\nLayout comes from the same `LabelFormat` pipeline the app's own dialog uses — pass a `preset` (e.g. `vendorOverType` for QR + vendor above material) and/or explicit `format` overrides; both are validated through `normalizeLabelFormat`. Location labels are forced to the name-only layout, since a location has no vendor or type.\n\n**Authentication.** Requires the `x-filamentdb-print-token` header. The Electron main process mints the token per run, passes it to the server in-process, and writes it 0600 to `local-print-token` in the app's user-data directory, so only a local process can read it. A loopback check is not used because Next exposes no socket peer address and the `Host` header is client-supplied. Where no token is configured (Docker, web) the route returns 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "description": "Spool identity. Mutually exclusive with locationId."
+                  },
+                  "locationId": {
+                    "type": "string",
+                    "description": "Location to label. Mutually exclusive with instanceId."
+                  },
+                  "printer": {
+                    "type": "string",
+                    "description": "CUPS queue name or usb:// device URI (Windows: printer name). Required unless dryRun."
+                  },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "nameOnly",
+                      "vendorType",
+                      "vendorOverType",
+                      "typeColor"
+                    ],
+                    "description": "Named layout preset applied over the default format."
+                  },
+                  "format": {
+                    "type": "object",
+                    "description": "Explicit LabelFormat overrides applied over the preset, then normalized.",
+                    "additionalProperties": true
+                  },
+                  "qrMode": {
+                    "type": "string",
+                    "enum": [
+                      "instanceId",
+                      "url"
+                    ],
+                    "default": "instanceId",
+                    "description": "Spool labels only. Default encodes the bare instanceId, which /api/filaments/match resolves."
+                  },
+                  "baseUrl": {
+                    "type": "string",
+                    "description": "Origin for URL-mode QR payloads. Falls back to the request's own Host."
+                  },
+                  "dryRun": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Render and report without printing."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered, and printed unless dryRun.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "printer": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Null on a dry run."
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Composed text lines, after field selection and wrapping."
+                    },
+                    "qrPayload": {
+                      "type": "string"
+                    },
+                    "rasterLines": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "warning": {
+                      "type": "string",
+                      "description": "Present when the QR points at a loopback host and will not resolve from another device."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad body: no subject or both, unknown preset, missing printer, or an unresolvable base URL."
+          },
+          "403": {
+            "description": "Missing or incorrect local print token."
+          },
+          "404": {
+            "description": "No token configured on this deployment, or the subject was not found."
+          },
+          "501": {
+            "description": "Label printing is not supported on this platform."
+          }
+        }
+      }
     }
   },
   "components": {
