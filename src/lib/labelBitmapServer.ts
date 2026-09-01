@@ -177,6 +177,13 @@ export async function renderLabelRaster(
 
   const rasterLines = rotated.info.height;
   const cols = rotated.info.width;
+  /* c8 ignore start -- unreachable internal-consistency asserts. The source
+     canvas is created at exactly PRINT_HEAD_DOTS tall and rotated 90°, so
+     the width is that constant by construction; extractChannel(0) yields
+     exactly one channel; and a raw buffer is width*height by definition.
+     They exist so a future geometry change fails loudly here rather than
+     emitting a misaligned raster the printer would happily consume. Same
+     posture as tsplEncoder.ts's asserts. */
   if (cols !== PRINT_HEAD_DOTS) {
     throw new Error(
       `Internal error: rotated width is ${cols}, expected ${PRINT_HEAD_DOTS}. ` +
@@ -193,6 +200,7 @@ export async function renderLabelRaster(
       `Internal error: raw buffer is ${rotated.data.length} bytes, expected ${rasterLines * cols}`,
     );
   }
+  /* c8 ignore stop */
 
   // HARDWARE FIX (#587): emitting raster lines in the rotate-90-CW order
   // prints the label MIRRORED along its length — verified on a real
