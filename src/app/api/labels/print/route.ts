@@ -5,6 +5,13 @@ import { matchFilament } from "@/lib/matchFilament";
 import { assertLocalPrintToken } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, getErrorMessage } from "@/lib/apiErrorHandler";
 import { renderLabelRaster } from "@/lib/labelBitmapServer";
+import {
+  DEFAULT_LABEL_FORMAT,
+  LABEL_PRESETS,
+  normalizeLabelFormat,
+  type LabelFilament,
+  type LabelFormat,
+} from "@/lib/labelFormat";
 import { encodeLabel, packGrayscaleBitmap, type TapeWidthMm } from "@/lib/labelEncoder";
 import { printLabel } from "@/lib/labelTransport";
 import { buildLocationDeepLink, buildFilamentDeepLink } from "@/lib/labelDeepLink";
@@ -44,6 +51,10 @@ interface PrintBody {
   baseUrl?: unknown;
   /** Spool labels only. `url` deep-links; `instanceId` encodes the bare id. */
   qrMode?: unknown;
+  /** Named layout preset, e.g. "vendorOverType" (vendor above the type). */
+  preset?: unknown;
+  /** Explicit LabelFormat overrides, applied over the preset and validated. */
+  format?: unknown;
 }
 
 function str(v: unknown): string | null {
@@ -63,6 +74,33 @@ function resolveBaseUrl(explicit: string | null, request: NextRequest): string |
   }
   const host = request.headers.get("host");
   return host ? `http://${host}` : null;
+}
+
+/**
+ * Resolve the LabelFormat for this print.
+ *
+ * The app's own saved format lives in electron-store, which the server
+ * process cannot read, so the caller states what it wants: a named preset
+ * (the same LABEL_PRESETS the Settings editor offers) plus optional explicit
+ * overrides. Everything is put through `normalizeLabelFormat` so a bad field
+ * id or font name cannot reach the renderer.
+ */
+function resolveFormat(body: PrintBody): LabelFormat | { error: string } {
+  let merged: Record<string, unknown> = { ...DEFAULT_LABEL_FORMAT };
+  const preset = str(body.preset);
+  if (preset) {
+    const entry = LABEL_PRESETS[preset];
+    if (!entry) {
+      return {
+        error: `Unknown preset "${preset}". Valid presets: ${Object.keys(LABEL_PRESETS).join(", ")}.`,
+      };
+    }
+    merged = { ...merged, ...entry.patch };
+  }
+  if (body.format && typeof body.format === "object" && !Array.isArray(body.format)) {
+    merged = { ...merged, ...(body.format as Record<string, unknown>) };
+  }
+  return normalizeLabelFormat(merged);
 }
 
 export async function POST(request: NextRequest) {
@@ -90,24 +128,40 @@ export async function POST(request: NextRequest) {
     return errorResponse("Provide exactly one of instanceId or locationId.", 400);
   }
 
+  const fmt = resolveFormat(body);
+  if ("error" in fmt) return errorResponse(fmt.error as string, 400);
+  const resolved = fmt as LabelFormat;
+
   try {
     await dbConnect();
 
-    let name: string;
+    let labelFilament: LabelFilament;
     let qrPayload: string;
+    let format = resolved;
 
     if (locationId) {
       const loc = await Location.findOne({ _id: locationId, _deletedAt: null }).lean();
       if (!loc) return errorResponse("Location not found", 404);
       const base = resolveBaseUrl(str(body.baseUrl), request);
       if (!base) return errorResponse("Could not resolve a base URL for the QR payload.", 400);
-      name = (loc as { name: string }).name;
+      // A location has no vendor/type/colorName, so any field-based preset
+      // would compose to zero lines. Force the name-only layout and keep the
+      // caller's font/QR choices.
+      labelFilament = { name: (loc as { name: string }).name };
+      format = { ...resolved, lines: ["name"] };
       qrPayload = buildLocationDeepLink(base, String((loc as { _id: unknown })._id));
     } else {
       const result = await matchFilament({ instanceId: instanceId! });
-      const filament = result.match as { _id?: unknown; name?: string } | null;
+      const filament = result.match as
+        | { _id?: unknown; name?: string; vendor?: string; type?: string; colorName?: string }
+        | null;
       if (!filament) return errorResponse("No filament matched that instanceId", 404);
-      name = filament.name ?? "(unnamed)";
+      labelFilament = {
+        name: filament.name,
+        vendor: filament.vendor,
+        type: filament.type,
+        colorName: filament.colorName,
+      };
       // Default to the bare instanceId: it needs no reachable host, which is
       // the failure mode a printed URL label has when the server moves.
       if (str(body.qrMode) === "url") {
@@ -124,7 +178,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const { raster, rasterLines } = await renderLabelRaster({ name, qrPayload });
+    const { raster, rasterLines, lines } = await renderLabelRaster({
+      filament: labelFilament,
+      qrPayload,
+      format,
+    });
     const packed = packGrayscaleBitmap(new Uint8Array(raster), rasterLines);
     const bytes = encodeLabel({
       bitmap: packed,
@@ -138,7 +196,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       printer,
-      name,
+      lines,
       qrPayload,
       rasterLines,
       bytes: bytes.length,

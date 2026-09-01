@@ -131,7 +131,7 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   const { raster, rasterLines, cols } = await renderLabelRaster({
-    name: args.name,
+    filament: { name: args.name },
     qrPayload: args.qr,
   });
   console.log(
