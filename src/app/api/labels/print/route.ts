@@ -211,6 +211,32 @@ export async function POST(request: NextRequest) {
     // telling an automated caller to retry input that can never succeed.
     const bad = rejectUnusablePrintTarget(printer, "brother");
     if (bad) return errorResponse(bad, 400);
+
+    // A raw `usb://` target is refused on THIS surface, deliberately.
+    //
+    // `ensureManagedQueue` REBINDS the single FilamentDB_Label queue to
+    // whichever device is printing, and CUPS delivery is asynchronous: the job
+    // spools after the rebind but drains later. The Electron path is safe
+    // because its device comes from one stored setting, so the binding is
+    // stable. Making the device per-REQUEST reintroduces exactly the hazard
+    // the per-kind queue split was created to prevent — two calls naming
+    // different usb:// devices in close succession can deliver a job to the
+    // WRONG PHYSICAL PRINTER (src/lib/labelTransport.ts:56-69).
+    //
+    // An installed queue NAME prints directly with no rebind, and the managed
+    // queue is itself installed, so `FilamentDB_Label` is the answer for the
+    // common case. Narrowing this new surface is the honest fix; giving every
+    // USB URI its own stable queue would change transport behaviour the
+    // shipped desktop app depends on, which does not belong in this PR.
+    if (/^usb:\/\//i.test(printer)) {
+      return errorResponse(
+        `A raw usb:// device is not accepted here because the shared managed queue is ` +
+          `rebound per print, and concurrent requests naming different devices could ` +
+          `deliver a job to the wrong printer. Use an installed queue name instead ` +
+          `(e.g. "FilamentDB_Label", which this app manages for that device).`,
+        400,
+      );
+    }
   }
   if (!!instanceId === !!locationId) {
     return errorResponse("Provide exactly one of instanceId or locationId.", 400);

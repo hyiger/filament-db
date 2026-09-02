@@ -173,6 +173,14 @@ describe("POST /api/labels/print", () => {
       expect(res.status).toBe(400);
     });
 
+    it("400s a raw usb:// device and names the installed-queue alternative", async () => {
+      const res = await post({ instanceId, printer: "usb://Brother/PT-P710BT?serial=X" });
+      expect(res.status).toBe(400);
+      const err = (await res.json()).error;
+      expect(err).toMatch(/wrong printer/i);
+      expect(err).toMatch(/FilamentDB_Label/);
+    });
+
     it("400s a non-usb URL scheme (GH #623)", async () => {
       const res = await post({ instanceId, printer: "ipp://printer.local/x" });
       expect(res.status).toBe(400);
@@ -245,6 +253,10 @@ describe("POST /api/labels/print", () => {
       ["format.maxLinesPerField non-integer", bad({ format: { maxLinesPerField: 1.5 } })],
       ["format unknown top-level key", bad({ format: { nope: 1 } })],
       ["format.lines explicitly empty", bad({ format: { lines: [] } })],
+      // A raw usb:// device is refused on this surface: the shared managed
+      // queue is rebound per print and CUPS delivery is async, so concurrent
+      // requests naming different devices could reach the wrong printer.
+      ["raw usb:// device target", bad({ printer: "usb://Brother/PT-P710BT?serial=X" })],
       ["format selects no QR and no non-empty fields", bad({
         format: { lines: ["colorName"], qr: { enabled: false, placement: "left" } },
       })],

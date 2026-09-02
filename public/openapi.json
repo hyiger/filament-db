@@ -7089,7 +7089,7 @@
                   },
                   "printer": {
                     "type": "string",
-                    "description": "CUPS queue name or usb:// device URI (Windows: printer name). Required unless dryRun."
+                    "description": "Installed CUPS queue name (e.g. \"FilamentDB_Label\") or, on Windows, the printer name. Required unless dryRun. A raw usb:// device URI is REJECTED here: the shared managed queue is rebound per print and CUPS delivery is asynchronous, so concurrent requests naming different devices could deliver a job to the wrong printer. Name the installed queue instead."
                   },
                   "preset": {
                     "type": "string",
@@ -7260,7 +7260,12 @@
           "501": {
             "description": "Not possible on this build: an unsupported platform, a format the server renderer does not implement (vertical text orientation), or a missing native image backend \u2014 sharp's architecture-specific binary could not be loaded."
           }
-        }
+        },
+        "security": [
+          {
+            "LocalPrintToken": []
+          }
+        ]
       }
     }
   },
@@ -8981,6 +8986,12 @@
         "type": "http",
         "scheme": "bearer",
         "description": "Optional bearer-token gate, applied only when the server's FILAMENTDB_API_KEY environment variable is set (off by default \u2014 the API is unauthenticated for localhost/desktop use). When set, EVERY /api request must send `Authorization: Bearer <key>`; there is no same-origin exemption, so the gate also locks out the first-party browser UI. Requests without a valid key get 401 with `WWW-Authenticate: Bearer`."
+      },
+      "LocalPrintToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-filamentdb-print-token",
+        "description": "Local print token. The Electron main process mints one per run and writes it 0600 to `local-print-token` in the app's user-data directory, so only a process on the same machine can read it. Absent on a deployment with no attached printer (Docker, web) and in dev, where the route returns 404."
       }
     }
   }

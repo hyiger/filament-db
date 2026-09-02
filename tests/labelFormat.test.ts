@@ -320,6 +320,19 @@ describe("OpenAPI format schema matches the handler (GH #1195)", () => {
   ].schema.properties.format;
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
+  it("declares the print-token header so Swagger UI can send it", () => {
+    // Prose alone left "Try it out" with no field for the token, so every
+    // attempt 403'd and generated clients could not discover the header.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const scheme = (spec as any).components.securitySchemes.LocalPrintToken;
+    const op = (spec as any).paths["/api/labels/print"].post;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(scheme.type).toBe("apiKey");
+    expect(scheme.in).toBe("header");
+    expect(scheme.name).toBe("x-filamentdb-print-token");
+    expect(op.security).toEqual([{ LocalPrintToken: [] }]);
+  });
+
   it("documents the nested shape and forbids unknown keys", () => {
     expect(fmt.additionalProperties).toBe(false);
     expect(Object.keys(fmt.properties).sort()).toEqual([
