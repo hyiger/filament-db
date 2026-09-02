@@ -283,6 +283,16 @@ describe("validateLabelFormatOverride (GH #1195)", () => {
     expect(validateLabelFormatOverride({ orientation: "sideways" })).toMatch(/orientation/);
   });
 
+  it("rejects duplicate lines, which the normalizer would silently collapse", () => {
+    // normalizeLabelFormat dedupes with a Set, so ["name","name"] would print
+    // ONE line for a two-line request — fewer lines than the ordered-array
+    // contract promised, with a 200.
+    expect(validateLabelFormatOverride({ lines: ["name", "name"] })).toMatch(/duplicates/);
+    expect(validateLabelFormatOverride({ lines: ["vendor", "type", "vendor"] })).toMatch(/duplicates/);
+    // Distinct fields are still fine.
+    expect(validateLabelFormatOverride({ lines: ["vendor", "type"] })).toBeNull();
+  });
+
   it("rejects an explicitly empty lines list, which the normalizer would refill", () => {
     // normalizeLabelFormat turns [] into ["name"], so accepting it would print
     // the filament name on a label the caller asked to be QR-only.
@@ -320,6 +330,44 @@ describe("OpenAPI format schema matches the handler (GH #1195)", () => {
   ].schema.properties.format;
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
+  it("keeps the optional bearer gate alongside the local token", () => {
+    // An operation-level `security` REPLACES the top-level declaration, so
+    // listing only the print token told clients to omit Authorization —
+    // guaranteeing a 401 on any deployment where FILAMENTDB_API_KEY is set and
+    // src/proxy.ts enforces it. Entries are alternatives; keys within one are
+    // combined. So: token alone, or token AND bearer.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const op = (spec as any).paths["/api/labels/print"].post;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(op.security).toEqual([
+      { LocalPrintToken: [] },
+      { LocalPrintToken: [], bearerAuth: [] },
+    ]);
+    expect(Object.keys(op.responses)).toContain("401");
+  });
+
+  it("closes the request schema, matching the handler's unknown-key refusal", () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const schema = (spec as any).paths["/api/labels/print"].post.requestBody
+      .content["application/json"].schema;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(schema.additionalProperties).toBe(false);
+    // Documented keys must match the handler's allow-list exactly, or a client
+    // generated from this spec sends a field the route rejects.
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "baseUrl", "dryRun", "format", "instanceId", "locationId", "preset", "printer", "qrMode",
+    ]);
+  });
+
+  it("marks lines uniqueItems, matching the duplicate refusal", () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const lines = (spec as any).paths["/api/labels/print"].post.requestBody
+      .content["application/json"].schema.properties.format.properties.lines;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(lines.uniqueItems).toBe(true);
+    expect(validateLabelFormatOverride({ lines: ["name", "name"] })).not.toBeNull();
+  });
+
   it("declares the print-token header so Swagger UI can send it", () => {
     // Prose alone left "Try it out" with no field for the token, so every
     // attempt 403'd and generated clients could not discover the header.
@@ -330,7 +378,10 @@ describe("OpenAPI format schema matches the handler (GH #1195)", () => {
     expect(scheme.type).toBe("apiKey");
     expect(scheme.in).toBe("header");
     expect(scheme.name).toBe("x-filamentdb-print-token");
-    expect(op.security).toEqual([{ LocalPrintToken: [] }]);
+    // Every alternative must require the local token; the bearer combination
+    // is asserted separately above.
+    expect(op.security.length).toBeGreaterThan(0);
+    for (const alt of op.security) expect(Object.keys(alt)).toContain("LocalPrintToken");
   });
 
   it("documents the nested shape and forbids unknown keys", () => {

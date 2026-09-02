@@ -253,6 +253,7 @@ describe("POST /api/labels/print", () => {
       ["format.maxLinesPerField non-integer", bad({ format: { maxLinesPerField: 1.5 } })],
       ["format unknown top-level key", bad({ format: { nope: 1 } })],
       ["format.lines explicitly empty", bad({ format: { lines: [] } })],
+      ["format.lines with duplicates", bad({ format: { lines: ["name", "name"] } })],
       // A raw usb:// device is refused on this surface: the shared managed
       // queue is rebound per print and CUPS delivery is async, so concurrent
       // requests naming different devices could reach the wrong printer.

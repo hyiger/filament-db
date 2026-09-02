@@ -252,6 +252,14 @@ export function validateLabelFormatOverride(raw: unknown): string | null {
     if (o.lines.length === 0) {
       return "format.lines must not be empty — omit it to use the default.";
     }
+    // normalizeLabelFormat dedupes with a Set (GH #954: a field is shown or
+    // not, never stacked), so ["name","name"] would return 200 and print ONE
+    // line for a two-line request. The published contract is an ordered array;
+    // silently returning fewer lines than asked for is the same
+    // changed-output failure as the empty-list case above.
+    if (new Set(o.lines as unknown[]).size !== o.lines.length) {
+      return "format.lines must not contain duplicates — each field is shown at most once.";
+    }
     for (const l of o.lines) {
       if (typeof l !== "string" || !(FIELD_IDS as string[]).includes(l)) {
         return `format.lines entries must be one of: ${FIELD_IDS.join(", ")}.`;

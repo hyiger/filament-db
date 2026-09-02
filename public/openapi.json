@@ -7126,7 +7126,7 @@
                       "lines": {
                         "type": "array",
                         "minItems": 1,
-                        "description": "Ordered text fields, stacked top to bottom. Must not be empty \u2014 omit to use the default.",
+                        "description": "Ordered text fields, stacked top to bottom. Must be non-empty and duplicate-free -- the normalizer dedupes, so a repeated field would silently print fewer lines than requested. Omit to use the default.",
                         "items": {
                           "type": "string",
                           "enum": [
@@ -7136,7 +7136,8 @@
                             "vendorType",
                             "colorName"
                           ]
-                        }
+                        },
+                        "uniqueItems": true
                       },
                       "font": {
                         "type": "object",
@@ -7199,7 +7200,9 @@
                     "default": false,
                     "description": "Render and report without printing."
                   }
-                }
+                },
+                "additionalProperties": false,
+                "description": "Closed object: the handler rejects any unknown top-level key with a 400. That is deliberate rather than lenient -- it is what catches a misspelled safety-critical field such as `dryrun`, which would otherwise leave dryRun false and physically print."
               }
             }
           }
@@ -7251,6 +7254,9 @@
           "400": {
             "description": "Bad request. Covers: a body that is not a JSON object; no subject or both; a field of the wrong type (printer, format, dryRun, qrMode); an instanceId over 128 characters; a locationId that is not a valid id; an unknown preset (inherited Object.prototype names are rejected); an unusable print target (legacy serial setting or a non-usb:// scheme); an unresolvable base URL; or content that cannot fit 24mm tape - too many fields/lines, an over-budget or unencodable QR, text that produces no printable output, or a format that selects no QR and no non-empty fields."
           },
+          "401": {
+            "description": "The deployment sets FILAMENTDB_API_KEY, which src/proxy.ts enforces on every /api/* request with no same-origin exemption. Send Authorization: Bearer <key> in addition to the local print token."
+          },
           "403": {
             "description": "Missing or incorrect local print token."
           },
@@ -7264,6 +7270,10 @@
         "security": [
           {
             "LocalPrintToken": []
+          },
+          {
+            "LocalPrintToken": [],
+            "bearerAuth": []
           }
         ]
       }
