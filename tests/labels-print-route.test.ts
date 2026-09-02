@@ -254,6 +254,15 @@ describe("POST /api/labels/print", () => {
       ["format unknown top-level key", bad({ format: { nope: 1 } })],
       ["format.lines explicitly empty", bad({ format: { lines: [] } })],
       ["format.lines with duplicates", bad({ format: { lines: ["name", "name"] } })],
+      // A PRESENT but blank string is malformed, not omitted. str() collapsed
+      // it to null, so `preset: ""` skipped validation and printed the default
+      // layout with a 200.
+      ["preset blank", bad({ preset: "" })],
+      ["preset whitespace only", bad({ preset: "   " })],
+      ["baseUrl blank", bad({ baseUrl: "", qrMode: "url" })],
+      ["instanceId blank", bad({ instanceId: "" })],
+      ["locationId blank", bad({ instanceId: undefined, locationId: "" })],
+      ["printer blank", bad({ printer: "" })],
       // A raw usb:// device is refused on this surface: the shared managed
       // queue is rebound per print and CUPS delivery is async, so concurrent
       // requests naming different devices could reach the wrong printer.
@@ -367,6 +376,31 @@ describe("POST /api/labels/print", () => {
       const body = await res.json();
       expect(body.qrPayload).toBe(`http://example.com/inventory?location=${locationId}`);
       expect(body.qrPayload).not.toContain("xxxx");
+    });
+
+    it("refuses a malformed Host before anything reaches the printer", async () => {
+      // The Host header is client-supplied and used to be interpolated into
+      // `http://${host}` unchecked. A malformed value produced an unparseable
+      // base, the deep-link builder returned the raw string, the label PRINTED,
+      // and the loopback check then threw — answering 500 after the print, so a
+      // retry duplicated the label.
+      const headers = new Headers({
+        "content-type": "application/json",
+        "x-filamentdb-print-token": TOKEN,
+        host: "::::",
+      });
+      const { POST } = await import("@/app/api/labels/print/route");
+      const res = await POST(
+        new NextRequest("http://localhost:3456/api/labels/print", {
+          method: "POST",
+          headers,
+          // No baseUrl: forces the Host fallback. No dryRun: this is the path
+          // that would otherwise have printed.
+          body: JSON.stringify({ locationId, printer: "FilamentDB_Label" }),
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/base URL/i);
     });
 
     it("warns when the QR would point at a loopback host", async () => {

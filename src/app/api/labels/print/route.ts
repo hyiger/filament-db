@@ -80,18 +80,47 @@ function str(v: unknown): string | null {
 const MAX_INSTANCE_ID_LENGTH = 128;
 
 /** Resolve the base the QR should point at, preferring an explicit value. */
-function resolveBaseUrl(explicit: string | null, request: NextRequest): string | null {
-  if (explicit) {
-    try {
-      const u = new URL(explicit);
-      if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-      return u.origin;
-    } catch {
-      return null;
-    }
+/**
+ * Loopback advisory for the returned payload. Never throws: it runs after the
+ * label has already printed, so an exception would convert a successful print
+ * into a 500 and an automated retry would print a duplicate.
+ */
+function loopbackWarning(qrPayload: string): string | undefined {
+  if (!/^https?:\/\//i.test(qrPayload)) return undefined;
+  try {
+    return isLoopbackHostname(new URL(qrPayload).hostname)
+      ? "QR points at a loopback host and will not resolve from another device."
+      : undefined;
+  } catch {
+    return undefined;
   }
+}
+
+function parseHttpOrigin(candidate: string): string | null {
+  try {
+    const u = new URL(candidate);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve the base the QR should point at.
+ *
+ * BOTH branches go through the same parse. The Host header is client-supplied,
+ * and it used to be interpolated into `http://${host}` unchecked: a malformed
+ * Host such as "::::" produced an unparseable base, `buildLocationDeepLink`
+ * caught the failure and returned the raw string, and the label was RENDERED
+ * AND PRINTED — after which the loopback-warning check threw on the same
+ * string and the route answered 500. A caller retrying that 500 printed a
+ * duplicate label. Validating here refuses before anything reaches the printer.
+ */
+function resolveBaseUrl(explicit: string | null, request: NextRequest): string | null {
+  if (explicit) return parseHttpOrigin(explicit);
   const host = request.headers.get("host");
-  return host ? `http://${host}` : null;
+  return host ? parseHttpOrigin(`http://${host}`) : null;
 }
 
 /**
@@ -179,8 +208,17 @@ export async function POST(request: NextRequest) {
   // name.
   for (const field of ["instanceId", "locationId", "printer", "preset", "baseUrl"] as const) {
     const value = (body as Record<string, unknown>)[field];
-    if (value !== undefined && typeof value !== "string") {
+    if (value === undefined) continue;
+    if (typeof value !== "string") {
       return errorResponse(`${field} must be a string.`, 400);
+    }
+    // A PRESENT but blank value is malformed, not omitted. str() collapses it
+    // to null, which reads downstream as "the caller did not supply this" --
+    // so `preset: ""` skipped preset validation entirely and printed the
+    // default layout with a 200, and `baseUrl: ""` silently fell back to the
+    // request Host. Distinguishing the two is the whole point.
+    if (value.trim().length === 0) {
+      return errorResponse(`${field} must not be blank.`, 400);
     }
   }
 
@@ -347,9 +385,9 @@ export async function POST(request: NextRequest) {
       // Surfaced, not refused: a loopback QR still scans, it just will not
       // resolve from a phone. The caller may genuinely be labelling for a
       // machine that only ever reads it locally.
-      warning: /^https?:\/\//.test(qrPayload) && isLoopbackHostname(new URL(qrPayload).hostname)
-        ? "QR points at a loopback host and will not resolve from another device."
-        : undefined,
+      // Computed defensively: this runs AFTER printLabel, so a throw here would
+      // turn a completed print into a 500 and invite a duplicate on retry.
+      warning: loopbackWarning(qrPayload),
     });
   } catch (err) {
     // 501 = "this build/platform cannot do it", which is true for both the
