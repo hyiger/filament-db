@@ -220,6 +220,15 @@ export async function POST(request: NextRequest) {
     if (value.trim().length === 0) {
       return errorResponse(`${field} must not be blank.`, 400);
     }
+    // Control characters, NUL above all. A `printer` containing NUL passes the
+    // string, blank and rejectUnusablePrintTarget checks, then Node throws when
+    // printCups spawns it (and likewise on the Windows execFile path) -- a 500
+    // for permanently malformed caller input, which breaks this route's
+    // no-caller-input-as-5xx invariant. None of these fields (queue names, ids,
+    // preset names, URLs) can legitimately contain a C0 control or DEL.
+    if (/[\u0000-\u001f\u007f]/.test(value)) {
+      return errorResponse(`${field} must not contain control characters.`, 400);
+    }
   }
 
   // (c) The nested format override, validated STRICTLY. normalizeLabelFormat

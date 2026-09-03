@@ -33,6 +33,16 @@ import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+/**
+ * npm ships as `npm.cmd` on Windows, and Node's execFile CANNOT launch a
+ * .cmd/.bat there (documented limitation) — it throws before npm ever runs.
+ * The win-arm64-cross release leg executes this script on windows-latest, so
+ * without this the Windows arm64 artifact would fail to build on every tag
+ * (GH #1195 review). Resolved once, at module scope, so both call sites and
+ * any future one get it.
+ */
+const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+
 const VALID_PLATFORMS = ["darwin", "win32", "linux", "linuxmusl"];
 const VALID_ARCHES = ["x64", "arm64", "arm", "s390x", "ppc64", "riscv64"];
 
@@ -111,11 +121,18 @@ function main() {
       // suitability check, which `npm install` applies and which rejects a
       // foreign-arch package outright ("notsup Valid cpu").
       const spec = `${name}@${version}`;
+      // Split on \r?\n: npm on Windows emits CRLF, and a trailing \r in the
+      // filename would make the join() below point at a path that does not
+      // exist.
       const tarball = execFileSync(
-        "npm",
+        NPM,
         ["pack", spec, "--pack-destination", staging, "--loglevel", "error"],
         { encoding: "utf8" },
-      ).trim().split("\n").pop().trim();
+      )
+        .trim()
+        .split(/\r?\n/)
+        .pop()
+        .trim();
 
       const tarPath = join(staging, tarball);
       const unpacked = join(staging, name.replace("/", "__"));

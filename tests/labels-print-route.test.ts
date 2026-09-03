@@ -263,6 +263,12 @@ describe("POST /api/labels/print", () => {
       ["instanceId blank", bad({ instanceId: "" })],
       ["locationId blank", bad({ instanceId: undefined, locationId: "" })],
       ["printer blank", bad({ printer: "" })],
+      // NUL passes the string/blank/target checks, then Node throws when the
+      // transport spawns it -- a 500 for permanently malformed input.
+      ["printer with a NUL byte", bad({ printer: "Queue\u0000" })],
+      ["instanceId with a NUL byte", bad({ instanceId: "abc\u0000def" })],
+      ["preset with a control character", bad({ preset: "nameOnly\u0007" })],
+      ["baseUrl with a NUL byte", bad({ baseUrl: "http://x.test\u0000", qrMode: "url" })],
       // A raw usb:// device is refused on this surface: the shared managed
       // queue is rebound per print and CUPS delivery is async, so concurrent
       // requests naming different devices could reach the wrong printer.
