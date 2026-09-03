@@ -254,6 +254,7 @@ const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
  * table (docs/usage.md) in sync when changing the default.
  */
 const GEMINI_MODEL = "gemini-3.1-flash";
+const CLAUDE_MODEL = "claude-sonnet-4-6";
 
 /** Models discovered via ListModels after the default failed, keyed by the
  *  SHA-256 of the API key — discovery is key-dependent (each key sees its
@@ -527,7 +528,7 @@ async function callClaude(
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
+      model: CLAUDE_MODEL,
       max_tokens: 2048,
       messages: [{ role: "user", content: contentBlocks }],
     }),
@@ -666,7 +667,7 @@ export async function validateApiKey(
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
+          model: CLAUDE_MODEL,
           messages: [{ role: "user", content: "test" }],
         }),
       });
