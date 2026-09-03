@@ -39,13 +39,12 @@ import { writeFileSync } from "node:fs";
 import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import sharp from "sharp";
-import QRCode from "qrcode";
 import {
   encodeLabel,
   packGrayscaleBitmap,
-  PRINT_HEAD_DOTS as ENCODER_PRINT_HEAD_DOTS,
   type TapeWidthMm,
 } from "@/lib/labelEncoder";
+import { renderLabelRaster } from "@/lib/labelBitmapServer";
 
 /* ---------- CLI parsing ----------------------------------------------- */
 
@@ -101,182 +100,11 @@ function parseArgs(argv: string[]): Args {
 
 /* ---------- bitmap rendering ------------------------------------------ */
 
-/** Re-exported from the encoder so this file's geometry constants stay
- *  in lockstep with what the wire format expects. */
-const PRINT_HEAD_DOTS = ENCODER_PRINT_HEAD_DOTS;
-
-/** Side padding inside the printable area, in dots. Keeps the QR /
- *  text off the literal edge of the 18mm printable strip. */
-const VERTICAL_PADDING_DOTS = 6;
-
-/** Horizontal padding at the start of the label. */
-const HORIZONTAL_PADDING_DOTS = 14;
-
-/** Render the label as a 1-bit raster: rows = raster lines (printer
- *  output direction), cols = print-head dots. Returns the row-major
- *  raw buffer plus dimensions.
- *
- *  The natural way to compose with sharp is the human-readable
- *  orientation: width = label-length-in-dots, height = 128 dots tall.
- *  We rotate 90° at the end so each output row corresponds to one
- *  raster line the printer will fire. */
-async function renderLabelBitmap(args: Args): Promise<{
-  raster: Buffer;
-  rasterLines: number;
-  cols: number; // == PRINT_HEAD_DOTS
-}> {
-  /* --- QR --- */
-  // errorCorrectionLevel 'M' is the practical sweet spot for label use:
-  // robust against tape scuffs, doesn't bloat short payloads. To match
-  // the renderer's labelBitmap.ts behavior, probe at scale=1 (with the
-  // spec-required 4-module quiet zone included) to find the total
-  // pixel height and pick the largest fitting scale. Payloads too long
-  // even at scale=1 throw rather than silently clipping or producing
-  // an unscannable code. (PR #487.)
-  const QR_QUIET_ZONE_MODULES = 4;
-  const MAX_QR_DOTS_SPIKE = PRINT_HEAD_DOTS - 12; // 6 padding each side
-  const probePng = await QRCode.toBuffer(args.qr, {
-    errorCorrectionLevel: "M",
-    margin: QR_QUIET_ZONE_MODULES,
-    scale: 1,
-    color: { dark: "#000000", light: "#FFFFFF" },
-  });
-  const probeMeta = await sharp(probePng).metadata();
-  const widthWithQuietZone = probeMeta.width!;
-  if (widthWithQuietZone > MAX_QR_DOTS_SPIKE) {
-    throw new Error(
-      `QR payload (${args.qr.length} chars) needs ${widthWithQuietZone} dots ` +
-        `including the required 4-module quiet zone — exceeds the ` +
-        `${MAX_QR_DOTS_SPIKE}-dot budget for 24mm tape.`,
-    );
-  }
-  const qrSize = Math.floor(MAX_QR_DOTS_SPIKE / widthWithQuietZone);
-  const qrPng = await QRCode.toBuffer(args.qr, {
-    errorCorrectionLevel: "M",
-    margin: QR_QUIET_ZONE_MODULES,
-    scale: qrSize,
-    color: { dark: "#000000", light: "#FFFFFF" },
-  });
-  const qrMeta = await sharp(qrPng).metadata();
-  const qrDots = qrMeta.width!; // QR is square
-
-  /* --- text --- */
-  // The text "band" occupies the remaining label width to the right of
-  // the QR. We render it via SVG so we get crisp 1-bit output without
-  // antialias artifacts surviving the threshold pass.
-  const textHeight = Math.min(56, PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS);
-  // Rough heuristic: 24px font in CSS ≈ 32 dots at 180 dpi.
-  const fontPx = Math.floor(textHeight * 0.72);
-  const escaped = escapeXml(args.name);
-  // We don't know the final text-band width yet — we'll measure with
-  // sharp by rendering it on an oversize canvas and trimming.
-  const svgText = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="${textHeight}">
-      <text x="0" y="${fontPx}"
-            font-family="Helvetica, Arial, sans-serif"
-            font-weight="700"
-            font-size="${fontPx}"
-            fill="#000000">${escaped}</text>
-    </svg>`;
-  const textPng = await sharp(Buffer.from(svgText))
-    .threshold(128)
-    .trim({ threshold: 250 }) // strip empty space around the text
-    .png()
-    .toBuffer();
-  const textMeta = await sharp(textPng).metadata();
-  const textWidth = textMeta.width!;
-
-  /* --- compose --- */
-  const qrTextGap = 12;
-  const labelWidthDots =
-    HORIZONTAL_PADDING_DOTS + qrDots + qrTextGap + textWidth + HORIZONTAL_PADDING_DOTS;
-
-  // Sharp's `create` requires 3 or 4 channels (RGB / RGBA); we collapse
-  // to grayscale at the threshold step below.
-  const canvas = sharp({
-    create: {
-      width: labelWidthDots,
-      height: PRINT_HEAD_DOTS,
-      channels: 3,
-      background: { r: 255, g: 255, b: 255 },
-    },
-  });
-
-  const qrTop = Math.floor((PRINT_HEAD_DOTS - qrDots) / 2);
-  const textTop = Math.floor((PRINT_HEAD_DOTS - textMeta.height!) / 2);
-
-  const composed = await canvas
-    .composite([
-      { input: qrPng, top: qrTop, left: HORIZONTAL_PADDING_DOTS },
-      {
-        input: textPng,
-        top: textTop,
-        left: HORIZONTAL_PADDING_DOTS + qrDots + qrTextGap,
-      },
-    ])
-    .toColorspace("b-w")
-    .png()
-    .toBuffer();
-
-  // Rotate 90° clockwise so each output ROW is one raster line.
-  // After rotation: width = 128 dots (one raster line wide), height = label length.
-  //
-  // Sharp's `.raw()` will give us 4-channel RGBA EVEN when the source is
-  // grayscale, because the pipeline still carries an alpha channel by
-  // default. `extractChannel(0)` collapses to exactly one byte per pixel
-  // (one of the R/G/B channels, all equal after threshold) so our
-  // downstream packing logic can rely on 1 byte = 1 dot.
-  const rotated = await sharp(composed)
-    .rotate(90)
-    .threshold(128)
-    .extractChannel(0)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const rasterLines = rotated.info.height;
-  const cols = rotated.info.width;
-  if (cols !== PRINT_HEAD_DOTS) {
-    throw new Error(
-      `Internal error: rotated width is ${cols}, expected ${PRINT_HEAD_DOTS}. ` +
-        `Did the source canvas height drift from PRINT_HEAD_DOTS?`,
-    );
-  }
-  if (rotated.info.channels !== 1) {
-    throw new Error(
-      `Internal error: expected 1 channel after extractChannel, got ${rotated.info.channels}`,
-    );
-  }
-  if (rotated.data.length !== rasterLines * cols) {
-    throw new Error(
-      `Internal error: raw buffer is ${rotated.data.length} bytes, expected ${rasterLines * cols}`,
-    );
-  }
-
-  // HARDWARE FIX (#587): emitting raster lines in the rotate-90-CW order
-  // prints the label MIRRORED along its length — verified on a real
-  // PT-P710BT, where the QR came out unscannable and the text read
-  // backwards. The printer's physical feed direction is opposite our
-  // raster-line order, so reverse the line order. (The QR/text content
-  // within each line is untouched; only the order the lines feed changes,
-  // which reflects the physical label along its length and un-mirrors it.)
-  // Mirror of the same fix in src/lib/labelBitmap.ts.
-  const raster = Buffer.alloc(rotated.data.length);
-  for (let r = 0; r < rasterLines; r++) {
-    rotated.data.copy(raster, (rasterLines - 1 - r) * cols, r * cols, (r + 1) * cols);
-  }
-
-  return { raster, rasterLines, cols };
-}
-
-function escapeXml(s: string): string {
-  return s.replace(/[<>&"']/g, (c) => ({
-    "<": "&lt;",
-    ">": "&gt;",
-    "&": "&amp;",
-    '"': "&quot;",
-    "'": "&apos;",
-  }[c]!));
-}
+/* Lifted to src/lib/labelBitmapServer.ts (GH #1195) so the print API route
+ * and this CLI share ONE server-side renderer. The implementation moved
+ * verbatim — byte-for-byte identical output — and `renderLabelRaster` is
+ * the same function this file used to define inline as
+ * `renderLabelBitmap()`. Geometry constants live there too. */
 
 /* ---------- sinks ----------------------------------------------------- */
 
@@ -302,7 +130,10 @@ async function writeToPrinter(bytes: Buffer, target: string) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const { raster, rasterLines, cols } = await renderLabelBitmap(args);
+  const { raster, rasterLines, cols } = await renderLabelRaster({
+    filament: { name: args.name },
+    qrPayload: args.qr,
+  });
   console.log(
     `rendered label: ${rasterLines} raster lines × ${cols} dots ` +
       `(≈ ${(rasterLines / 7.087).toFixed(1)}mm long)`,
