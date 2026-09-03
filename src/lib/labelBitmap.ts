@@ -30,8 +30,9 @@ import QRCode from "qrcode";
 import { PRINT_HEAD_DOTS } from "./labelEncoder";
 import {
   composeWrappedLabelLines,
+  baseFontPx as deriveBaseFontPx,
   FONT_STACKS,
-  FONT_SIZE_DOTS,
+  LINE_LEADING,
   type LabelFilament,
   type LabelFormat,
 } from "./labelFormat";
@@ -46,8 +47,8 @@ const QR_TEXT_GAP_DOTS = 12;
 const MAX_QR_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS; // 116
 /** QR spec requires a 4-module quiet zone for reliable scanning. */
 const QR_QUIET_ZONE_MODULES = 4;
-/** Line leading multiplier (rendered line box height / font px). */
-const LINE_LEADING = 1.18;
+/* LINE_LEADING and the size->font-px derivation live in labelFormat.ts so
+   this renderer and its Node twin (labelBitmapServer.ts) cannot drift. */
 
 export interface RenderLabelOpts {
   filament: LabelFilament;
@@ -184,7 +185,7 @@ async function composeLabelCanvas(opts: RenderLabelOpts): Promise<HTMLCanvasElem
   // composeLabelLines) so a long OpenPrintTag name no longer prints as one
   // crazy-long line. The font auto-shrink below fits the resulting lines.
   const lines = composeWrappedLabelLines(filament, format);
-  const baseFontPx = Math.floor(FONT_SIZE_DOTS[format.font.size] / LINE_LEADING);
+  const baseFontPx = deriveBaseFontPx(format.font.size);
   const textBlock = renderTextBlock(lines, FONT_STACKS[format.font.family], baseFontPx, format.orientation);
 
   // The text occupies blockW × blockH; after a 90° rotation (vertical mode)

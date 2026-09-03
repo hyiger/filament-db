@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import {
   composeLabelLines,
   composeWrappedLabelLines,
   wrapLabelLine,
   normalizeLabelFormat,
+  validateLabelFormatOverride,
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
   MAX_LINES_PER_FIELD,
@@ -231,5 +233,191 @@ describe("composeWrappedLabelLines (#745)", () => {
     expect(composeWrappedLabelLines(fil, legacy as LabelFormat)).toEqual([
       "Polymaker Panchroma Gradient Matte PLA Wood",
     ]);
+  });
+});
+
+describe("validateLabelFormatOverride (GH #1195)", () => {
+  // normalizeLabelFormat is a PERSISTENCE normalizer — it coerces anything
+  // unrecognised to a default so an old stored format still loads. Using it to
+  // validate a REQUEST silently turned malformed input into a printed label
+  // the caller never asked for. These pin the strict request-shape check.
+  it("accepts an omitted override", () => {
+    expect(validateLabelFormatOverride(undefined)).toBeNull();
+  });
+
+  it("accepts a valid partial override", () => {
+    expect(
+      validateLabelFormatOverride({ qr: { enabled: false }, font: { size: "l" } }),
+    ).toBeNull();
+  });
+
+  it("rejects a non-object", () => {
+    for (const v of ["nope", 42, [], null]) {
+      expect(validateLabelFormatOverride(v)).toMatch(/must be an object/);
+    }
+  });
+
+  it("rejects a boolean sent as a string, which the normalizer would default to true", () => {
+    expect(validateLabelFormatOverride({ qr: { enabled: "false" } })).toMatch(
+      /qr\.enabled must be a boolean/,
+    );
+  });
+
+  it("rejects a nested qr/font that is not an object", () => {
+    for (const v of ["nope", 42, [], null]) {
+      expect(validateLabelFormatOverride({ qr: v })).toMatch(/qr must be an object/);
+      expect(validateLabelFormatOverride({ font: v })).toMatch(/font must be an object/);
+    }
+  });
+
+  it("rejects unknown keys at both levels rather than ignoring them", () => {
+    expect(validateLabelFormatOverride({ nope: 1 })).toMatch(/unknown field/);
+    expect(validateLabelFormatOverride({ qr: { nope: 1 } })).toMatch(/qr has unknown field/);
+    expect(validateLabelFormatOverride({ font: { nope: 1 } })).toMatch(/font has unknown field/);
+  });
+
+  it("rejects invalid enum values", () => {
+    expect(validateLabelFormatOverride({ qr: { placement: "middle" } })).toMatch(/placement/);
+    expect(validateLabelFormatOverride({ font: { family: "comic" } })).toMatch(/family/);
+    expect(validateLabelFormatOverride({ font: { size: "xxl" } })).toMatch(/size/);
+    expect(validateLabelFormatOverride({ orientation: "sideways" })).toMatch(/orientation/);
+  });
+
+  it("rejects duplicate lines, which the normalizer would silently collapse", () => {
+    // normalizeLabelFormat dedupes with a Set, so ["name","name"] would print
+    // ONE line for a two-line request — fewer lines than the ordered-array
+    // contract promised, with a 200.
+    expect(validateLabelFormatOverride({ lines: ["name", "name"] })).toMatch(/duplicates/);
+    expect(validateLabelFormatOverride({ lines: ["vendor", "type", "vendor"] })).toMatch(/duplicates/);
+    // Distinct fields are still fine.
+    expect(validateLabelFormatOverride({ lines: ["vendor", "type"] })).toBeNull();
+  });
+
+  it("rejects an explicitly empty lines list, which the normalizer would refill", () => {
+    // normalizeLabelFormat turns [] into ["name"], so accepting it would print
+    // the filament name on a label the caller asked to be QR-only.
+    expect(validateLabelFormatOverride({ lines: [] })).toMatch(/must not be empty/);
+  });
+
+  it("rejects bad lines arrays", () => {
+    expect(validateLabelFormatOverride({ lines: "name" })).toMatch(/must be an array/);
+    expect(validateLabelFormatOverride({ lines: ["nope"] })).toMatch(/lines entries/);
+    expect(validateLabelFormatOverride({ lines: [1] })).toMatch(/lines entries/);
+  });
+
+  it("bounds maxLinesPerField to a sane integer range", () => {
+    for (const n of [0, -1, 99, 1.5, "2"]) {
+      expect(validateLabelFormatOverride({ maxLinesPerField: n })).toMatch(/maxLinesPerField/);
+    }
+    expect(validateLabelFormatOverride({ maxLinesPerField: MAX_LINES_PER_FIELD })).toBeNull();
+  });
+
+  it("rejects a non-boolean invert", () => {
+    expect(validateLabelFormatOverride({ invert: "yes" })).toMatch(/invert must be a boolean/);
+  });
+});
+
+describe("OpenAPI format schema matches the handler (GH #1195)", () => {
+  // The round-6 review found the published contract had drifted from the
+  // route: `format` was declared additionalProperties:true with no properties
+  // while the handler validated every member strictly, so a schema-valid
+  // request got an undocumented 400 and clients could not discover the fields.
+  // This pins the two together rather than relying on remembering.
+  const spec = JSON.parse(readFileSync("public/openapi.json", "utf8")) as Record<string, never>;
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  const fmt = (spec as any).paths["/api/labels/print"].post.requestBody.content[
+    "application/json"
+  ].schema.properties.format;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  it("keeps the optional bearer gate alongside the local token", () => {
+    // An operation-level `security` REPLACES the top-level declaration, so
+    // listing only the print token told clients to omit Authorization —
+    // guaranteeing a 401 on any deployment where FILAMENTDB_API_KEY is set and
+    // src/proxy.ts enforces it. Entries are alternatives; keys within one are
+    // combined. So: token alone, or token AND bearer.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const op = (spec as any).paths["/api/labels/print"].post;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(op.security).toEqual([
+      { LocalPrintToken: [] },
+      { LocalPrintToken: [], bearerAuth: [] },
+    ]);
+    expect(Object.keys(op.responses)).toContain("401");
+  });
+
+  it("closes the request schema, matching the handler's unknown-key refusal", () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const schema = (spec as any).paths["/api/labels/print"].post.requestBody
+      .content["application/json"].schema;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(schema.additionalProperties).toBe(false);
+    // Documented keys must match the handler's allow-list exactly, or a client
+    // generated from this spec sends a field the route rejects.
+    expect(Object.keys(schema.properties).sort()).toEqual([
+      "baseUrl", "dryRun", "format", "instanceId", "locationId", "preset", "printer", "qrMode",
+    ]);
+  });
+
+  it("marks lines uniqueItems, matching the duplicate refusal", () => {
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const lines = (spec as any).paths["/api/labels/print"].post.requestBody
+      .content["application/json"].schema.properties.format.properties.lines;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(lines.uniqueItems).toBe(true);
+    expect(validateLabelFormatOverride({ lines: ["name", "name"] })).not.toBeNull();
+  });
+
+  it("declares the print-token header so Swagger UI can send it", () => {
+    // Prose alone left "Try it out" with no field for the token, so every
+    // attempt 403'd and generated clients could not discover the header.
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    const scheme = (spec as any).components.securitySchemes.LocalPrintToken;
+    const op = (spec as any).paths["/api/labels/print"].post;
+    /* eslint-enable @typescript-eslint/no-explicit-any */
+    expect(scheme.type).toBe("apiKey");
+    expect(scheme.in).toBe("header");
+    expect(scheme.name).toBe("x-filamentdb-print-token");
+    // Every alternative must require the local token; the bearer combination
+    // is asserted separately above.
+    expect(op.security.length).toBeGreaterThan(0);
+    for (const alt of op.security) expect(Object.keys(alt)).toContain("LocalPrintToken");
+  });
+
+  it("documents the nested shape and forbids unknown keys", () => {
+    expect(fmt.additionalProperties).toBe(false);
+    expect(Object.keys(fmt.properties).sort()).toEqual([
+      "font", "invert", "lines", "maxLinesPerField", "orientation", "qr",
+    ]);
+    expect(fmt.properties.qr.additionalProperties).toBe(false);
+    expect(fmt.properties.font.additionalProperties).toBe(false);
+  });
+
+  it("accepts every value the spec declares legal", () => {
+    const legal: unknown[] = [
+      ...fmt.properties.qr.properties.placement.enum.map((p: string) => ({ qr: { placement: p } })),
+      ...fmt.properties.lines.items.enum.map((l: string) => ({ lines: [l] })),
+      ...fmt.properties.font.properties.family.enum.map((f: string) => ({ font: { family: f } })),
+      ...fmt.properties.font.properties.size.enum.map((s: string) => ({ font: { size: s } })),
+      ...fmt.properties.orientation.enum.map((o: string) => ({ orientation: o })),
+      { invert: true },
+      { qr: { enabled: false } },
+    ];
+    for (let n = fmt.properties.maxLinesPerField.minimum; n <= fmt.properties.maxLinesPerField.maximum; n++) {
+      legal.push({ maxLinesPerField: n });
+    }
+    for (const value of legal) {
+      expect(validateLabelFormatOverride(value)).toBeNull();
+    }
+  });
+
+  it("keeps the documented bounds in step with the validator", () => {
+    // Off-by-one on either side would let the spec promise something the
+    // handler refuses, which is the drift this suite exists to catch.
+    const { minimum, maximum } = fmt.properties.maxLinesPerField;
+    expect(validateLabelFormatOverride({ maxLinesPerField: minimum - 1 })).not.toBeNull();
+    expect(validateLabelFormatOverride({ maxLinesPerField: maximum + 1 })).not.toBeNull();
+    expect(fmt.properties.lines.minItems).toBe(1);
+    expect(validateLabelFormatOverride({ lines: [] })).not.toBeNull();
   });
 });

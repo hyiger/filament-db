@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { errorResponse } from "@/lib/apiErrorHandler";
 
@@ -247,4 +248,72 @@ export function assertSafeUpdateBody(body: unknown): NextResponse | null {
     }
   }
   return null;
+}
+
+/* -------------------------------------------------------------------------
+ * Local-print token (GH #1195)
+ * ---------------------------------------------------------------------- */
+
+/** Header carrying the local print token. */
+export const LOCAL_PRINT_TOKEN_HEADER = "x-filamentdb-print-token";
+
+/** Env var the Electron main process populates when it spawns the server. */
+export const LOCAL_PRINT_TOKEN_ENV = "FILAMENTDB_LOCAL_PRINT_TOKEN";
+
+/**
+ * Gate a route that drives physically-attached hardware.
+ *
+ * WHY A TOKEN AND NOT A LOOPBACK CHECK. The obvious guard — "only serve
+ * requests that arrived on loopback" — is NOT implementable here. Next 16
+ * exposes no socket peer address on `NextRequest` (there is no `.ip`, and
+ * nothing in the bundled docs surfaces the connection), so the only signal
+ * available is the `Host` header, which the client sets. Verified against a
+ * live instance: `curl -H 'Host: localhost:3456' http://<lan-ip>:3456/...`
+ * is served normally, so a Host-based "is this local?" test is a trivial
+ * bypass for anyone on the LAN. That is the same spoofable-header reasoning
+ * that kept `Sec-Fetch`/`Origin` out of the API-key gate (#767).
+ *
+ * `assertSameOriginRequest` does not help either: it deliberately lets
+ * non-browser clients through (curl and the slicer forks send neither
+ * header), which is exactly the caller shape this route has.
+ *
+ * So the local caller proves locality by reading a secret only a local
+ * process can read: the Electron main process mints it at startup, passes
+ * it to the server in-process via env, and writes it to a 0600 file under
+ * userData. A LAN attacker can reach the port but cannot read the file.
+ *
+ * Absent env => 404, not 403. On a Docker or web deployment there is no
+ * attached label printer and no token, so the endpoint should read as
+ * "not a thing here" rather than "correct guess required".
+ */
+export function assertLocalPrintToken(request: NextRequest): NextResponse | null {
+  const expected = process.env[LOCAL_PRINT_TOKEN_ENV];
+  if (!expected) {
+    return errorResponse("Not found", 404);
+  }
+
+  const presented = request.headers.get(LOCAL_PRINT_TOKEN_HEADER);
+  if (!presented || !timingSafeEqualString(presented, expected)) {
+    return errorResponse(
+      "Label printing requires the local print token. It is written to " +
+        "`local-print-token` in the app's user-data directory and is " +
+        "readable only by local processes.",
+      403,
+    );
+  }
+  return null;
+}
+
+/**
+ * Constant-time string comparison.
+ *
+ * `crypto.timingSafeEqual` THROWS on a length mismatch, which would itself
+ * leak the expected length, so both sides are hashed to a fixed 32 bytes
+ * first and the digests compared. Hashing is what makes the lengths equal
+ * by construction; it is not being used as a secret-strength measure.
+ */
+function timingSafeEqualString(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a, "utf8").digest();
+  const hb = createHash("sha256").update(b, "utf8").digest();
+  return timingSafeEqual(ha, hb);
 }

@@ -1,0 +1,756 @@
+/**
+ * Brother PT-P710BT label-printer transport for the Electron main
+ * process — OS print-system backend (GH #588).
+ *
+ * The PT-P710BT's Bluetooth is iOS/Android only per Brother; on the
+ * desktop it connects over USB as a USB **printer-class** device, NOT a
+ * serial port. So this transport hands the raster byte stream to the
+ * platform print stack, which owns the USB device and its driver:
+ *
+ *   - macOS / Linux → CUPS. We `lp -o raw` to a print queue. The printer
+ *     usually isn't an installed *queue* (Brother's own app talks to the
+ *     device directly), so when the user selects a raw `usb://…` device we
+ *     auto-manage a hidden raw queue (`FilamentDB_Label`) bound to it.
+ *   - Windows → the print spooler. We send the `RAW` datatype to the
+ *     installed printer via the Win32 `WritePrinter` API (driven from a
+ *     short PowerShell P/Invoke script).
+ *
+ * The byte stream itself is produced by `src/lib/labelEncoder.ts` — this
+ * file is transport only.
+ *
+ * Replaces the previous `serialport` transport, which could only reach
+ * the (unsupported, flaky) Bluetooth-SPP node and never the USB device.
+ */
+
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, win32 } from "node:path";
+
+const execFileP = promisify(execFile);
+
+/**
+ * Heuristic match for "this device is a Brother PT-series label printer".
+ *
+ * Deliberately NOT widened to cover the KNAON: the only consumer is the
+ * Brother picker, whose badge invites selection for labelPrinterPrint —
+ * Brother raster bytes. Badging a Y813BT there would invite sending raster
+ * to a TSPL printer. Per-kind badging belongs with the TSPL picker.
+ */
+const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
+
+/**
+ * Which label printer a job is bound for: "brother" = PT-P710BT (spool
+ * labels, raster bytes), "tspl" = KNAON Y813BT (dry-box labels, TSPL bytes).
+ * The transport itself is byte-agnostic — this only selects which managed
+ * queue and description a raw `usb://` device gets bound to.
+ */
+export type LabelPrinterKind = "brother" | "tspl";
+
+/** Name of the hidden raw CUPS queue we manage for raw `usb://` devices
+ *  that aren't already installed as a queue. CUPS queue names allow only
+ *  letters, digits and underscores. */
+const MANAGED_QUEUE = "FilamentDB_Label";
+
+/**
+ * The TSPL printer gets its OWN managed queue, and that is load-bearing
+ * rather than tidiness.
+ *
+ * `ensureManagedQueue` REBINDS its queue to whichever device is currently
+ * printing. With both printers sharing one queue name, a Brother print and
+ * a dry-box print overlapping in time would rebind the queue away from each
+ * other — and because CUPS delivery is asynchronous (the `lp` job is spooled
+ * after the rebind but drains later) a job could be delivered to the WRONG
+ * PHYSICAL PRINTER. Per-kind queues make that impossible.
+ *
+ * The Brother queue keeps its original name so existing installs, which
+ * already have `FilamentDB_Label` bound, are untouched by the upgrade.
+ */
+const MANAGED_QUEUE_TSPL = `${MANAGED_QUEUE}_TSPL`;
+
+/** Every queue this app creates and owns. */
+const MANAGED_QUEUES: readonly string[] = [MANAGED_QUEUE, MANAGED_QUEUE_TSPL];
+
+/** True when `name` is one of OUR managed queues — an implementation detail
+ *  the picker surfaces as the underlying USB device rather than as a queue. */
+function isManagedQueueName(name: string): boolean {
+  return MANAGED_QUEUES.includes(name);
+}
+
+function managedQueueFor(kind: LabelPrinterKind): string {
+  return kind === "tspl" ? MANAGED_QUEUE_TSPL : MANAGED_QUEUE;
+}
+
+/** `lpadmin -D` description, so the two queues are distinguishable in the
+ *  user's system printer list rather than appearing as duplicates. */
+function queueDescriptionFor(kind: LabelPrinterKind): string {
+  return kind === "tspl" ? "Filament DB Dry-Box Label Printer" : "Filament DB Label Printer";
+}
+
+/** Per-subprocess timeout for listing + the CUPS `lp` print. Listing and a
+ *  single 24mm label both complete well under this; the IPC handler wraps the
+ *  whole print in its own 30s timeout on top. */
+const EXEC_TIMEOUT_MS = 15_000;
+
+/** GH #759 — the Windows winspool print gets a LONGER subprocess timeout than
+ *  the 15s listing timeout. `EndDocPrinter` blocks until the spooler drains the
+ *  RAW bytes to the (slow, USB) label printer, which can take several seconds;
+ *  at 15s a busy/recovering spooler could be SIGKILLed mid-`EndDocPrinter`,
+ *  leaving the job open + a leaked printer handle (the "2nd print sticks, 3rd
+ *  errors" cascade). Kept under the IPC handler's 30s wrapper so the user still
+ *  gets a bounded failure. Exported for the regression test. */
+export const WINDOWS_PRINT_TIMEOUT_MS = 25_000;
+
+/** On Linux a GUI app's PATH often omits /usr/sbin where lpadmin/lpinfo
+ *  live, so we try the bare name first then the sbin path. (The CUPS tools
+ *  stay bare names on purpose: Unix execvp never searches the cwd, and
+ *  their install paths vary across distros — see windowsPowershellPath()
+ *  for why Windows gets the opposite treatment.) */
+const SBIN = "/usr/sbin";
+
+/**
+ * Absolute path to powershell.exe (GH #623). Windows' CreateProcess
+ * resolves a bare executable name from the application's own directory
+ * and the current directory BEFORE System32, so a `powershell.exe`
+ * planted next to a portable/unpacked run would be picked up first and
+ * turn these calls into an arbitrary-code-execution sink. Anchor to an
+ * absolute path — the exact pattern the sc.exe probe in electron/main.ts
+ * uses. Exported for the unit test; built with win32.join so the path is
+ * identical regardless of the host the test runs on.
+ */
+export function windowsPowershellPath(): string {
+  return win32.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
+
+export interface LabelPrinterDevice {
+  /** Opaque print target: a CUPS queue name, a `usb://…` device URI, or a
+   *  Windows printer name. Passed back to {@link printLabel}. */
+  path: string;
+  /** Human-readable name for the picker dropdown. */
+  friendlyName: string;
+  /** True when the target matches a PT-series printer — the picker badges
+   *  / pre-selects the obvious choice. */
+  looksLikePrinter: boolean;
+  /** Windows only: the queue has bidirectional support (EnableBIDI) turned on.
+   *  Some drivers (the PT-P710BT among them) crash the Print Spooler when the
+   *  spooler's bidi status query runs at schedule time, so the picker warns the
+   *  user to disable it. `undefined` on macOS/Linux and whenever the bidi state
+   *  couldn't be read — only an explicit `true` should trigger the warning. */
+  bidiEnabled?: boolean;
+}
+
+function isCups(): boolean {
+  return process.platform === "darwin" || process.platform === "linux";
+}
+
+/**
+ * List label-printer targets. Never throws — returns [] on any failure
+ * so the picker shows its empty state.
+ *
+ * `probeUsb` (GH #771): false by default. Only ALREADY-CONFIGURED queues
+ * are listed (CUPS `lpstat -v` — plain read, no prompt). When true, also
+ * run `lpinfo` to discover raw `usb://` devices that aren't a queue yet.
+ * On macOS `lpinfo` issues CUPS's admin-only `CUPS-Get-Devices` op and
+ * pops the macOS password dialog, so we probe only on explicit user
+ * action (the Refresh button), never on mount. On Windows `Get-Printer`
+ * needs no elevation, so `probeUsb` is a no-op there.
+ */
+export async function listLabelPrinters(
+  opts: { probeUsb?: boolean } = {},
+): Promise<LabelPrinterDevice[]> {
+  try {
+    if (process.platform === "win32") return await listWindowsPrinters();
+    if (isCups()) return await listCupsPrinters(opts.probeUsb === true);
+    return [];
+  } catch (err) {
+    console.error("[label-printer] list failed:", err);
+    return [];
+  }
+}
+
+/** Run a CUPS admin/info tool, falling back to /usr/sbin when it isn't on PATH. */
+async function runCupsTool(tool: string, args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileP(tool, args, { timeout: EXEC_TIMEOUT_MS });
+    return stdout;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      const { stdout } = await execFileP(join(SBIN, tool), args, { timeout: EXEC_TIMEOUT_MS });
+      return stdout;
+    }
+    throw err;
+  }
+}
+
+async function listCupsPrinters(probeUsb: boolean): Promise<LabelPrinterDevice[]> {
+  const devices: LabelPrinterDevice[] = [];
+  const seenUris = new Set<string>();
+
+  // 1. Installed queues. `lpstat -v` lines look like:
+  //    "device for NAME: usb://Brother/PT-P710BT?serial=…". A plain read —
+  //    never prompts, so safe on the passive (mount-time) path.
+  try {
+    const stdout = await runCupsTool("lpstat", ["-v"]);
+    for (const line of stdout.split("\n")) {
+      const m = line.match(/^device for (.+?):\s*(.+)$/);
+      if (!m) continue;
+      const name = m[1].trim();
+      const uri = m[2].trim();
+      seenUris.add(uri);
+      if (isManagedQueueName(name)) {
+        // Our own managed queue is an implementation detail — surface it as
+        // the underlying USB *device* (path = the uri), so selecting it and
+        // printing both route through ensureManagedQueue idempotently. Without
+        // this the device would vanish from the picker once the queue exists
+        // (its uri is in seenUris, so the lpinfo pass below dedups it away).
+        devices.push({
+          path: uri,
+          friendlyName: prettifyUsbUri(uri),
+          looksLikePrinter: PRINTER_PATTERN.test(uri),
+        });
+        continue;
+      }
+      devices.push({
+        path: name,
+        friendlyName: name,
+        looksLikePrinter: PRINTER_PATTERN.test(`${name} ${uri}`),
+      });
+    }
+  } catch {
+    /* no installed queues / lpstat unavailable — fall through to lpinfo */
+  }
+
+  // 2. Available USB printer devices not already installed as a queue.
+  //    `lpinfo -v` lines look like: "direct usb://Brother/PT-P710BT?serial=…".
+  //    `--include-schemes usb` restricts it to the USB backend: a bare
+  //    `lpinfo -v` also runs the network backends (snmp/dnssd), which probe
+  //    the LAN ~10-15s — enough to blow the IPC timeout. We only parse
+  //    usb:// lines anyway. Gated behind `probeUsb` (GH #771, see docblock).
+  if (!probeUsb) return devices;
+  try {
+    const stdout = await runCupsTool("lpinfo", ["--include-schemes", "usb", "-v"]);
+    for (const line of stdout.split("\n")) {
+      const m = line.trim().match(/^\w+\s+(usb:\/\/\S+)$/);
+      if (!m) continue;
+      const uri = m[1].trim();
+      if (seenUris.has(uri)) continue;
+      seenUris.add(uri);
+      devices.push({
+        path: uri,
+        friendlyName: prettifyUsbUri(uri),
+        looksLikePrinter: PRINTER_PATTERN.test(uri),
+      });
+    }
+  } catch {
+    /* lpinfo may need elevated privileges on some Linux distros — the
+       installed-queue list above still works; skip silently. */
+  }
+
+  return devices;
+}
+
+/** "usb://Brother/PT-P710BT?serial=000M…" → "Brother PT-P710BT (USB)". */
+function prettifyUsbUri(uri: string): string {
+  try {
+    const path = uri.replace(/^usb:\/\//i, "").split("?")[0];
+    const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+    return parts.length ? `${parts.join(" ")} (USB)` : uri;
+  } catch {
+    return uri;
+  }
+}
+
+async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
+  // `Get-Printer` is the device list; EnableBIDI comes from Win32_Printer
+  // (Get-Printer doesn't surface it). The CIM query is best-effort — on
+  // failure the listing still works. ConvertTo-Json yields a single object
+  // for one printer; @(...) forces an array so the shape is predictable.
+  const script =
+    "$bidi=@{}; " +
+    "try { Get-CimInstance Win32_Printer -ErrorAction Stop | " +
+    "ForEach-Object { $bidi[$_.Name] = [bool]$_.EnableBIDI } } catch {}; " +
+    "@(Get-Printer | ForEach-Object { " +
+    "[pscustomobject]@{ Name = $_.Name; EnableBIDI = [bool]$bidi[$_.Name] } }) | " +
+    "ConvertTo-Json -Compress";
+  const { stdout } = await execFileP(
+    windowsPowershellPath(),
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { timeout: EXEC_TIMEOUT_MS },
+  );
+  const text = stdout.trim();
+  if (!text) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+  return rows
+    .filter((r): r is { Name?: unknown; EnableBIDI?: unknown } => !!r && typeof r === "object")
+    .map((r) => ({ name: r.Name, bidi: r.EnableBIDI }))
+    .filter((r): r is { name: string; bidi: unknown } => typeof r.name === "string" && r.name.length > 0)
+    .map(({ name, bidi }) => ({
+      path: name,
+      friendlyName: name,
+      looksLikePrinter: PRINTER_PATTERN.test(name),
+      // Only a definite `true` warns; a missing/non-boolean value stays
+      // undefined so a failed CIM probe doesn't show a spurious warning.
+      bidiEnabled: typeof bidi === "boolean" ? bidi : undefined,
+    }));
+}
+
+/** Exit codes the unelevated launcher uses for elevation-level outcomes, kept
+ *  distinct from the elevated child's own 0/1/2/3/4 so they never collide.
+ *  10 = the user dismissed the UAC consent dialog (win32 1223 = ERROR_CANCELLED,
+ *  detected STRUCTURALLY via .NET Win32Exception.NativeErrorCode — never by
+ *  scraping the localized message; the app ships German). 11 = elevation could
+ *  not be obtained at all (policy-blocked / no consent path). Exported for the
+ *  unit test. */
+export const ELEVATION_CANCELLED_EXIT = 10;
+export const ELEVATION_UNAVAILABLE_EXIT = 11;
+
+/** Whole-round-trip timeout for the elevation. UAC waits on a human, so this is
+ *  deliberately long; the IPC handler must NOT additionally race it (a reject
+ *  there wouldn't cancel the work). Exported for the unit test. */
+export const DISABLE_BIDI_TIMEOUT_MS = 120_000;
+
+/** Wrap a string as a safe single-quoted PowerShell literal: surround with
+ *  single quotes and double any embedded single quote. */
+function psSingleQuote(s: string): string {
+  return "'" + s.replace(/'/g, "''") + "'";
+}
+
+/**
+ * Build the ELEVATED script that turns bidirectional support off on exactly one
+ * Win32_Printer queue, then RE-READS to confirm the write took (some drivers
+ * silently ignore it). The validated printer name is baked in as a single-quote-
+ * escaped literal — there are NO files and NO params: the script reaches the
+ * elevated PowerShell via -EncodedCommand (fixed on the command line at process
+ * creation), so a same-user process can't swap a temp script before the elevated
+ * read — the TOCTOU a -File approach would open. The outcome is the
+ * EXIT CODE, the only thing that reliably crosses the RunAs boundary:
+ *   0 = disabled + confirmed · 2 = not found · 3 = ambiguous (>1 match)
+ *   4 = write didn't take (still on) · 1 = unexpected error
+ * ASCII-only template. Exported for the unit test.
+ */
+export function buildDisableBidiScript(printerName: string): string {
+  return `$ErrorActionPreference = "Stop"
+$PrinterName = ${psSingleQuote(printerName)}
+$q = "Name='" + $PrinterName.Replace('\\', '\\\\').Replace("'", "\\'") + "'"
+try {
+  $p = @(Get-CimInstance Win32_Printer -Filter $q)
+  if ($p.Count -eq 0) { exit 2 }
+  if ($p.Count -gt 1) { exit 3 }
+  Set-CimInstance -InputObject $p[0] -Property @{ EnableBIDI = $false }
+  $after = @(Get-CimInstance Win32_Printer -Filter $q)
+  if ($after.Count -gt 0 -and $after[0].EnableBIDI) { exit 4 }
+  exit 0
+} catch {
+  exit 1
+}`;
+}
+
+/**
+ * Build the UNELEVATED launcher. It triggers the UAC prompt via Start-Process
+ * -Verb RunAs, handing the elevated payload over as a single -EncodedCommand
+ * token. Base64 has no spaces, so Start-Process's space-joining of -ArgumentList
+ * can't split it, and no file path (with or without spaces) is involved.
+ * User-cancel and elevation-unavailable map to the dedicated exit codes
+ * above; otherwise the elevated child's own exit code is relayed. The launcher
+ * is itself passed to powershell via -Command (also no file) and runs unelevated
+ * — not a privilege boundary. `psExe` is the absolute powershell path (GH #623),
+ * single-quote-escaped; `encoded` is base64. Exported for the unit test.
+ */
+export function buildDisableBidiLauncher(psExe: string, encoded: string): string {
+  return `$ErrorActionPreference = "Stop"
+try {
+  $proc = Start-Process -FilePath ${psSingleQuote(psExe)} -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', '${encoded}')
+  exit $proc.ExitCode
+} catch {
+  $ex = $_.Exception
+  $code = $null
+  if ($ex -is [System.ComponentModel.Win32Exception]) { $code = $ex.NativeErrorCode }
+  elseif ($ex.InnerException -is [System.ComponentModel.Win32Exception]) { $code = $ex.InnerException.NativeErrorCode }
+  if ($code -eq 1223) { exit ${ELEVATION_CANCELLED_EXIT} } else { exit ${ELEVATION_UNAVAILABLE_EXIT} }
+}`;
+}
+
+/** Outcome of {@link disableBidi}. `{ ok: true }` on a confirmed disable;
+ *  `{ ok: false, reason }` for cancel + known-failure cases (the renderer maps
+ *  `reason` to a localized toast — main-process strings can't cross the bundle
+ *  boundary into the Next.js renderer). Unexpected internal errors reject. */
+export type DisableBidiResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | "cancelled"
+        | "not_found"
+        | "ambiguous"
+        | "still_enabled"
+        | "elevation_unavailable"
+        | "error";
+      detail?: string;
+    };
+
+/**
+ * Disable bidirectional support (`EnableBIDI`) on a Windows printer queue by
+ * running an elevated helper through the Windows UAC consent dialog.
+ * Windows-only.
+ *
+ * Some drivers (the Brother PT-P710BT among them) crash the Print Spooler when
+ * the spooler's bidi status query runs at job-schedule time; turning BiDi off
+ * is the fix, but it needs admin — hence `Start-Process -Verb RunAs`. See
+ * buildDisableBidiScript/-Launcher for the -EncodedCommand delivery rationale.
+ * Returns a STRUCTURED result so the renderer maps it without matching any
+ * main-process string. The caller MUST have already validated the name (the
+ * IPC handler requires it to be an installed, BiDi-on queue the user was
+ * shown).
+ */
+export async function disableBidi(printerName: string): Promise<DisableBidiResult> {
+  if (process.platform !== "win32") {
+    throw new Error("Disabling bidirectional support is only supported on Windows.");
+  }
+  const psExe = windowsPowershellPath();
+  // -EncodedCommand wants base64 of UTF-16LE, per PowerShell's contract.
+  const encoded = Buffer.from(buildDisableBidiScript(printerName), "utf16le").toString("base64");
+  const launcher = buildDisableBidiLauncher(psExe, encoded);
+  let exitCode: number;
+  try {
+    await execFileP(
+      psExe,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", launcher],
+      { timeout: DISABLE_BIDI_TIMEOUT_MS, windowsHide: true },
+    );
+    exitCode = 0;
+  } catch (err) {
+    // execFile rejects on any non-zero exit; .code carries the exit code (a
+    // timeout/kill leaves it null -> mapped to a generic error below).
+    const code = (err as { code?: unknown }).code;
+    exitCode = typeof code === "number" ? code : -1;
+  }
+  switch (exitCode) {
+    case 0:
+      return { ok: true };
+    case 2:
+      return { ok: false, reason: "not_found" };
+    case 3:
+      return { ok: false, reason: "ambiguous" };
+    case 4:
+      return { ok: false, reason: "still_enabled" };
+    case ELEVATION_CANCELLED_EXIT:
+      return { ok: false, reason: "cancelled" };
+    case ELEVATION_UNAVAILABLE_EXIT:
+      return { ok: false, reason: "elevation_unavailable" };
+    default:
+      return { ok: false, reason: "error" };
+  }
+}
+
+/**
+ * A print target left over from the pre-#588 serialport transport: a macOS
+ * `/dev/tty.*` / `/dev/cu.*` path, a Linux `/dev/rfcomm*`, or a Windows `COMn`.
+ * None are valid OS print targets now — and a `/dev/...` path would otherwise
+ * be mistaken for a CUPS queue name (which can't even contain `/`) and fail
+ * obscurely. Detect them so we can prompt the user to reselect.
+ */
+export function isLegacySerialTarget(target: string): boolean {
+  return /^\/dev\//.test(target) || /^COM\d+$/i.test(target);
+}
+
+/**
+ * Reject a print target the transport is guaranteed to refuse, so a CALLER can
+ * answer 400 instead of letting printLabel throw into a 500 (GH #1195).
+ *
+ * Deliberately mirrors printLabel/printCups's own refusals rather than adding
+ * new policy: a legacy serial setting, and any URL scheme other than usb://
+ * (GH #623). Returns null when the target is acceptable. Keep in lockstep with
+ * the throws in printLabel and printCups.
+ */
+export function rejectUnusablePrintTarget(
+  target: string,
+  kind: LabelPrinterKind = "brother",
+): string | null {
+  if (isLegacySerialTarget(target)) {
+    return kind === "tspl"
+      ? `"${target}" is a serial-port setting, which is not a valid print target.`
+      : `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
+          `The PT-P710BT prints over USB — select the printer again in Settings.`;
+  }
+  if (!/^usb:\/\//i.test(target) && /^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
+    return `Unsupported print target "${target}" — only usb:// devices and installed print queues are supported.`;
+  }
+  return null;
+}
+
+/**
+ * Send the raster byte stream to the selected print target. Rejects with a
+ * descriptive Error on failure; the IPC handler surfaces it to the renderer.
+ */
+export async function printLabel(
+  target: string,
+  bytes: Uint8Array,
+  kind: LabelPrinterKind = "brother",
+): Promise<void> {
+  if (isLegacySerialTarget(target)) {
+    // Only the Brother setting can hold a legacy serial value — the TSPL
+    // setting postdates the Bluetooth transport entirely — so the Brother
+    // copy stays, and the TSPL case gets wording that isn't a lie.
+    throw new Error(
+      kind === "tspl"
+        ? `"${target}" is a serial-port setting, which is not a valid print target. ` +
+            `Open Settings → Devices and select your label printer again.`
+        : `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
+            `The PT-P710BT now prints over USB — open Settings → Label Printer and select your printer again.`,
+    );
+  }
+  if (process.platform === "win32") return printWindows(target, bytes);
+  if (isCups()) return printCups(target, bytes, kind);
+  throw new Error(`Label printing is not supported on platform "${process.platform}".`);
+}
+
+async function printCups(
+  target: string,
+  bytes: Uint8Array,
+  kind: LabelPrinterKind,
+): Promise<void> {
+  // A `usb://…` target is a raw device → route it through our managed raw
+  // queue. Otherwise it's an installed queue name. Only the usb scheme is
+  // accepted — it's the only scheme listLabelPrinters ever surfaces — so a
+  // stored target with any other scheme (ipp://, file://, …) is refused
+  // instead of being forwarded verbatim to `lpadmin -v` (GH #623).
+  let queue = target;
+  if (/^usb:\/\//i.test(target)) {
+    queue = managedQueueFor(kind);
+    await ensureManagedQueue(target, kind);
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
+    throw new Error(
+      `Unsupported print target "${target}" — only usb:// devices and installed ` +
+        `print queues are supported. Open Settings → Label Printer and select your printer again.`,
+    );
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    // `-o raw` tells CUPS to send the file to the printer unfiltered, so the
+    // Brother raster stream reaches the print head verbatim regardless of
+    // any driver attached to the queue.
+    const child = spawn("lp", ["-d", queue, "-o", "raw"], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
+    let settled = false;
+    const done = (err?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(new Error(`lp timed out after ${EXEC_TIMEOUT_MS}ms — power-cycle the printer and try again.`));
+    }, EXEC_TIMEOUT_MS);
+
+    child.stderr?.on("data", (d) => { stderr += d.toString(); });
+    child.on("error", (e) => done(e instanceof Error ? e : new Error(String(e))));
+    child.on("close", (code) => {
+      if (code === 0) done();
+      else done(new Error(`lp exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
+    });
+    // If lp dies before consuming stdin, the write EPIPEs — swallow it so the
+    // real exit-code error wins.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(Buffer.from(bytes));
+  });
+}
+
+/**
+ * Ensure the hidden raw queue exists and points at `uri`. Idempotent —
+ * a no-op when it's already bound correctly.
+ */
+async function ensureManagedQueue(uri: string, kind: LabelPrinterKind): Promise<void> {
+  const queueName = managedQueueFor(kind);
+  let current: string | null = null;
+  try {
+    const stdout = await runCupsTool("lpstat", ["-v", queueName]);
+    const m = stdout.match(/^device for .+?:\s*(.+)$/m);
+    current = m ? m[1].trim() : null;
+  } catch {
+    current = null; // queue doesn't exist yet
+  }
+  if (current === uri) return;
+
+  // No `-m <model>` → CUPS creates a *raw* queue (no PPD), which is exactly
+  // what we want: the bytes pass straight through. That is what lets one
+  // transport carry both Brother raster and TSPL — neither is interpreted.
+  const args = [
+    "-p", queueName,
+    "-v", uri,
+    "-E",
+    "-D", queueDescriptionFor(kind),
+    "-o", "printer-is-shared=false",
+  ];
+  try {
+    await runCupsTool("lpadmin", args);
+  } catch (err) {
+    throw new Error(
+      `Could not set up the print queue for ${prettifyUsbUri(uri)}. ` +
+        `On Linux you may need to add the printer in your system print settings first. ` +
+        `(${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+}
+
+/** win32 `RPC_S_SERVER_UNAVAILABLE`. The winspool APIs are RPC calls to the
+ *  Print Spooler service, so when it's stopped or has crashed `OpenPrinter`
+ *  (and every later winspool call) fails with this code. */
+const WIN32_RPC_S_SERVER_UNAVAILABLE = 1722;
+
+/** Actionable, renderer-ready message for the spooler-down case. Shared by the
+ *  PowerShell `OpenPrinter` throw (interpolated into {@link WINDOWS_RAW_PRINT_PS1})
+ *  and the {@link printWindows} catch, so the toast text is identical whichever
+ *  layer first surfaces it. Kept ASCII-only on purpose: it's embedded in a C#
+ *  string literal inside a PowerShell here-string that's written to disk and
+ *  re-read, where non-ASCII (em dashes, arrows) can be mangled by the host code
+ *  page. Exported for the unit test. */
+export const SPOOLER_DOWN_MESSAGE =
+  "The Windows Print Spooler service isn't running - restart it (open services.msc, select Print Spooler, and click Start), then try printing again.";
+
+/** Flatten an execFile rejection (its message + any captured stderr) into one
+ *  string for pattern matching. PowerShell writes the C# exception to stderr;
+ *  execFile also attaches it to the rejection. */
+function windowsPrintErrorText(err: unknown): string {
+  if (err && typeof err === "object") {
+    const e = err as { message?: unknown; stderr?: unknown };
+    const msg = typeof e.message === "string" ? e.message : "";
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    return `${msg}\n${stderr}`;
+  }
+  return String(err);
+}
+
+/**
+ * Map a raw Windows print-subprocess failure to an actionable message, or
+ * `null` when nothing specific applies (caller keeps the original error).
+ *
+ * Detects the spooler-down case both as the friendly message the PowerShell
+ * child already emits for an `OpenPrinter` 1722 AND as the bare win32 code
+ * `1722`, which can still surface from a later winspool call or be buried in
+ * .NET/PowerShell error noise. Exported for the unit test.
+ */
+export function mapWindowsPrintError(raw: string): string | null {
+  if (!raw) return null;
+  if (raw.includes(SPOOLER_DOWN_MESSAGE)) return SPOOLER_DOWN_MESSAGE;
+  // Word-boundaried so it matches "(1722)" / "error 1722" but not 17220 etc.
+  if (/\b1722\b/.test(raw)) return SPOOLER_DOWN_MESSAGE;
+  return null;
+}
+
+async function printWindows(printerName: string, bytes: Uint8Array): Promise<void> {
+  // The spooler RAW datatype needs the bytes as a file; pass it + the printer
+  // name to a P/Invoke script that calls winspool WritePrinter. A unique
+  // per-call temp dir (mkdtemp) keeps concurrent prints from colliding on
+  // the same path or deleting a file the other is still reading.
+  const dir = await mkdtemp(join(tmpdir(), "fdb-label-"));
+  const dataPath = join(dir, "label.bin");
+  const scriptPath = join(dir, "print.ps1");
+  await writeFile(dataPath, Buffer.from(bytes));
+  await writeFile(scriptPath, WINDOWS_RAW_PRINT_PS1, "utf8");
+  try {
+    await execFileP(
+      windowsPowershellPath(),
+      [
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", scriptPath,
+        "-PrinterName", printerName,
+        "-FilePath", dataPath,
+      ],
+      { timeout: WINDOWS_PRINT_TIMEOUT_MS },
+    );
+  } catch (err) {
+    // Replace cryptic winspool failures (notably the Print Spooler being down,
+    // win32 1722) with an actionable message so the renderer toast is clear;
+    // anything we don't recognise rethrows verbatim.
+    const friendly = mapWindowsPrintError(windowsPrintErrorText(err));
+    throw friendly ? new Error(friendly) : err;
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** PowerShell that sends a file's bytes to a printer with the spooler RAW
+ *  datatype via winspool.drv WritePrinter — the Windows equivalent of
+ *  `lp -o raw`. Bypasses the driver's rendering so the Brother raster
+ *  stream reaches the print head verbatim.
+ *
+ *  GH #759 — `EndPagePrinter`/`EndDocPrinter` COMMIT the spool job as
+ *  "printed"; ignoring their bool returns lets a physically-printed job exit 0
+ *  while the spooler holds an uncommitted job that re-spools on reboot and
+ *  blocks the next print. Both returns are checked and throw — but ONLY when
+ *  the protected body succeeded (`pageOk`/`docOk` guard the throw), so a
+ *  teardown after a real WritePrinter failure doesn't mask the original error.
+ *  EndPage/EndDoc/Close are still ALWAYS called in their finallys, so a failed
+ *  write tears the job down instead of leaking it open. Exported for the
+ *  regression test. */
+export const WINDOWS_RAW_PRINT_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
+      [Parameter(Mandatory=$true)][string]$FilePath)
+$ErrorActionPreference = "Stop"
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+public static class FdbRawPrinter {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public struct DOCINFO { public string pDocName; public string pOutputFile; public string pDataType; }
+  [DllImport("winspool.drv", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool OpenPrinter(string src, out IntPtr h, IntPtr pd);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool ClosePrinter(IntPtr h);
+  [DllImport("winspool.drv", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool StartDocPrinter(IntPtr h, int level, ref DOCINFO di);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool EndDocPrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool StartPagePrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool EndPagePrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool WritePrinter(IntPtr h, byte[] buf, int count, out int written);
+  public static void Print(string printer, byte[] data) {
+    IntPtr h;
+    if (!OpenPrinter(printer, out h, IntPtr.Zero)) {
+      int err = Marshal.GetLastWin32Error();
+      // win32 1722 (RPC_S_SERVER_UNAVAILABLE) = the Print Spooler service is
+      // down - surface the actionable hint instead of the bare code.
+      throw new Exception(err == ${WIN32_RPC_S_SERVER_UNAVAILABLE} ? "${SPOOLER_DOWN_MESSAGE}" : "OpenPrinter failed (" + err + ")");
+    }
+    try {
+      DOCINFO di = new DOCINFO(); di.pDocName = "Filament DB Label"; di.pDataType = "RAW";
+      if (!StartDocPrinter(h, 1, ref di)) throw new Exception("StartDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+      bool docOk = false;
+      try {
+        if (!StartPagePrinter(h)) throw new Exception("StartPagePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+        bool pageOk = false;
+        try {
+          int written;
+          if (!WritePrinter(h, data, data.Length, out written)) throw new Exception("WritePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+          if (written != data.Length) throw new Exception("WritePrinter wrote " + written + " of " + data.Length + " bytes");
+          pageOk = true;
+        } finally {
+          bool endPage = EndPagePrinter(h);
+          if (pageOk && !endPage) throw new Exception("EndPagePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+        }
+        docOk = true;
+      } finally {
+        bool endDoc = EndDocPrinter(h);
+        if (docOk && !endDoc) throw new Exception("EndDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+      }
+    } finally { ClosePrinter(h); }
+  }
+}
+"@
+Add-Type -TypeDefinition $code -Language CSharp
+$bytes = [System.IO.File]::ReadAllBytes($FilePath)
+[FdbRawPrinter]::Print($PrinterName, $bytes)
+`;
