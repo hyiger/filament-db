@@ -29,38 +29,84 @@
  * the outcome this guards against.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, cpSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, cpSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
- * Build the argv for running npm, per platform.
+ * Fetch a package tarball straight from the npm registry.
  *
- * On Windows npm is a BATCH SCRIPT (npm.cmd), and Node cannot execute .cmd or
- * .bat files with execFile/spawn at all — they are not executable on their own
- * and need a command interpreter. Naming the file `npm.cmd` is not enough; the
- * first attempt at this fix did exactly that and would still have failed. The
- * `win-arm64-cross` release leg runs this script on windows-latest, so getting
- * it wrong loses the Windows arm64 artifact on every tag (GH #1195 review).
+ * WHY NOT `npm pack`. The original version shelled out to npm, which on
+ * Windows is a BATCH SCRIPT that Node cannot execute without a command
+ * interpreter. Three successive attempts to get that right — npm.cmd, then
+ * cmd.exe with hand-quoted arguments — were all wrong, and none of them was
+ * verifiable here: this script cannot be run on Windows from a development
+ * host or from the root test suite, and a unit test over the pre-serialization
+ * argv cannot see what Windows actually receives after Node's own quoting
+ * (GH #1195 review, rounds 10-12).
  *
- * Arguments are quoted HERE rather than using `shell: true`, which joins argv
- * with spaces and no quoting — that breaks the moment the staging path lands
- * under a directory with a space in it, which is the norm on Windows
- * (C:\Users\Some Name\AppData\Local\Temp\...).
- *
- * Exported and pure so the Windows path is verifiable from a non-Windows host;
- * this script cannot be executed on Windows in local development or in the
- * root test suite.
+ * So the untestable surface is gone rather than iterated on. A direct HTTPS
+ * fetch has no shell, no batch file and no argument serialization, runs the
+ * SAME code path on every platform, and is exercised end to end from macOS
+ * against the real Windows-arm64 package. It also skips npm's os/cpu
+ * suitability check for free — the original reason `npm pack` was chosen over
+ * `npm install` — and lets us verify the registry's own integrity digest,
+ * which `npm pack` never gave us.
  */
-export function npmInvocation(args, platform = process.platform) {
-  if (platform !== "win32") return { file: "npm", args: [...args] };
-  const command = ["npm", ...args].map(quoteForCmd).join(" ");
-  return { file: "cmd.exe", args: ["/d", "/s", "/c", command] };
+
+/** Registry metadata URL for one exact version. Scoped names need the slash
+ *  percent-encoded; the version segment is a literal version, not a range
+ *  (sharp pins its optionalDependencies exactly). */
+export function registryMetadataUrl(name, version) {
+  return `https://registry.npmjs.org/${name.replace("/", "%2F")}/${encodeURIComponent(version)}`;
 }
 
-/** Quote one argument for cmd.exe. Embedded quotes are backslash-escaped. */
-export function quoteForCmd(arg) {
-  return `"${String(arg).replace(/"/g, '\\"')}"`;
+/**
+ * Verify a downloaded tarball against the registry's Subresource-Integrity
+ * digest. A silently corrupted or substituted tarball would otherwise be
+ * unpacked into the shipped app.
+ */
+export function verifyIntegrity(buffer, integrity, label) {
+  if (typeof integrity !== "string" || !integrity.includes("-")) {
+    throw new Error(`${label}: registry returned no usable integrity digest`);
+  }
+  const [algorithm, expected] = [
+    integrity.slice(0, integrity.indexOf("-")),
+    integrity.slice(integrity.indexOf("-") + 1),
+  ];
+  if (!["sha512", "sha384", "sha256"].includes(algorithm)) {
+    throw new Error(`${label}: unsupported integrity algorithm "${algorithm}"`);
+  }
+  const actual = createHash(algorithm).update(buffer).digest("base64");
+  if (actual !== expected) {
+    throw new Error(
+      `${label}: integrity mismatch — expected ${algorithm}-${expected}, got ${algorithm}-${actual}`,
+    );
+  }
+}
+
+async function fetchJson(url, label) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`${label}: registry responded ${res.status} for ${url}`);
+  return res.json();
+}
+
+/** Download one package tarball into `destDir`, integrity-checked. */
+async function downloadTarball(name, version, destDir) {
+  const label = `${name}@${version}`;
+  const meta = await fetchJson(registryMetadataUrl(name, version), label);
+  const dist = meta && meta.dist;
+  if (!dist || typeof dist.tarball !== "string") {
+    throw new Error(`${label}: registry metadata has no dist.tarball`);
+  }
+  const res = await fetch(dist.tarball);
+  if (!res.ok) throw new Error(`${label}: tarball responded ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  verifyIntegrity(buffer, dist.integrity, label);
+  const file = join(destDir, `${name.replace("/", "-").replace("@", "")}-${version}.tgz`);
+  writeFileSync(file, buffer);
+  return file;
 }
 
 const VALID_PLATFORMS = ["darwin", "win32", "linux", "linuxmusl"];
@@ -111,7 +157,7 @@ export function packagesFor(sharpPkg, platform, arch) {
   return names.map((name) => ({ name, version: sharpPkg.optionalDependencies[name] }));
 }
 
-function main() {
+async function main() {
   const { platform, arch, dest } = parseArgs(process.argv.slice(2));
   const sharpPkgPath = resolve("node_modules/sharp/package.json");
   if (!existsSync(sharpPkgPath)) {
@@ -137,28 +183,7 @@ function main() {
   try {
     mkdirSync(destDir, { recursive: true });
     for (const { name, version } of wanted) {
-      // `npm pack` fetches the tarball WITHOUT running npm's os/cpu
-      // suitability check, which `npm install` applies and which rejects a
-      // foreign-arch package outright ("notsup Valid cpu").
-      const spec = `${name}@${version}`;
-      // Split on \r?\n: npm on Windows emits CRLF, and a trailing \r in the
-      // filename would make the join() below point at a path that does not
-      // exist.
-      const npm = npmInvocation([
-        "pack",
-        spec,
-        "--pack-destination",
-        staging,
-        "--loglevel",
-        "error",
-      ]);
-      const tarball = execFileSync(npm.file, npm.args, { encoding: "utf8" })
-        .trim()
-        .split(/\r?\n/)
-        .pop()
-        .trim();
-
-      const tarPath = join(staging, tarball);
+      const tarPath = await downloadTarball(name, version, staging);
       const unpacked = join(staging, name.replace("/", "__"));
       mkdirSync(unpacked, { recursive: true });
       execFileSync("tar", ["-xzf", tarPath, "-C", unpacked, "--strip-components", "1"]);
@@ -193,7 +218,7 @@ function main() {
 // Only run when invoked directly, so the pure helpers stay unit-testable.
 if (process.argv[1] && process.argv[1].endsWith("install-sharp-arch.mjs")) {
   try {
-    main();
+    await main();
   } catch (err) {
     console.error(`::error::install-sharp-arch: ${err.message}`);
     process.exit(1);

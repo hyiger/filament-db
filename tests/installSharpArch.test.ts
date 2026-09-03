@@ -2,7 +2,13 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 // Ships as a CLI invoked from release.yml's cross-build legs; import the pure
 // helpers directly (the .mjs guards its CLI entry, like audit-gate.mjs).
-import { parseArgs, packagesFor, npmInvocation, quoteForCmd } from "../scripts/install-sharp-arch.mjs";
+import { createHash } from "node:crypto";
+import {
+  parseArgs,
+  packagesFor,
+  registryMetadataUrl,
+  verifyIntegrity,
+} from "../scripts/install-sharp-arch.mjs";
 
 /**
  * GH #1195 — sharp resolves @img/sharp-<platform>-<arch> at require time and
@@ -89,48 +95,68 @@ describe("packagesFor", () => {
   });
 });
 
-describe("npmInvocation (GH #1195 — Windows release path)", () => {
-  // The win-arm64-cross leg runs this script on windows-latest, where npm is a
-  // BATCH SCRIPT. Node cannot execute .cmd/.bat with execFile at all — they
-  // need a command interpreter — so naming the file "npm.cmd" is not a fix.
-  // This path cannot be executed from a non-Windows host or the root test
-  // suite, so it is pinned here as pure logic instead.
-  it("runs npm directly on non-Windows platforms", () => {
-    for (const platform of ["darwin", "linux"] as const) {
-      expect(npmInvocation(["pack", "x@1"], platform)).toEqual({
-        file: "npm",
-        args: ["pack", "x@1"],
-      });
-    }
+describe("registry fetch (GH #1195 — replaces the npm/cmd.exe path)", () => {
+  // The script used to shell out to `npm pack`. On Windows npm is a batch
+  // script Node cannot exec, and three attempts to work around that were all
+  // wrong and none verifiable from here — a unit test over the argv cannot see
+  // what Windows receives after Node's own quoting. Fetching from the registry
+  // removes the shell entirely: same code path on every platform, and testable.
+  describe("registryMetadataUrl", () => {
+    it("percent-encodes the slash in a scoped name", () => {
+      expect(registryMetadataUrl("@img/sharp-win32-arm64", "0.35.3")).toBe(
+        "https://registry.npmjs.org/@img%2Fsharp-win32-arm64/0.35.3",
+      );
+    });
+
+    it("handles an unscoped name", () => {
+      expect(registryMetadataUrl("sharp", "0.35.3")).toBe(
+        "https://registry.npmjs.org/sharp/0.35.3",
+      );
+    });
+
+    it("encodes the version segment", () => {
+      expect(registryMetadataUrl("x", "1.0.0-beta+1")).toContain("1.0.0-beta%2B1");
+    });
   });
 
-  it("routes through cmd.exe on win32 rather than exec'ing the batch file", () => {
-    const inv = npmInvocation(["pack", "x@1"], "win32");
-    expect(inv.file).toBe("cmd.exe");
-    expect(inv.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
-    expect(inv.args[3]).toContain("npm");
-    expect(inv.args[3]).toContain("pack");
-  });
+  describe("verifyIntegrity", () => {
+    const body = Buffer.from("tarball bytes");
+    const good = `sha512-${createHash("sha512").update(body).digest("base64")}`;
 
-  it("quotes a staging path containing spaces", () => {
-    // The Windows temp dir is routinely under "C:\Users\Some Name\...".
-    // shell:true would join argv unquoted and split this into three arguments.
-    const inv = npmInvocation(
-      ["pack", "p@1", "--pack-destination", "C:\\Users\\Some Name\\Temp\\x"],
-      "win32",
-    );
-    expect(inv.args[3]).toContain('"C:\\Users\\Some Name\\Temp\\x"');
-  });
+    it("accepts a matching digest", () => {
+      expect(() => verifyIntegrity(body, good, "pkg")).not.toThrow();
+    });
 
-  it("does not mutate the caller's argv", () => {
-    const args = ["pack", "x@1"];
-    npmInvocation(args, "darwin");
-    npmInvocation(args, "win32");
-    expect(args).toEqual(["pack", "x@1"]);
-  });
+    it("rejects a corrupted or substituted tarball", () => {
+      // The whole point: a silently wrong tarball would be unpacked into the
+      // shipped app.
+      expect(() => verifyIntegrity(Buffer.from("tampered"), good, "pkg")).toThrow(
+        /integrity mismatch/,
+      );
+    });
 
-  it("escapes embedded quotes so an argument cannot terminate early", () => {
-    expect(quoteForCmd('a"b')).toBe('"a\\"b"');
-    expect(quoteForCmd("plain")).toBe('"plain"');
+    it("supports the other SRI algorithms the registry may return", () => {
+      for (const algo of ["sha256", "sha384"] as const) {
+        const d = `${algo}-${createHash(algo).update(body).digest("base64")}`;
+        expect(() => verifyIntegrity(body, d, "pkg")).not.toThrow();
+      }
+    });
+
+    it("refuses a missing or malformed digest rather than skipping the check", () => {
+      // Treating an absent digest as "fine" would silently disable the guard.
+      for (const bad of [undefined, null, "", "notadigest", 42]) {
+        expect(() => verifyIntegrity(body, bad as never, "pkg")).toThrow(/integrity/);
+      }
+    });
+
+    it("refuses an unknown algorithm", () => {
+      expect(() => verifyIntegrity(body, "md5-abc", "pkg")).toThrow(/unsupported/);
+    });
+
+    it("names the package in the error so a CI failure is actionable", () => {
+      expect(() => verifyIntegrity(body, "sha512-wrong", "@img/sharp-win32-arm64")).toThrow(
+        /@img\/sharp-win32-arm64/,
+      );
+    });
   });
 });
