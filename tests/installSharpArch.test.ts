@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 // Ships as a CLI invoked from release.yml's cross-build legs; import the pure
 // helpers directly (the .mjs guards its CLI entry, like audit-gate.mjs).
-import { parseArgs, packagesFor } from "../scripts/install-sharp-arch.mjs";
+import { parseArgs, packagesFor, npmInvocation, quoteForCmd } from "../scripts/install-sharp-arch.mjs";
 
 /**
  * GH #1195 — sharp resolves @img/sharp-<platform>-<arch> at require time and
@@ -86,5 +86,51 @@ describe("packagesFor", () => {
     ] as const) {
       expect(packagesFor(SHARP_PKG, platform, arch).length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("npmInvocation (GH #1195 — Windows release path)", () => {
+  // The win-arm64-cross leg runs this script on windows-latest, where npm is a
+  // BATCH SCRIPT. Node cannot execute .cmd/.bat with execFile at all — they
+  // need a command interpreter — so naming the file "npm.cmd" is not a fix.
+  // This path cannot be executed from a non-Windows host or the root test
+  // suite, so it is pinned here as pure logic instead.
+  it("runs npm directly on non-Windows platforms", () => {
+    for (const platform of ["darwin", "linux"] as const) {
+      expect(npmInvocation(["pack", "x@1"], platform)).toEqual({
+        file: "npm",
+        args: ["pack", "x@1"],
+      });
+    }
+  });
+
+  it("routes through cmd.exe on win32 rather than exec'ing the batch file", () => {
+    const inv = npmInvocation(["pack", "x@1"], "win32");
+    expect(inv.file).toBe("cmd.exe");
+    expect(inv.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+    expect(inv.args[3]).toContain("npm");
+    expect(inv.args[3]).toContain("pack");
+  });
+
+  it("quotes a staging path containing spaces", () => {
+    // The Windows temp dir is routinely under "C:\Users\Some Name\...".
+    // shell:true would join argv unquoted and split this into three arguments.
+    const inv = npmInvocation(
+      ["pack", "p@1", "--pack-destination", "C:\\Users\\Some Name\\Temp\\x"],
+      "win32",
+    );
+    expect(inv.args[3]).toContain('"C:\\Users\\Some Name\\Temp\\x"');
+  });
+
+  it("does not mutate the caller's argv", () => {
+    const args = ["pack", "x@1"];
+    npmInvocation(args, "darwin");
+    npmInvocation(args, "win32");
+    expect(args).toEqual(["pack", "x@1"]);
+  });
+
+  it("escapes embedded quotes so an argument cannot terminate early", () => {
+    expect(quoteForCmd('a"b')).toBe('"a\\"b"');
+    expect(quoteForCmd("plain")).toBe('"plain"');
   });
 });

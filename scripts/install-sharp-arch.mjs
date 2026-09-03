@@ -34,14 +34,34 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
- * npm ships as `npm.cmd` on Windows, and Node's execFile CANNOT launch a
- * .cmd/.bat there (documented limitation) — it throws before npm ever runs.
- * The win-arm64-cross release leg executes this script on windows-latest, so
- * without this the Windows arm64 artifact would fail to build on every tag
- * (GH #1195 review). Resolved once, at module scope, so both call sites and
- * any future one get it.
+ * Build the argv for running npm, per platform.
+ *
+ * On Windows npm is a BATCH SCRIPT (npm.cmd), and Node cannot execute .cmd or
+ * .bat files with execFile/spawn at all — they are not executable on their own
+ * and need a command interpreter. Naming the file `npm.cmd` is not enough; the
+ * first attempt at this fix did exactly that and would still have failed. The
+ * `win-arm64-cross` release leg runs this script on windows-latest, so getting
+ * it wrong loses the Windows arm64 artifact on every tag (GH #1195 review).
+ *
+ * Arguments are quoted HERE rather than using `shell: true`, which joins argv
+ * with spaces and no quoting — that breaks the moment the staging path lands
+ * under a directory with a space in it, which is the norm on Windows
+ * (C:\Users\Some Name\AppData\Local\Temp\...).
+ *
+ * Exported and pure so the Windows path is verifiable from a non-Windows host;
+ * this script cannot be executed on Windows in local development or in the
+ * root test suite.
  */
-const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
+export function npmInvocation(args, platform = process.platform) {
+  if (platform !== "win32") return { file: "npm", args: [...args] };
+  const command = ["npm", ...args].map(quoteForCmd).join(" ");
+  return { file: "cmd.exe", args: ["/d", "/s", "/c", command] };
+}
+
+/** Quote one argument for cmd.exe. Embedded quotes are backslash-escaped. */
+export function quoteForCmd(arg) {
+  return `"${String(arg).replace(/"/g, '\\"')}"`;
+}
 
 const VALID_PLATFORMS = ["darwin", "win32", "linux", "linuxmusl"];
 const VALID_ARCHES = ["x64", "arm64", "arm", "s390x", "ppc64", "riscv64"];
@@ -124,11 +144,15 @@ function main() {
       // Split on \r?\n: npm on Windows emits CRLF, and a trailing \r in the
       // filename would make the join() below point at a path that does not
       // exist.
-      const tarball = execFileSync(
-        NPM,
-        ["pack", spec, "--pack-destination", staging, "--loglevel", "error"],
-        { encoding: "utf8" },
-      )
+      const npm = npmInvocation([
+        "pack",
+        spec,
+        "--pack-destination",
+        staging,
+        "--loglevel",
+        "error",
+      ]);
+      const tarball = execFileSync(npm.file, npm.args, { encoding: "utf8" })
         .trim()
         .split(/\r?\n/)
         .pop()
