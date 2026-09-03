@@ -112,8 +112,32 @@ async function downloadTarball(name, version, destDir) {
 const VALID_PLATFORMS = ["darwin", "win32", "linux", "linuxmusl"];
 const VALID_ARCHES = ["x64", "arm64", "arm", "s390x", "ppc64", "riscv64"];
 
+/**
+ * Where the patched @img packages must land.
+ *
+ * BOTH trees, and that is the whole point. `standalone/node_modules` is what
+ * Next's tracing populates and what earlier review rounds assumed was the
+ * shipped copy — but electron-builder auto-inserts "!**\/node_modules\/**"
+ * when its `files` list mentions node_modules, and only
+ * standalone/.next/node_modules is re-included, so `standalone/node_modules`
+ * is STRIPPED FROM THE PACKAGE. Verified against a real packaged build: the
+ * app has no standalone/node_modules at all, and the embedded server resolves
+ * sharp from the app's ROOT node_modules.
+ *
+ * Patching only standalone would therefore be a no-op in every shipped
+ * artifact; patching only root would break if the packaging config ever
+ * re-includes standalone, since Node resolves that first. Doing both is
+ * correct under either configuration.
+ */
+export const DEFAULT_DESTS = ["standalone/node_modules", "node_modules"];
+
 export function parseArgs(argv) {
-  const out = { dest: "standalone/node_modules" };
+  const out = {
+    /** @type {string|null} */ dest: null,
+    /** @type {string[]} */ dests: [],
+    /** @type {string|undefined} */ platform: undefined,
+    /** @type {string|undefined} */ arch: undefined,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     const next = () => {
@@ -136,6 +160,7 @@ export function parseArgs(argv) {
   if (!VALID_ARCHES.includes(out.arch)) {
     throw new Error(`Invalid --arch "${out.arch}" (expected one of ${VALID_ARCHES.join(", ")})`);
   }
+  out.dests = out.dest ? [out.dest] : [...DEFAULT_DESTS];
   return out;
 }
 
@@ -158,36 +183,42 @@ export function packagesFor(sharpPkg, platform, arch) {
 }
 
 async function main() {
-  const { platform, arch, dest } = parseArgs(process.argv.slice(2));
+  const { platform, arch, dests } = parseArgs(process.argv.slice(2));
   const sharpPkgPath = resolve("node_modules/sharp/package.json");
   if (!existsSync(sharpPkgPath)) {
     throw new Error("node_modules/sharp not found — run npm ci first.");
   }
   const sharpPkg = JSON.parse(readFileSync(sharpPkgPath, "utf8"));
-  const destDir = resolve(dest, "@img");
 
-  // The standalone tree must already exist; if it does not, the build/fixlinks
-  // step has not run and patching it would create a directory the packager
-  // then ships as the ONLY sharp copy, which is worse than failing.
-  const destRoot = resolve(dest);
-  if (!existsSync(destRoot)) {
+  // Patch every destination that EXISTS. A missing one is skipped rather than
+  // created: creating it would leave a tree the packager might ship as the
+  // only sharp copy. Failing when none exists keeps a silent no-op — the exact
+  // bug this fix addresses — from passing as success.
+  const present = dests.filter((d) => existsSync(resolve(d)));
+  if (present.length === 0) {
     throw new Error(
-      `Destination "${dest}" does not exist. Run \`npm run build && npm run electron:fixlinks\` first.`,
+      `None of the destinations exist (${dests.join(", ")}). ` +
+        "Run `npm run build && npm run electron:fixlinks` first.",
     );
   }
 
   const wanted = packagesFor(sharpPkg, platform, arch);
-  console.log(`sharp ${sharpPkg.version} → ${platform}-${arch}: ${wanted.map((w) => w.name).join(", ")}`);
+  console.log(
+    `sharp ${sharpPkg.version} → ${platform}-${arch}: ${wanted.map((w) => w.name).join(", ")}`,
+  );
+  console.log(`destinations: ${present.join(", ")}`);
 
   const staging = mkdtempSync(join(tmpdir(), "sharp-arch-"));
   try {
-    mkdirSync(destDir, { recursive: true });
     for (const { name, version } of wanted) {
       const tarPath = await downloadTarball(name, version, staging);
       const unpacked = join(staging, name.replace("/", "__"));
       mkdirSync(unpacked, { recursive: true });
       execFileSync("tar", ["-xzf", tarPath, "-C", unpacked, "--strip-components", "1"]);
 
+      for (const d of present) {
+      const destDir = resolve(d, "@img");
+      mkdirSync(destDir, { recursive: true });
       const target = join(destDir, name.split("/")[1]);
       rmSync(target, { recursive: true, force: true });
       cpSync(unpacked, target, { recursive: true });
@@ -206,13 +237,16 @@ async function main() {
       if (!hasBinary) {
         throw new Error(`${name} unpacked to ${target} but contains no native binary`);
       }
-      console.log(`  installed ${name}@${version}`);
+      console.log(`  installed ${name}@${version} -> ${d}`);
+      }
     }
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }
 
-  console.log(`@img now in ${dest}: ${readdirSync(destDir).join(", ")}`);
+  for (const d of present) {
+    console.log(`@img in ${d}: ${readdirSync(resolve(d, "@img")).join(", ")}`);
+  }
 }
 
 // Only run when invoked directly, so the pure helpers stay unit-testable.

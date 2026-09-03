@@ -8,6 +8,7 @@ import {
   packagesFor,
   registryMetadataUrl,
   verifyIntegrity,
+  DEFAULT_DESTS,
 } from "../scripts/install-sharp-arch.mjs";
 
 /**
@@ -27,12 +28,24 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--platform", "darwin"])).toThrow(/--arch is required/);
   });
 
-  it("defaults the destination to the standalone tree, not root node_modules", () => {
-    // Patching root would be a NO-OP: Node resolves standalone/node_modules
-    // first, so the traced wrong-arch copy would still win.
-    expect(parseArgs(["--platform", "darwin", "--arch", "x64"]).dest).toBe(
+  it("defaults to BOTH the standalone tree and root node_modules", () => {
+    // Verified against a real packaged build: electron-builder auto-inserts
+    // "!**/node_modules/**" when its files list mentions node_modules and only
+    // re-includes standalone/.next/node_modules, so standalone/node_modules is
+    // STRIPPED from the package and the embedded server resolves sharp from
+    // the app's ROOT node_modules. Patching only standalone was a silent
+    // no-op in every shipped artifact; patching only root would break if the
+    // packaging config ever re-included standalone, which Node resolves first.
+    expect(parseArgs(["--platform", "darwin", "--arch", "x64"]).dests).toEqual([
       "standalone/node_modules",
-    );
+      "node_modules",
+    ]);
+    expect(DEFAULT_DESTS).toContain("node_modules");
+    expect(DEFAULT_DESTS).toContain("standalone/node_modules");
+  });
+
+  it("an explicit --dest overrides both defaults", () => {
+    expect(parseArgs(["--platform", "darwin", "--arch", "x64", "--dest", "x"]).dests).toEqual(["x"]);
   });
 
   it("rejects an unknown flag rather than silently ignoring it", () => {
