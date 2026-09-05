@@ -2,6 +2,7 @@ import { app, BrowserWindow, Menu, ipcMain, dialog, utilityProcess, UtilityProce
 import path from "path";
 import fs from "fs";
 import { execFile } from "child_process";
+import { randomBytes } from "crypto";
 import Store from "electron-store";
 import { NfcService } from "./nfc-service";
 import {
@@ -419,6 +420,56 @@ async function resolveSrvUri(uri: string): Promise<string> {
   }
 }
 
+/**
+ * Local print token (GH #1195).
+ *
+ * `POST /api/labels/print` drives physically-attached hardware, so it must
+ * only answer local callers. A loopback check is not implementable — Next 16
+ * exposes no socket peer address, and the `Host` header is client-supplied
+ * (verified: a LAN request carrying `Host: localhost:3456` is served) — so
+ * locality is proven by reading a secret only a local process can read.
+ *
+ * Minted once per app run, handed to the server in its spawn env, and
+ * written 0600 under userData so a CLI or agent on this machine can read it.
+ * A LAN attacker can reach the port but not the file.
+ */
+const LOCAL_PRINT_TOKEN = randomBytes(32).toString("hex");
+
+function writeLocalPrintToken(): void {
+  // DEV: `npm run electron:dev` starts Next as a SIBLING process via
+  // concurrently, and startProductionServer() is skipped when !app.isPackaged
+  // — so the server never receives FILAMENTDB_LOCAL_PRINT_TOKEN and the print
+  // route answers 404 no matter what this file says. Publishing a token the
+  // server cannot accept is worse than publishing none: a CLI reads it, sends
+  // it, and gets a 404 that looks like a bug rather than "not enabled here"
+  // (GH #1195). Set the env var on the dev server yourself to use the route in
+  // development.
+  if (isDev) {
+    try {
+      fs.rmSync(path.join(app.getPath("userData"), "local-print-token"), { force: true });
+    } catch {
+      /* best effort — a stale file from a packaged run must not linger and
+         advertise a token this dev server will reject. */
+    }
+    console.log(
+      "[label-print] dev mode: print API token not published. To use it, start " +
+        "the dev server with FILAMENTDB_LOCAL_PRINT_TOKEN set.",
+    );
+    return;
+  }
+  try {
+    const target = path.join(app.getPath("userData"), "local-print-token");
+    // mode on write does not apply to an existing file; chmod explicitly so a
+    // token file left world-readable by an earlier run is corrected.
+    fs.writeFileSync(target, LOCAL_PRINT_TOKEN, { mode: 0o600 });
+    fs.chmodSync(target, 0o600);
+  } catch (err) {
+    // Non-fatal: the print API simply stays unusable rather than the app
+    // failing to start.
+    console.error("[label-print] could not write local print token:", err);
+  }
+}
+
 async function startProductionServer(mongoUri?: string): Promise<void> {
   let uri = mongoUri || (store.get("mongodbUri") as string);
 
@@ -452,6 +503,7 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       // the embedded server. Toggling it restarts the server (see save-config).
       HOSTNAME: store.get("exposeToLan") ? "0.0.0.0" : "localhost",
       NODE_ENV: "production",
+      FILAMENTDB_LOCAL_PRINT_TOKEN: LOCAL_PRINT_TOKEN,
     };
 
     if (uri) {
@@ -1714,6 +1766,9 @@ async function initNfc(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  // GH #1195: mint/refresh the local print token file before the server
+  // spawns, so a local CLI can read it as soon as the app is up.
+  writeLocalPrintToken();
   diag("app ready");
   // GH #344: React's RSC client uses `eval()` in dev mode. next.config.ts
   // gates `'unsafe-eval'` on NODE_ENV, but the Electron renderer applies

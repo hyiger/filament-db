@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. Authentication is off by default; deployments that set the FILAMENTDB_API_KEY environment variable require `Authorization: Bearer <key>` on every /api request (see the bearerAuth security scheme). Because the gate is optional and all-or-nothing, it is modelled as an optional top-level requirement (anonymous OR bearerAuth) rather than per-operation, so tooling sends the token when one is configured and works unauthenticated when none is.",
-    "version": "1.79.0",
+    "version": "1.81.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
@@ -141,12 +141,12 @@
                 "1"
               ]
             },
-            "description": "Set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants are returned too even if their own stored vendor/type differs. Off by default — `type` and `vendor` are exact row filters. The grouping filament list opts in so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows."
+            "description": "Set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants are returned too even if their own stored vendor/type differs. Off by default \u2014 `type` and `vendor` are exact row filters. The grouping filament list opts in so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows."
           }
         ],
         "responses": {
           "200": {
-            "description": "Array of filament summaries sorted by name. This is an aggregation projection (FilamentSummary), NOT the full Filament document — heavy spool subfields are dropped, temperatures is reduced to nozzle+bed, and two computed booleans (hasCalibrations, hasVariants) are added. Use GET /api/filaments/{id} for the full document.",
+            "description": "Array of filament summaries sorted by name. This is an aggregation projection (FilamentSummary), NOT the full Filament document \u2014 heavy spool subfields are dropped, temperatures is reduced to nozzle+bed, and two computed booleans (hasCalibrations, hasVariants) are added. Use GET /api/filaments/{id} for the full document.",
             "content": {
               "application/json": {
                 "schema": {
@@ -165,7 +165,7 @@
           "Filaments"
         ],
         "summary": "Create filament",
-        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent. Alternatively, send { tagData, overrides } where tagData is a DecodedOpenPrintTag from POST /api/nfc/decode: the server maps the decoded tag to a filament payload (mobile create-from-scan, plan §4.4), then overrides win over the mapped fields — the scanner uses this to set the user-edited name/vendor/type (which are required). When totalWeight is provided without a spools array (or spoolRemainingGrams is sent on the tagData path), the server creates ONE initial spool from it; usage history is never fabricated.",
+        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent. Alternatively, send { tagData, overrides } where tagData is a DecodedOpenPrintTag from POST /api/nfc/decode: the server maps the decoded tag to a filament payload (mobile create-from-scan, plan \u00a74.4), then overrides win over the mapped fields \u2014 the scanner uses this to set the user-edited name/vendor/type (which are required). When totalWeight is provided without a spools array (or spoolRemainingGrams is sent on the tagData path), the server creates ONE initial spool from it; usage history is never fabricated.",
         "requestBody": {
           "required": true,
           "content": {
@@ -205,7 +205,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (parentId set, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard, so an otherwise-invalid request gets its own 400 first.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (parentId set, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard, so an otherwise-invalid request gets its own 400 first.",
             "content": {
               "application/json": {
                 "schema": {
@@ -230,7 +230,7 @@
           "Filaments"
         ],
         "summary": "Get filament by ID",
-        "description": "Returns a single filament with resolved inherited values (for variants), populated nozzle/printer references, and any child variants. Pass `?raw=true` to skip parent-inheritance resolution and receive only the variant's own overrides — used by the edit page to avoid silently copying parent values onto the child (GH #106). When `?raw=true` is passed on a variant the response includes a `_parent` summary projection. The response also carries `_hasTrashedVariants` (GH #1103): true when this row has non-purged children in the trash. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone there — this flag lets the UI still offer \"Convert to template\", which is the action a refused restore points at.",
+        "description": "Returns a single filament with resolved inherited values (for variants), populated nozzle/printer references, and any child variants. Pass `?raw=true` to skip parent-inheritance resolution and receive only the variant's own overrides \u2014 used by the edit page to avoid silently copying parent values onto the child (GH #106). When `?raw=true` is passed on a variant the response includes a `_parent` summary projection. The response also carries `_hasTrashedVariants` (GH #1103): true when this row has non-purged children in the trash. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone there \u2014 this flag lets the UI still offer \"Convert to template\", which is the action a refused restore points at.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -276,7 +276,7 @@
                               "color": {
                                 "type": "string",
                                 "nullable": true,
-                                "description": "Primary color hex. May be null for coextruded variants — colors are then in secondaryColors."
+                                "description": "Primary color hex. May be null for coextruded variants \u2014 colors are then in secondaryColors."
                               },
                               "secondaryColors": {
                                 "type": "array",
@@ -310,7 +310,7 @@
                         },
                         "_hasTrashedVariants": {
                           "type": "boolean",
-                          "description": "GH #1103 — true when this row has non-purged children in the TRASH. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone; this flag lets a client still expose \"Convert to template\", which is the action a refused restore (409 `parent_must_be_template_first`) points at."
+                          "description": "GH #1103 \u2014 true when this row has non-purged children in the TRASH. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone; this flag lets a client still expose \"Convert to template\", which is the action a refused restore (409 `parent_must_be_template_first`) points at."
                         },
                         "_hasOwnOptLink": {
                           "type": "boolean"
@@ -339,7 +339,7 @@
           "Filaments"
         ],
         "summary": "Update filament",
-        "description": "Update filament fields. Validates parentId references to prevent circular or nested inheritance. A body that INTRODUCES or CHANGES `parentId` can mint that parent's first live variant, which runs the GH #605 promotion gate (409 `parent_promotion_required` until confirmed with `promoteParent: true`). When the TARGET is itself a template (it has ≥1 live variant), a non-null write of `totalWeight`, `color`, `colorName` or `lowStockThreshold` is stripped rather than rejected — the edit form echoes every field back on save — and the dropped names come back in `_strippedTemplateFields`. An explicit null still passes through, so a legacy template's leftover value can be cleared.",
+        "description": "Update filament fields. Validates parentId references to prevent circular or nested inheritance. A body that INTRODUCES or CHANGES `parentId` can mint that parent's first live variant, which runs the GH #605 promotion gate (409 `parent_promotion_required` until confirmed with `promoteParent: true`). When the TARGET is itself a template (it has \u22651 live variant), a non-null write of `totalWeight`, `color`, `colorName` or `lowStockThreshold` is stripped rather than rejected \u2014 the edit form echoes every field back on save \u2014 and the dropped names come back in `_strippedTemplateFields`. An explicit null still passes through, so a legacy template's leftover value can be cleared.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -413,7 +413,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (a write that introduces or changes `parentId`, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard including the schema dry-run, so an otherwise-invalid request gets its own 400 first and nothing is restructured.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (a write that introduces or changes `parentId`, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard including the schema dry-run, so an otherwise-invalid request gets its own 400 first and nothing is restructured.",
             "content": {
               "application/json": {
                 "schema": {
@@ -436,7 +436,7 @@
           "Filaments"
         ],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first — so a renamed preset isn't orphaned — then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative — a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) — \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first \u2014 so a renamed preset isn't orphaned \u2014 then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative \u2014 a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) \u2014 \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -511,11 +511,11 @@
                         "name",
                         null
                       ],
-                      "description": "#867: how the filament was resolved — `id` (filamentdb_id), `name`, or null."
+                      "description": "#867: how the filament was resolved \u2014 `id` (filamentdb_id), `name`, or null."
                     },
                     "matchedName": {
                       "type": "string",
-                      "description": "#867: the stored name of the matched filament (so the fork can re-stamp the id into a name-matched preset). A 200 always means the update WAS applied — a name/id mismatch returns 409 without mutating."
+                      "description": "#867: the stored name of the matched filament (so the fork can re-stamp the id into a name-matched preset). A 200 always means the update WAS applied \u2014 a name/id mismatch returns 409 without mutating."
                     },
                     "_strippedTemplateFields": {
                       "$ref": "#/components/schemas/TemplateStrippedFields"
@@ -546,7 +546,7 @@
             }
           },
           "409": {
-            "description": "#867: TWO conflict shapes share this status (distinguish by `error`). `name_id_mismatch` — a name-addressed sync carried a `filamentdb_id` that resolves to a filament whose stored name differs from the preset name (a renamed preset OR a copied/cloned id); the update is NOT applied, the fork should prompt, and to apply anyway re-sync by id (POST /api/filaments/{_id}, the authoritative ObjectId form). `name_taken` (Phase 2) — an ObjectId-addressed sync tried to rename the record to the request body's `name`, but another active filament already has that name (`conflictId` names it); nothing was changed.",
+            "description": "#867: TWO conflict shapes share this status (distinguish by `error`). `name_id_mismatch` \u2014 a name-addressed sync carried a `filamentdb_id` that resolves to a filament whose stored name differs from the preset name (a renamed preset OR a copied/cloned id); the update is NOT applied, the fork should prompt, and to apply anyway re-sync by id (POST /api/filaments/{_id}, the authoritative ObjectId form). `name_taken` (Phase 2) \u2014 an ObjectId-addressed sync tried to rename the record to the request body's `name`, but another active filament already has that name (`conflictId` names it); nothing was changed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,7 +597,7 @@
           "Filaments"
         ],
         "summary": "Delete filament",
-        "description": "By default this is a soft delete that sets _deletedAt — the filament moves to the trash and can be restored via POST /api/filaments/{id}/restore. Pass ?permanent=true to mark the row as purged (sets _purged so the hybrid sync engine propagates the deletion to peers); the filament must already be in the trash. Cannot delete a parent that still has variants.",
+        "description": "By default this is a soft delete that sets _deletedAt \u2014 the filament moves to the trash and can be restored via POST /api/filaments/{id}/restore. Pass ?permanent=true to mark the row as purged (sets _purged so the hybrid sync engine propagates the deletion to peers); the filament must already be in the trash. Cannot delete a parent that still has variants.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -633,7 +633,7 @@
             }
           },
           "400": {
-            "description": "Cannot delete — has variants, or permanent delete attempted on a filament that isn't in the trash",
+            "description": "Cannot delete \u2014 has variants, or permanent delete attempted on a filament that isn't in the trash",
             "content": {
               "application/json": {
                 "schema": {
@@ -661,7 +661,7 @@
           "Filaments"
         ],
         "summary": "List trashed filaments",
-        "description": "Returns soft-deleted filaments (those with a non-null _deletedAt), sorted by deletion time descending. Permanently-purged tombstones (_purged: true) are excluded — they remain in the collection only so the hybrid sync engine can propagate the purge to peers and should never reappear in the trash UI.",
+        "description": "Returns soft-deleted filaments (those with a non-null _deletedAt), sorted by deletion time descending. Permanently-purged tombstones (_purged: true) are excluded \u2014 they remain in the collection only so the hybrid sync engine can propagate the purge to peers and should never reappear in the trash UI.",
         "responses": {
           "200": {
             "description": "List of trashed filaments (lightweight projection)",
@@ -687,7 +687,7 @@
                       "color": {
                         "type": "string",
                         "nullable": true,
-                        "description": "Primary color hex. May be null for coextruded filaments — see Filament.secondaryColors."
+                        "description": "Primary color hex. May be null for coextruded filaments \u2014 see Filament.secondaryColors."
                       },
                       "secondaryColors": {
                         "type": "array",
@@ -742,7 +742,7 @@
           "Filaments"
         ],
         "summary": "Restore filament from trash",
-        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name — the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed. Restoring a trashed VARIANT can mint its parent's first live variant (the parent may have re-acquired a color or spools while the variant sat in the trash), so it runs the same GH #605 gate as the create and re-parent paths — but, unlike those, it REFUSES rather than offering a confirmation (GH #1103). Restore is a request for data back exactly as it was, so it never restructures the family; convert the parent with POST /api/filaments/{id}/promote first, which does the whole family at once, then restore.",
+        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name \u2014 the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed. Restoring a trashed VARIANT can mint its parent's first live variant (the parent may have re-acquired a color or spools while the variant sat in the trash), so it runs the same GH #605 gate as the create and re-parent paths \u2014 but, unlike those, it REFUSES rather than offering a confirmation (GH #1103). Restore is a request for data back exactly as it was, so it never restructures the family; convert the parent with POST /api/filaments/{id}/promote first, which does the whole family at once, then restore.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -779,7 +779,7 @@
             }
           },
           "409": {
-            "description": "Name conflict — another active filament already uses this name. Also returned when the filament is a variant whose parent is still in the trash (restore the parent first), and, with the structured `parent_must_be_template_first` body (GH #1103), when reviving this variant would be its parent's first live variant while that parent still carries its own color/spools/inventory. That last one is terminal for this route: there is no confirmation flag, and repeating the request changes nothing — use POST /api/filaments/{id}/promote on the parent, then restore.",
+            "description": "Name conflict \u2014 another active filament already uses this name. Also returned when the filament is a variant whose parent is still in the trash (restore the parent first), and, with the structured `parent_must_be_template_first` body (GH #1103), when reviving this variant would be its parent's first live variant while that parent still carries its own color/spools/inventory. That last one is terminal for this route: there is no confirmation flag, and repeating the request changes nothing \u2014 use POST /api/filaments/{id}/promote on the parent, then restore.",
             "content": {
               "application/json": {
                 "schema": {
@@ -814,7 +814,7 @@
           "Filaments"
         ],
         "summary": "Convert filament to template",
-        "description": "\"Convert to template\" (GH #605). Moves a legacy parent's own `color`, `colorName`, `spools` and inventory `totalWeight` — plus the `lowStockThreshold` that alarms on that inventory — onto a NEW variant named `<parent> — <colorName>` (or `<parent> — Original`), then clears them on the parent. Same copy-first/clear-last promotion the first-variant create path runs behind `promoteParent: true`, here at the user's explicit initiative: enforcement is forward-only, so parents that predate the template model are never migrated in bulk. Only a filament that ALREADY has at least one variant qualifies — a standalone becomes a template implicitly when its first variant is created. TRASHED variants count (GH #1103): when a legacy carrying parent and all of its variants sit in the trash together, restore refuses and points here, so this route has to accept the parent or that advice would be unactionable. Purged variants do not count — a permanent delete is a one-way tombstone, so such a parent really is a standalone again. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Persisted `(filamentId, spoolId)` references follow the moved spools: print-history usage entries and printer AMS slots are remapped, including filament-only \"any spool\" slot dedications. Takes no request body; two overlapping calls serialize, so the second gets 400 `nothing_to_convert` rather than minting a duplicate copy. The promotion copy's name also reserves this parent's TRASHED children's names (GH #1103): they are absent from the partial unique index, so without the reservation the copy could take a tombstoned sibling's exact name and that sibling would then fail the restore route's active-name conflict check — the conversion would promise to unblock the family and not deliver.",
+        "description": "\"Convert to template\" (GH #605). Moves a legacy parent's own `color`, `colorName`, `spools` and inventory `totalWeight` \u2014 plus the `lowStockThreshold` that alarms on that inventory \u2014 onto a NEW variant named `<parent> \u2014 <colorName>` (or `<parent> \u2014 Original`), then clears them on the parent. Same copy-first/clear-last promotion the first-variant create path runs behind `promoteParent: true`, here at the user's explicit initiative: enforcement is forward-only, so parents that predate the template model are never migrated in bulk. Only a filament that ALREADY has at least one variant qualifies \u2014 a standalone becomes a template implicitly when its first variant is created. TRASHED variants count (GH #1103): when a legacy carrying parent and all of its variants sit in the trash together, restore refuses and points here, so this route has to accept the parent or that advice would be unactionable. Purged variants do not count \u2014 a permanent delete is a one-way tombstone, so such a parent really is a standalone again. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Persisted `(filamentId, spoolId)` references follow the moved spools: print-history usage entries and printer AMS slots are remapped, including filament-only \"any spool\" slot dedications. Takes no request body; two overlapping calls serialize, so the second gets 400 `nothing_to_convert` rather than minting a duplicate copy. The promotion copy's name also reserves this parent's TRASHED children's names (GH #1103): they are absent from the partial unique index, so without the reservation the copy could take a tombstoned sibling's exact name and that sibling would then fail the restore route's active-name conflict check \u2014 the conversion would promise to unblock the family and not deliver.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -844,7 +844,7 @@
             }
           },
           "400": {
-            "description": "Invalid filament id, or a structured refusal (distinguish by `error`). `not_a_template` — the target is itself a variant, or has never had a variant that still exists (live or trashed). `nothing_to_convert` — the template already carries nothing that belongs on a variant: no color, no color name, no spools, no inventory weight (the spec fields it legitimately keeps do not count as carrying).",
+            "description": "Invalid filament id, or a structured refusal (distinguish by `error`). `not_a_template` \u2014 the target is itself a variant, or has never had a variant that still exists (live or trashed). `nothing_to_convert` \u2014 the template already carries nothing that belongs on a variant: no color, no color name, no spools, no inventory weight (the spec fields it legitimately keeps do not count as carrying).",
             "content": {
               "application/json": {
                 "schema": {
@@ -892,7 +892,7 @@
           "Filaments"
         ],
         "summary": "Generate OpenPrintTag binary",
-        "description": "Generates a CBOR-encoded OpenPrintTag binary for NFC writing. Contains filament name, brand, type, color, density, diameter, and temperatures. The tag's spool_uid carries the SELECTED spool's per-spool instanceId (#732), and the encoded remaining weight comes from that same spool — pass ?spool= to target a specific spool.",
+        "description": "Generates a CBOR-encoded OpenPrintTag binary for NFC writing. Contains filament name, brand, type, color, density, diameter, and temperatures. The tag's spool_uid carries the SELECTED spool's per-spool instanceId (#732), and the encoded remaining weight comes from that same spool \u2014 pass ?spool= to target a specific spool.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -903,7 +903,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Spool subdocument _id selecting which spool's instanceId and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level instanceId for a spool-less filament OR when the default-selected spool has no instanceId (legacy data, src/lib/selectSpoolForWrite.ts). An EXPLICITLY requested spool without an instanceId does NOT silently fall back — it is a 422. An id that doesn't belong to this filament is a 400 — the route never silently encodes the wrong spool."
+            "description": "Spool subdocument _id selecting which spool's instanceId and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level instanceId for a spool-less filament OR when the default-selected spool has no instanceId (legacy data, src/lib/selectSpoolForWrite.ts). An EXPLICITLY requested spool without an instanceId does NOT silently fall back \u2014 it is a 422. An id that doesn't belong to this filament is a 400 \u2014 the route never silently encodes the wrong spool."
           }
         ],
         "responses": {
@@ -939,7 +939,7 @@
             }
           },
           "422": {
-            "description": "No instance ID available to encode — neither the selected spool nor the filament carries one",
+            "description": "No instance ID available to encode \u2014 neither the selected spool nor the filament carries one",
             "content": {
               "application/json": {
                 "schema": {
@@ -957,7 +957,7 @@
           "Filaments"
         ],
         "summary": "Check for OpenPrintTag updates",
-        "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote — safe) or `conflict` (locally edited away from OPT — surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced.",
+        "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote \u2014 safe) or `conflict` (locally edited away from OPT \u2014 surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1031,7 +1031,7 @@
           "Filaments"
         ],
         "summary": "Apply OpenPrintTag updates",
-        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys → 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
+        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys \u2192 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1120,7 +1120,7 @@
           "Filaments"
         ],
         "summary": "Link a filament to an OpenPrintTag material",
-        "description": "Links an existing filament to an OpenPrintTag material so it can use the check-for-updates re-sync loop (Issue #753). Same-origin guarded. Writes only the OpenPrintTag reference (settings.openprinttag_slug/_uuid) and the provenance snapshot (openprinttagSnapshot) — no field value is changed, so a variant's inherited values are never clobbered. A subsequent check classifies each managed field (unedited-equal-to-OPT → adopt, diverged → conflict).",
+        "description": "Links an existing filament to an OpenPrintTag material so it can use the check-for-updates re-sync loop (Issue #753). Same-origin guarded. Writes only the OpenPrintTag reference (settings.openprinttag_slug/_uuid) and the provenance snapshot (openprinttagSnapshot) \u2014 no field value is changed, so a variant's inherited values are never clobbered. A subsequent check classifies each managed field (unedited-equal-to-OPT \u2192 adopt, diverged \u2192 conflict).",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1201,7 +1201,7 @@
       },
       "delete": {
         "summary": "Remove the OpenPrintTag link from a filament",
-        "description": "Removes exactly what linking wrote: `settings.openprinttag_slug`, `settings.openprinttag_uuid`, and the `openprinttagSnapshot` provenance. Field values are never touched. Requires no upstream fetch, so a link whose material has vanished from the OpenPrintTag database can still be removed. Idempotent — unlinking an unlinked filament returns 200. (GH #1150)",
+        "description": "Removes exactly what linking wrote: `settings.openprinttag_slug`, `settings.openprinttag_uuid`, and the `openprinttagSnapshot` provenance. Field values are never touched. Requires no upstream fetch, so a link whose material has vanished from the OpenPrintTag database can still be removed. Idempotent \u2014 unlinking an unlinked filament returns 200. (GH #1150)",
         "tags": [
           "Filaments"
         ],
@@ -1302,7 +1302,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Printer NAME or ObjectId (same convention as bed_type). Selects the calibration tuned for that machine (GH #1047 Phase 0). Soft: an unknown printer falls back to the shareable printer-less defaults, then to any same-nozzle entry — never a new 404. With NO printer param the printer-less defaults are preferred (deterministic; previously the first matching entry won regardless of its printer)."
+            "description": "Printer NAME or ObjectId (same convention as bed_type). Selects the calibration tuned for that machine (GH #1047 Phase 0). Soft: an unknown printer falls back to the shareable printer-less defaults, then to any same-nozzle entry \u2014 never a new 404. With NO printer param the printer-less defaults are preferred (deterministic; previously the first matching entry won regardless of its printer)."
           },
           {
             "name": "format",
@@ -1391,48 +1391,48 @@
                         "nozzleTemp": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Recommended nozzle temperature in °C (GH #514.5 — Codex follow-up on PR #542; the GET /calibration handler returns these alongside the original six)"
+                          "description": "Recommended nozzle temperature in \u00b0C (GH #514.5 \u2014 Codex follow-up on PR #542; the GET /calibration handler returns these alongside the original six)"
                         },
                         "nozzleTempFirstLayer": {
                           "type": "number",
                           "nullable": true,
-                          "description": "First-layer nozzle temperature override in °C"
+                          "description": "First-layer nozzle temperature override in \u00b0C"
                         },
                         "bedTemp": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Bed temperature in °C"
+                          "description": "Bed temperature in \u00b0C"
                         },
                         "bedTempFirstLayer": {
                           "type": "number",
                           "nullable": true,
-                          "description": "First-layer bed temperature override in °C"
+                          "description": "First-layer bed temperature override in \u00b0C"
                         },
                         "chamberTemp": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Enclosure / chamber temperature in °C"
+                          "description": "Enclosure / chamber temperature in \u00b0C"
                         },
                         "fanMinSpeed": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Overhang fan minimum speed (0–100)"
+                          "description": "Overhang fan minimum speed (0\u2013100)"
                         },
                         "fanMaxSpeed": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Additional-cooling fan maximum speed (0–100)"
+                          "description": "Additional-cooling fan maximum speed (0\u2013100)"
                         },
                         "fanBridgeSpeed": {
                           "type": "number",
                           "nullable": true,
-                          "description": "Bridge fan speed (0–100)"
+                          "description": "Bridge fan speed (0\u2013100)"
                         }
                       }
                     },
                     "calibration_orca": {
                       "type": "object",
-                      "description": "Returned INSTEAD of `calibration` when format=orcaslicer — OrcaSlicer key names (e.g. filament_flow_ratio, pressure_advance, filament_retraction_length) mapped to their array values. Additional properties are OrcaSlicer keys.",
+                      "description": "Returned INSTEAD of `calibration` when format=orcaslicer \u2014 OrcaSlicer key names (e.g. filament_flow_ratio, pressure_advance, filament_retraction_length) mapped to their array values. Additional properties are OrcaSlicer keys.",
                       "additionalProperties": true
                     }
                   }
@@ -1475,11 +1475,11 @@
                               },
                               "type": {
                                 "type": "string",
-                                "description": "Nozzle material/type (e.g. Brass, Diamondback) — helps the caller pick a nozzle_type to retry with."
+                                "description": "Nozzle material/type (e.g. Brass, Diamondback) \u2014 helps the caller pick a nozzle_type to retry with."
                               },
                               "highFlow": {
                                 "type": "boolean",
-                                "description": "Whether this calibration's nozzle is high-flow — helps the caller pick a high_flow value to retry with."
+                                "description": "Whether this calibration's nozzle is high-flow \u2014 helps the caller pick a high_flow value to retry with."
                               }
                             }
                           },
@@ -1828,7 +1828,7 @@
           "NFC"
         ],
         "summary": "Decode raw NFC tag bytes and match against the database",
-        "description": "Decodes an OpenPrintTag (ISO 15693 / NFC-V, CBOR), OpenTag3D (ISO 14443A NTAG or NFC-V SLIX2, fixed binary memory map — #864) or Bambu Lab (MIFARE Classic) tag from raw bytes a client read on the phone — the mobile scanner app's primary call — and attaches a confident DB match using the same priority order as /api/filaments/match. Decoding runs server-side so clients ship no decoder (the Bambu path needs Node crypto in particular). For an NDEF tag, a raw tagMemory dump is auto-detected by NDEF record MIME (application/vnd.openprinttag vs application/opentag3d) regardless of the tagType hint. Read-only: performs no mutation and, like /api/filaments/match, is intentionally NOT behind the same-origin CSRF guard so cross-origin clients can reach it. When FILAMENTDB_API_KEY is set, every /api caller must present the bearer key.",
+        "description": "Decodes an OpenPrintTag (ISO 15693 / NFC-V, CBOR), OpenTag3D (ISO 14443A NTAG or NFC-V SLIX2, fixed binary memory map \u2014 #864) or Bambu Lab (MIFARE Classic) tag from raw bytes a client read on the phone \u2014 the mobile scanner app's primary call \u2014 and attaches a confident DB match using the same priority order as /api/filaments/match. Decoding runs server-side so clients ship no decoder (the Bambu path needs Node crypto in particular). For an NDEF tag, a raw tagMemory dump is auto-detected by NDEF record MIME (application/vnd.openprinttag vs application/opentag3d) regardless of the tagType hint. Read-only: performs no mutation and, like /api/filaments/match, is intentionally NOT behind the same-origin CSRF guard so cross-origin clients can reach it. When FILAMENTDB_API_KEY is set, every /api caller must present the bearer key.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1851,7 +1851,7 @@
                   "payload": {
                     "type": "string",
                     "format": "byte",
-                    "description": "OpenPrintTag / OpenTag3D: base64 of the pre-parsed NDEF record payload (CBOR for openprinttag, fixed-binary memory map for opentag3d). Preferred — iOS Core NFC returns parsed NDEF records. Takes precedence over tagMemory when both are sent. Supply this OR tagMemory."
+                    "description": "OpenPrintTag / OpenTag3D: base64 of the pre-parsed NDEF record payload (CBOR for openprinttag, fixed-binary memory map for opentag3d). Preferred \u2014 iOS Core NFC returns parsed NDEF records. Takes precedence over tagMemory when both are sent. Supply this OR tagMemory."
                   },
                   "tagMemory": {
                     "type": "string",
@@ -1864,7 +1864,7 @@
                       "type": "string",
                       "format": "byte"
                     },
-                    "description": "Bambu only: map of MIFARE block number (0–63, as a string key) → base64 of that 16-byte plaintext block."
+                    "description": "Bambu only: map of MIFARE block number (0\u201363, as a string key) \u2192 base64 of that 16-byte plaintext block."
                   }
                 }
               }
@@ -1881,7 +1881,7 @@
                   "properties": {
                     "decoded": {
                       "type": "object",
-                      "description": "DecodedOpenPrintTag — normalized tag fields (materialName, brandName, materialType, color, temperatures, weightGrams, etc.)."
+                      "description": "DecodedOpenPrintTag \u2014 normalized tag fields (materialName, brandName, materialType, color, temperatures, weightGrams, etc.)."
                     },
                     "match": {
                       "type": "object",
@@ -2077,11 +2077,11 @@
                       "color": {
                         "type": "string",
                         "nullable": true,
-                        "description": "Primary color hex. May be null for coextruded parents — children inherit secondaryColors via Filament.secondaryColors."
+                        "description": "Primary color hex. May be null for coextruded parents \u2014 children inherit secondaryColors via Filament.secondaryColors."
                       },
                       "hasVariants": {
                         "type": "boolean",
-                        "description": "True when this filament already has ≥1 non-deleted variant. Drives the cross-hatched 'parent of variants' swatch in the picker."
+                        "description": "True when this filament already has \u22651 non-deleted variant. Drives the cross-hatched 'parent of variants' swatch in the picker."
                       }
                     }
                   }
@@ -2293,7 +2293,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2381,7 +2381,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2421,7 +2421,7 @@
             }
           },
           "400": {
-            "description": "Cannot delete — referenced by filaments",
+            "description": "Cannot delete \u2014 referenced by filaments",
             "content": {
               "application/json": {
                 "schema": {
@@ -2551,7 +2551,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2639,7 +2639,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2679,7 +2679,7 @@
             }
           },
           "400": {
-            "description": "Cannot delete — referenced by filament calibrations",
+            "description": "Cannot delete \u2014 referenced by filament calibrations",
             "content": {
               "application/json": {
                 "schema": {
@@ -2707,7 +2707,7 @@
           "Spools"
         ],
         "summary": "Add spool to filament",
-        "description": "Adds a new spool subdoc to the filament. At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, instanceId, or retired must be supplied — an empty body returns 400 (GH #203). A TEMPLATE (a filament with ≥1 live color variant) holds no inventory and refuses with 400 `template_no_spools` — add the spool to one of its variants instead (GH #605).",
+        "description": "Adds a new spool subdoc to the filament. At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, instanceId, or retired must be supplied \u2014 an empty body returns 400 (GH #203). A TEMPLATE (a filament with \u22651 live color variant) holds no inventory and refuses with 400 `template_no_spools` \u2014 add the spool to one of its variants instead (GH #605).",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -2746,7 +2746,7 @@
                   "openedDate": {
                     "type": "string",
                     "nullable": true,
-                    "description": "ISO date string (YYYY-MM-DD) — when the spool was first opened"
+                    "description": "ISO date string (YYYY-MM-DD) \u2014 when the spool was first opened"
                   },
                   "locationId": {
                     "type": "string",
@@ -2858,7 +2858,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "description": "All fields optional ($set semantics — only supplied keys change). This is the primary spool-edit caller from the /inventory page.",
+                "description": "All fields optional ($set semantics \u2014 only supplied keys change). This is the primary spool-edit caller from the /inventory page.",
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2870,7 +2870,7 @@
                   "remainingWeight": {
                     "type": "number",
                     "nullable": true,
-                    "description": "Convenience input (grams of filament left, not a stored field). The server converts it to an absolute totalWeight by adding the spool's tare — the filament's spoolWeight, inherited from the parent for a variant, 0 if unset. Mutually exclusive with totalWeight (sending both → 400). PUT only; rejected on the create POST."
+                    "description": "Convenience input (grams of filament left, not a stored field). The server converts it to an absolute totalWeight by adding the spool's tare \u2014 the filament's spoolWeight, inherited from the parent for a variant, 0 if unset. Mutually exclusive with totalWeight (sending both \u2192 400). PUT only; rejected on the create POST."
                   },
                   "lotNumber": {
                     "type": "string",
@@ -2879,7 +2879,7 @@
                   "purchaseDate": {
                     "type": "string",
                     "nullable": true,
-                    "description": "ISO date string (validated; impossible calendar dates rejected — GH #372)"
+                    "description": "ISO date string (validated; impossible calendar dates rejected \u2014 GH #372)"
                   },
                   "openedDate": {
                     "type": "string",
@@ -2907,7 +2907,7 @@
                   },
                   "regenerate": {
                     "type": "boolean",
-                    "description": "#732: PUT-only. When true, mints a fresh auto-generated instanceId; mutually exclusive with instanceId (regenerate wins — any supplied instanceId is ignored)."
+                    "description": "#732: PUT-only. When true, mints a fresh auto-generated instanceId; mutually exclusive with instanceId (regenerate wins \u2014 any supplied instanceId is ignored)."
                   }
                 }
               }
@@ -3075,7 +3075,7 @@
           "Filaments"
         ],
         "summary": "Import filaments from CSV",
-        "description": "Upload a CSV file with header row. Requires Name, Vendor, Type columns. Only fields present are updated. The optional `Parent` column (matching the filament CSV export) attaches a newly-created filament as a variant of the named parent — honoured on create/resurrect only; ignored on update. The parent must exist among active filaments and must not itself be a variant. `Variant Count` is read-only and ignored on import.",
+        "description": "Upload a CSV file with header row. Requires Name, Vendor, Type columns. Only fields present are updated. The optional `Parent` column (matching the filament CSV export) attaches a newly-created filament as a variant of the named parent \u2014 honoured on create/resurrect only; ignored on update. The parent must exist among active filaments and must not itself be a variant. `Variant Count` is read-only and ignored on import.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3237,7 +3237,7 @@
           "Prusament"
         ],
         "summary": "Import Prusament spool",
-        "description": "Creates a filament from scraped Prusament data or adds a spool to an existing filament. Every path that pushes a spool onto an EXISTING filament refuses a TEMPLATE target (a filament with ≥1 live color variant) with 400 `template_no_spools`, byte-identically to POST /api/filaments/{id}/spools: the `add-spool` action, and the `create` action's two fallbacks — an active filament already carrying the derived name, and the winner of a concurrent-create race (GH #605).",
+        "description": "Creates a filament from scraped Prusament data or adds a spool to an existing filament. Every path that pushes a spool onto an EXISTING filament refuses a TEMPLATE target (a filament with \u22651 live color variant) with 400 `template_no_spools`, byte-identically to POST /api/filaments/{id}/spools: the `add-spool` action, and the `create` action's two fallbacks \u2014 an active filament already carrying the derived name, and the winner of a concurrent-create race (GH #605).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3308,7 +3308,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3385,7 +3385,7 @@
                         },
                         "jobs": {
                           "type": "integer",
-                          "description": "Count of PrintHistory rows that PASSED the malformed-date + future-date guards — matches the row count reflected in every other aggregate. GH #936."
+                          "description": "Count of PrintHistory rows that PASSED the malformed-date + future-date guards \u2014 matches the row count reflected in every other aggregate. GH #936."
                         },
                         "manualEntries": {
                           "type": "integer",
@@ -3410,7 +3410,7 @@
                           },
                           "grams": {
                             "type": "integer",
-                            "description": "`Math.round(rawDaySum)` — matches Σ byFilament[].grams by Hamilton apportionment."
+                            "description": "`Math.round(rawDaySum)` \u2014 matches \u03a3 byFilament[].grams by Hamilton apportionment."
                           },
                           "byFilament": {
                             "type": "array",
@@ -3432,11 +3432,11 @@
                                 },
                                 "color": {
                                   "type": "string",
-                                  "description": "Hex `#RRGGBB` — resolved via `resolveColor` (variant primary || variant secondaryColors[0] || parent secondaryColors[0] || `#808080` sentinel). Never inherits parent's primary color, matching `resolveFilament`'s `VARIANT_ONLY_FIELDS`. GH #477, #936."
+                                  "description": "Hex `#RRGGBB` \u2014 resolved via `resolveColor` (variant primary || variant secondaryColors[0] || parent secondaryColors[0] || `#808080` sentinel). Never inherits parent's primary color, matching `resolveFilament`'s `VARIANT_ONLY_FIELDS`. GH #477, #936."
                                 },
                                 "grams": {
                                   "type": "integer",
-                                  "description": "Hamilton apportionment of `day.grams` — may be 0 for a sub-0.5g raw contributor even though the entry is preserved."
+                                  "description": "Hamilton apportionment of `day.grams` \u2014 may be 0 for a sub-0.5g raw contributor even though the entry is preserved."
                                 }
                               }
                             }
@@ -3446,7 +3446,7 @@
                     },
                     "byFilament": {
                       "type": "array",
-                      "description": "Top-filament ranking. `grams` here is round-of-raw over the whole window and can drift by up to N/2 from Σ across days of that filament's stacked-chart segments for sub-0.5g/day usage — the ranking prioritises window-total accuracy; the chart prioritises per-day segment-sum equality with `day.grams`.",
+                      "description": "Top-filament ranking. `grams` here is round-of-raw over the whole window and can drift by up to N/2 from \u03a3 across days of that filament's stacked-chart segments for sub-0.5g/day usage \u2014 the ranking prioritises window-total accuracy; the chart prioritises per-day segment-sum equality with `day.grams`.",
                       "items": {
                         "type": "object",
                         "required": [
@@ -3496,7 +3496,7 @@
                     },
                     "byPrinter": {
                       "type": "array",
-                      "description": "Per-printer ranking. Rows WITHOUT a `printerId` (e.g. slicer-agnostic jobs) are intentionally excluded — `Σ byPrinter[].grams ≤ totals.grams` by design.",
+                      "description": "Per-printer ranking. Rows WITHOUT a `printerId` (e.g. slicer-agnostic jobs) are intentionally excluded \u2014 `\u03a3 byPrinter[].grams \u2264 totals.grams` by design.",
                       "items": {
                         "type": "object",
                         "required": [
@@ -3693,7 +3693,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3782,7 +3782,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3915,7 +3915,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4004,7 +4004,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict \u2014 a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4258,7 +4258,7 @@
           "OrcaSlicer"
         ],
         "summary": "Sync OrcaSlicer profile changes",
-        "description": "Maps known OrcaSlicer fields back to structured filament fields and stores unknown keys in the settings bag. When the target is a template (a filament with ≥1 live color variant), per-variant keys the preset carried are dropped before the write and named in `_strippedTemplateFields` (GH #605); the rest of the sync still applies.",
+        "description": "Maps known OrcaSlicer fields back to structured filament fields and stores unknown keys in the settings bag. When the target is a template (a filament with \u22651 live color variant), per-variant keys the preset carried are dropped before the write and named in `_strippedTemplateFields` (GH #605); the rest of the sync still applies.",
         "parameters": [
           {
             "name": "id",
@@ -4325,7 +4325,7 @@
           "PrusaSlicer"
         ],
         "summary": "Export one filament as a PrusaSlicer config bundle",
-        "description": "Downloads a single filament as a PrusaSlicer config bundle `.ini` (a one-filament bundle). Import via PrusaSlicer → File → Import → Import Config Bundle. Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent.",
+        "description": "Downloads a single filament as a PrusaSlicer config bundle `.ini` (a one-filament bundle). Import via PrusaSlicer \u2192 File \u2192 Import \u2192 Import Config Bundle. Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent.",
         "parameters": [
           {
             "name": "id",
@@ -4407,7 +4407,7 @@
           "OrcaSlicer"
         ],
         "summary": "Sync a Bambu Studio preset INTO this filament (by id)",
-        "description": "Inverse of the per-id export above. Pinned by id so the user updates exactly the filament they're looking at, even if the file's `filament_settings_id` doesn't match (renamed in the slicer, lost the link to the app's record). The parsed `name` field is intentionally ignored. Spool subdocuments, usageHistory and dryCycles are NEVER touched. Calibration values (flow ratio, pressure advance, retraction, fan speeds, max volumetric speed) auto-attach to a `calibrations[]` row tagged with the printer + nozzle inferred from `printer_settings_id` — when a printer matches but the nozzle context is ambiguous or no match exists, the response carries `calibrationUnresolved: true` so the UI can prompt the user to pick manually. Body is either `multipart/form-data` (file upload, 10 MB cap) or `application/json` with the Bambu profile directly.",
+        "description": "Inverse of the per-id export above. Pinned by id so the user updates exactly the filament they're looking at, even if the file's `filament_settings_id` doesn't match (renamed in the slicer, lost the link to the app's record). The parsed `name` field is intentionally ignored. Spool subdocuments, usageHistory and dryCycles are NEVER touched. Calibration values (flow ratio, pressure advance, retraction, fan speeds, max volumetric speed) auto-attach to a `calibrations[]` row tagged with the printer + nozzle inferred from `printer_settings_id` \u2014 when a printer matches but the nozzle context is ambiguous or no match exists, the response carries `calibrationUnresolved: true` so the UI can prompt the user to pick manually. Body is either `multipart/form-data` (file upload, 10 MB cap) or `application/json` with the Bambu profile directly.",
         "parameters": [
           {
             "name": "id",
@@ -4484,7 +4484,7 @@
                     },
                     "calibrationUnresolved": {
                       "type": "boolean",
-                      "description": "True when calibration values were present but the printer/nozzle couldn't be matched unambiguously. The top-level `maxVolumetricSpeed` still lands, but per-nozzle-only hints (flow ratio, pressure advance, retraction, fan speeds) are dropped — the UI surfaces a nudge to attach manually."
+                      "description": "True when calibration values were present but the printer/nozzle couldn't be matched unambiguously. The top-level `maxVolumetricSpeed` still lands, but per-nozzle-only hints (flow ratio, pressure advance, retraction, fan speeds) are dropped \u2014 the UI surfaces a nudge to attach manually."
                     },
                     "calibrationContext": {
                       "type": "object",
@@ -4568,7 +4568,7 @@
           "OrcaSlicer"
         ],
         "summary": "Import a Bambu Studio preset (upsert by name)",
-        "description": "Bulk-import companion to the per-id sync above. Matches by `filament_settings_id` (preferred — what the slicer treats as the preset name) or top-level `name`. Three-phase atomic upsert: (1) update an existing ACTIVE row, (2) resurrect a TRASHED non-purged row with the same name (clears `_deletedAt` in the same write), or (3) create new — catching E11000 from a concurrent identical import and converging on the racing winner's row. Spool subdocuments are NEVER touched. Calibration resolution is identical to the per-id variant. Body is either `multipart/form-data` (10 MB cap) or `application/json`.",
+        "description": "Bulk-import companion to the per-id sync above. Matches by `filament_settings_id` (preferred \u2014 what the slicer treats as the preset name) or top-level `name`. Three-phase atomic upsert: (1) update an existing ACTIVE row, (2) resurrect a TRASHED non-purged row with the same name (clears `_deletedAt` in the same write), or (3) create new \u2014 catching E11000 from a concurrent identical import and converging on the racing winner's row. Spool subdocuments are NEVER touched. Calibration resolution is identical to the per-id variant. Body is either `multipart/form-data` (10 MB cap) or `application/json`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4597,7 +4597,7 @@
         },
         "responses": {
           "200": {
-            "description": "Filament imported. `created` is true on the create path (or the create→update fallback after an E11000 race), false on update / resurrect. `_strippedTemplateFields` (GH #605) can only appear on the phases that write to an existing ACTIVE row — the update phase and the E11000-race merge; a resurrected or freshly created row can't be a template.",
+            "description": "Filament imported. `created` is true on the create path (or the create\u2192update fallback after an E11000 race), false on update / resurrect. `_strippedTemplateFields` (GH #605) can only appear on the phases that write to an existing ACTIVE row \u2014 the update phase and the E11000-race merge; a resurrected or freshly created row can't be a template.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4698,7 +4698,7 @@
           "Scan Stream"
         ],
         "summary": "Subscribe to NFC scans (Server-Sent Events)",
-        "description": "Long-lived Server-Sent Events stream. Each NFC tag read is emitted as a `scan` event after the renderer decodes the tag and matches it against the database. The most recent scan is also replayed once on connect as a `replay` event so a slicer opened just after a tag read still picks it up. Heartbeats (`: hb`) are sent every 25 seconds to defeat idle-proxy timeouts; clients also receive a `retry: 5000` prelude so EventSource implementations reconnect after a drop. The underlying bus is in-process (Node EventEmitter on `globalThis`) — that means one Filament DB instance, not one physical machine: subscribers can be anywhere reachable over HTTP (e.g. a Pi running Filament DB driving PrusaSlicer on a Mac across the LAN). The publisher side is the only piece that pins to a machine — NFC reads come from the Electron renderer, so the reader must be plugged into whichever box runs the Electron app, and a headless Docker / web-only deploy never publishes. A horizontally-scaled multi-process deployment would need an external broker behind the bus.",
+        "description": "Long-lived Server-Sent Events stream. Each NFC tag read is emitted as a `scan` event after the renderer decodes the tag and matches it against the database. The most recent scan is also replayed once on connect as a `replay` event so a slicer opened just after a tag read still picks it up. Heartbeats (`: hb`) are sent every 25 seconds to defeat idle-proxy timeouts; clients also receive a `retry: 5000` prelude so EventSource implementations reconnect after a drop. The underlying bus is in-process (Node EventEmitter on `globalThis`) \u2014 that means one Filament DB instance, not one physical machine: subscribers can be anywhere reachable over HTTP (e.g. a Pi running Filament DB driving PrusaSlicer on a Mac across the LAN). The publisher side is the only piece that pins to a machine \u2014 NFC reads come from the Electron renderer, so the reader must be plugged into whichever box runs the Electron app, and a headless Docker / web-only deploy never publishes. A horizontally-scaled multi-process deployment would need an external broker behind the bus.",
         "parameters": [
           {
             "name": "replay",
@@ -4734,7 +4734,7 @@
           "Scan Stream"
         ],
         "summary": "Publish a decoded scan to subscribers",
-        "description": "Fan-out endpoint used by the renderer's `NfcProvider` after the existing `/api/filaments/match` step. Public clients normally don't need to call this directly; documented for completeness and for testing the SSE path without a physical reader. The body is validated against an allow-list — unknown fields are stripped before the event is published, so a malformed POST cannot pollute the replay cache.",
+        "description": "Fan-out endpoint used by the renderer's `NfcProvider` after the existing `/api/filaments/match` step. Public clients normally don't need to call this directly; documented for completeness and for testing the SSE path without a physical reader. The body is validated against an allow-list \u2014 unknown fields are stripped before the event is published, so a malformed POST cannot pollute the replay cache.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4763,7 +4763,7 @@
                         "$ref": "#/components/schemas/ScanEventSpool"
                       }
                     ],
-                    "description": "The spool the tag's spool_uid resolved to (#732), or null/omitted for a filament-level / heuristic match. Validated against the same allow-list — requires string _id + instanceId, label bounded, else dropped to null."
+                    "description": "The spool the tag's spool_uid resolved to (#732), or null/omitted for a filament-level / heuristic match. Validated against the same allow-list \u2014 requires string _id + instanceId, label bounded, else dropped to null."
                   },
                   "decoded": {
                     "$ref": "#/components/schemas/ScanEventDecoded"
@@ -5236,7 +5236,7 @@
           "Print History"
         ],
         "summary": "Update print job metadata",
-        "description": "Metadata-only PUT. Accepts ONLY the five user-editable metadata fields below — usage rows + per-spool gram totals are NOT mutable here (refund + re-record via DELETE + POST to change a usage). `jobLabel` is trimmed and capped at 200 chars; `notes` is truncated to 2000 chars; `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; `printerId` accepts `null` to clear. **Unknown body keys are REJECTED with 400** — a stray `_purged` or `_deletedAt` doesn't silently slip through. Generated clients sending legacy/extension fields like `durationSeconds` will get a 400, not a silent drop.",
+        "description": "Metadata-only PUT. Accepts ONLY the five user-editable metadata fields below \u2014 usage rows + per-spool gram totals are NOT mutable here (refund + re-record via DELETE + POST to change a usage). `jobLabel` is trimmed and capped at 200 chars; `notes` is truncated to 2000 chars; `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; `printerId` accepts `null` to clear. **Unknown body keys are REJECTED with 400** \u2014 a stray `_purged` or `_deletedAt` doesn't silently slip through. Generated clients sending legacy/extension fields like `durationSeconds` will get a 400, not a silent drop.",
         "parameters": [
           {
             "name": "id",
@@ -5327,7 +5327,7 @@
           "Print History"
         ],
         "summary": "Undo print job",
-        "description": "Refunds matching spool usage and soft-deletes the PrintHistory row so sync propagates the delete tombstone. Pass ?permanent=true to mark an already soft-deleted entry as purged (sets _purged so the hybrid sync engine propagates the deletion to peers); the entry must already be soft-deleted, and no refund happens on the purge — the spool weight was already refunded by the soft delete.",
+        "description": "Refunds matching spool usage and soft-deletes the PrintHistory row so sync propagates the delete tombstone. Pass ?permanent=true to mark an already soft-deleted entry as purged (sets _purged so the hybrid sync engine propagates the deletion to peers); the entry must already be soft-deleted, and no refund happens on the purge \u2014 the spool weight was already refunded by the soft delete.",
         "parameters": [
           {
             "name": "id",
@@ -5348,7 +5348,7 @@
                 "false"
               ]
             },
-            "description": "When 'true', permanently purges a soft-deleted entry (sets the _purged sync tombstone) instead of refunding + soft-deleting. The entry must already be soft-deleted — an active entry returns 404. Idempotent: a second purge also returns 404."
+            "description": "When 'true', permanently purges a soft-deleted entry (sets the _purged sync tombstone) instead of refunding + soft-deleting. The entry must already be soft-deleted \u2014 an active entry returns 404. Idempotent: a second purge also returns 404."
           }
         ],
         "responses": {
@@ -5557,7 +5557,7 @@
                 "false"
               ]
             },
-            "description": "When 'true', permanently purges an unpublished catalog (sets the _purged sync tombstone) instead of soft-deleting. The catalog must already be unpublished — otherwise 404. Idempotent: a second purge also returns 404."
+            "description": "When 'true', permanently purges an unpublished catalog (sets the _purged sync tombstone) instead of soft-deleting. The catalog must already be unpublished \u2014 otherwise 404. Idempotent: a second purge also returns 404."
           }
         ],
         "responses": {
@@ -5595,7 +5595,7 @@
           "Spools"
         ],
         "summary": "Export spools as CSV",
-        "description": "Exports one row per spool with round-trippable columns for filament, vendor, label, total weight, lot number, dates, and location. The `instanceId` column carries each spool's OWN per-spool id (#732 Phase 5) — distinct per row — so re-importing the file preserves each roll's identity.",
+        "description": "Exports one row per spool with round-trippable columns for filament, vendor, label, total weight, lot number, dates, and location. The `instanceId` column carries each spool's OWN per-spool id (#732 Phase 5) \u2014 distinct per row \u2014 so re-importing the file preserves each roll's identity.",
         "responses": {
           "200": {
             "description": "Spool CSV",
@@ -5616,7 +5616,7 @@
           "Spools"
         ],
         "summary": "Import spools from CSV",
-        "description": "Bulk-creates or updates spools from CSV. Required columns are filament and totalWeight; vendor can disambiguate, location names are created when missing, and a spoolId column updates an existing spool in place (idempotent re-import). The optional `instanceId` column (#732 Phase 5) sets each spool's own id — validated for charset/length and checked for uniqueness against other spools' ids, other filaments' top-level ids, and other rows in the same CSV; absent/empty means auto-generate on create or leave unchanged on update. A malformed or duplicate id fails just that row.",
+        "description": "Bulk-creates or updates spools from CSV. Required columns are filament and totalWeight; vendor can disambiguate, location names are created when missing, and a spoolId column updates an existing spool in place (idempotent re-import). The optional `instanceId` column (#732 Phase 5) sets each spool's own id \u2014 validated for charset/length and checked for uniqueness against other spools' ids, other filaments' top-level ids, and other rows in the same CSV; absent/empty means auto-generate on create or leave unchanged on update. A malformed or duplicate id fails just that row.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5677,7 +5677,7 @@
             }
           },
           "413": {
-            "description": "Request body exceeds the 10 MB cap (v1.66.1, #991) — enforced before parsing across the text/csv, JSON, and multipart shapes.",
+            "description": "Request body exceeds the 10 MB cap (v1.66.1, #991) \u2014 enforced before parsing across the text/csv, JSON, and multipart shapes.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5695,7 +5695,7 @@
           "Spools"
         ],
         "summary": "Resolve a single spool by id (v1.43)",
-        "description": "Resolve a spool's subdocument id to its owning filament (inheritance-resolved for variants) plus the spool itself. Powers the mobile scanner's spool-level deep links — the label QR's ?spool=<spoolId> link resolves here so the phone can open the filament detail with that spool highlighted without knowing the parent filament id up front.",
+        "description": "Resolve a spool's subdocument id to its owning filament (inheritance-resolved for variants) plus the spool itself. Powers the mobile scanner's spool-level deep links \u2014 the label QR's ?spool=<spoolId> link resolves here so the phone can open the filament detail with that spool highlighted without knowing the parent filament id up front.",
         "parameters": [
           {
             "name": "spoolId",
@@ -5821,7 +5821,7 @@
                     },
                     "totalSpools": {
                       "type": "integer",
-                      "description": "Sum of each group's count — surfaced on the page header without re-summing client-side."
+                      "description": "Sum of each group's count \u2014 surfaced on the page header without re-summing client-side."
                     }
                   }
                 }
@@ -5850,7 +5850,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Current assignment ({ assignment } — null when the spool is in no slot)",
+            "description": "Current assignment ({ assignment } \u2014 null when the spool is in no slot)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5876,7 +5876,7 @@
           "Spools"
         ],
         "summary": "Assign a spool to a printer slot",
-        "description": "Assigns the spool to a printer AMS/MMU slot, first clearing it from any other slot — a spool occupies at most one slot at a time. Writes Printer.amsSlots[].spoolId AND .filamentId (the owning filament — GH #1041; a slot carries both refs and the printer form renders slots keyed on filamentId, so a spool-only write was invisible there), never the spool's locationId. The clearing pass nulls BOTH refs on the losing slot, since the physical spool leaves with the loaded filament; slots dedicated to a filament with no tracked spool (\"any spool\") never match it and keep their dedication. Retired spools are rejected.",
+        "description": "Assigns the spool to a printer AMS/MMU slot, first clearing it from any other slot \u2014 a spool occupies at most one slot at a time. Writes Printer.amsSlots[].spoolId AND .filamentId (the owning filament \u2014 GH #1041; a slot carries both refs and the printer form renders slots keyed on filamentId, so a spool-only write was invisible there), never the spool's locationId. The clearing pass nulls BOTH refs on the losing slot, since the physical spool leaves with the loaded filament; slots dedicated to a filament with no tracked spool (\"any spool\") never match it and keep their dedication. Retired spools are rejected.",
         "parameters": [
           {
             "name": "spoolId",
@@ -5947,7 +5947,7 @@
           "Spools"
         ],
         "summary": "Clear a spool's printer-slot assignment",
-        "description": "Removes the spool from whatever slot it occupies. Idempotent — succeeds even if the spool was already unassigned.",
+        "description": "Removes the spool from whatever slot it occupies. Idempotent \u2014 succeeds even if the spool was already unassigned.",
         "parameters": [
           {
             "name": "spoolId",
@@ -6009,7 +6009,7 @@
           "Snapshot"
         ],
         "summary": "Export database snapshot",
-        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 7: v4 added shared catalogs, v5 the top-level `legacyNozzleCleanupComplete` provenance flag (GH #1021), v6 `Location.desiccantChangedAt`, v7 `debitedGrams` on both usage ledgers (GH #1074). Older snapshots still restore, and as of GH #1104 the collections they OMIT are left untouched rather than wiped — the response's `skipped` array names them. A collection carried as an explicit empty array is still emptied. The v4–v7 bumps exist so a build that predates the addition rejects the file outright instead of accepting it and silently dropping the new data.",
+        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 7: v4 added shared catalogs, v5 the top-level `legacyNozzleCleanupComplete` provenance flag (GH #1021), v6 `Location.desiccantChangedAt`, v7 `debitedGrams` on both usage ledgers (GH #1074). Older snapshots still restore, and as of GH #1104 the collections they OMIT are left untouched rather than wiped \u2014 the response's `skipped` array names them. A collection carried as an explicit empty array is still emptied. The v4\u2013v7 bumps exist so a build that predates the addition rejects the file outright instead of accepting it and silently dropping the new data.",
         "responses": {
           "200": {
             "description": "JSON snapshot file",
@@ -6028,7 +6028,7 @@
           "Snapshot"
         ],
         "summary": "Restore database snapshot",
-        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. Only the collections the file actually carries are wiped and replaced (GH #1104); omitted ones are left as they are and listed in the response's `skipped` array. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. A snapshot whose `version` exceeds the running build's current schema version is rejected with 400 BEFORE the destructive wipe (GH #953) — it would carry collections or fields this build doesn't know, which would be dropped while the handler still reported success. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
+        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. Only the collections the file actually carries are wiped and replaced (GH #1104); omitted ones are left as they are and listed in the response's `skipped` array. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. A snapshot whose `version` exceeds the running build's current schema version is rejected with 400 BEFORE the destructive wipe (GH #953) \u2014 it would carry collections or fields this build doesn't know, which would be dropped while the handler still reported success. Concurrent restores are rejected with 409. Note: the restore is not truly atomic \u2014 concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6107,7 +6107,7 @@
             }
           },
           "400": {
-            "description": "Invalid snapshot — malformed file, no recognised collection, a document that fails validation (checked before the wipe, so the database is left untouched), or a `version` newer than this build's current schema version.",
+            "description": "Invalid snapshot \u2014 malformed file, no recognised collection, a document that fails validation (checked before the wipe, so the database is left untouched), or a `version` newer than this build's current schema version.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6283,7 +6283,7 @@
           "OpenPrintTag"
         ],
         "summary": "Browse OpenPrintTag community database",
-        "description": "Fetches the OpenPrintTag community database from GitHub, parses material YAML files, filters to FFF filaments, and returns them with completeness scores. Cached for 1 hour. To force a refresh use POST /api/openprinttag (the old GET ?refresh=true trigger was removed — a cache-busting side effect on a GET violated REST semantics).",
+        "description": "Fetches the OpenPrintTag community database from GitHub, parses material YAML files, filters to FFF filaments, and returns them with completeness scores. Cached for 1 hour. To force a refresh use POST /api/openprinttag (the old GET ?refresh=true trigger was removed \u2014 a cache-busting side effect on a GET violated REST semantics).",
         "responses": {
           "200": {
             "description": "Brands and materials list",
@@ -6343,7 +6343,7 @@
           "OpenPrintTag"
         ],
         "summary": "Import OpenPrintTag materials",
-        "description": "Import selected OpenPrintTag materials into Filament DB. Bulk mode (no parentId): materials are upserted by name (not name+vendor); if a filament with the same name exists under a different vendor, the import is skipped with an error. Variant mode (parentId set — Issue #753): imports exactly one slug as a variant of the given parent, keeping only the fields that differ from the parent (the rest inherit) and linking the variant to the material for later re-sync; a name collision is refused (409) rather than re-parenting an existing row.",
+        "description": "Import selected OpenPrintTag materials into Filament DB. Bulk mode (no parentId): materials are upserted by name (not name+vendor); if a filament with the same name exists under a different vendor, the import is skipped with an error. Variant mode (parentId set \u2014 Issue #753): imports exactly one slug as a variant of the given parent, keeping only the fields that differ from the parent (the rest inherit) and linking the variant to the material for later re-sync; a name collision is refused (409) rather than re-parenting an existing row.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6367,7 +6367,7 @@
                   "promoteParent": {
                     "type": "boolean",
                     "default": false,
-                    "description": "GH #605 confirmation flag, variant mode only (`parentId` set) — see the 409 response. Mirrors the identically-named flag on POST /api/filaments: the same gate runs here so a secondary entry point can never mint a carrying parent's first variant without the round-trip."
+                    "description": "GH #605 confirmation flag, variant mode only (`parentId` set) \u2014 see the 409 response. Mirrors the identically-named flag on POST /api/filaments: the same gate runs here so a secondary entry point can never mint a carrying parent's first variant without the round-trip."
                   }
                 }
               }
@@ -6396,7 +6396,7 @@
             }
           },
           "409": {
-            "description": "Variant mode: a filament with the imported material's name already exists; or (GH #605) the structured `parent_promotion_required` body when this would be the parent's first live variant and the parent still carries its own color/spools/inventory — nothing is written until the request is repeated with `promoteParent: true`.",
+            "description": "Variant mode: a filament with the imported material's name already exists; or (GH #605) the structured `parent_promotion_required` body when this would be the parent's first live variant and the parent still carries its own color/spools/inventory \u2014 nothing is written until the request is repeated with `promoteParent: true`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6732,7 +6732,7 @@
           "Spools"
         ],
         "summary": "Next roll-number suggestion for spool labels",
-        "description": "Returns the highest numeric spool label across the ENTIRE database plus one, for the Add Spool form's 'Next #' pre-fill (GH #1060). Only labels that are all digits after trimming count; leading zeros are ignored ('0042' is 42); acceptance is judged by VALUE — any digit string parsing to a safe integer (<= 9007199254740991) counts, and larger values are skipped so an oversized 'number' cannot poison the max. Every suggestion the endpoint emits is therefore re-accepted on the next request; 'next' saturates at the safe-integer maximum. The scan deliberately includes retired spools and trashed/purged filaments' spools — roll numbers are physical and permanent, so a number is never re-suggested even when its record leaves active inventory. Suggestion-only: nothing is reserved, the client pre-fills an editable field, and two concurrent readers may receive the same value.",
+        "description": "Returns the highest numeric spool label across the ENTIRE database plus one, for the Add Spool form's 'Next #' pre-fill (GH #1060). Only labels that are all digits after trimming count; leading zeros are ignored ('0042' is 42); acceptance is judged by VALUE \u2014 any digit string parsing to a safe integer (<= 9007199254740991) counts, and larger values are skipped so an oversized 'number' cannot poison the max. Every suggestion the endpoint emits is therefore re-accepted on the next request; 'next' saturates at the safe-integer maximum. The scan deliberately includes retired spools and trashed/purged filaments' spools \u2014 roll numbers are physical and permanent, so a number is never re-suggested even when its record leaves active inventory. Suggestion-only: nothing is reserved, the client pre-fills an editable field, and two concurrent readers may receive the same value.",
         "responses": {
           "200": {
             "description": "The suggestion.",
@@ -6772,7 +6772,7 @@
           "Spools"
         ],
         "summary": "Cross-spool usage-ledger search",
-        "description": "Unwinds every active filament's spools[].usageHistory into flat rows for the /history page's Spool usage ledger tab (GH #1168). Manual usage entries (source 'manual', jobId null) exist ONLY inside spool subdocuments, so this is the one surface where a manual entry's jobLabel can be searched across spools. Filters: label (case-insensitive substring, regex metacharacters literal, max 128 chars), source (manual | slicer | job | nfc — the UI defaults to 'manual' because job/slicer entries are projections of PrintHistory rows and would double-show next to the Print jobs tab), limit (1..1000, default 100). Rows sort date-descending. Soft-deleted filaments are excluded. The projection never carries photoDataUrl or dryCycles. Completeness caveat: each spool's ledger is capped at 1,000 entries with manual/nfc entries evicted first, so very old entries may be absent.",
+        "description": "Unwinds every active filament's spools[].usageHistory into flat rows for the /history page's Spool usage ledger tab (GH #1168). Manual usage entries (source 'manual', jobId null) exist ONLY inside spool subdocuments, so this is the one surface where a manual entry's jobLabel can be searched across spools. Filters: label (case-insensitive substring, regex metacharacters literal, max 128 chars), source (manual | slicer | job | nfc \u2014 the UI defaults to 'manual' because job/slicer entries are projections of PrintHistory rows and would double-show next to the Print jobs tab), limit (1..1000, default 100). Rows sort date-descending. Soft-deleted filaments are excluded. The projection never carries photoDataUrl or dryCycles. Completeness caveat: each spool's ledger is capped at 1,000 entries with manual/nfc entries evicted first, so very old entries may be absent.",
         "parameters": [
           {
             "name": "label",
@@ -6917,7 +6917,7 @@
                           },
                           "id": {
                             "type": "string",
-                            "description": "The blocked row's _id — resolution happens through the ordinary id-addressed PUT/DELETE routes (the row is unreachable by NAME through Mongoose)."
+                            "description": "The blocked row's _id \u2014 resolution happens through the ordinary id-addressed PUT/DELETE routes (the row is unreachable by NAME through Mongoose)."
                           },
                           "name": {
                             "type": "string",
@@ -6986,7 +6986,7 @@
     "/api/abrasive-nozzles": {
       "get": {
         "summary": "Scan for abrasive filaments on unsuitable nozzles",
-        "description": "Read-only advisory scan (no writes). Reports filaments that read as abrasive — `settings.filament_abrasive` on; an abrasive-implying OPT tag (4 ABRASIVE, or a specific material tag: 0 glass fibre, 1 aramid, 19 wood, 20 metal, 21 stone, 22 sparkle, 23 phosphorescent, 24 glow, 31 carbon fibre, 32 kevlar — tags describing thermal or mechanical behaviour are deliberately excluded); a fibre-reinforced type (CF/GF, with or without a separator, so PA6-CF20 and PETGCF both count); or a filled product name — that either allow a nozzle which is not hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Templates are excluded: a filament with live variants is not printable stock. Runs on RESOLVED documents, so a variant inheriting its template's nozzle set is judged on the effective set and reports the template in `inheritedFrom`. An explicit `filament_abrasive = \"0\"` suppresses only the weakest (name) heuristic — never a fibre type or an abrasive tag: the app writes that flag from `form.abrasive` alone while its own predicate also honours OPT tag 4, so a stored `\"0\"` is not a reliable negative. Abrasiveness is inferred, so findings are advisory and nothing is repaired.",
+        "description": "Read-only advisory scan (no writes). Reports filaments that read as abrasive \u2014 `settings.filament_abrasive` on; an abrasive-implying OPT tag (4 ABRASIVE, or a specific material tag: 0 glass fibre, 1 aramid, 19 wood, 20 metal, 21 stone, 22 sparkle, 23 phosphorescent, 24 glow, 31 carbon fibre, 32 kevlar \u2014 tags describing thermal or mechanical behaviour are deliberately excluded); a fibre-reinforced type (CF/GF, with or without a separator, so PA6-CF20 and PETGCF both count); or a filled product name \u2014 that either allow a nozzle which is not hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Templates are excluded: a filament with live variants is not printable stock. Runs on RESOLVED documents, so a variant inheriting its template's nozzle set is judged on the effective set and reports the template in `inheritedFrom`. An explicit `filament_abrasive = \"0\"` suppresses only the weakest (name) heuristic \u2014 never a fibre type or an abrasive tag: the app writes that flag from `form.abrasive` alone while its own predicate also honours OPT tag 4, so a stored `\"0\"` is not a reliable negative. Abrasiveness is inferred, so findings are advisory and nothing is repaired.",
         "tags": [
           "maintenance"
         ],
@@ -7028,7 +7028,7 @@
                           },
                           "softNozzles": {
                             "type": "array",
-                            "description": "Nozzles this filament is RECORDED as compatible with that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown — a dangling ref is not evidence of hardness.",
+                            "description": "Nozzles this filament is RECORDED as compatible with that are not hardened. A reference to a nozzle missing from the live catalogue is included here as unknown \u2014 a dangling ref is not evidence of hardness.",
                             "items": {
                               "type": "object",
                               "properties": {
@@ -7043,7 +7043,7 @@
                           },
                           "unassigned": {
                             "type": "boolean",
-                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a baked restriction either: the export derives no compatible_printers_condition from it (GH #1021), so an unscoped bundle is not limited by nozzle — only a request naming a printer (?printer=) is filtered on this list. An empty list simply means no soft-nozzle assignment can be detected for this filament."
+                            "description": "No compatible nozzles recorded. Note that a POPULATED list is not a baked restriction either: the export derives no compatible_printers_condition from it (GH #1021), so an unscoped bundle is not limited by nozzle \u2014 only a request naming a printer (?printer=) is filtered on this list. An empty list simply means no soft-nozzle assignment can be detected for this filament."
                           },
                           "flagMismatch": {
                             "type": "boolean",
@@ -7052,7 +7052,7 @@
                           "inheritedFrom": {
                             "type": "string",
                             "nullable": true,
-                            "description": "Template name when the nozzle set is inherited — where the fix belongs."
+                            "description": "Template name when the nozzle set is inherited \u2014 where the fix belongs."
                           }
                         }
                       }
@@ -7063,6 +7063,219 @@
             }
           }
         }
+      }
+    },
+    "/api/labels/print": {
+      "post": {
+        "tags": [
+          "Labels"
+        ],
+        "summary": "Print a Brother PT-P710BT label for a spool or a location",
+        "description": "Renders a 24mm tape label server-side and sends it to the OS print system. Provide exactly one subject: `instanceId` (the per-spool identity from #732) or `locationId`.\n\nLayout comes from the same `LabelFormat` pipeline the app's own dialog uses \u2014 pass a `preset` (e.g. `vendorOverType` for QR + vendor above material) and/or explicit `format` overrides; both are validated through `normalizeLabelFormat`. Location labels are forced to the name-only layout, since a location has no vendor or type.\n\n**Authentication.** Requires the `x-filamentdb-print-token` header. The Electron main process mints the token per run, passes it to the server in-process, and writes it 0600 to `local-print-token` in the app's user-data directory, so only a local process can read it. A loopback check is not used because Next exposes no socket peer address and the `Host` header is client-supplied. Where no token is configured (Docker, web) the route returns 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "instanceId": {
+                    "type": "string",
+                    "description": "Spool identity. Mutually exclusive with locationId."
+                  },
+                  "locationId": {
+                    "type": "string",
+                    "description": "Location to label. Mutually exclusive with instanceId."
+                  },
+                  "printer": {
+                    "type": "string",
+                    "description": "Installed CUPS queue name (e.g. \"FilamentDB_Label\") or, on Windows, the printer name. Required unless dryRun. A raw usb:// device URI is REJECTED here: the shared managed queue is rebound per print and CUPS delivery is asynchronous, so concurrent requests naming different devices could deliver a job to the wrong printer. Name the installed queue instead."
+                  },
+                  "preset": {
+                    "type": "string",
+                    "enum": [
+                      "nameOnly",
+                      "vendorType",
+                      "vendorOverType",
+                      "typeColor"
+                    ],
+                    "description": "Named layout preset applied over the default format."
+                  },
+                  "format": {
+                    "type": "object",
+                    "description": "Partial LabelFormat override, applied over the preset. Validated STRICTLY: unknown keys at either level, wrong types, invalid enum values and an empty `lines` list are 400s. This is deliberately stricter than the persistence normalizer, which coerces unknown values to defaults \u2014 for a print request that would silently produce a label the caller did not ask for. Omit any member to keep the preset's value.",
+                    "additionalProperties": false,
+                    "properties": {
+                      "qr": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "description": "Draw the QR at all."
+                          },
+                          "placement": {
+                            "type": "string",
+                            "enum": [
+                              "left",
+                              "right"
+                            ]
+                          }
+                        }
+                      },
+                      "lines": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Ordered text fields, stacked top to bottom. Must be non-empty and duplicate-free -- the normalizer dedupes, so a repeated field would silently print fewer lines than requested. Omit to use the default.",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "name",
+                            "vendor",
+                            "type",
+                            "vendorType",
+                            "colorName"
+                          ]
+                        },
+                        "uniqueItems": true
+                      },
+                      "font": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "family": {
+                            "type": "string",
+                            "enum": [
+                              "sans",
+                              "serif",
+                              "mono",
+                              "condensed"
+                            ]
+                          },
+                          "size": {
+                            "type": "string",
+                            "enum": [
+                              "s",
+                              "m",
+                              "l"
+                            ]
+                          }
+                        }
+                      },
+                      "orientation": {
+                        "type": "string",
+                        "enum": [
+                          "horizontal",
+                          "vertical"
+                        ],
+                        "description": "\"vertical\" is accepted by the schema but not implemented by the server renderer \u2014 it returns 501."
+                      },
+                      "invert": {
+                        "type": "boolean",
+                        "description": "White text on a black background. The QR stays dark-on-light so it still scans."
+                      },
+                      "maxLinesPerField": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 3,
+                        "description": "Max lines a single field may word-wrap across."
+                      }
+                    }
+                  },
+                  "qrMode": {
+                    "type": "string",
+                    "enum": [
+                      "instanceId",
+                      "url"
+                    ],
+                    "default": "instanceId",
+                    "description": "Spool labels only. Default encodes the bare instanceId, which /api/filaments/match resolves."
+                  },
+                  "baseUrl": {
+                    "type": "string",
+                    "description": "Origin for URL-mode QR payloads. Falls back to the request's own Host."
+                  },
+                  "dryRun": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Render and report without printing."
+                  }
+                },
+                "additionalProperties": false,
+                "description": "Closed object: the handler rejects any unknown top-level key with a 400. That is deliberate rather than lenient -- it is what catches a misspelled safety-critical field such as `dryrun`, which would otherwise leave dryRun false and physically print."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Rendered, and printed unless dryRun.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "dryRun": {
+                      "type": "boolean"
+                    },
+                    "printer": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Null on a dry run."
+                    },
+                    "lines": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Composed text lines, after field selection and wrapping."
+                    },
+                    "qrPayload": {
+                      "type": "string"
+                    },
+                    "rasterLines": {
+                      "type": "integer"
+                    },
+                    "bytes": {
+                      "type": "integer"
+                    },
+                    "warning": {
+                      "type": "string",
+                      "description": "Present when the QR points at a loopback host and will not resolve from another device."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad request. Covers: a body that is not a JSON object; no subject or both; a field of the wrong type (printer, format, dryRun, qrMode); an instanceId over 128 characters; a locationId that is not a valid id; an unknown preset (inherited Object.prototype names are rejected); an unusable print target (legacy serial setting or a non-usb:// scheme); an unresolvable base URL; or content that cannot fit 24mm tape - too many fields/lines, an over-budget or unencodable QR, text that produces no printable output, or a format that selects no QR and no non-empty fields."
+          },
+          "401": {
+            "description": "The deployment sets FILAMENTDB_API_KEY, which src/proxy.ts enforces on every /api/* request with no same-origin exemption. Send Authorization: Bearer <key> in addition to the local print token."
+          },
+          "403": {
+            "description": "Missing or incorrect local print token."
+          },
+          "404": {
+            "description": "No token configured on this deployment, or the subject was not found."
+          },
+          "501": {
+            "description": "Not possible on this build: an unsupported platform, a format the server renderer does not implement (vertical text orientation), or a missing native image backend \u2014 sharp's architecture-specific binary could not be loaded."
+          }
+        },
+        "security": [
+          {
+            "LocalPrintToken": []
+          },
+          {
+            "LocalPrintToken": [],
+            "bearerAuth": []
+          }
+        ]
       }
     }
   },
@@ -7122,7 +7335,7 @@
       },
       "ParentPromotionRequired": {
         "type": "object",
-        "description": "GH #605: the request would mint its parent's FIRST live variant, and that parent still carries variant-level state of its own — a color, a color name, spools, or a legacy inventory `totalWeight`. Nothing was written. Repeat the identical request with `promoteParent: true` to confirm: the parent is then converted to a template, its color, colorName, spools, totalWeight and lowStockThreshold move onto a newly created variant named `variantName`, and the original request proceeds. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Returned by POST /api/filaments (with parentId), PUT /api/filaments/{id} (when the body introduces or changes parentId), and POST /api/openprinttag/import in variant mode — byte-identically, so one client handler covers all three. POST /api/filaments/{id}/restore runs the same gate but does NOT return this body and has no confirmation path (GH #1103): it returns RestoreBlockedByTemplate instead, and repeating the request with `promoteParent: true` changes nothing. A client that retries on this code must not include the restore route.",
+        "description": "GH #605: the request would mint its parent's FIRST live variant, and that parent still carries variant-level state of its own \u2014 a color, a color name, spools, or a legacy inventory `totalWeight`. Nothing was written. Repeat the identical request with `promoteParent: true` to confirm: the parent is then converted to a template, its color, colorName, spools, totalWeight and lowStockThreshold move onto a newly created variant named `variantName`, and the original request proceeds. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Returned by POST /api/filaments (with parentId), PUT /api/filaments/{id} (when the body introduces or changes parentId), and POST /api/openprinttag/import in variant mode \u2014 byte-identically, so one client handler covers all three. POST /api/filaments/{id}/restore runs the same gate but does NOT return this body and has no confirmation path (GH #1103): it returns RestoreBlockedByTemplate instead, and repeating the request with `promoteParent: true` changes nothing. A client that retries on this code must not include the restore route.",
         "properties": {
           "error": {
             "type": "string",
@@ -7146,7 +7359,7 @@
           },
           "variantName": {
             "type": "string",
-            "description": "The name the auto-created variant would get: `<parent> — <colorName>`, or `<parent> — Original` when the parent has no color name, de-duplicated with a ` (2)` / ` (3)` suffix when that name is taken. A stored record name, deliberately not translated."
+            "description": "The name the auto-created variant would get: `<parent> \u2014 <colorName>`, or `<parent> \u2014 Original` when the parent has no color name, de-duplicated with a ` (2)` / ` (3)` suffix when that name is taken. A stored record name, deliberately not translated."
           }
         },
         "required": [
@@ -7160,7 +7373,7 @@
       },
       "TemplateNoSpools": {
         "type": "object",
-        "description": "GH #605: the target filament is a TEMPLATE — it has at least one live color variant — and templates hold no inventory. Nothing was written; add the spool to one of the variants instead. Spools already sitting on a legacy parent stay editable, so an update that targets an existing spool subdocument is still allowed; only creating a new one is refused.",
+        "description": "GH #605: the target filament is a TEMPLATE \u2014 it has at least one live color variant \u2014 and templates hold no inventory. Nothing was written; add the spool to one of the variants instead. Spools already sitting on a legacy parent stay editable, so an update that targets an existing spool subdocument is still allowed; only creating a new one is refused.",
         "properties": {
           "error": {
             "type": "string",
@@ -7177,7 +7390,7 @@
       },
       "TemplateStrippedFields": {
         "type": "array",
-        "description": "GH #605: per-variant fields this write carried that the template guard refused to apply — a subset of `totalWeight`, `color`, `colorName`, `lowStockThreshold`. Present only when at least one field was dropped; the rest of the write still applied, so a client that ignores this key will believe a value landed that was silently discarded. The offending fields are STRIPPED rather than rejected because a slicer preset (like a stale edit form) echoes a promoted-away color back verbatim on every save, and a 4xx would break the whole sync for a value the user never re-entered. An EXPLICIT null passes through, so clearing a legacy template's leftover value is still possible.",
+        "description": "GH #605: per-variant fields this write carried that the template guard refused to apply \u2014 a subset of `totalWeight`, `color`, `colorName`, `lowStockThreshold`. Present only when at least one field was dropped; the rest of the write still applied, so a client that ignores this key will believe a value landed that was silently discarded. The offending fields are STRIPPED rather than rejected because a slicer preset (like a stale edit form) echoes a promoted-away color back verbatim on every save, and a 4xx would break the whole sync for a value the user never re-entered. An EXPLICIT null passes through, so clearing a legacy template's leftover value is still possible.",
         "items": {
           "type": "string"
         }
@@ -7211,7 +7424,7 @@
       },
       "ScanEventDecoded": {
         "type": "object",
-        "description": "Subset of decoded NFC tag fields useful to consumers. Allow-listed by the publish route — unknown keys are stripped.",
+        "description": "Subset of decoded NFC tag fields useful to consumers. Allow-listed by the publish route \u2014 unknown keys are stripped.",
         "properties": {
           "materialName": {
             "type": "string"
@@ -7310,7 +7523,7 @@
           "nozzle": {
             "type": "number",
             "nullable": true,
-            "description": "Nozzle temperature in °C"
+            "description": "Nozzle temperature in \u00b0C"
           },
           "nozzleFirstLayer": {
             "type": "number",
@@ -7320,17 +7533,17 @@
           "nozzleRangeMin": {
             "type": "number",
             "nullable": true,
-            "description": "Minimum recommended nozzle temperature in °C"
+            "description": "Minimum recommended nozzle temperature in \u00b0C"
           },
           "nozzleRangeMax": {
             "type": "number",
             "nullable": true,
-            "description": "Maximum recommended nozzle temperature in °C"
+            "description": "Maximum recommended nozzle temperature in \u00b0C"
           },
           "bed": {
             "type": "number",
             "nullable": true,
-            "description": "Bed temperature in °C"
+            "description": "Bed temperature in \u00b0C"
           },
           "bedFirstLayer": {
             "type": "number",
@@ -7340,7 +7553,7 @@
           "standby": {
             "type": "number",
             "nullable": true,
-            "description": "Standby/idle nozzle temperature in °C"
+            "description": "Standby/idle nozzle temperature in \u00b0C"
           }
         }
       },
@@ -7364,7 +7577,7 @@
           "maxVolumetricSpeed": {
             "type": "number",
             "nullable": true,
-            "description": "mm³/s",
+            "description": "mm\u00b3/s",
             "example": 15
           },
           "pressureAdvance": {
@@ -7393,47 +7606,47 @@
           "bedType": {
             "type": "string",
             "nullable": true,
-            "description": "BedType ObjectId — pins the calibration to a specific bed surface (GH #514.5)"
+            "description": "BedType ObjectId \u2014 pins the calibration to a specific bed surface (GH #514.5)"
           },
           "nozzleTemp": {
             "type": "number",
             "nullable": true,
-            "description": "Recommended nozzle temperature in °C for this calibration"
+            "description": "Recommended nozzle temperature in \u00b0C for this calibration"
           },
           "nozzleTempFirstLayer": {
             "type": "number",
             "nullable": true,
-            "description": "First-layer nozzle temperature override in °C"
+            "description": "First-layer nozzle temperature override in \u00b0C"
           },
           "bedTemp": {
             "type": "number",
             "nullable": true,
-            "description": "Bed temperature in °C"
+            "description": "Bed temperature in \u00b0C"
           },
           "bedTempFirstLayer": {
             "type": "number",
             "nullable": true,
-            "description": "First-layer bed temperature override in °C"
+            "description": "First-layer bed temperature override in \u00b0C"
           },
           "chamberTemp": {
             "type": "number",
             "nullable": true,
-            "description": "Enclosure / chamber temperature in °C"
+            "description": "Enclosure / chamber temperature in \u00b0C"
           },
           "fanMinSpeed": {
             "type": "number",
             "nullable": true,
-            "description": "Overhang fan minimum speed (0–100)"
+            "description": "Overhang fan minimum speed (0\u2013100)"
           },
           "fanMaxSpeed": {
             "type": "number",
             "nullable": true,
-            "description": "Additional-cooling fan maximum speed (0–100)"
+            "description": "Additional-cooling fan maximum speed (0\u2013100)"
           },
           "fanBridgeSpeed": {
             "type": "number",
             "nullable": true,
-            "description": "Bridge fan speed (0–100). Round-trip pinned by PR #508."
+            "description": "Bridge fan speed (0\u2013100). Round-trip pinned by PR #508."
           }
         },
         "required": [
@@ -7482,7 +7695,7 @@
             "type": "string",
             "nullable": true,
             "example": "#1a1a2e",
-            "description": "Primary color as a hex string. May be null for coextruded multi-color filaments where no single slot is the primary — see secondaryColors. The alpha byte from the OpenPrintTag spec is not stored (translucency is modelled via finish optTags instead)."
+            "description": "Primary color as a hex string. May be null for coextruded multi-color filaments where no single slot is the primary \u2014 see secondaryColors. The alpha byte from the OpenPrintTag spec is not stored (translucency is modelled via finish optTags instead)."
           },
           "secondaryColors": {
             "type": "array",
@@ -7491,7 +7704,7 @@
               "pattern": "^#[0-9A-Fa-f]{6}$"
             },
             "maxItems": 5,
-            "description": "Up to 5 additional color slots in display order, mirroring OpenPrintTag's secondary_color_0..4 keys. Coextruded filaments leave the primary null and put all colors here; gradient filaments put their stops here in feed order. Slicer-bound exports (PrusaSlicer/OrcaSlicer/Bambu Studio) drop these silently — slicer presets are single-color and the UI surfaces a notice on the export menu.",
+            "description": "Up to 5 additional color slots in display order, mirroring OpenPrintTag's secondary_color_0..4 keys. Coextruded filaments leave the primary null and put all colors here; gradient filaments put their stops here in feed order. Slicer-bound exports (PrusaSlicer/OrcaSlicer/Bambu Studio) drop these silently \u2014 slicer presets are single-color and the UI surfaces a notice on the export menu.",
             "example": [
               "#FF0000",
               "#00FF00",
@@ -7506,7 +7719,7 @@
           "density": {
             "type": "number",
             "nullable": true,
-            "description": "g/cm³"
+            "description": "g/cm\u00b3"
           },
           "diameter": {
             "type": "number",
@@ -7519,7 +7732,7 @@
           "maxVolumetricSpeed": {
             "type": "number",
             "nullable": true,
-            "description": "mm³/s"
+            "description": "mm\u00b3/s"
           },
           "compatibleNozzles": {
             "type": "array",
@@ -7563,7 +7776,7 @@
           "dryingTemperature": {
             "type": "number",
             "nullable": true,
-            "description": "Recommended drying temperature in °C"
+            "description": "Recommended drying temperature in \u00b0C"
           },
           "dryingTime": {
             "type": "number",
@@ -7578,12 +7791,12 @@
           "glassTempTransition": {
             "type": "number",
             "nullable": true,
-            "description": "Glass transition temperature in °C (Tg)"
+            "description": "Glass transition temperature in \u00b0C (Tg)"
           },
           "heatDeflectionTemp": {
             "type": "number",
             "nullable": true,
-            "description": "Heat deflection temperature in °C"
+            "description": "Heat deflection temperature in \u00b0C"
           },
           "shoreHardnessA": {
             "type": "number",
@@ -7733,7 +7946,7 @@
       },
       "FilamentSummary": {
         "type": "object",
-        "description": "Lightweight projection returned by GET /api/filaments (the list view). A subset of Filament plus two computed booleans; spools[] and temperatures are reduced. NOT the full document — fetch GET /api/filaments/{id} for everything.",
+        "description": "Lightweight projection returned by GET /api/filaments (the list view). A subset of Filament plus two computed booleans; spools[] and temperatures are reduced. NOT the full document \u2014 fetch GET /api/filaments/{id} for everything.",
         "properties": {
           "_id": {
             "type": "string"
@@ -7758,7 +7971,7 @@
               "pattern": "^#[0-9A-Fa-f]{6}$"
             },
             "maxItems": 5,
-            "description": "Effective array — a variant with its own empty array inherits the parent's via resolveFilament's array-fallback rule."
+            "description": "Effective array \u2014 a variant with its own empty array inherits the parent's via resolveFilament's array-fallback rule."
           },
           "cost": {
             "type": "number",
@@ -7815,15 +8028,15 @@
           },
           "hasCalibrations": {
             "type": "boolean",
-            "description": "Computed — true when this filament OR (for a variant) its parent carries ≥1 calibration."
+            "description": "Computed \u2014 true when this filament OR (for a variant) its parent carries \u22651 calibration."
           },
           "hasVariants": {
             "type": "boolean",
-            "description": "Computed — true when ≥1 non-deleted filament has this one as its parent."
+            "description": "Computed \u2014 true when \u22651 non-deleted filament has this one as its parent."
           },
           "spools": {
             "type": "array",
-            "description": "Reduced spool shape — only the fields the list + AMS slot picker need.",
+            "description": "Reduced spool shape \u2014 only the fields the list + AMS slot picker need.",
             "items": {
               "type": "object",
               "properties": {
@@ -7847,7 +8060,7 @@
                 "locationId": {
                   "type": "string",
                   "nullable": true,
-                  "description": "Spool's location id (#616) — projected so the home-page stat line can count distinct spool locations without a Location join. Null for spools with no assigned location."
+                  "description": "Spool's location id (#616) \u2014 projected so the home-page stat line can count distinct spool locations without a Location join. Null for spools with no assigned location."
                 }
               }
             }
@@ -7856,7 +8069,7 @@
       },
       "CreateFromTagInput": {
         "type": "object",
-        "description": "Create-from-scan variant of POST /api/filaments (mobile Phase 2, plan §4.4). The server maps the decoded tag to a filament payload, then applies overrides (which win). Same mass-assignment strips as a normal create body. When spoolRemainingGrams is sent (the scanner defaults it to the tag's net weight, since you own the roll you scanned), the server also creates ONE spool; usage history is never fabricated.",
+        "description": "Create-from-scan variant of POST /api/filaments (mobile Phase 2, plan \u00a74.4). The server maps the decoded tag to a filament payload, then applies overrides (which win). Same mass-assignment strips as a normal create body. When spoolRemainingGrams is sent (the scanner defaults it to the tag's net weight, since you own the roll you scanned), the server also creates ONE spool; usage history is never fabricated.",
         "required": [
           "tagData"
         ],
@@ -7864,12 +8077,12 @@
           "tagData": {
             "type": "object",
             "additionalProperties": true,
-            "description": "A DecodedOpenPrintTag exactly as POST /api/nfc/decode returns it in `decoded`. The server maps it via decodedTagToFilament. instanceId is NOT taken from the tag — it stays system-assigned (re-scans resolve via the decode route's heuristic match)."
+            "description": "A DecodedOpenPrintTag exactly as POST /api/nfc/decode returns it in `decoded`. The server maps it via decodedTagToFilament. instanceId is NOT taken from the tag \u2014 it stays system-assigned (re-scans resolve via the decode route's heuristic match)."
           },
           "overrides": {
             "type": "object",
             "additionalProperties": true,
-            "description": "Filament fields that override the tag-mapped values — the scanner sends the user-confirmed name/vendor/type (required identity fields). Server-owned fields (instanceId, _purged, …) are stripped."
+            "description": "Filament fields that override the tag-mapped values \u2014 the scanner sends the user-confirmed name/vendor/type (required identity fields). Server-owned fields (instanceId, _purged, \u2026) are stripped."
           },
           "spoolRemainingGrams": {
             "type": "number",
@@ -7894,7 +8107,7 @@
           "color": {
             "type": "string",
             "nullable": true,
-            "description": "Primary color as a hex string. Send null for coextruded multi-color filaments where no single slot is the primary — colors then go in secondaryColors."
+            "description": "Primary color as a hex string. Send null for coextruded multi-color filaments where no single slot is the primary \u2014 colors then go in secondaryColors."
           },
           "secondaryColors": {
             "type": "array",
@@ -7952,7 +8165,7 @@
           "totalWeight": {
             "type": "number",
             "nullable": true,
-            "description": "Gross weight (spool + filament) in grams. On create, when provided without a `spools` array the server auto-creates ONE initial spool carrying this weight and nulls the top-level field — spool-based filaments track weight per spool."
+            "description": "Gross weight (spool + filament) in grams. On create, when provided without a `spools` array the server auto-creates ONE initial spool carrying this weight and nulls the top-level field \u2014 spool-based filaments track weight per spool."
           },
           "dryingTemperature": {
             "type": "number",
@@ -8071,12 +8284,12 @@
           },
           {
             "type": "object",
-            "description": "Create-only additions. `spools` is honored ONLY on POST — the PUT handler strips `body.spools` (spool subdocuments are managed via the dedicated /spools endpoints after creation).",
+            "description": "Create-only additions. `spools` is honored ONLY on POST \u2014 the PUT handler strips `body.spools` (spool subdocuments are managed via the dedicated /spools endpoints after creation).",
             "properties": {
               "promoteParent": {
                 "type": "boolean",
                 "default": false,
-                "description": "GH #605 confirmation flag for variant creation (only meaningful together with `parentId`). Creating the FIRST live variant of a parent that still carries its own color/colorName/spools/totalWeight restructures that second document, so the request is refused with 409 `parent_promotion_required` and nothing is written; repeating it with this flag set converts the parent to a template first — its color, colorName, spools, totalWeight and lowStockThreshold move onto a new variant — then creates the requested variant. A control flag, never a schema field: it is deleted from the body before any value is written."
+                "description": "GH #605 confirmation flag for variant creation (only meaningful together with `parentId`). Creating the FIRST live variant of a parent that still carries its own color/colorName/spools/totalWeight restructures that second document, so the request is refused with 409 `parent_promotion_required` and nothing is written; repeating it with this flag set converts the parent to a template first \u2014 its color, colorName, spools, totalWeight and lowStockThreshold move onto a new variant \u2014 then creates the requested variant. A control flag, never a schema field: it is deleted from the body before any value is written."
               },
               "spools": {
                 "type": "array",
@@ -8230,14 +8443,14 @@
             "items": {
               "$ref": "#/components/schemas/Nozzle"
             },
-            "description": "Populated nozzle objects. Physical instances — one nozzle belongs to exactly one printer (#232)."
+            "description": "Populated nozzle objects. Physical instances \u2014 one nozzle belongs to exactly one printer (#232)."
           },
           "installedBedTypes": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/BedType"
             },
-            "description": "Bed surfaces this printer can use (v1.23). Shared catalog — a surface like 'Textured PEI' can be referenced by many printers."
+            "description": "Bed surfaces this printer can use (v1.23). Shared catalog \u2014 a surface like 'Textured PEI' can be referenced by many printers."
           },
           "buildVolume": {
             "$ref": "#/components/schemas/BuildVolume"
@@ -8245,7 +8458,7 @@
           "maxFlow": {
             "type": "number",
             "nullable": true,
-            "description": "Rated max volumetric flow in mm³/s (v1.11)"
+            "description": "Rated max volumetric flow in mm\u00b3/s (v1.11)"
           },
           "maxSpeed": {
             "type": "number",
@@ -8319,7 +8532,7 @@
       },
       "AmsSlot": {
         "type": "object",
-        "description": "One multi-material system slot. spoolId is intentionally ref-less (a spool is a subdocument of a Filament, not a top-level collection — see GH #280); it is also nulled on cross-side hybrid-sync remap.",
+        "description": "One multi-material system slot. spoolId is intentionally ref-less (a spool is a subdocument of a Filament, not a top-level collection \u2014 see GH #280); it is also nulled on cross-side hybrid-sync remap.",
         "properties": {
           "_id": {
             "type": "string"
@@ -8462,7 +8675,7 @@
           },
           "skippedRows": {
             "type": "array",
-            "description": "Per-row reasons for every row the import refused (GH #1115). `row` is the PHYSICAL source line — the CSV line number or the XLSX sheet row — not an index into the surviving rows.",
+            "description": "Per-row reasons for every row the import refused (GH #1115). `row` is the PHYSICAL source line \u2014 the CSV line number or the XLSX sheet row \u2014 not an index into the surviving rows.",
             "items": {
               "type": "object",
               "properties": {
@@ -8616,7 +8829,7 @@
           "locationId": {
             "type": "string",
             "nullable": true,
-            "description": "Location ObjectId — the spool's semi-permanent home (v1.11). Distinct from a printer AMS slot, which is its transient loaded position."
+            "description": "Location ObjectId \u2014 the spool's semi-permanent home (v1.11). Distinct from a printer AMS slot, which is its transient loaded position."
           },
           "photoDataUrl": {
             "type": "string",
@@ -8699,7 +8912,7 @@
                 "debitedGrams": {
                   "type": "number",
                   "nullable": true,
-                  "description": "GH #1074: grams actually removed from the spool at debit time — min(spool remaining weight, grams) when the debit was clamped at zero. The print-history delete refund pays back this value; null on manual/nfc entries and on job entries created before the field existed (those refund the full grams)."
+                  "description": "GH #1074: grams actually removed from the spool at debit time \u2014 min(spool remaining weight, grams) when the debit was clamped at zero. The print-history delete refund pays back this value; null on manual/nfc entries and on job entries created before the field existed (those refund the full grams)."
                 }
               },
               "required": [
@@ -8712,7 +8925,7 @@
       },
       "SpoolShapeResponse": {
         "type": "object",
-        "description": "GH #1027: the slim `?shape=spool` response of the spool-mutation endpoints — only the affected spool rides the wire, never the sibling spools' photoDataUrl blobs or usageHistory ledgers.",
+        "description": "GH #1027: the slim `?shape=spool` response of the spool-mutation endpoints \u2014 only the affected spool rides the wire, never the sibling spools' photoDataUrl blobs or usageHistory ledgers.",
         "properties": {
           "spool": {
             "$ref": "#/components/schemas/Spool"
@@ -8724,7 +8937,7 @@
       },
       "SpoolDeleteShapeResponse": {
         "type": "object",
-        "description": "GH #1027: the slim `?shape=spool` response of the spool DELETE — the spool no longer exists, so a deletion marker is returned instead of a document.",
+        "description": "GH #1027: the slim `?shape=spool` response of the spool DELETE \u2014 the spool no longer exists, so a deletion marker is returned instead of a document.",
         "properties": {
           "deleted": {
             "type": "boolean",
@@ -8744,7 +8957,7 @@
       },
       "RestoreBlockedByTemplate": {
         "type": "object",
-        "description": "GH #1103 — the restore route's refusal when reviving a variant would make its parent a template while that parent still carries its own color/spools/inventory. Deliberately NOT `parent_promotion_required`: that code means \"repeat with promoteParent: true\", and here repeating changes nothing. `message` names the parent and the action that unblocks the whole family (Convert to template). It deliberately does NOT predict the name of the variant the conversion will create: this gate resolves that against active rows while `/promote` also reserves the parent's trashed children, so the two can legitimately disagree.",
+        "description": "GH #1103 \u2014 the restore route's refusal when reviving a variant would make its parent a template while that parent still carries its own color/spools/inventory. Deliberately NOT `parent_promotion_required`: that code means \"repeat with promoteParent: true\", and here repeating changes nothing. `message` names the parent and the action that unblocks the whole family (Convert to template). It deliberately does NOT predict the name of the variant the conversion will create: this gate resolves that against active rows while `/promote` also reserves the parent's trashed children, so the two can legitimately disagree.",
         "properties": {
           "error": {
             "type": "string",
@@ -8782,7 +8995,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Optional bearer-token gate, applied only when the server's FILAMENTDB_API_KEY environment variable is set (off by default — the API is unauthenticated for localhost/desktop use). When set, EVERY /api request must send `Authorization: Bearer <key>`; there is no same-origin exemption, so the gate also locks out the first-party browser UI. Requests without a valid key get 401 with `WWW-Authenticate: Bearer`."
+        "description": "Optional bearer-token gate, applied only when the server's FILAMENTDB_API_KEY environment variable is set (off by default \u2014 the API is unauthenticated for localhost/desktop use). When set, EVERY /api request must send `Authorization: Bearer <key>`; there is no same-origin exemption, so the gate also locks out the first-party browser UI. Requests without a valid key get 401 with `WWW-Authenticate: Bearer`."
+      },
+      "LocalPrintToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-filamentdb-print-token",
+        "description": "Local print token. The Electron main process mints one per run and writes it 0600 to `local-print-token` in the app's user-data directory, so only a process on the same machine can read it. Absent on a deployment with no attached printer (Docker, web) and in dev, where the route returns 404."
       }
     }
   }

@@ -102,6 +102,29 @@ jobs:
           npm run electron:fixlinks
           npm run electron:compile
 
+      # GH #1195: sharp resolves @img/sharp-<platform>-<arch> at require time
+      # and THROWS if absent — there is no JS fallback in a packaged build.
+      # A route now imports it, so Next's tracing copies sharp into
+      # .next/standalone/node_modules and electron:fixlinks carries that into
+      # `standalone/`, which electron-builder ships. Node resolves
+      # standalone/node_modules BEFORE the app's root node_modules, so on the
+      # three CROSS legs that traced copy is the runner's arch and wins.
+      #
+      # This must run AFTER the build (the tree it patches does not exist
+      # before) and BEFORE packaging. It cannot be done by installing the
+      # target arch ahead of the build: `npm install --os/--cpu` re-resolves
+      # EVERY optional dependency, which swaps lightningcss/@tailwindcss/oxide
+      # too and the build then dies on a missing lightningcss .node.
+      - name: Install target-arch sharp into the standalone tree (cross-builds)
+        if: matrix.platform == 'mac-x64-cross' || matrix.platform == 'win-arm64-cross' || matrix.platform == 'linux-arm64'
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            mac-x64-cross)   node scripts/install-sharp-arch.mjs --platform darwin --arch x64 ;;
+            win-arm64-cross) node scripts/install-sharp-arch.mjs --platform win32  --arch arm64 ;;
+            linux-arm64)     node scripts/install-sharp-arch.mjs --platform linux  --arch arm64 ;;
+          esac
+
       # macOS code signing + notarization. Exports the signing env (via
       # $GITHUB_ENV) consumed by the mac packaging steps below. When the secrets
       # aren't configured, it disables auto-discovery so the build is UNSIGNED —

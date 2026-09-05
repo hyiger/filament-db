@@ -1,10 +1,11 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { NextRequest } from "next/server";
 import {
   assertSameOriginRequest,
   assertSafeUpdateBody,
   stripServerOwnedFields,
   SERVER_OWNED_FILAMENT_FIELDS,
+  assertLocalPrintToken,
 } from "@/lib/requestGuard";
 
 /**
@@ -283,5 +284,62 @@ describe("stripServerOwnedFields (#1072)", () => {
     };
     expect(stripServerOwnedFields(body)).toEqual([]);
     expect(Object.keys(body)).toHaveLength(5);
+  });
+});
+
+describe("assertLocalPrintToken (GH #1195)", () => {
+  const ENV = "FILAMENTDB_LOCAL_PRINT_TOKEN";
+  const TOKEN = "a".repeat(64);
+  let saved: string | undefined;
+
+  beforeEach(() => {
+    saved = process.env[ENV];
+  });
+  afterEach(() => {
+    if (saved === undefined) delete process.env[ENV];
+    else process.env[ENV] = saved;
+  });
+
+  function req(token?: string): NextRequest {
+    const headers = new Headers();
+    if (token !== undefined) headers.set("x-filamentdb-print-token", token);
+    return new NextRequest("http://localhost:3456/api/labels/print", {
+      method: "POST",
+      headers,
+    });
+  }
+
+  it("404s when no token is configured, so Docker/web read as 'no such route'", async () => {
+    delete process.env[ENV];
+    const res = assertLocalPrintToken(req(TOKEN));
+    expect(res?.status).toBe(404);
+  });
+
+  it("404s on an empty token rather than treating '' as a valid secret", async () => {
+    process.env[ENV] = "";
+    expect(assertLocalPrintToken(req(""))?.status).toBe(404);
+  });
+
+  it("403s when the header is missing", async () => {
+    process.env[ENV] = TOKEN;
+    expect(assertLocalPrintToken(req())?.status).toBe(403);
+  });
+
+  it("403s on a wrong token", async () => {
+    process.env[ENV] = TOKEN;
+    expect(assertLocalPrintToken(req("b".repeat(64)))?.status).toBe(403);
+  });
+
+  it("403s on a length-mismatched token without throwing (timingSafeEqual would)", async () => {
+    process.env[ENV] = TOKEN;
+    // crypto.timingSafeEqual throws on unequal buffer lengths; the guard
+    // hashes both sides first, so a short token must refuse, not crash.
+    expect(() => assertLocalPrintToken(req("short"))).not.toThrow();
+    expect(assertLocalPrintToken(req("short"))?.status).toBe(403);
+  });
+
+  it("allows a matching token", async () => {
+    process.env[ENV] = TOKEN;
+    expect(assertLocalPrintToken(req(TOKEN))).toBeNull();
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "filament-db",
-  "version": "1.79.0",
+  "version": "1.81.0",
   "description": "Desktop and web app for managing 3D printing filament profiles",
   "author": {
     "name": "hyiger",
@@ -50,6 +50,7 @@
     "rehype-raw": "^7.0.0",
     "rehype-sanitize": "^6.0.0",
     "remark-gfm": "^4.0.1",
+    "sharp": "^0.35.3",
     "swagger-ui-react": "^5.32.1",
     "tar": "^7.5.16",
     "undici": "^6.28.0",
@@ -75,7 +76,9 @@
     "brace-expansion@1": "^1.1.18",
     "brace-expansion@2": "^2.1.4",
     "brace-expansion@>=3.0.0": "^5.0.9",
-    "fast-uri": "^3.1.5"
+    "fast-uri": "^3.1.7",
+    "browserslist": "^4.28.8",
+    "@xmldom/xmldom@0.8": "^0.8.15"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
@@ -93,7 +96,6 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "mongodb-memory-server": "^11.0.1",
-    "sharp": "^0.35.3",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
