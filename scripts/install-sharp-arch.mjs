@@ -28,8 +28,8 @@
  * Exits non-zero on any failure — a silently wrong-arch artifact is exactly
  * the outcome this guards against.
  */
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { x as tarExtract } from "tar";
 import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, cpSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -214,7 +214,23 @@ async function main() {
       const tarPath = await downloadTarball(name, version, staging);
       const unpacked = join(staging, name.replace("/", "__"));
       mkdirSync(unpacked, { recursive: true });
-      execFileSync("tar", ["-xzf", tarPath, "-C", unpacked, "--strip-components", "1"]);
+      // Extract with the `tar` LIBRARY, not the `tar` BINARY.
+      //
+      // GNU tar (which Git Bash supplies on windows-latest) parses a colon in
+      // the archive path as rmt remote-tape `host:path` syntax, so a Windows
+      // path extracts as host "C" and fails with "Cannot connect to C: resolve
+      // failed" — which is exactly how the win-arm64-cross leg died on the
+      // v1.81.0 tag. `--force-local` fixes it for GNU tar and is REJECTED by
+      // the BSD tar macOS ships, so there is no one flag string that works
+      // everywhere.
+      //
+      // This is the THIRD Windows-only defect in this script, after npm.cmd
+      // and cmd.exe quoting, and all three came from shelling out to a
+      // platform tool whose behaviour cannot be exercised from a development
+      // host. `tar` is already a production dependency, so using its JS API
+      // removes the last subprocess here: one code path on every platform,
+      // no argument serialization, no shell.
+      await tarExtract({ file: tarPath, cwd: unpacked, strip: 1, gzip: true });
 
       for (const d of present) {
       const destDir = resolve(d, "@img");
