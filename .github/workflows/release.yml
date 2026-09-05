@@ -169,12 +169,26 @@ jobs:
           npm run electron:rebuild
           # Notarize only when the Prepare step set the flag (i.e. secrets exist).
           NOTARIZE_FLAG=""
-          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
+          # forceCodeSigning lives HERE rather than in electron-builder.yml so it
+          # stays gated on the secrets being present: the no-secrets fork path
+          # must still build UNSIGNED rather than fail. Without it, an identity
+          # miss is a WARNING (macCodeSign.js:73-79) and macPackager returns
+          # before notarization, so the job exits 0 and uploads an unsigned,
+          # un-notarized dmg to a public release. Until now the broken -k call
+          # below was the only thing making that go red.
+          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true --config.mac.forceCodeSigning=true"
           # --publish never: electron-builder's `publish: github` config would
           # otherwise upload this job's SINGLE-arch latest-mac.yml on the tag
           # build (GH_TOKEN is set), racing the multi-arch merge job and serving
           # one arch to every Mac if that merge is ever skipped. Installers go up
           # via softprops; the yml is owned by merge-mac-metadata. (Mirrors #586.)
+          # app-builder-lib <= 26.16.0 authenticates `security set-key-partition-list
+          # -k` with the p12 export password instead of the temp keychain's own
+          # random password. macOS 26.5.2 tolerated it; 26.6.2 validates it and the
+          # signing step dies with "SecKeychainUnlock: ... not correct". Upstream
+          # fixed it in 27.0.0-alpha.8 and has not backported to any published 26.x.
+          # Must run AFTER `npm ci` (which restores a pristine node_modules).
+          node scripts/patch-app-builder-keychain.mjs
           npx electron-builder --config electron-builder.yml --arm64 $NOTARIZE_FLAG --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -219,10 +233,24 @@ jobs:
           grep -q "x86_64" /tmp/arch-check.txt
           # Notarize only when the Prepare step set the flag (i.e. secrets exist).
           NOTARIZE_FLAG=""
-          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
+          # forceCodeSigning lives HERE rather than in electron-builder.yml so it
+          # stays gated on the secrets being present: the no-secrets fork path
+          # must still build UNSIGNED rather than fail. Without it, an identity
+          # miss is a WARNING (macCodeSign.js:73-79) and macPackager returns
+          # before notarization, so the job exits 0 and uploads an unsigned,
+          # un-notarized dmg to a public release. Until now the broken -k call
+          # below was the only thing making that go red.
+          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true --config.mac.forceCodeSigning=true"
           # --publish never — see the macOS arm64 step: stop electron-builder
           # publishing this job's single-arch latest-mac.yml; merge-mac-metadata
           # owns the mac update channel.
+          # app-builder-lib <= 26.16.0 authenticates `security set-key-partition-list
+          # -k` with the p12 export password instead of the temp keychain's own
+          # random password. macOS 26.5.2 tolerated it; 26.6.2 validates it and the
+          # signing step dies with "SecKeychainUnlock: ... not correct". Upstream
+          # fixed it in 27.0.0-alpha.8 and has not backported to any published 26.x.
+          # Must run AFTER `npm ci` (which restores a pristine node_modules).
+          node scripts/patch-app-builder-keychain.mjs
           npx electron-builder --config electron-builder.yml --x64 $NOTARIZE_FLAG --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
