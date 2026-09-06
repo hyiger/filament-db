@@ -764,6 +764,19 @@ def case_calibration_scope_refs():
         f"the snapshot carried no printers collection, so no printer ref can be judged; "
         f"reporting one is a false claim: {fp}")
 
+    # an OMITTED collection must say so too — distinguishing absent from empty
+    # avoids a false positive, but staying silent about it makes an UNCHECKED
+    # category look like a clean one, which is the worse failure
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      {"printers": None, "bedTypes": {"b1"},
+                       "cals": {"a": [{"printer": "p1", "bedType": "b1"}]}})
+    hit = [m for rows in f.values() for _, m in rows
+           if "printer references were NOT checked" in m]
+    ok("cal-scope-omitted-collection-visible") if hit else bad(
+        "cal-scope-omitted-collection-visible",
+        "the snapshot carried no `printers` collection, so every printer scope went unchecked "
+        "and the report rendered as structurally clean")
+
     # a FAILED snapshot read must say so, not silently render as clean
     f, _, _ = A.audit({"a": base}, (), None, None, None, {"error": "HTTP 500"})
     hit = [m for rows in f.values() for _, m in rows if "were NOT checked" in m]
@@ -826,11 +839,19 @@ def case_ref_index_hostile_shapes():
 # pinned here so a future "tightening" cannot silently start lying.
 def case_date_mirror():
     accepted = ["2026-01-05", "2026-01-05T00:00:00.000Z", "2026-01-05T12:34:56+02:00",
+                # TIME half — hour 24 is legal at exactly 24:00:00, and a -14:00
+                # offset is real (Baker Island). Both verified against node.
+                "2026-01-05T24:00:00Z", "2026-01-05T23:59:59Z", "2026-01-05T12:00",
+                "2026-01-05T12:00:00-14:00", "2026-01-05T12:00:00.123456789Z",
+                "2026-01-05 12:00", "2026-01-05t12:00:00z", "2026-01-05T09:05:05Z",
                 "2026-1-5", "2026/01/05", "Jan 1 2020", "1 Jan 2020", "January 1, 2020",
                 "2020", "2020-02-30", "2019-02-29", "2020-02-29", "9999-12-31",
                 "  2026-01-05  ", "5/6/2020", "12345", "0", "2026-01-05 12:00",
                 "Mon Jan 01 2020", "1970-01-01T00:00:00.000Z"]
     rejected = ["2020-13-01", "2020-00-10", "2020-01-32", "2020-01-00", "not-a-date",
+                # a sane date prefix says NOTHING about the timestamp
+                "2020-01-01T25:00:00Z", "2020-01-01T24:00:01Z", "2020-01-01T12:61:00Z",
+                "2020-01-01T12:00:60Z", "2020-01-01T23:59:60Z", "2020-01-01T12:00:00+25:00",
                 "", "   ", "0000-00-00", "null", "undefined", "NaN", "Invalid Date",
                 "-", "T", "Z", "true", "false", "date", {}, []]
     fp = [v for v in accepted if A._bad_date(v)]
@@ -883,6 +904,38 @@ def case_no_cross_record_leak():
         bad("no-leak-colour-sentinel",
             "a non-string `colorName` on the LAST record suppressed the #808080 sentinel finding "
             "on an EARLIER one — same loop-local leak")
+
+
+# --- 14f. one field, five shapes, five different consequences ----------------
+# `presets[].label` is the clearest instance of the rule that keeps being broken
+# here: shapes that fail DIFFERENTLY must not share a sentence. React renders a
+# number child happily and Mongoose casts it through the String path, so the
+# page-crash claim belongs only to the shapes that actually throw.
+def case_preset_label_shapes():
+    want = {
+        "throws": [{"x": 1}, ["a", {"b": 2}]],       # React invalid-child error
+        "REQUIRED": [None, ""],                       # schema violation -> backup refused
+        "casts it to a string": [5, True],            # off-type, harmless
+        "EMPTY name": ["   "],                        # valid, but invisible
+    }
+    for phrase, values in want.items():
+        for val in values:
+            r = valid_res()
+            r["presets"][0]["label"] = val
+            f, _ = run({"a": rec(r, copy.deepcopy(r))})
+            rows = [m for rows_ in f.values() for _, m in rows_ if "presets[0].label" in m]
+            if not rows:
+                bad(f"preset-label-{phrase[:12]}", f"label={val!r} produced no finding at all")
+            elif not any(phrase in m for m in rows):
+                bad(f"preset-label-{phrase[:12]}",
+                    f"label={val!r} must be described with {phrase!r}; got: {rows}")
+            else:
+                ok(f"preset-label-{type(val).__name__}-{str(val)[:6]}")
+    r = valid_res()
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    fp = [m for rows_ in f.values() for _, m in rows_ if "presets[0].label" in m]
+    ok("preset-label-valid-silent") if not fp else bad(
+        "preset-label-valid-silent", f"a normal label was flagged: {fp}")
 
 
 # --- 15. an inherited defect belongs to the template -------------------------
@@ -960,6 +1013,7 @@ if __name__ == "__main__":
     case_ref_index_hostile_shapes()
     case_date_mirror()
     case_no_cross_record_leak()
+    case_preset_label_shapes()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

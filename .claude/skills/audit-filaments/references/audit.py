@@ -464,6 +464,10 @@ _URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+# Only the shapes whose components can be READ are judged; an unrecognised
+# tail is left alone rather than guessed at (see _bad_date).
+_ISO_TIME_RE = re.compile(r"^[Tt](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?")
+_ISO_OFFSET_RE = re.compile(r"[+-](\d{2}):?(\d{2})$")
 
 
 def _bad_date(v):
@@ -497,6 +501,24 @@ def _bad_date(v):
         _m, _d = int(mo.group(2)), int(mo.group(3))
         if not (1 <= _m <= 12) or not (1 <= _d <= 31):
             return True
+        # The TIME half is judged the same way, because the date prefix alone
+        # being sane says nothing: V8 rejects "…T25:00:00Z" outright. Confirmed
+        # boundaries -- hour 24 is legal ONLY as exactly 24:00:00, there are no
+        # leap seconds (23:59:60 is rejected), and an offset hour must be <= 23.
+        # A tail this regex cannot read (a bare "T", "Tnonsense", a one-digit
+        # hour) is NOT judged: V8 does reject those, but guessing at shapes we
+        # cannot parse is how a false positive gets in.
+        _t = _ISO_TIME_RE.match(t[mo.end():])
+        if _t:
+            _h, _mi = int(_t.group(1)), int(_t.group(2))
+            _se = int(_t.group(3)) if _t.group(3) else 0
+            if _h > 24 or _mi > 59 or _se > 59:
+                return True
+            if _h == 24 and (_mi or _se):
+                return True
+            _off = _ISO_OFFSET_RE.search(t)
+            if _off and (int(_off.group(1)) > 23 or int(_off.group(2)) > 59):
+                return True
     return False
 
 
@@ -1460,11 +1482,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 add("physical", f"{name}: presets[{idx}].label is {_plabel!r} -> `label` is "
                                 f"schema-REQUIRED, so POST /api/snapshot refuses the ENTIRE "
                                 f"backup file{_inh_blame('presets')}", fid)
-            elif not isinstance(_plabel, str):
+            elif _react_child_throws(_plabel):
                 add("physical", f"{name}: presets[{idx}].label is {type(_plabel).__name__} "
                                 f"({_plabel!r}) -> the detail page renders it directly as a React "
                                 f"child, and React throws on an object, so opening this filament "
                                 f"fails outright{_inh_blame('presets')}", fid)
+            elif not isinstance(_plabel, str):
+                # A number or boolean is off-type but harmless: React renders it,
+                # and Mongoose casts it through the schema's String path, so the
+                # backup restores. Claiming a crash here would be the same error
+                # this branch was split to fix, one shape further down.
+                add("physical", f"{name}: presets[{idx}].label is {type(_plabel).__name__} "
+                                f"({_plabel!r}), not a string -> React renders it and Mongoose "
+                                f"casts it to a string on the next write, so nothing breaks — the "
+                                f"stored value simply is not the type the schema declares"
+                                f"{_inh_blame('presets')}", fid)
             elif not _plabel.strip():
                 add("physical", f"{name}: presets[{idx}].label is {_plabel!r} — whitespace only "
                                 f"-> the schema accepts it (required, but not trimmed) and React "
@@ -2024,6 +2056,16 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                          f"indistinguishable from the generic state without it.", None)
     elif isinstance(ref_index, dict):
         _live = {"printer": ref_index.get("printers"), "bedType": ref_index.get("bedTypes")}
+        # Distinguishing an absent collection from an empty one stops a false
+        # positive, but silence about it is its own defect: with `printers`
+        # omitted, every printer scope goes unchecked and the report looks
+        # structurally clean. Say so, in the same words as a failed read.
+        for _f, _coll in (("printer", "printers"), ("bedType", "bedTypes")):
+            if not isinstance(_live[_f], set):
+                add("structure", f"calibration {_f} references were NOT checked: the /api/snapshot "
+                                 f"response carried no `{_coll}` collection, so no {_f} id could be "
+                                 f"resolved. Both detail reads populate these refs, and populate() "
+                                 f"nulls a purged target, so they are invisible without it.", None)
 
         def _dangles(cal, field):
             """True when this ref is STORED but resolves to no row — the state

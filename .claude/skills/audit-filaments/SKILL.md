@@ -172,7 +172,12 @@ and raises `CastError` on an Invalid Date, so the mirror has to match **V8**, wh
 more than ISO 8601 — `"Jan 1 2020"`, `"2026-1-5"`, and even `"2020-02-30"`, which it rolls over to
 March 1. Anything stricter would condemn a date the app stores happily, so the predicate reports
 only the shapes V8 provably rejects and stays silent on the rest (pinned against node's own
-`new Date` in `case_date_mirror`). Three sites, three different consequences: a spool's
+`new Date` in `case_date_mirror`). The **time half is judged too** — a sane date prefix says
+nothing about the timestamp, and `…T25:00:00Z` is an Invalid Date. Boundaries confirmed against
+node: hour 24 is legal only as exactly `24:00:00`, there are no leap seconds (`23:59:60` is
+rejected), and an offset hour must be ≤ 23. A tail the parser cannot read (a bare `T`, a one-digit
+hour) is deliberately **not** judged — V8 does reject those, but guessing at shapes you cannot
+parse is how a false positive gets in. Three sites, three different consequences: a spool's
 `purchaseDate`/`openedDate` throws a **`RangeError` during render** (the SpoolCard seeds its inputs
 with `new Date(v).toISOString()`, so the whole filament page fails to open); a `dryCycles[].date`
 is schema-**required** and 400s the entire backup; a `usageHistory[].date` has a `Date.now`
@@ -466,6 +471,13 @@ goes to an `<img src>`, which **coerces** rather than throwing; and `label`/`lot
 when the value is an *object* — React renders a number or a flat array child happily, so a numeric
 label breaks nothing visible but is skipped by `computeNextSpoolLabel`'s `typeof raw !== "string"`,
 letting the Next # button hand the same roll number out twice.
+
+**Distinguishing absent from empty is only half the job — say when you did not check.** The
+calibration-scope pass treats a snapshot that does not *carry* `printers` differently from one
+carrying an empty list, which prevents a false positive; but staying quiet about it made an
+entirely unchecked category read as a clean one. It now emits the same explicit "NOT checked" row
+as a failed snapshot read. Both halves are needed: the first stops a wrong finding, the second
+stops a wrong silence.
 
 **A missing value and a malformed one are different findings.** `num()` returns `None` for both,
 so a `density: "oops"` used to produce a "no density" row *on top of* the malformed-value row the
