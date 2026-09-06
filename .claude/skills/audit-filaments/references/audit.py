@@ -704,8 +704,15 @@ MAX_SPOOL_ID_LENGTH = 128
 MAX_TAG_ID_LENGTH = 16
 
 
-def _id_contract_problem(value):
-    """Which consumer bound a stored instanceId violates, or None."""
+def _id_contract_problem(value, scope="spool"):
+    """Which consumer bound a stored instanceId violates, or None.
+
+    `scope` matters: validateSpoolInstanceId governs `spools[].instanceId` ONLY
+    (validateSpoolBody + the spool CSV import). The FILAMENT-level id is
+    server-owned with no validator and no charset constraint, and
+    /api/filaments/match's boundedParam trims only the ENDS -- so an internal
+    space there round-trips fine and reporting it as broken was a false
+    positive. The two length ceilings are consumer bounds and apply to both."""
     if not isinstance(value, str):
         return None                       # a non-string is reported by the shape sweep
     t = value.strip()
@@ -720,13 +727,18 @@ def _id_contract_problem(value):
                 "while /api/filaments/match and /api/nfc/decode both trim the scanned value "
                 "before querying, so no tier can ever match it")
     if len(t) > MAX_SPOOL_ID_LENGTH:
-        return (f"is {len(t)} characters, past the {MAX_SPOOL_ID_LENGTH}-character contract -> "
+        _edit = (", and any write that carries this id is refused by validateSpoolInstanceId"
+                 if scope == "spool" else "")
+        return (f"is {len(t)} characters, past the {MAX_SPOOL_ID_LENGTH}-character bound -> "
                 f"/api/filaments/match caps its query at the same length, so this id can never "
-                f"round-trip through a QR or NFC scan, and any edit through the API is refused")
-    if not SPOOL_ID_RE.match(t):
+                f"round-trip through a QR or NFC scan{_edit}")
+    if scope == "spool" and not SPOOL_ID_RE.match(t):
+        # Spool ids ONLY. The top-level id has no charset constraint anywhere —
+        # no schema validator, no route check — and match's boundedParam trims
+        # only the ends, so an internal space there is harmless.
         return ("is outside the allowed charset (letters, digits, dot, underscore, hyphen) -> "
-                "validateSpoolInstanceId refuses it, so any later edit to this spool is rejected "
-                "until the id is replaced")
+                "validateSpoolInstanceId refuses it, so any write that carries this spool's id "
+                "is rejected until it is replaced")
     if len(t) > MAX_TAG_ID_LENGTH:
         return (f"is {len(t)} characters, past the {MAX_TAG_ID_LENGTH}-character OpenPrintTag "
                 f"field -> the encoder OMITS it rather than truncating (a truncated id would read "
@@ -1727,7 +1739,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # selectSpoolForWrite hands THIS value to the tag encoder for a
             # spool-less filament, so an id past either ceiling cannot round-trip
             # even though it is present and looks fine.
-            _tid_bad = _id_contract_problem(_tid_v)
+            _tid_bad = _id_contract_problem(_tid_v, scope="filament")
             if _tid_bad:
                 add("structure", f"{name}: filament-level instanceId {_short(repr(_tid_v))} "
                                  f"{_tid_bad}", fid)
@@ -2717,6 +2729,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"matchFilament runs its case-insensitive SPOOL tier before the "
                                  f"exact filament tier, so a scan of that filament's own id "
                                  f"resolves to this spool's filament instead", None)
+
+    # `top_ci` existed only for the spool-vs-filament shadow test; the
+    # filament-vs-filament case was never asked. matchFilament's filament
+    # fallback is exact-then-folded too, so two ids differing only by case make
+    # the folded tier return BOTH as candidates and match nothing.
+    for _fold, _rows_t in sorted(top_ci.items()):
+        _tvariants = {t for t, _ in ((_v["raw"].get("instanceId"), i) for i, _v in records.items()
+                                     if isinstance(_v["raw"].get("instanceId"), str)
+                                     and _v["raw"]["instanceId"].casefold() == _fold)}
+        if len(_tvariants) > 1:
+            add("structure", f"filament-level instanceIds {sorted(_tvariants)!r} differ only by "
+                             f"CASE ({_who(_rows_t)}) -> matchFilament's filament fallback runs "
+                             f"exact, then case-insensitive, so a scan of either id reaches the "
+                             f"folded tier, gets both rows back as candidates and resolves NO "
+                             f"match at all", None)
 
     for _tid, _owners in sorted(top_owners.items()):
         if len(_owners) > 1:

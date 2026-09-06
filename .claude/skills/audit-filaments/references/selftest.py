@@ -1213,14 +1213,21 @@ def case_identity_and_dates():
     # encoder as `spoolUid`, and that field OMITS anything past 16 characters
     # (GH #952: truncating would read back as a different id), so both the spool
     # id and the filament-level fallback need the same three checks.
+    # The two LENGTH ceilings are consumer bounds and apply to both ids; the
+    # CHARSET rule is validateSpoolInstanceId, which governs spools[].instanceId
+    # ONLY. The top-level id is server-owned with no validator, and match's
+    # boundedParam trims only the ends — so an internal space there round-trips
+    # and reporting it was a false positive (this assertion used to demand it).
     for holder in ("spool", "filament"):
-        for val, needle in ((("a" * 17), "16-character OpenPrintTag"),
-                            (("a" * 129), "128-character contract"),
-                            ("has space!", "allowed charset"),
-                            # trimmed for the CHECK but stored with the spaces:
-                            # every scan path trims before querying while the
-                            # writers encode it as stored, so no tier can match
-                            ("  abc  ", "surrounding whitespace")):
+        checks = [(("a" * 17), "16-character OpenPrintTag"),
+                  (("a" * 129), "128-character bound"),
+                  # trimmed for the CHECK but stored with the spaces: every scan
+                  # path trims before querying while the writers encode it as
+                  # stored, so no tier can match
+                  ("  abc  ", "surrounding whitespace")]
+        if holder == "spool":
+            checks.append(("has space!", "allowed charset"))
+        for val, needle in checks:
             rr = valid_res()
             if holder == "spool":
                 rr["spools"][0]["instanceId"] = val
@@ -1234,6 +1241,17 @@ def case_identity_and_dates():
                 f"idcontract-{holder}-{needle[:12]}",
                 f"a {holder}-level id of {val[:6]}... violates {needle} and must be reported — "
                 f"the id is present and looks fine, so nothing else catches it")
+        # ...and the charset rule must NOT reach the filament-level id
+        if holder == "filament":
+            rf = valid_res(instanceId="abc def")
+            rf["spools"] = []
+            f, _ = run({"a": rec(rf, copy.deepcopy(rf))})
+            fp = [m for rows in f.values() for _, m in rows if "allowed charset" in m]
+            ok("idcontract-filament-charset-exempt") if not fp else bad(
+                "idcontract-filament-charset-exempt",
+                f"validateSpoolInstanceId governs spools[].instanceId only; the top-level id has "
+                f"no charset constraint and match preserves internal whitespace: {fp}")
+
         # ...and a normal id stays silent on BOTH
         rr = valid_res()
         if holder == "filament":
@@ -1511,6 +1529,20 @@ def case_instance_id_shadows():
     fp = [m for rows_ in f.values() for _, m in rows_ if "differ only by CASE" in m]
     ok("shadow-spool-case-negative") if not fp else bad(
         "shadow-spool-case-negative", f"genuinely distinct ids were flagged: {fp}")
+
+    # (g) two FILAMENT-level ids differing only by case — the folded filament
+    #     fallback returns both as candidates and matches nothing
+    f, _ = two({"instanceId": "abcdefabcd"}, {"instanceId": "ABCDEFABCD"})
+    rows = [m for rows_ in f.values() for _, m in rows_
+            if "filament-level instanceIds" in m and "differ only by CASE" in m]
+    ok("shadow-filament-case-twins") if rows else bad(
+        "shadow-filament-case-twins",
+        "matchFilament's filament fallback is exact-then-folded, so two case-only twins resolve "
+        "NO match at all — top_ci existed but was only consulted for spool shadows")
+    f, _ = two({"instanceId": "abcdefabcd"}, {"instanceId": "0011223399"})
+    fp = [m for rows_ in f.values() for _, m in rows_ if "filament-level instanceIds" in m]
+    ok("shadow-filament-case-negative") if not fp else bad(
+        "shadow-filament-case-negative", f"genuinely distinct ids were flagged: {fp}")
 
     # NEGATIVE: a spool id equal to ITS OWN filament's is the #732 carry-over
     f, _ = two({"instanceId": "carryover1", "spools": spools("carryover1")},
