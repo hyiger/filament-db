@@ -404,6 +404,9 @@ USAGE_BOUNDS = {"grams": (0, 1_000_000)}
 # corrupt: the refund path states a genuine clamped debit can never exceed the
 # entry's grams, and falls back to a full-grams refund when it does.
 SEMANTIC_BOUNDS_USAGE = {"debitedGrams": (0, 1_000_000)}
+
+# The usage-entry `source` enum, mirrored from the schema.
+USAGE_SOURCES = {"manual", "slicer", "job", "nfc"}
 ORDERED_PAIRS_USAGE = [("debited vs requested grams", "debitedGrams", "grams")]
 LOW_TEMP_FLOOR = 60
 NOZZLE_FLOOR = 150
@@ -751,10 +754,21 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             numerics, then ordering and density — so it is now one helper applied
             at every value-based emission.
             """
-            if any(x in inherited_fields for x in roots if x):
+            named = [x for x in roots if x]
+            inh = [x for x in named if x in inherited_fields]
+            if not inh:
+                return ""
+            if len(inh) == len(named):
                 return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
                         f"variant keeps it")
-            return ""
+            # MIXED ownership. `any()` blamed the template wholesale, but the
+            # remedy differs: for a local minPrintSpeed against an inherited max,
+            # editing the template changes every sibling and leaves the offending
+            # local value in place. Name both sides and let the reader choose.
+            local = [x for x in named if x not in inherited_fields]
+            return (f" -> MIXED: {', '.join(inh)} inherited from template {parent_name!r} while "
+                    f"{', '.join(local)} is stored here — correcting the template would change "
+                    f"every sibling, so fix whichever value is actually wrong")
 
         def _temp_blame(label):
             """Attribute a temperature finding the way the bounds path does."""
@@ -1077,6 +1091,20 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 # `grams` is schema-REQUIRED on a usage entry, and bounds_check
                 # skips a None. Spool export and analytics read the missing value
                 # as zero, so the entry vanishes from usage totals in silence.
+                # `source` is an enum, and analytics counts ONLY exact "manual"
+                # (src/app/api/analytics/route.ts) — so a typo does not error, it
+                # quietly removes real usage from the manual aggregation.
+                if isinstance(ue, dict):
+                    src_v = ue.get("source")
+                    # `x in <set>` raises on an unhashable x, so the type test
+                    # comes first — a dict or list here is malformed anyway and
+                    # is reported by the same row.
+                    if src_v is not None and (not isinstance(src_v, str)
+                                              or src_v not in USAGE_SOURCES):
+                        add("physical", f"{name}: spool {tag} usage source={src_v!r} is not one of "
+                                        f"{sorted(USAGE_SOURCES)} -> analytics counts only exact "
+                                        f"'manual', so this entry silently drops out of the manual "
+                                        f"usage and cost totals", fid)
                 if isinstance(ue, dict) and ue.get("grams") is None:
                     add("physical", f"{name}: spool {tag} usage entry has no grams -> the schema "
                                     f"requires it, and export and analytics read it as zero, so "
