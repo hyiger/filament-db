@@ -558,7 +558,9 @@ JS_MAX_TIME_VALUE = 8_640_000_000_000_000
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 # Only the shapes whose components can be READ are judged; an unrecognised
 # tail is left alone rather than guessed at (see _bad_date).
-_ISO_TIME_RE = re.compile(r"^[Tt](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?")
+# The fraction separator is captured too: ISO 8601 allows a comma, V8 does
+# NOT -- every comma form is an Invalid Date, verified against node.
+_ISO_TIME_RE = re.compile(r"^[Tt](\d{2}):(\d{2})(?::(\d{2})(?:([.,])(\d+))?)?")
 _ISO_OFFSET_RE = re.compile(r"[+-](\d{2}):?(\d{2})$")
 
 
@@ -635,9 +637,16 @@ def _bad_date(v):
         if _t:
             _h, _mi = int(_t.group(1)), int(_t.group(2))
             _se = int(_t.group(3)) if _t.group(3) else 0
+            # The fraction is CAPTURED, not just consumed: V8 allows hour 24
+            # only at exactly 24:00:00.000, so "T24:00:00.1Z" is an Invalid Date
+            # while "T24:00:00.0Z" is fine. Consuming it without testing it let
+            # the whole class through.
+            _sep, _fr = _t.group(4), _t.group(5) or ""
+            if _sep == ",":
+                return True            # V8 rejects the comma fraction outright
             if _h > 24 or _mi > 59 or _se > 59:
                 return True
-            if _h == 24 and (_mi or _se):
+            if _h == 24 and (_mi or _se or _fr.strip("0")):
                 return True
             _off = _ISO_OFFSET_RE.search(t)
             if _off and (int(_off.group(1)) > 23 or int(_off.group(2)) > 59):
@@ -726,10 +735,15 @@ def _id_contract_problem(value, scope="spool"):
         return ("has surrounding whitespace -> the tag and label writers encode it as stored "
                 "while /api/filaments/match and /api/nfc/decode both trim the scanned value "
                 "before querying, so no tier can ever match it")
-    if len(t) > MAX_SPOOL_ID_LENGTH:
+    # UTF-16 CODE UNITS, not Python characters: both ceilings are JS lengths
+    # (`input.spoolUid.length <= 16` in the encoder, `trimmed.length <= 128` in
+    # boundedParam), and an astral character costs two on that side. Ten emoji
+    # are len() 10 here and .length 20 there.
+    if _utf16_len(t) > MAX_SPOOL_ID_LENGTH:
         _edit = (", and any write that carries this id is refused by validateSpoolInstanceId"
                  if scope == "spool" else "")
-        return (f"is {len(t)} characters, past the {MAX_SPOOL_ID_LENGTH}-character bound -> "
+        return (f"is {_utf16_len(t)} UTF-16 units, past the {MAX_SPOOL_ID_LENGTH}-character "
+                f"bound -> "
                 f"/api/filaments/match caps its query at the same length, so this id can never "
                 f"round-trip through a QR or NFC scan{_edit}")
     if scope == "spool" and not SPOOL_ID_RE.match(t):
@@ -739,8 +753,9 @@ def _id_contract_problem(value, scope="spool"):
         return ("is outside the allowed charset (letters, digits, dot, underscore, hyphen) -> "
                 "validateSpoolInstanceId refuses it, so any write that carries this spool's id "
                 "is rejected until it is replaced")
-    if len(t) > MAX_TAG_ID_LENGTH:
-        return (f"is {len(t)} characters, past the {MAX_TAG_ID_LENGTH}-character OpenPrintTag "
+    if _utf16_len(t) > MAX_TAG_ID_LENGTH:
+        return (f"is {_utf16_len(t)} UTF-16 units, past the {MAX_TAG_ID_LENGTH}-character "
+                f"OpenPrintTag "
                 f"field -> the encoder OMITS it rather than truncating (a truncated id would read "
                 f"back as a different one), so a written tag carries no instance id at all and "
                 f"scan-back falls through to name/vendor/type")
@@ -2798,8 +2813,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not isinstance(_live[field], set):
                 return None        # the snapshot did not carry that collection
             ref = cal.get(field)
-            if ref is None or ref == "" or isinstance(ref, (dict, list)):
-                return False       # unset (a genuine generic scope), or malformed
+            if ref is None or ref == "":
+                return False       # unset — a genuine generic scope
+            if isinstance(ref, (dict, list)):
+                # NOT "uncheckable": this pass reads the SNAPSHOT, which is
+                # unpopulated, so a dict or array here cannot be a joined
+                # document — it is a value Mongoose cannot cast to an ObjectId,
+                # and it is invisible in both detail reads because populate()
+                # renders it null. Signalled separately from a dangling ref.
+                return "malformed"
             return str(ref) not in _live[field]
 
         _cal_map = ref_index.get("cals")
@@ -2821,7 +2843,16 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     _cal.get(f) in (None, "") or _dangles(_cal, f) for f in ("printer", "bedType")
                 ) and not any(isinstance(_cal.get(f), (dict, list)) for f in ("printer", "bedType"))
                 for _f in ("printer", "bedType"):
-                    if not _dangles(_cal, _f):
+                    _d = _dangles(_cal, _f)
+                    if _d == "malformed":
+                        add("structure",
+                            f"{_nm}: calibration[{_i}] stores {_f}="
+                            f"{_short(repr(_cal.get(_f)))} -> the snapshot is unpopulated, so this "
+                            f"cannot be a joined document; Mongoose cannot cast it to an ObjectId "
+                            f"and POST /api/snapshot refuses the ENTIRE backup file. Both detail "
+                            f"reads render it null, so nothing else can see it.", _fid)
+                        continue
+                    if not _d:
                         continue
                     _conseq = (
                         "populate() nulls it, and with the other scope empty too that is EXACTLY "

@@ -870,6 +870,21 @@ def case_calibration_scope_refs():
         "the snapshot carried no `printers` collection, so every printer scope went unchecked "
         "and the report rendered as structurally clean")
 
+    # a MALFORMED scope ref in the snapshot: unpopulated there, so a dict or
+    # array cannot be a joined document — it is an uncastable value that both
+    # detail reads render as null, so nothing else can see it
+    for bad_ref in ({}, [], {"_id": "x"}):
+        f, _, _ = A.audit({"a": base}, (), None, None, None,
+                          {"printers": {"p1"}, "bedTypes": {"b1"}, "locations": set(),
+                           "cals": {"a": [{"printer": bad_ref, "bedType": None}]}})
+        hit = [m for rows in f.values() for _, m in rows if "calibration[0] stores" in m]
+        if not hit:
+            bad("cal-scope-malformed", f"a {type(bad_ref).__name__} scope ref was treated as an "
+                                       f"unset generic scope; it fails the ObjectId cast")
+            break
+    else:
+        ok("cal-scope-malformed")
+
     # a spool pointing at a SOFT-DELETED location is just as broken as one
     # pointing at a purged one — /api/spools/by-location joins with
     # `_deletedAt: null` — so the location set must be built from ACTIVE rows,
@@ -958,6 +973,9 @@ def case_date_mirror():
                 # TIME half — hour 24 is legal at exactly 24:00:00, and a -14:00
                 # offset is real (Baker Island). Both verified against node.
                 "2026-01-05T24:00:00Z", "2026-01-05T23:59:59Z", "2026-01-05T12:00",
+                # hour 24 is legal ONLY at exactly 24:00:00 — an all-zero
+                # fraction still qualifies, a non-zero one does not
+                "2026-01-05T24:00:00.0Z", "2026-01-05T24:00:00.000Z", "2026-01-05T12:00:00.5Z",
                 "2026-01-05T12:00:00-14:00", "2026-01-05T12:00:00.123456789Z",
                 "2026-01-05 12:00", "2026-01-05t12:00:00z", "2026-01-05T09:05:05Z",
                 "2026-1-5", "2026/01/05", "Jan 1 2020", "1 Jan 2020", "January 1, 2020",
@@ -981,6 +999,10 @@ def case_date_mirror():
                 # a sane date prefix says NOTHING about the timestamp
                 "2020-01-01T25:00:00Z", "2020-01-01T24:00:01Z", "2020-01-01T12:61:00Z",
                 "2020-01-01T12:00:60Z", "2020-01-01T23:59:60Z", "2020-01-01T12:00:00+25:00",
+                "2020-01-01T24:00:00.1Z", "2020-01-01T24:00:00.001Z",
+                # ISO 8601 allows a comma fraction; V8 does not, in any form
+                "2020-01-01T12:00:00,5Z", "2020-01-01T12:00:00,000Z",
+                "2020-01-01T24:00:00,0Z", "2020-01-01T12:00:00,123+02:00",
                 "", "   ", "0000-00-00", "null", "undefined", "NaN", "Invalid Date",
                 "-", "T", "Z", "true", "false", "date", {}, []]
     fp = [v for v in accepted if A._bad_date(v)]
@@ -1241,6 +1263,28 @@ def case_identity_and_dates():
                 f"idcontract-{holder}-{needle[:12]}",
                 f"a {holder}-level id of {val[:6]}... violates {needle} and must be reported — "
                 f"the id is present and looks fine, so nothing else catches it")
+        # both ceilings are JS lengths, so they count UTF-16 CODE UNITS —
+        # ten emoji are len() 10 in Python and .length 20 in the encoder
+        ra = valid_res()
+        astral = "\U0001F600" * 10
+        if holder == "spool":
+            ra["spools"][0]["instanceId"] = astral
+        else:
+            ra["instanceId"] = astral
+            ra["spools"] = []
+        f, _ = run({"a": rec(ra, copy.deepcopy(ra))})
+        # For a SPOOL id an emoji breaks the charset rule first, and that row is
+        # the right one (its remedy — replace the id — fixes both). The UTF-16
+        # measurement is what the FILAMENT-level id depends on, since it has no
+        # charset rule to catch it.
+        needle = "UTF-16 units" if holder == "filament" else "allowed charset"
+        hit = [m for rows in f.values() for _, m in rows if needle in m]
+        ok(f"idcontract-{holder}-astral") if hit else bad(
+            f"idcontract-{holder}-astral",
+            f"the OpenPrintTag field and boundedParam both measure JS length, so an astral "
+            f"character costs two — Python len() undercounts and lets an over-long id through "
+            f"(expected {needle!r})")
+
         # ...and the charset rule must NOT reach the filament-level id
         if holder == "filament":
             rf = valid_res(instanceId="abc def")
