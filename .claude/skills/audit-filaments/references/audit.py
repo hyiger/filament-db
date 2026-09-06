@@ -130,6 +130,14 @@ OPAQUE_BAGS = {"settings", "openprinttagSnapshot"}
 # Every child is fetched and audited in its own right.
 RESPONSE_METADATA = {"_variants", "_parent", "_inherited", "_strippedTemplateFields"}
 
+# Populated REFERENCE documents. These are other collections' rows joined into
+# this response — a nozzle's own `diameter` is not the filament's field, and the
+# same nozzle is referenced by many filaments, so descending here reported one
+# nozzle's defect once per referencing filament, against documents that cannot
+# repair it. Nozzles are audited by /api/abrasive-nozzles and by the nozzle
+# routes; a filament audit only cares whether the REFERENCE resolves.
+REFERENCE_FIELDS = {"nozzle", "printer", "bedType", "compatibleNozzles", "installedNozzles"}
+
 
 _CAL_ELEMENT_RE = re.compile(r"^calibrations\[\d+\]$")
 
@@ -146,9 +154,13 @@ def malformed_numerics(node, path=""):
             # is correct rather than malformed. Scoped BY PATH: name alone
             # exempted `temperatures.nozzle: {}` too, so an object in a numeric
             # temperature field audited clean.
-            if k == "nozzle" and isinstance(v, dict) and _CAL_ELEMENT_RE.match(path):
-                yield from malformed_numerics(v, where)
-                continue
+            # A populated reference is another collection's document. Skipping
+            # it entirely also preserves the older fix this replaces: an object
+            # in the NUMERIC `temperatures.nozzle` is still reported, because
+            # that path is not a reference site.
+            if k in REFERENCE_FIELDS and (isinstance(v, dict) or isinstance(v, list)):
+                if not (k == "nozzle" and not _CAL_ELEMENT_RE.match(path)):
+                    continue
             if k in NUMERIC_LEAF_NAMES:
                 if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool)):
                     yield where, v
@@ -950,7 +962,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
-        def _blame(field, where=""):
+        def _blame(field, where="", inherit_root=""):
             """Whose data is this, and where should the user go?
 
             A variant that INHERITS a field stores nothing for it, so telling its
@@ -961,12 +973,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             already solves this: /api/abrasive-nozzles returns `inheritedFrom`
             and the UI says to change it on the template.
             """
+            if (where or field) and inherit_root and inherit_root in inherited_fields:
+                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
+                        f"variant keeps it")
             if not where and field in inherited_fields:
                 return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
                         f"variant keeps it")
             return " -> written by a path that bypassed validation"
 
-        def bounds_check(container, table, where="", source="schema", inherit_prefix=""):
+        def bounds_check(container, table, where="", source="schema", inherit_prefix="",
+                         inherit_root=""):
             # `inherit_prefix` is used ONLY for the inheritance lookup, never in
             # the message: resolveFilament records nested temperature entries
             # qualified (`temperatures.nozzleRangeMin`) while top-level scalars
@@ -982,13 +998,14 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
                     add("physical", f"{name}: {where}{f2}={val} outside the {source} bound "
-                                    f"({rng}){_blame(inherit_prefix + f2, where)}", fid)
+                                    f"({rng}){_blame(inherit_prefix + f2, where, inherit_root)}", fid)
 
         bounds_check(r, NUMERIC_BOUNDS)
         bounds_check(temps, RANGE_BOUNDS, inherit_prefix="temperatures.")
         for idx, pre in enumerate(r.get("presets") or []):
             if isinstance(pre, dict):
-                bounds_check(pre, PRESET_BOUNDS, f"preset[{pre.get('label') or idx}] ")
+                bounds_check(pre, PRESET_BOUNDS, f"preset[{pre.get('label') or idx}] ",
+                             inherit_root="presets")
         for sp in (r.get("spools") or []):
             if not isinstance(sp, dict):
                 continue
@@ -1018,7 +1035,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             # Through the shared helper, not a bespoke loop: a second copy of the
             # same logic is exactly how this table missed the malformed-value
             # reporting that bounds_check gained.
-            bounds_check(cal, CALIBRATION_BOUNDS, f"{where} ")
+            bounds_check(cal, CALIBRATION_BOUNDS, f"{where} ", inherit_root="calibrations")
 
         # --- missing core spec (EFFECTIVE — a template legitimately has none) -
         if not is_template:
