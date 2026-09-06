@@ -335,9 +335,15 @@ When those disagree, say so and let the owner decide rather than prescribing a w
 
 **Two active records can share a name.** Hybrid sync, a restore, or a legacy database whose
 unique-name index could not be built all produce it, and every finding identifies its filament by
-name. The checker therefore dedupes on `(record id, message)` and appends the id **only** when a
-message really is shared, so the count stays accurate and both records can be repaired — do not
-"tidy" that back into a text-level dedupe.
+name. The checker therefore dedupes on `(record id, message)` and appends the id to **every**
+finding on a record whose name is not unique — not merely where two messages happen to be
+identical, which is the rare case: duplicates usually carry *different* defects, so message-level
+disambiguation would almost never fire and the report could not say which row to repair.
+
+Names are compared **trimmed**, because `X` and `X ` are distinct raw keys that render identically.
+That pair is a documented unresolved state rather than a hypothetical — the #1116 trim migration
+deliberately refuses to merge a whitespace twin and Data health surfaces it instead — so it is
+exactly where the reader needs the id. Do not "tidy" any of this back into a text-level dedupe.
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
