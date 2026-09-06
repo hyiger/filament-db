@@ -380,6 +380,19 @@ def _nested_text_consequence(field, value):
     if field == "photoDataUrl":
         return ("it goes straight to an <img src>, which COERCES rather than throwing, so the "
                 "spool shows a permanently broken image with no error to explain it")
+    if field == "lotNumber":
+        # Wrong in BOTH directions before: an object was reported as a
+        # detail-page crash it cannot cause (the detail page only ever puts
+        # lotNumber in a controlled <input>, which coerces), and a NUMBER was
+        # called harmless when it is not -- /inventory's search does
+        # `(s.lotNumber || "").toLowerCase()`, and a truthy non-string has no
+        # .toLowerCase, so the page throws as soon as the user types.
+        extra = (" and, being an object, it also fails Mongoose's String cast, so POST "
+                 "/api/snapshot refuses the ENTIRE backup file"
+                 if isinstance(value, (dict, list)) else "")
+        return ("the Spool Inventory search does `(s.lotNumber || \"\").toLowerCase()`, and a "
+                "truthy non-string has no .toLowerCase — so /inventory throws the moment anyone "
+                "types in the search box" + extra)
     if _react_child_throws(value):
         return ("it renders directly as a React child and React throws on an object, so opening "
                 "this filament -- or expanding its inventory row -- fails outright")
@@ -445,6 +458,13 @@ NUMERIC_LEAF_NAMES = {
 # a "1 kg" spool is routinely wound 1000-1050 g, and a kitchen scale drifts, so
 # a few percent over is normal stock rather than a defect.
 OVER_NET_TOLERANCE = 1.10
+# The mirror of OVER_NET_TOLERANCE, and it needs one for the same reason: a roll
+# weighed a few grams under its tare is a FINISHED roll plus scale drift, not a
+# data defect. Without this the check fired on the ordinary end of a spool's
+# life with a diagnosis ("a tare inherited from a template whose spools are
+# heavier") that does not fit it at all.
+BELOW_TARE_TOLERANCE_G = 15.0
+BELOW_TARE_TOLERANCE_FRAC = 0.05
 
 # Schema constraints that are not numeric min/max. Same rationale as
 # NUMERIC_BOUNDS, sharper consequence: POST /api/snapshot pre-validates EVERY
@@ -1077,11 +1097,26 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                             for lf in LEDGER_TEXT_FIELDS.get((parent_key, sf), ()):
                                 lv = ent.get(lf)
                                 if lv is not None and not isinstance(lv, str) and not _inh_arr:
+                                    # `jobLabel` IS a React child (the usage
+                                    # disclosure renders `{u.jobLabel || …}`) but
+                                    # only an object throws there; `notes` has no
+                                    # render site anywhere in the app, so the
+                                    # crash sentence was false for it outright.
+                                    if lf == "jobLabel" and _react_child_throws(lv):
+                                        _lc = ("the usage disclosure renders it as a React child, "
+                                               "so React throws on this object and expanding the "
+                                               "history fails")
+                                    elif isinstance(lv, (dict, list)):
+                                        _lc = ("Mongoose's String cast refuses it, so POST "
+                                               "/api/snapshot refuses the ENTIRE backup file")
+                                    else:
+                                        _lc = ("the schema declares a string and Mongoose casts "
+                                               "this on the next write, so nothing breaks — the "
+                                               "stored value simply is not the declared type")
                                     add_shape("physical",
                                               f"{nm}: {parent_key}[{tag}] {sf}[{eidx}].{lf} is "
                                               f"{type(lv).__name__} ({lv!r}), not a string "
-                                              f"({which}) -> it renders as a React child, so "
-                                              f"expanding this list throws",
+                                              f"({which}) -> {_lc}",
                                               ("ledger-text", parent_key, str(tag), sf, eidx, lf))
         # optTags ELEMENT validity. The container check above accepts a list of
         # anything, but the schema's setter and the CBOR encoder both keep only
@@ -1244,12 +1279,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # String()-coerced by every emitter, exporting as the literal
                 # "[object Object]" into both the INI bundle and the Orca JSON —
                 # silently, in the bag whose whole purpose is lossless round-trip.
-                if isinstance(v, dict) or (isinstance(v, list)
-                                           and any(isinstance(e, (dict, list)) for e in v)):
+                # `String()` on a nested ARRAY joins with commas -- it does
+                # not produce "[object Object]". Only an object does that, so
+                # the two ship differently and a reader grepping the export for
+                # "[object Object]" would never find the array case.
+                _nested_obj = isinstance(v, dict) or (isinstance(v, list)
+                                                      and any(isinstance(e, dict) for e in v))
+                _nested_arr = isinstance(v, list) and any(isinstance(e, list) for e in v)
+                if _nested_obj or _nested_arr:
+                    _sc = ("ships as the literal '[object Object]'" if _nested_obj else
+                           "ships with its elements comma-JOINED (String([0.8, 0.9]) is "
+                           "'0.8,0.9'), which a re-import then reads back as one scalar "
+                           "containing commas — silently, with no [object Object] to grep for")
                     add("physical", f"{name}: settings.{k} is a {type(v).__name__}, but the bag "
                                     f"holds scalars (or an array of scalars) -> every exporter "
-                                    f"String()-coerces it, so it ships as the literal "
-                                    f"'[object Object]'", fid)
+                                    f"String()-coerces it, so it {_sc}", fid)
                 if measured > MAX_SETTING_VALUE_LENGTH:
                     add("physical", f"{name}: settings.{k} is {measured} UTF-16 units, past the "
                                     f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
@@ -1284,14 +1328,26 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"gram figure counts the spool's own mass as filament"
                                  f"{_inh_blame('spoolWeight')}", fid)
 
+            def _below_tare_slack(t):
+                """How far under the tare is still just a finished roll."""
+                return max(BELOW_TARE_TOLERANCE_G, BELOW_TARE_TOLERANCE_FRAC * t)
+
+            # `_diag` names the two causes that actually produce a LARGE
+            # shortfall. The template clause is dropped on a row that has no
+            # parent, where it is impossible by construction.
+            _diag = ("a net weight typed into the gross field"
+                     if not raw.get("parentId") else
+                     "a tare inherited from a template whose spools are heavier, or a net weight "
+                     "typed into the gross field")
+
             if legacy_roll:
                 gross = num(r.get("totalWeight"))
-                if tare is not None and gross is not None and gross < tare:
-                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> clamps "
-                                     f"to 0, so the roll reads as EMPTY everywhere and spool-check "
-                                     f"refuses every job — usually a tare inherited from a template "
-                                     f"whose spools are heavier, or a net weight typed into the "
-                                     f"gross field", fid)
+                if (tare is not None and gross is not None
+                        and tare - gross > _below_tare_slack(tare)):
+                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g by "
+                                     f"{tare - gross:.0f}g -> clamps to 0, so the roll reads as "
+                                     f"EMPTY everywhere and spool-check refuses every job — "
+                                     f"usually {_diag}{_inh_blame('spoolWeight')}", fid)
             else:
                 missing_gross = 0
                 for s in live_spools:
@@ -1311,7 +1367,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                         missing_gross += 1
                         add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
                                          f"totalWeight (gross) -> it contributes nothing to the bar", fid)
-                    elif tare is not None and gross < tare:
+                    elif (tare is not None
+                          and tare - gross > _below_tare_slack(tare)):
                         # NOT the legacy roll's consequence. getRemainingPct
                         # clamps this spool's contribution to 0 but STILL counts
                         # it in validCount, so it adds a whole `net` to the
@@ -1319,16 +1376,27 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                         # it drags the filament's bar down rather than emptying
                         # it. And spool-check answers ok when ANY spool has
                         # enough, so with a healthy sibling no job is refused.
-                        _alone = len(live_spools) == 1
-                        _conseq = ("so the filament reads as EMPTY and spool-check refuses every "
-                                   "job" if _alone else
-                                   f"so it contributes 0g yet still adds {int(net) if net else 'net'}g "
-                                   f"to the % denominator — it drags the whole filament's bar down")
-                        add("inventory", f"{name}: spool {s.get('instanceId') or s.get('_id')} gross "
-                                         f"{gross}g is below tare {tare}g -> clamps to 0, {_conseq} "
-                                         f"— usually a tare inherited from a template whose spools "
-                                         f"are heavier, or a net weight typed into the gross field",
-                            fid)
+                        # getRemainingPct counts only spools that CARRY a gross
+                        # weight (validCount), and spool-check likewise needs a
+                        # sibling with one -- so the branch is the weighed count,
+                        # not the live count. And the denominator sentence only
+                        # means anything when a net weight exists; without one
+                        # there is no bar at all (its own row says so).
+                        _weighed = sum(1 for _s in live_spools
+                                       if num(_s.get("totalWeight")) is not None)
+                        if _weighed <= 1:
+                            _conseq = ("so the filament reads as EMPTY and spool-check refuses "
+                                       "every job")
+                        elif net is not None and net > 0:
+                            _conseq = (f"so it contributes 0g yet still adds {int(net)}g to the % "
+                                       f"denominator — it drags the whole filament's bar down")
+                        else:
+                            _conseq = ("so it contributes 0g to the gram total; there is no % bar "
+                                       "to drag down because no net weight is set")
+                        add("inventory", f"{name}: spool {_short(s.get('instanceId') or s.get('_id'))} "
+                                         f"gross {gross}g is below tare {tare}g by "
+                                         f"{tare - gross:.0f}g -> clamps to 0, {_conseq} — "
+                                         f"usually {_diag}{_inh_blame('spoolWeight')}", fid)
                 if missing_gross and missing_gross == len(live_spools):
                     add("inventory", f"{name}: every live spool is missing its gross weight -> "
                                      f"getRemainingPct returns null, no bar at all", fid)
@@ -1485,19 +1553,41 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"exists -> the tuning is unreachable"
                                  f"{_inh_blame('calibrations')}", fid)
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
+                # NOT the purged case's consequence. A soft-deleted nozzle
+                # populates as a FULL document that still carries its
+                # `diameter`, and neither consumer filters tombstones:
+                # /calibration's diameter filter has no `_deletedAt` clause
+                # (it filters the PRINTER explicitly, which shows the omission
+                # is not incidental) and the Prusa fan-out drops only a
+                # null/diameter-less nozzle. So the tuning is still SERVED and
+                # still EXPORTED — what is lost is the ability to edit it.
                 add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
-                                 f"{noz_name!r} -> the tuning is unreachable"
-                                 f"{_inh_blame('calibrations')}", fid)
+                                 f"{noz_name!r} -> /calibration and the slicer exports still serve "
+                                 f"this tuning (neither filters tombstoned nozzles), but the "
+                                 f"nozzle is gone from the active catalogue, so the row drops out "
+                                 f"of the FilamentForm grid into the orphan list and can only be "
+                                 f"removed, not corrected{_inh_blame('calibrations')}", fid)
             # `printer` and `bedType` are `default: null`, unlike the required
             # nozzle above, so null is the schema's supported "generic" state and
-            # must NOT be reported. A TOMBSTONED ref is different: the row points
-            # at a deleted machine or plate, so the tuning is unreachable.
+            # must NOT be reported. A TOMBSTONED ref is reported -- but each of
+            # the two fails DIFFERENTLY, and neither is "unreachable".
             for ref_field in ("printer", "bedType"):
                 rv = cal.get(ref_field)
                 if isinstance(rv, dict) and rv.get("_deletedAt"):
+                    _rn = rv.get("name") or rv.get("_id")
+                    if ref_field == "printer":
+                        _rc = ("`?printer=` filters tombstoned printers out of the addressable "
+                               "set, so this row can no longer be selected by machine and the "
+                               "lookup falls back to a generic entry; the FilamentForm also has "
+                               "no tab for a deleted printer, so the row lands in the orphan list")
+                    else:
+                        _rc = ("the bed lookup matches by NAME, so /calibration and the exports "
+                               "still serve this tuning — but isCalibrationRowReachable has no tab "
+                               "for a bed type missing from the active catalogue, so the row lands "
+                               "in the FilamentForm orphan list and can only be removed")
                     add("structure", f"{name}: calibration[{idx}] references soft-deleted "
-                                     f"{ref_field} {rv.get('name') or rv.get('_id')!r} -> the "
-                                     f"tuning is unreachable{_inh_blame('calibrations')}", fid)
+                                     f"{ref_field} {_rn!r} -> {_rc}"
+                                     f"{_inh_blame('calibrations')}", fid)
             ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ", inherit_root="calibrations")
             nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
                             (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
@@ -1743,7 +1833,13 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # exactly like the other two.
             for _df in ("purchaseDate", "openedDate", "createdAt"):
                 _dv = sp.get(_df)
-                if _dv is not None and _bad_date(_dv):
+                # `""` is NOT a bad date here: Mongoose's castDate returns null
+                # for it (cast/date.js — `if (value == null || value === '')`),
+                # and isoToDateInput short-circuits on the falsy value, so the
+                # page opens and the backup restores. The dryCycle branch below
+                # still reports `""` — correctly, because `date` is REQUIRED
+                # there and null fails that.
+                if _dv not in (None, "") and _bad_date(_dv):
                     # createdAt has no render site of its own, so it gets the
                     # consequence it actually has rather than the SpoolCard's.
                     _dcons = ("POST /api/snapshot cannot cast it, so the ENTIRE backup file is "
@@ -1817,18 +1913,33 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     # and `continue`s on NaN, so the grams and their cost vanish
                     # from every total while the spool's own ledger still shows
                     # them. That mismatch is the symptom a user actually reports.
-                    if _ud is None:
-                        add("physical", f"{name}: spool {tag} usage entry has no date -> analytics "
-                                        f"builds `new Date(u.date)` and skips the entry when it is "
-                                        f"invalid, so these grams and their cost are missing from "
-                                        f"every total while the spool's ledger still lists them",
+                    if _ud is None or _bad_date(_ud):
+                        # The consequence depends on `source`. Analytics filters
+                        # `u.source !== "manual"` in the SAME loop, so a job or
+                        # slicer entry was never counted from the ledger anyway
+                        # -- its grams reach the totals through the PrintHistory
+                        # row, and claiming they are "missing from every total"
+                        # would send the reader looking for a shortfall that is
+                        # not there.
+                        _usrc = ue.get("source")
+                        if _usrc == "manual":
+                            _ucons = ("analytics builds `new Date(u.date)` and skips the entry "
+                                      "when it is invalid, so these grams and their cost are "
+                                      "missing from every total while the spool's ledger still "
+                                      "lists them")
+                        elif _usrc in ("job", "slicer"):
+                            _ucons = ("analytics counts only source='manual', so these grams still "
+                                      "reach the totals through their PrintHistory row — what is "
+                                      "broken is this ledger entry itself, which /history and the "
+                                      "spool's usage list order and display by date")
+                        else:
+                            _ucons = ("analytics counts only source='manual', so this entry was "
+                                      "never in the totals — what is broken is the ledger row, "
+                                      "which /history and the spool's usage list order by date")
+                        _uwhat = ("has no date" if _ud is None
+                                  else f"date={_ud!r} cannot be cast to a Date")
+                        add("physical", f"{name}: spool {tag} usage entry {_uwhat} -> {_ucons}",
                             fid)
-                    elif _bad_date(_ud):
-                        add("physical", f"{name}: spool {tag} usage date={_ud!r} cannot be cast to "
-                                        f"a Date -> analytics builds `new Date(u.date)` and skips "
-                                        f"the entry when it is invalid, so these grams and their "
-                                        f"cost are missing from every total while the spool's "
-                                        f"ledger still lists them", fid)
                 if isinstance(ue, dict) and ue.get("grams") is None:
                     add("physical", f"{name}: spool {tag} usage entry has no grams -> the schema "
                                     f"requires it, and export and analytics read it as zero, so "
