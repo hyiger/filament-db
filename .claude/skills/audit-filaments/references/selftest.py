@@ -377,7 +377,7 @@ def case_opt_tag_elements():
 # without saying which kind it is breaks the suite instead of quietly shrinking
 # the fuzz's reach again.
 FIELD_TABLES = {          # string keys/elements are record FIELD names
-    "CALIBRATION_BOUNDS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
+    "ALWAYS_STORED_ROOTS", "CALIBRATION_BOUNDS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
     "LEDGER_TEXT_FIELDS", "NESTED_BOOL_FIELDS", "NESTED_CONTAINER_SHAPES",
     "NESTED_DICT_ELEMENT_ARRAYS", "NESTED_TEXT_FIELDS", "NESTED_TEXT_MAXLEN",
     "NUMERIC_BOUNDS", "NUMERIC_LEAF_NAMES", "OPAQUE_BAGS", "PIN_CHECK_ARRAYS",
@@ -1094,6 +1094,75 @@ def case_identity_and_dates():
         ok("spool-createdat-consequence")
 
 
+# --- 14l. _inh_blame's ATTRIBUTION branches, positively ----------------------
+# Both value-bearing branches of _inh_blame — "INHERITED from template" and
+# "MIXED" — could be deleted outright and the suite still reported green: every
+# existing assertion only checks that a row is ABSENT on the variant, never that
+# the row the template gets carries the attribution the reader needs. These
+# assert the text itself, on the same template/variant pair.
+def case_inh_blame_attribution():
+    def family(res_over, inherited, raw_over=None):
+        t = valid_res(_id="t", name="Prusament PLA", parentId=None, spools=[], color=None,
+                      colorName=None, totalWeight=None, lowStockThreshold=None)
+        k = valid_res(_id="k", name="Prusament PLA — Blue", parentId="t", **res_over)
+        k["_inherited"] = inherited
+        kraw = copy.deepcopy(k)
+        for f2 in inherited:
+            kraw.pop(f2, None)
+        if raw_over:
+            kraw.update(raw_over)
+        return {"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}}
+
+    def rows_for(recs, needle):
+        f, _ = run(recs, topology={"t": True})
+        return [m for rows in f.values() for _, m in rows if needle in m]
+
+    # 1. ALL roots inherited -> the single-owner sentence. Uses the saturation
+    #    row, which goes through _inh_blame; the bounds rows go through the
+    #    separate `_blame` helper and would not have exercised this at all.
+    sat = {"netFilamentWeight": 1000, "spoolWeight": 200,
+           "spools": [dict(valid_res()["spools"][0], totalWeight=1400)]}
+    got = rows_for(family(sat, ["netFilamentWeight", "spoolWeight"]), "SATURATE")
+    if got and "INHERITED from template 'Prusament PLA'" in got[0]:
+        ok("inh-blame-single-owner")
+    else:
+        bad("inh-blame-single-owner",
+            f"an inherited value must name the template that owns it, or the reader edits the one "
+            f"document that cannot fix it; got: {got}")
+
+    # 2. MIXED ownership -> both sides named
+    got = rows_for(family({"minPrintSpeed": 500, "maxPrintSpeed": 200}, ["maxPrintSpeed"]),
+                   "INVERTED print speed")
+    if got and "MIXED:" in got[0] and "maxPrintSpeed" in got[0] and "minPrintSpeed" in got[0]:
+        ok("inh-blame-mixed")
+    else:
+        bad("inh-blame-mixed",
+            f"a local value against an inherited one has two different repairs and the row must "
+            f"name both sides; got: {got}")
+
+    # 3. an inherited whole-array root attributes through bounds_check
+    cal = copy.deepcopy(valid_res()["calibrations"])
+    cal[0]["extrusionMultiplier"] = -1
+    got = rows_for(family({"calibrations": cal}, ["calibrations"], {"calibrations": []}),
+                   "extrusionMultiplier=-1")
+    if got and "INHERITED from template" in got[0]:
+        ok("inh-blame-array-root")
+    else:
+        bad("inh-blame-array-root",
+            f"an inherited calibrations array must attribute to the template; got: {got}")
+
+    # 4. an EMPTY stored array is the inherit sentinel, not local ownership —
+    #    it must never force the MIXED branch on the ordinary variant shape
+    got = rows_for(family({"density": 3.0, "optTags": []}, ["density"], {"optTags": []}),
+                   "density 3.0")
+    if got and "MIXED:" in got[0]:
+        bad("inh-blame-empty-array-not-owned",
+            f"an empty stored array is resolveFilament's INHERIT sentinel; calling it "
+            f"'stored here' gives the default variant shape a false MIXED clause: {got}")
+    else:
+        ok("inh-blame-empty-array-not-owned")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1175,6 +1244,7 @@ if __name__ == "__main__":
     case_promotion_carryover_exempt()
     case_malformed_is_not_missing()
     case_identity_and_dates()
+    case_inh_blame_attribution()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

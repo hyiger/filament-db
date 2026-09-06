@@ -613,6 +613,12 @@ def _bad_tds_url(v):
 SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MAX_SPOOL_ID_LENGTH = 128
 
+# Roots that are REQUIRED and therefore stored on every row, so `_inherited`
+# can never contain them. Naming one as a blame root made the single-owner
+# "INHERITED from template" branch unreachable at that site and forced every
+# genuinely inherited value there into the MIXED branch instead.
+ALWAYS_STORED_ROOTS = ("name", "vendor", "type")
+
 ORCA_PLATE_KEYS = ("Cool Plate", "Engineering Plate", "Hot Plate",
                    "Textured PEI Plate", "Textured Cool Plate")
 
@@ -1179,7 +1185,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             numerics, then ordering and density — so it is now one helper applied
             at every value-based emission.
             """
-            named = [x for x in roots if x]
+            named = [x for x in roots if x and x not in ALWAYS_STORED_ROOTS]
+            # A whole-array inheritable resolves by FALLBACK: an empty stored
+            # array IS the inherit sentinel (resolveFilament), and such a field
+            # may be absent from `_inherited` simply because the template's
+            # array is empty too. Treating it as "stored here" gave the ordinary
+            # variant shape a false MIXED clause telling the reader the value
+            # lives on a row that does not carry it. It is neither inherited nor
+            # owned, so it is dropped from consideration entirely.
+            named = [x for x in named
+                     if not (x in PIN_CHECK_ARRAYS and x not in inherited_fields
+                             and not raw.get(x))]
             inh = [x for x in named if x in inherited_fields]
             if not inh:
                 return ""
@@ -1528,30 +1544,25 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         nozzle_like = [("nozzle", noz), ("nozzleFirstLayer", nfl)]
         bed_like = [("bed", bed), ("bedFirstLayer", bfl)]
 
-        for idx, cal in enumerate(r.get("calibrations") or []):
+        # REFERENCE INTEGRITY walks the STORED array; the VALUE checks below
+        # deliberately walk the resolved one. A variant that inherits
+        # `calibrations` carries the template's array verbatim, so reporting a
+        # dead ref off the resolved read named one defect once per inheriting
+        # variant, at an index that variant does not store — the same fan-out
+        # already fixed for the container and element sweeps. The ?raw=true
+        # response populates these refs too, so this costs no extra fetch, and
+        # with the emits keyed to the storing document `_inh_blame` is
+        # unreachable here and deliberately absent.
+        for idx, cal in enumerate(raw.get("calibrations") or []):
             if not isinstance(cal, dict):
                 continue
             nz = cal.get("nozzle")
             noz_name = nz.get("name") if isinstance(nz, dict) else None
-            where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
-            # populate() returns null for a PURGED nozzle and an object still
-            # carrying _deletedAt for a soft-deleted one. Neither can be
-            # diameter-matched by the dynamic calibration route, and the Prusa
-            # bundle drops such a row from its per-nozzle fan-out, so valid
-            # tuning silently becomes unreachable.
-            # `printer` and `bedType` are NOT checked here, and cannot be:
-            # their null is the supported "generic" state, and BOTH reads
-            # populate them (the detail route runs one populated query for raw
-            # and resolved alike), so a purged target and a genuine generic are
-            # indistinguishable in this loop. They are checked instead by the
-            # calibration-scope pass at the end of audit(), against the
-            # UNPOPULATED ids from /api/snapshot — the only read that carries
-            # them. Keyed by the document that STORES the array, so an inherited
-            # calibrations array is not re-reported against every child.
             if nz is None:
                 add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
-                                 f"exists -> the tuning is unreachable"
-                                 f"{_inh_blame('calibrations')}", fid)
+                                 f"exists -> populate() answers null for it, so /calibration cannot "
+                                 f"diameter-match this row and the Prusa fan-out drops it: the "
+                                 f"tuning is genuinely unreachable", fid)
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
                 # NOT the purged case's consequence. A soft-deleted nozzle
                 # populates as a FULL document that still carries its
@@ -1566,7 +1577,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"this tuning (neither filters tombstoned nozzles), but the "
                                  f"nozzle is gone from the active catalogue, so the row drops out "
                                  f"of the FilamentForm grid into the orphan list and can only be "
-                                 f"removed, not corrected{_inh_blame('calibrations')}", fid)
+                                 f"removed, not corrected", fid)
             # `printer` and `bedType` are `default: null`, unlike the required
             # nozzle above, so null is the schema's supported "generic" state and
             # must NOT be reported. A TOMBSTONED ref is reported -- but each of
@@ -1586,8 +1597,27 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                "for a bed type missing from the active catalogue, so the row lands "
                                "in the FilamentForm orphan list and can only be removed")
                     add("structure", f"{name}: calibration[{idx}] references soft-deleted "
-                                     f"{ref_field} {_rn!r} -> {_rc}"
-                                     f"{_inh_blame('calibrations')}", fid)
+                                     f"{ref_field} {_rn!r} -> {_rc}", fid)
+
+        for idx, cal in enumerate(r.get("calibrations") or []):
+            if not isinstance(cal, dict):
+                continue
+            nz = cal.get("nozzle")
+            noz_name = nz.get("name") if isinstance(nz, dict) else None
+            where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
+            # Reference integrity is handled by the STORED-array loop above;
+            # this loop is VALUES ONLY, and reads the resolved document on
+            # purpose — a variant exports the temperatures and calibration
+            # values it inherits, so those legitimately follow the child.
+            # `printer` and `bedType` are NOT checked here, and cannot be:
+            # their null is the supported "generic" state, and BOTH reads
+            # populate them (the detail route runs one populated query for raw
+            # and resolved alike), so a purged target and a genuine generic are
+            # indistinguishable in this loop. They are checked instead by the
+            # calibration-scope pass at the end of audit(), against the
+            # UNPOPULATED ids from /api/snapshot — the only read that carries
+            # them. Keyed by the document that STORES the array, so an inherited
+            # calibrations array is not re-reported against every child.
             ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ", inherit_root="calibrations")
             nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
                             (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
@@ -1696,12 +1726,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}"
                              f"{_inh_blame(_temp_root(label), 'temperatures.nozzleRangeMax')}", fid)
             if not floor <= val <= NOZZLE_CEILING:
-                # The band is chosen BY TYPE, so type ownership matters as much as
-                # the temperature's: a child overriding type against an inherited
-                # temperature must not be told to edit the template.
+                # The band is chosen BY TYPE — but `type` is `required: true`
+                # and stored on EVERY row, so it can never appear in
+                # `_inherited`. Naming it as a blame root made the single-owner
+                # "INHERITED from template" branch unreachable here and forced
+                # every genuinely inherited temperature into MIXED instead. The
+                # type is stated as CONTEXT for the band, not as an ownership
+                # claim.
                 add("temps", f"{name}: {label} {val}C outside the plausible band for "
-                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C)"
-                             f"{_inh_blame(_temp_root(label), 'type')}", fid)
+                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C — chosen from "
+                             f"this row's own type)"
+                             f"{_inh_blame(_temp_root(label))}", fid)
         for label, val in bed_like:
             if val is not None and not 0 <= val <= 200:
                 add("temps", f"{name}: {label} {val}C implausible{_temp_blame(label)}", fid)
@@ -2061,11 +2096,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 val = raw.get(fld)
                 if val in (None, "", []):
                     continue
-                if nested_parent:
-                    # /promote is refused on this row, so the only working
-                    # remedy is the explicit null — which templateStrip lets
-                    # through on purpose (it filters `!= null`, so clearing a
-                    # legacy value is never blocked).
+                if nested_parent and promote_runs:
+                    # A destructive null was prescribed unconditionally here,
+                    # even where the shape repair one row above makes /promote
+                    # MOVE the value onto a variant instead of deleting it. Name
+                    # the sequence rather than the shortcut: the null is still
+                    # available, but it is the "I want this gone" branch, not
+                    # the repair.
+                    how = (f'/promote is refused while this row carries parentId — repair the '
+                           f'shape (above), then Convert to template, which MOVES this onto a '
+                           f'variant; PUT {{"{fld}": null}} only if you want it deleted')
+                elif nested_parent:
+                    # promote_runs is False, so promotion would move nothing and
+                    # the null really is the only remedy.
                     how = f'/promote refused (see above) — PUT {{"{fld}": null}}'
                 elif promote_runs:
                     how = "Convert to template — moves this onto a new variant"
