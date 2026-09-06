@@ -731,6 +731,35 @@ def case_calibration_scope_refs():
     ok("cal-scope-unaudited-skipped") if not fp else bad(
         "cal-scope-unaudited-skipped", f"reported on a filament this run never audited: {fp}")
 
+    # the CONSEQUENCE must follow pickRepresentativeCalibration's actual
+    # predicate (printer == null && bedType == null), not be pasted on both ways
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      idx({"printer": "p_gone", "bedType": None}))
+    both = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      idx({"printer": "p_gone", "bedType": "b1"}))
+    one = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
+    if (both and "EVERY machine" in both[0]) and (one and "EVERY machine" not in one[0]
+                                                  and "loses its printer scope" in one[0]):
+        ok("cal-scope-consequence-branches")
+    else:
+        bad("cal-scope-consequence-branches",
+            "a dangling printer beside a LIVE bed type fails pickRepresentativeCalibration's "
+            "`printer == null && bedType == null`, so it does NOT become the export default; "
+            f"the two cases must not carry the same sentence.\n    both-null: {both}\n"
+            f"    one-live: {one}")
+
+    # an ABSENT collection is not an empty one — collapsing them would report
+    # every stored reference in the library as dangling at once
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      {"printers": None, "bedTypes": {"b1"},
+                       "cals": {"a": [{"printer": "p_whatever", "bedType": "b1"}]}})
+    fp = [m for rows in f.values() for _, m in rows if "resolves to no printer" in m]
+    ok("cal-scope-absent-collection") if not fp else bad(
+        "cal-scope-absent-collection",
+        f"the snapshot carried no printers collection, so no printer ref can be judged; "
+        f"reporting one is a false claim: {fp}")
+
     # a FAILED snapshot read must say so, not silently render as clean
     f, _, _ = A.audit({"a": base}, (), None, None, None, {"error": "HTTP 500"})
     hit = [m for rows in f.values() for _, m in rows if "were NOT checked" in m]

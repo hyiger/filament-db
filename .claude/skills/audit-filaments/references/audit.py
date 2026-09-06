@@ -674,7 +674,15 @@ def load(base, api_key, cache_dir=None):
         cols = snap.get("collections") if isinstance(snap, dict) else None
         if isinstance(cols, dict):
             def _ids(key):
-                return {str(x.get("_id")) for x in (cols.get(key) or [])
+                # None when the snapshot does not CARRY the collection, which is
+                # a real state (restore treats an absent key as "leave this
+                # collection alone", and an older export predates some of them).
+                # Collapsing that into an empty set would report every stored
+                # reference in the library as dangling in one go.
+                rows = cols.get(key)
+                if not isinstance(rows, list):
+                    return None
+                return {str(x.get("_id")) for x in rows
                         if isinstance(x, dict) and x.get("_id") is not None}
             ref_index = {
                 "printers": _ids("printers"),
@@ -1865,8 +1873,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                          f"`calibrations.printer`/`.bedType`, so a purged target is "
                          f"indistinguishable from the generic state without it.", None)
     elif isinstance(ref_index, dict):
-        _live = {"printer": ref_index.get("printers") or set(),
-                 "bedType": ref_index.get("bedTypes") or set()}
+        _live = {"printer": ref_index.get("printers"), "bedType": ref_index.get("bedTypes")}
+
+        def _dangles(cal, field):
+            """True when this ref is STORED but resolves to no row — the state
+            populate() renders as null. None when it cannot be judged."""
+            if _live[field] is None:
+                return None        # the snapshot did not carry that collection
+            ref = cal.get(field)
+            if ref is None or ref == "" or isinstance(ref, (dict, list)):
+                return False       # unset (a genuine generic scope), or malformed
+            return str(ref) not in _live[field]
+
         for _fid, _cals in (ref_index.get("cals") or {}).items():
             if _fid not in records or not isinstance(_cals, list):
                 continue           # only rows this run actually audited
@@ -1874,19 +1892,32 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             for _i, _cal in enumerate(_cals):
                 if not isinstance(_cal, dict):
                     continue       # shape already reported by the element sweep
+                # The consequence is NOT the same for both fields, and it is not
+                # even the same for one field twice. pickRepresentativeCalibration
+                # tests `printer == null && bedType == null`, so the export-default
+                # promotion happens only when BOTH refs are null after populate --
+                # a dangling printer beside a LIVE bed type fails that predicate,
+                # and claiming otherwise would send the reader looking for an
+                # export defect that is not there.
+                _both_null = all(
+                    _cal.get(f) in (None, "") or _dangles(_cal, f) for f in ("printer", "bedType")
+                ) and not any(isinstance(_cal.get(f), (dict, list)) for f in ("printer", "bedType"))
                 for _f in ("printer", "bedType"):
-                    _ref = _cal.get(_f)
-                    if _ref is None or _ref == "" or isinstance(_ref, (dict, list)):
-                        continue   # a genuine generic scope, or already reported
-                    if str(_ref) not in _live[_f]:
-                        add("structure",
-                            f"{_nm}: calibration[{_i}] stores {_f}={str(_ref)!r}, which resolves "
-                            f"to no {_f} row at all -> populate() returns null for it, and that "
-                            f"is EXACTLY the shape pickRepresentativeCalibration reads as the "
-                            f"generic any-printer/any-bed default, so this calibration's tuning "
-                            f"is baked into the single-preset Orca/Bambu export for every "
-                            f"machine. Re-point it at a live {_f}, or clear it deliberately if "
-                            f"the tuning really is generic.", _fid)
+                    if not _dangles(_cal, _f):
+                        continue
+                    _conseq = (
+                        "populate() nulls it, and with the other scope empty too that is EXACTLY "
+                        "the shape pickRepresentativeCalibration reads as the generic "
+                        "any-printer/any-bed default -- so this calibration's tuning is baked "
+                        "into the single-preset Orca/Bambu export for EVERY machine"
+                        if _both_null else
+                        "populate() nulls it, so the calibration silently loses its "
+                        f"{_f} scope: it still exports and still renders, but no longer as the "
+                        f"tuning for the {_f} it was measured on")
+                    add("structure",
+                        f"{_nm}: calibration[{_i}] stores {_f}={str(_cal.get(_f))!r}, which "
+                        f"resolves to no {_f} row at all -> {_conseq}. Re-point it at a live "
+                        f"{_f}, or clear it deliberately if the tuning really is generic.", _fid)
 
     return findings, parents, set(records)
 

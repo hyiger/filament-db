@@ -158,7 +158,14 @@ is the whole database — fetch it once and keep only the ids). The pass walks t
 per-filament arrays**, never the resolved read: a variant inheriting `calibrations` carries the
 template's array, so walking the resolved read would report the template's dangling ref once per
 child at an index the child does not own. If that read fails, the report **says the category was
-not checked** rather than rendering as clean.
+not checked** rather than rendering as clean, and a collection the snapshot does not *carry* is
+distinguished from one that is *empty* — collapsing those would report every stored reference in
+the library as dangling at once.
+
+The consequence branches, because `pickRepresentativeCalibration`'s predicate is
+`printer == null && bedType == null`: a dangling printer beside a **live** bed type fails it and
+does **not** become the export default — it merely loses its printer scope. Two different
+sentences, chosen from the other ref's state.
 
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
