@@ -1526,6 +1526,48 @@ def case_heuristics_and_negatives():
             f"heuristic-{label}", f"{label}: must stay silent, got {fp}")
 
 
+# --- 14q. unreachable calibrations, from BOTH sides --------------------------
+# A template owning calibrations with no ticks was invisible twice over: the
+# template by the `not is_template` guard, and the inheriting child by counting
+# its STORED (empty) array. v1.70 keeps calibrations on the template as shared
+# spec, so this is the normal place for them to live.
+def case_unreachable_calibrations():
+    cal = valid_res()["calibrations"]
+
+    def family(ticks, kid_inherits):
+        t = valid_res(_id="t", name="Family", parentId=None, spools=[], color=None,
+                      colorName=None, totalWeight=None, lowStockThreshold=None,
+                      compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
+        k = valid_res(_id="k", name="Family — Blue", parentId="t",
+                      compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
+        k["_inherited"] = ["calibrations", "compatibleNozzles"] if kid_inherits else []
+        kraw = copy.deepcopy(k)
+        if kid_inherits:
+            kraw["calibrations"] = []
+            kraw["compatibleNozzles"] = []
+        f, _ = run({"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}},
+                   topology={"t": True})
+        return [m for rows in f.values() for _, m in rows if "no compatibleNozzles" in m]
+
+    got = family([], True)
+    if len(got) == 1 and got[0].startswith("Family:"):
+        ok("unreachable-cals-template")
+    else:
+        bad("unreachable-cals-template",
+            f"a template owning calibrations with no ticks makes every row unreachable in ITS "
+            f"form and in every inheriting variant's — expected exactly one row, on the "
+            f"template; got {got}")
+
+    ok("unreachable-cals-healthy") if not family(valid_res()["compatibleNozzles"], True) else bad(
+        "unreachable-cals-healthy", "a ticked template must stay silent")
+
+    got = family([], False)
+    ok("unreachable-cals-variant-owned") if any(m.startswith("Family — Blue") for m in got) else bad(
+        "unreachable-cals-variant-owned",
+        f"a variant storing its OWN calibrations with no ticks must be reported on the variant: "
+        f"{got}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1612,6 +1654,7 @@ if __name__ == "__main__":
     case_shape_dedup_keeps_distinct()
     case_instance_id_shadows()
     case_heuristics_and_negatives()
+    case_unreachable_calibrations()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

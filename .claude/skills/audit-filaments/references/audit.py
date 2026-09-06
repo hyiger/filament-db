@@ -2499,6 +2499,23 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # An abrasive filament with no assignment is already reported, with far
         # better remediation, by /api/abrasive-nozzles. Restating it here would
         # contradict this script's own division of labour and double-count.
+        # The no-ticks-with-calibrations case below applies to a TEMPLATE too:
+        # v1.70 keeps calibrations on the template as shared spec, and its own
+        # form grid drops every unreachable row the same way. Excluding
+        # templates wholesale left the defect unreported from BOTH sides — the
+        # template by this guard, the inheriting child by an empty stored array.
+        _ticks_eff = r.get("compatibleNozzles") or []
+        _cals_eff = [c for c in (r.get("calibrations") or []) if isinstance(c, dict)]
+        _both_inherited = ("calibrations" in inherited_fields
+                           and "compatibleNozzles" in inherited_fields)
+        if (is_template and fid not in abrasive_unassigned
+                and not _ticks_eff and _cals_eff):
+            add("nozzles", f"{name}: no compatibleNozzles, but {len(_cals_eff)} calibration(s) are "
+                           f"stored -> isCalibrationRowReachable requires the row's nozzle to be "
+                           f"ticked, so every one of them drops out of the FilamentForm grid into "
+                           f"the orphan list and can only be removed, not edited — here and on "
+                           f"every variant that inherits them", fid)
+
         if not is_template and fid not in abrasive_unassigned:
             compat = r.get("compatibleNozzles") or []
             # A soft-deleted nozzle still populates as a truthy object carrying
@@ -2520,8 +2537,13 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # so with no ticks EVERY stored calibration drops out of the
                 # form's grid into the orphan list, where it can be removed but
                 # not corrected.
-                _cal_n = len([c for c in (raw.get("calibrations") or [])
-                              if isinstance(c, dict)])
+                # EFFECTIVE, not stored: a variant that inherits both arrays
+                # stores an empty one, so counting the stored array reported
+                # nothing while the resolved child really does carry rows that
+                # its (empty) effective tick set makes unreachable. Suppressed
+                # only when BOTH roots are inherited — the template then owns
+                # the defect and reports it once, above.
+                _cal_n = 0 if _both_inherited else len(_cals_eff)
                 if _cal_n:
                     add("nozzles", f"{name}: no compatibleNozzles, but {_cal_n} calibration(s) are "
                                    f"stored -> isCalibrationRowReachable requires the row's nozzle "
