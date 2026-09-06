@@ -102,7 +102,11 @@ def rec(res=None, raw=None):
 
 
 def run(records, abrasive=(), failed_map=None, topology=None):
-    return A.audit(records, abrasive, failed_map, topology)
+    # audit() returns (findings, parents, audited_ids). The third element exists
+    # so main() cannot iterate records audit() discarded; callers here only need
+    # the first two, so unpack defensively rather than pinning the arity.
+    result = A.audit(records, abrasive, failed_map, topology)
+    return result[0], result[1]
 
 
 # --- 1. the valid record must audit cleanly and not crash -------------------

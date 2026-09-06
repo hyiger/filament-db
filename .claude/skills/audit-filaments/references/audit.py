@@ -121,6 +121,14 @@ def num(v):
 # met. `openprinttagSnapshot` is provenance, not live spec.
 OPAQUE_BAGS = {"settings", "openprinttagSnapshot"}
 
+# Detail-response METADATA, injected by the route rather than stored on the
+# document. GET /api/filaments/{id} attaches `_variants` (name/color/
+# secondaryColors/cost/optTags per live child) plus `_parent`/`_inherited`, so
+# walking them reports a CHILD's malformed value a second time against its
+# TEMPLATE, at a path (`_variants[0].cost`) the template cannot even be PUT to.
+# Every child is fetched and audited in its own right.
+RESPONSE_METADATA = {"_variants", "_parent", "_inherited", "_strippedTemplateFields"}
+
 
 _CAL_ELEMENT_RE = re.compile(r"^calibrations\[\d+\]$")
 
@@ -130,7 +138,7 @@ def malformed_numerics(node, path=""):
     if isinstance(node, dict):
         for k, v in node.items():
             where = f"{path}.{k}" if path else k
-            if k in OPAQUE_BAGS:
+            if k in OPAQUE_BAGS or k in RESPONSE_METADATA:
                 continue
             # `calibrations[].nozzle` shares its name with the numeric
             # `temperatures.nozzle` but holds a POPULATED NOZZLE, so a dict there
@@ -225,6 +233,49 @@ CALIBRATION_BOUNDS = {
 # so a bag past either limit bloats every detail read and every export.
 MAX_SETTINGS_KEYS = 400
 MAX_SETTING_VALUE_LENGTH = 20_000
+
+
+def _js_number(x):
+    """Render a number as `JSON.stringify` would.
+
+    Python and JavaScript disagree on numeric text, and the difference is not
+    cosmetic here: `json.dumps(1e20)` is `1e+20` (5 chars) while
+    `JSON.stringify(1e20)` is `100000000000000000000` (21). A settings value of
+    1,000 such numbers measures 6,001 in Python and 22,001 in the app — rejected
+    by validateSettingsBag, reported clean by this audit.
+
+    ECMAScript writes decimal notation while the decimal exponent is under 21,
+    and its exponent carries no zero padding (`1e-7`, not Python's `1e-07`).
+    """
+    f = float(x)
+    if f != f or f in (float("inf"), float("-inf")):
+        return "null"                      # JSON.stringify(NaN|Infinity) === null
+    if f == int(f) and abs(f) < 1e21:
+        return str(int(f))
+    text = repr(f)
+    if "e" in text:
+        mant, exp = text.split("e")
+        n = int(exp)
+        text = f"{mant}e{'+' if n >= 0 else '-'}{abs(n)}"
+    return text
+
+
+def _js_stringify(v):
+    """`JSON.stringify(value ?? null)`, matching the app's own measurement."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return _js_number(v)
+    if isinstance(v, str):
+        return json.dumps(v, ensure_ascii=False)
+    if isinstance(v, list):
+        return "[" + ",".join(_js_stringify(e) for e in v) + "]"
+    if isinstance(v, dict):
+        return "{" + ",".join(f"{json.dumps(str(k), ensure_ascii=False)}:{_js_stringify(e)}"
+                              for k, e in v.items()) + "}"
+    return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
 MAX_SECONDARY_COLORS = 5   # OpenPrintTag spec limit, enforced by the schema
 
 # Containers whose SHAPE a raw-driver sync or restore can break. A truthy
@@ -248,6 +299,18 @@ CONTAINER_SHAPES = {
 # raw read carries ObjectId strings there, so a non-dict element is normal.
 DICT_ELEMENT_ARRAYS = ("spools", "calibrations", "presets", "bedTypeTemps")
 
+# Elements of the NESTED subdocument arrays. NESTED_CONTAINER_SHAPES checks only
+# that the container is a list, so `usageHistory: ["oops"]` passed it and every
+# later pass dropped the scalar in silence (bounds_check returns on a non-dict) —
+# the record audited clean while exportSpools reads `u.grams` and `c.date` off it.
+NESTED_DICT_ELEMENT_ARRAYS = {"spools": ("usageHistory", "dryCycles")}
+
+# Booleans read by TRUTHINESS. `retired` is the one that matters: any non-empty
+# string hides the spool from the spool count, the gram total and the % bar, so a
+# corrupt flag silently removes inventory. Reported but deliberately NOT coerced —
+# coercing would make the audit disagree with what the app actually computes.
+NESTED_BOOL_FIELDS = {"spools": ("retired",)}
+
 NESTED_CONTAINER_SHAPES = {
     "spools": {"usageHistory": list, "dryCycles": list},
     "presets": {"temperatures": dict},
@@ -259,6 +322,14 @@ NESTED_CONTAINER_SHAPES = {
 # the containers for the same reason the containers are swept centrally: guarding
 # each call site is what turns one defect into one review round per site.
 TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName")
+
+# Schema-required text, with the model's own trim semantics (Filament.ts):
+# `name` is `{required, trim}` so Mongoose trims BEFORE the required check and a
+# whitespace-only name is a violation; `vendor`/`type` are required WITHOUT trim,
+# so only the exact empty string is. Judged on the STORED read — resolveFilament
+# treats "" as missing and substitutes the template's value, so a variant's empty
+# vendor is invisible in the resolved response.
+REQUIRED_TEXT = {"name": True, "vendor": False, "type": False}
 
 # Every `<field>: { type: Number }` leaf in the Filament schema. ONE recursive
 # sweep reports a non-number in any of them, at any depth, so the individual
@@ -485,14 +556,32 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             _seen_shape.add(key)
             add(cat, msg, str(fid))
 
+        coerced_text = set()
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for tf in TEXT_FIELDS:
                 tv = doc.get(tf)
                 if tv is not None and not isinstance(tv, str):
+                    if doc is raw:
+                        # Remember it: the sweep replaces the value with "", and
+                        # the required-content check below would then report that
+                        # "" as a second, phantom defect for the same field.
+                        coerced_text.add(tf)
                     add_shape("physical", f"{_disp(r.get('name'))}: {tf} is "
                                           f"{type(tv).__name__}, not a string ({which}) -> "
                                           f"malformed; treated as empty", ("text", tf))
                     doc[tf] = ""
+        for rf, trims in REQUIRED_TEXT.items():
+            sv = raw.get(rf)
+            # A non-string is already reported by the sweep above; reporting the
+            # "" it was coerced to would be one defect wearing two rows.
+            if sv is None or rf in coerced_text or not isinstance(sv, str):
+                continue
+            empty = (str(sv).strip() == "") if trims else (sv == "")
+            if empty:
+                how = "empty after trimming" if trims else "the empty string"
+                add_shape("physical", f"{_disp(r.get('name'))}: {rf} is {how} but the schema "
+                                      f"requires it -> written by a path that bypassed validation",
+                          ("required-text", rf))
         nm = r.get("name") or "?"
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for cf, want in CONTAINER_SHAPES.items():
@@ -526,6 +615,26 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                                                   f"treated as empty",
                                       ("nested", parent_key, str(tag), sf))
                             sub[sf] = swant()
+                    # …and the ELEMENTS of those nested lists. Reported, never
+                    # removed: the wording promises the entry is skipped, and the
+                    # audit stays non-mutating beyond the container coercions.
+                    for bf in NESTED_BOOL_FIELDS.get(parent_key, ()):
+                        bv = sub.get(bf)
+                        if bv is not None and not isinstance(bv, bool):
+                            add_shape("physical",
+                                      f"{nm}: {parent_key}[{tag}].{bf} is {type(bv).__name__} "
+                                      f"({bv!r}), not a boolean ({which}) -> the app tests it by "
+                                      f"truthiness, so this spool may be silently excluded from "
+                                      f"the count, the gram total and the % bar",
+                                      ("nested-bool", parent_key, str(tag), bf))
+                    for sf in NESTED_DICT_ELEMENT_ARRAYS.get(parent_key, ()):
+                        for eidx, ent in enumerate(sub.get(sf) or []):
+                            if not isinstance(ent, dict):
+                                add_shape("physical",
+                                          f"{nm}: {parent_key}[{tag}] {sf}[{eidx}] is "
+                                          f"{type(ent).__name__} ({ent!r}), not a subdocument "
+                                          f"({which}) -> that entry is skipped by every check",
+                                          ("nested-element", parent_key, str(tag), sf, eidx))
         # optTags ELEMENT validity. The container check above accepts a list of
         # anything, but the schema's setter and the CBOR encoder both keep only
         # non-negative integers, and the app's abrasive audit matches tags
@@ -600,8 +709,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 # validateSettingsBag measures JSON.stringify(value ?? null), so a
                 # string's quotes and escapes COUNT: 10,001 quote characters
                 # measure as 10,001 raw but serialise to 20,004 and are rejected.
-                text = json.dumps(v if v is not None else None, ensure_ascii=False,
-                                  separators=(",", ":"))
+                text = _js_stringify(v)
                 # JavaScript's String.length counts UTF-16 CODE UNITS, so a
                 # non-BMP character (emoji) counts 2 where Python's len() counts
                 # 1: 10,000 emoji measure 10,002 here and 20,002 in the app.
@@ -807,7 +915,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                         f"variant keeps it")
             return " -> written by a path that bypassed validation"
 
-        def bounds_check(container, table, where="", source="schema"):
+        def bounds_check(container, table, where="", source="schema", inherit_prefix=""):
+            # `inherit_prefix` is used ONLY for the inheritance lookup, never in
+            # the message: resolveFilament records nested temperature entries
+            # qualified (`temperatures.nozzleRangeMin`) while top-level scalars
+            # are bare, so an inherited range endpoint was blamed on the variant.
             if not isinstance(container, dict):
                 return
             for f2, (bmin, bmax) in table.items():
@@ -819,10 +931,10 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
                     add("physical", f"{name}: {where}{f2}={val} outside the {source} bound "
-                                    f"({rng}){_blame(f2, where)}", fid)
+                                    f"({rng}){_blame(inherit_prefix + f2, where)}", fid)
 
         bounds_check(r, NUMERIC_BOUNDS)
-        bounds_check(temps, RANGE_BOUNDS)
+        bounds_check(temps, RANGE_BOUNDS, inherit_prefix="temperatures.")
         for idx, pre in enumerate(r.get("presets") or []):
             if isinstance(pre, dict):
                 bounds_check(pre, PRESET_BOUNDS, f"preset[{pre.get('label') or idx}] ")
@@ -1024,7 +1136,12 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 add("nozzles", f"{name}: compatibleNozzles includes soft-deleted {stale} -> stale "
                                f"reference that cannot be used", fid)
 
-    return findings, parents
+    # The audited ids, so main() cannot iterate records this function discarded:
+    # `records` was rebound to `usable` above, and the grouping in main() used to
+    # read `rec["res"].get(...)` off the ORIGINAL mapping and die on the very
+    # record audit() had just reported as unreadable — the one-bad-row-hides-
+    # everything failure, one scope up.
+    return findings, parents, set(records)
 
 
 def main():
@@ -1038,7 +1155,7 @@ def main():
 
     base = args.base.rstrip("/")
     records, abrasive, failed, topology = load(base, args.api_key, args.cache)
-    findings, parents = audit(records, abrasive, failed, topology)
+    findings, parents, audited = audit(records, abrasive, failed, topology)
 
     # A filter that matches NO known category must never render as a clean audit.
     # `--only abrasives` (plural) printed "0 findings" over a library with a real
@@ -1065,8 +1182,8 @@ def main():
     # surfaces it) — so bucketing on the raw string would leave both records
     # without an id in exactly the case the reader most needs one.
     by_name = {}
-    for rid, rec in records.items():
-        key = (rec["res"].get("name") or "").strip()
+    for rid in audited:
+        key = (records[rid]["res"].get("name") or "").strip()
         by_name.setdefault(key, []).append(rid)
     ambiguous = {rid for ids in by_name.values() if len(ids) > 1 for rid in ids}
 
@@ -1095,7 +1212,7 @@ def main():
         print(f"\n### {title}  ({len(rows)})")
         for row in rows:
             print("  -", row)
-    print(f"\n=== {total} findings across {len(records)} filaments "
+    print(f"\n=== {total} findings across {len(audited)} filaments "
           f"({len(parents)} templates) ===")
 
 
