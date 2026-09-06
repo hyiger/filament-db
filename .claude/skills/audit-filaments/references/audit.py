@@ -333,11 +333,9 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
         # A numeric field holding a non-number is malformed AND would crash every
         # comparison below, so report it and let `num()` treat it as absent.
-        for fld in NUMERIC_BOUNDS:
-            val = r.get(fld)
-            if val is not None and num(val) is None:
-                add("physical", f"{name}: {fld} is {type(val).__name__} ({val!r}), not a number -> "
-                                f"malformed; every check on it is skipped", fid)
+        # Only density/diameter here: every other top-level numeric is in
+        # NUMERIC_BOUNDS, which `bounds_check` now reports itself — sweeping them
+        # here as well produced two rows for one defect.
         for fld in ("density", "diameter"):
             val = r.get(fld)
             if val is not None and num(val) is None:
@@ -367,8 +365,12 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 # measure as 10,001 raw but serialise to 20,004 and are rejected.
                 text = json.dumps(v if v is not None else None, ensure_ascii=False,
                                   separators=(",", ":"))
-                if len(text) > MAX_SETTING_VALUE_LENGTH:
-                    add("physical", f"{name}: settings.{k} is {len(text)} characters, past the "
+                # JavaScript's String.length counts UTF-16 CODE UNITS, so a
+                # non-BMP character (emoji) counts 2 where Python's len() counts
+                # 1: 10,000 emoji measure 10,002 here and 20,002 in the app.
+                measured = len(text.encode("utf-16-le")) // 2
+                if measured > MAX_SETTING_VALUE_LENGTH:
+                    add("physical", f"{name}: settings.{k} is {measured} UTF-16 units, past the "
                                     f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
 
         # --- inventory: what makes the remaining bar work --------------------
@@ -392,7 +394,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
             if legacy_roll:
                 gross = num(r.get("totalWeight"))
-                if tare is not None and gross < tare:
+                if tare is not None and gross is not None and gross < tare:
                     add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining", fid)
             else:
                 missing_gross = 0
@@ -534,7 +536,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 return
             for f2, (bmin, bmax) in table.items():
                 val = container.get(f2)
-                if not isinstance(val, (int, float)) or isinstance(val, bool):
+                if val is None:
+                    continue
+                if num(val) is None:
+                    # Nested containers (presets, calibrations, spools, ledgers)
+                    # are not covered by the top-level malformed-type sweep, so
+                    # skipping quietly here would let the record read clean —
+                    # contradicting the promise that every malformed numeric is
+                    # reported.
+                    add("physical", f"{name}: {where}{f2} is {type(val).__name__} ({val!r}), not a "
+                                    f"number -> malformed; its bounds check is skipped", fid)
                     continue
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"

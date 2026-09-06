@@ -153,7 +153,9 @@ are exempt: an abstract product line legitimately carries none of it.
 `NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API,
 so a violation proves the row arrived by a path that bypassed validation (the settings bag's
 own limits — 400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored
-the same way) — a raw-driver sync copy,
+the same way, measured as **JavaScript would**: `JSON.stringify(value ?? null)` counted in UTF-16
+code units, so quotes, escapes and the surrogate pairs of an emoji all count exactly as they do in
+the app) — a raw-driver sync copy,
 a snapshot restore, or a legacy write — and both exporters serialise these straight into the
 preset. That covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three
 fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
@@ -297,7 +299,10 @@ truncates extras, and a slicer export can use the first secondary when the prima
 same hazard: one corrupt row killing the run. A raw-driver sync, a restore or a legacy write can
 leave a *string* in a numeric field, and `0.7 <= "oops"` raises `TypeError`, so every direct
 comparison goes through a `num()` helper that yields `None` for a non-number while the bad value is
-reported separately. Do not "simplify" those back to bare comparisons.
+reported separately — by `bounds_check` for anything in a bounds table, including nested
+containers, so a malformed `presets[0].extrusionMultiplier` is named rather than quietly skipped.
+Do not "simplify" those back to bare comparisons, and remember `num()` returns `None`, so a guard
+that then compares the result still raises.
 
 **A record that cannot be read is reported, not fatal.** One row that vanished between the listing
 and the detail read, or whose GET route 500s, used to abort the whole run before anything was
