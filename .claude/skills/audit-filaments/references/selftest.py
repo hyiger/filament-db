@@ -421,6 +421,94 @@ def case_nested_containers_reported():
                         f"container was silently declared clean")
 
 
+
+# --- 9. an exemption must be scoped by PATH, not by field name ---------------
+# `calibrations[].nozzle` legitimately holds a populated nozzle document, so a
+# dict there is correct. Exempting the NAME rather than the path also exempted
+# `temperatures.nozzle`, where a dict is a corrupt numeric field.
+def case_nozzle_exemption_scope():
+    r = valid_res()
+    r["temperatures"]["nozzle"] = {}
+    try:
+        findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    except Exception as e:
+        return bad("nozzle-exemption-scope", f"raised: {type(e).__name__}: {e}")
+    hit = any("temperatures.nozzle" in m for rows in findings.values() for _, m in rows)
+    ok("nozzle-exemption-scope") if hit else bad(
+        "nozzle-exemption-scope",
+        "temperatures.nozzle={} produced no finding -> an object in a numeric "
+        "temperature field audits clean")
+    # …and the legitimate populated nozzle must STILL not be reported.
+    r2 = valid_res()
+    try:
+        f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    except Exception as e:
+        return bad("nozzle-exemption-keeps", f"raised: {type(e).__name__}: {e}")
+    fp = [m for rows in f2.values() for _, m in rows if "calibrations[0].nozzle" in m]
+    ok("nozzle-exemption-keeps") if not fp else bad(
+        "nozzle-exemption-keeps", f"populated calibration nozzle wrongly flagged: {fp}")
+
+
+# --- 10. malformed ELEMENTS of subdocument arrays ----------------------------
+# The container check accepts a list of anything; every later pass then skips a
+# non-dict quietly, so `spools: ["oops"]` audited clean while the app cannot
+# compute inventory from that live spool.
+def case_subdoc_elements_reported():
+    for parent in ("spools", "calibrations", "presets", "bedTypeTemps"):
+        for elem in ("oops", 1, None, []):
+            r = valid_res()
+            r[parent] = [elem]
+            try:
+                findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+            except Exception as e:
+                bad(f"subdoc-element-{parent}", f"raised on {elem!r}: {type(e).__name__}: {e}")
+                continue
+            hit = any(parent in m and "not a subdocument" in m
+                      for rows in findings.values() for _, m in rows)
+            ok(f"subdoc-element-{parent}-{elem!r}") if hit else bad(
+                f"subdoc-element-{parent}",
+                f"{parent}=[{elem!r}] produced no malformed-element finding -> the "
+                f"entry is skipped by every check and the record reads clean")
+
+
+# --- 11. an UNREADABLE parent is not a MISSING one ---------------------------
+# A false report of data loss against a healthy row is worse than a miss: it
+# sends the user hunting a broken link that does not exist. The read failure is
+# already reported separately.
+def case_unreadable_parent_not_missing():
+    tpl_id, var_id = "tpl9", "var9"
+    var = valid_res(_id=var_id, name="Variant", parentId=tpl_id)
+    records = {var_id: rec(var, copy.deepcopy(var))}
+    # the parent is ACTIVE per the listing, but its detail read failed
+    topology = {tpl_id: True, var_id: False}
+    failed_map = {tpl_id: "HTTPError: 500"}
+    try:
+        findings, _ = run(records, failed_map=failed_map, topology=topology)
+    except Exception as e:
+        return bad("unreadable-parent", f"raised: {type(e).__name__}: {e}")
+    msgs = [m for rows in findings.values() for _, m in rows]
+    false_alarm = [m for m in msgs if "resolves to no active filament" in m]
+    honest = [m for m in msgs if "could not be read" in m and "NOT audited" in m]
+    if false_alarm:
+        bad("unreadable-parent",
+            f"reported a broken parent link for a parent that is active and merely "
+            f"unreadable: {false_alarm}")
+    elif not honest:
+        bad("unreadable-parent",
+            "neither the false alarm nor an honest 'inheritance not audited' finding "
+            "was emitted -- the gap is silent")
+    else:
+        ok("unreadable-parent")
+    # A genuinely ABSENT parent must still be reported.
+    var2 = valid_res(_id="v2", name="Orphan", parentId="gone")
+    f2, _ = run({"v2": rec(var2, copy.deepcopy(var2))}, topology={"v2": False})
+    if any("resolves to no active filament" in m for rows in f2.values() for _, m in rows):
+        ok("absent-parent-still-reported")
+    else:
+        bad("absent-parent-still-reported",
+            "a genuinely missing parent is no longer reported -- the fix went too far")
+
+
 if __name__ == "__main__":
     case_valid()
     case_record_containers()
@@ -428,6 +516,9 @@ if __name__ == "__main__":
     case_fixture_covers_reads()
     case_opt_tag_elements()
     case_nested_containers_reported()
+    case_nozzle_exemption_scope()
+    case_subdoc_elements_reported()
+    case_unreadable_parent_not_missing()
     n, ncrash = fuzz_shapes()
     n2, ncrash2 = fuzz_cross_record()
     n += n2; ncrash += ncrash2

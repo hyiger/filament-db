@@ -122,6 +122,9 @@ def num(v):
 OPAQUE_BAGS = {"settings", "openprinttagSnapshot"}
 
 
+_CAL_ELEMENT_RE = re.compile(r"^calibrations\[\d+\]$")
+
+
 def malformed_numerics(node, path=""):
     """Yield (path, value) for every numeric-named leaf holding a non-number."""
     if isinstance(node, dict):
@@ -131,8 +134,10 @@ def malformed_numerics(node, path=""):
                 continue
             # `calibrations[].nozzle` shares its name with the numeric
             # `temperatures.nozzle` but holds a POPULATED NOZZLE, so a dict there
-            # is correct rather than malformed.
-            if k == "nozzle" and isinstance(v, dict):
+            # is correct rather than malformed. Scoped BY PATH: name alone
+            # exempted `temperatures.nozzle: {}` too, so an object in a numeric
+            # temperature field audited clean.
+            if k == "nozzle" and isinstance(v, dict) and _CAL_ELEMENT_RE.match(path):
                 yield from malformed_numerics(v, where)
                 continue
             if k in NUMERIC_LEAF_NAMES:
@@ -236,6 +241,13 @@ CONTAINER_SHAPES = {
 # `usageHistory: 3` was iterated directly and aborted the run, and a preset
 # holding `temperatures: "oops"` was skipped in silence. Keyed by parent so a new
 # subdocument container is one table entry rather than another bespoke guard.
+# Arrays whose ELEMENTS must be subdocuments. The container check accepts a list
+# of anything, so `spools: ["oops"]` passed while every later pass skipped the
+# non-dict quietly and the record audited clean — the app cannot compute
+# inventory from that live spool. compatibleNozzles is deliberately ABSENT: the
+# raw read carries ObjectId strings there, so a non-dict element is normal.
+DICT_ELEMENT_ARRAYS = ("spools", "calibrations", "presets", "bedTypeTemps")
+
 NESTED_CONTAINER_SHAPES = {
     "spools": {"usageHistory": list, "dryCycles": list},
     "presets": {"temperatures": dict},
@@ -475,6 +487,14 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     add("physical", f"{nm}: {cf} is {type(cv).__name__}, not a {want.__name__} "
                                     f"({which}) -> malformed; treated as empty", str(fid))
                     doc[cf] = want()
+            # Elements of the subdocument arrays must themselves be documents.
+            for parent_key in DICT_ELEMENT_ARRAYS:
+                for idx, sub in enumerate(doc.get(parent_key) or []):
+                    if not isinstance(sub, dict):
+                        add("physical", f"{nm}: {parent_key}[{idx}] is {type(sub).__name__} "
+                                        f"({sub!r}), not a subdocument ({which}) -> that entry is "
+                                        f"skipped by every check", str(fid))
+
             # …and the containers one level down, in every list that has them.
             for parent_key, subshapes in NESTED_CONTAINER_SHAPES.items():
                 for idx, sub in enumerate(doc.get(parent_key) or []):
@@ -832,6 +852,15 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         if pid:
             if pid == fid:
                 add("structure", f"{name}: parentId points at itself -> nothing can inherit", fid)
+            elif pid not in records and pid in listing_topology:
+                # The parent IS active — the listing carries it — but its detail
+                # read failed, so it is absent from `records`. Calling that a
+                # broken link would be a false report of data loss against a
+                # perfectly healthy row; the read failure is already reported
+                # separately under `structure`.
+                add("structure", f"{name}: parent {pid} could not be read, so this row's "
+                                 f"inheritance was NOT audited (the parent exists and is active)",
+                    fid)
             elif pid not in records:
                 # The listing only returns ACTIVE filaments, so an absent parent is
                 # missing, soft-deleted or purged. Such a row can pass every other
