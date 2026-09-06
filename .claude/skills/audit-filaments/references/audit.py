@@ -583,14 +583,10 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             nz = cal.get("nozzle")
             noz_name = nz.get("name") if isinstance(nz, dict) else None
             where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
-            for fld, (bmin, bmax) in CALIBRATION_BOUNDS.items():
-                val = cal.get(fld)
-                if not isinstance(val, (int, float)) or isinstance(val, bool):
-                    continue
-                if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
-                    rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
-                    add("physical", f"{name}: {where} {fld}={val} outside the schema bound ({rng}) -> "
-                                    f"exported to the slicer as-is", fid)
+            # Through the shared helper, not a bespoke loop: a second copy of the
+            # same logic is exactly how this table missed the malformed-value
+            # reporting that bounds_check gained.
+            bounds_check(cal, CALIBRATION_BOUNDS, f"{where} ")
 
         # --- missing core spec (EFFECTIVE — a template legitimately has none) -
         if not is_template:
@@ -772,9 +768,15 @@ def main():
     # rather than on an identical message: two duplicates usually have DIFFERENT
     # defects, so every message would be unique and no id would be appended —
     # leaving the report unable to say which of the two to repair.
+    # Grouped on the TRIMMED name. "X" and "X " are distinct raw keys but render
+    # identically, and that pair is a documented unresolved state (the #1116 trim
+    # migration deliberately refuses to merge a whitespace twin, and Data health
+    # surfaces it) — so bucketing on the raw string would leave both records
+    # without an id in exactly the case the reader most needs one.
     by_name = {}
     for rid, rec in records.items():
-        by_name.setdefault(rec["res"].get("name"), []).append(rid)
+        key = (rec["res"].get("name") or "").strip()
+        by_name.setdefault(key, []).append(rid)
     ambiguous = {rid for ids in by_name.values() if len(ids) > 1 for rid in ids}
 
     def render(rows):
