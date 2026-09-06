@@ -479,7 +479,10 @@ NESTED_CONTAINER_SHAPES = {
 # child (`{filament.instanceId}` beside the name), so a non-string throws on
 # open — and the cross-record identity pass indexes strings only, so without
 # this the field had no check at all.
-TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits", "instanceId")
+TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits", "instanceId",
+               # a declared String path with no other check: a dict here fails
+               # Mongoose's cast and takes the whole snapshot restore with it
+               "spoolType")
 
 # Schema-required text, with the model's own trim semantics (Filament.ts):
 # `name` is `{required, trim}` so Mongoose trims BEFORE the required check and a
@@ -527,6 +530,23 @@ BELOW_TARE_TOLERANCE_FRAC = 0.05
 # un-restorable -- and they only find out at restore time.
 MAX_SPOOL_TEXT_LENGTH = 200                              # Filament.ts maxlength
 NESTED_TEXT_MAXLEN = {"spools": ("label", "lotNumber")}
+
+
+# ECMAScript TrimString removes WhiteSpace + LineTerminator. That set is NOT
+# Python's `str.strip()`: Python also strips U+0085 and U+001C..U+001F, which JS
+# KEEPS, while JS trims U+FEFF, which Python keeps. Verified against node.
+_JS_TRIM = (
+    "\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680"
+    "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a"
+    "\u2028\u2029\u202f\u205f\u3000\ufeff"
+)
+
+
+def _js_trim(text):
+    """`String.prototype.trim` exactly. Using Python's strip() here reported a
+    stored id ending in U+0085 as unmatchable — the writer and both scan routes
+    keep that character, so the exact match succeeds and the finding was false."""
+    return text.strip(_JS_TRIM)
 
 
 def _js_truthy(v):
@@ -743,7 +763,7 @@ def _id_contract_problem(value, scope="spool"):
     positive. The two length ceilings are consumer bounds and apply to both."""
     if not isinstance(value, str):
         return None                       # a non-string is reported by the shape sweep
-    t = value.strip()
+    t = _js_trim(value)
     if not t:
         return None                       # absence has its own row
     if t != value:

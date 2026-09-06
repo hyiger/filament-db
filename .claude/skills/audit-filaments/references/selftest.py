@@ -1777,6 +1777,41 @@ def case_js_truthiness_and_direction():
         "resolves to the template, and promoting would not fix it")
 
 
+# --- 14s. String.trim() is not str.strip() -----------------------------------
+# ECMAScript's TrimString removes WhiteSpace + LineTerminator. Python's strip()
+# ALSO removes U+0085 and U+001C..U+001F, which JS keeps, and does NOT remove
+# U+FEFF, which JS trims. Both scan routes call .trim(), so using Python's set
+# reported an id ending in U+0085 as unmatchable when the exact match succeeds.
+def case_js_trim_mirror():
+    NEL, FS, ZWNBSP, NBSP = chr(0x85), chr(0x1C), chr(0xFEFF), chr(0xA0)
+    # JS KEEPS these, so an id carrying them is matchable and must stay silent
+    for tail in (NEL, FS, chr(0x1F)):
+        r = valid_res(instanceId="abcdef" + tail)
+        r["spools"] = []
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        fp = [m for rows in f.values() for _, m in rows if "surrounding whitespace" in m]
+        if fp:
+            bad("js-trim-keeps",
+                f"JS String.trim() does NOT remove U+{ord(tail):04X}, so the writer and both scan "
+                f"routes keep it and the exact match succeeds: {fp}")
+            break
+    else:
+        ok("js-trim-keeps")
+    # JS DOES trim these, so an id carrying them really is unmatchable
+    for tail in (" ", NBSP, ZWNBSP, chr(0x2003)):
+        r = valid_res(instanceId="abcdef" + tail)
+        r["spools"] = []
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows in f.values() for _, m in rows if "surrounding whitespace" in m]
+        if not hit:
+            bad("js-trim-removes",
+                f"JS String.trim() DOES remove U+{ord(tail):04X}, so the scan routes strip it "
+                f"while the writers encode it as stored — no tier can match")
+            break
+    else:
+        ok("js-trim-removes")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1865,6 +1900,7 @@ if __name__ == "__main__":
     case_heuristics_and_negatives()
     case_unreachable_calibrations()
     case_js_truthiness_and_direction()
+    case_js_trim_mirror()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
