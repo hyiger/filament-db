@@ -262,6 +262,13 @@ stored array IS the inherit sentinel, so emptiness is the ownership test. A fixt
 hand-writes `_inherited` will happily encode the wrong assumption and let a family-wide fan-out
 pass — mirror what `resolveFilament` actually records.
 
+**Python truthiness is not JavaScript truthiness.** `{}` and `[]` are falsy in Python and TRUTHY
+in JS, so a Python truth test on a malformed `retired: {}` counted a spool the app excludes from
+every inventory helper — and the checker then reported missing-net, missing-tare and saturation
+rows for stock that does not exist. Anything mirroring an `if (x)` in the app goes through
+`_js_truthy`. The same asymmetry is why `_react_child_throws` and `_js_number` exist: the whole
+file is a Python mirror of JS semantics, and every place the two disagree is a defect waiting.
+
 **A negative-only assertion is not coverage.** Several cases here asserted only that a *wrong*
 sentence was absent — so deleting the entire check they guarded left the suite green. Every
 message assertion now has a positive half naming the consequence clause it expects, and the way to

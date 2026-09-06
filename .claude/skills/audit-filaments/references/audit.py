@@ -529,6 +529,25 @@ MAX_SPOOL_TEXT_LENGTH = 200                              # Filament.ts maxlength
 NESTED_TEXT_MAXLEN = {"spools": ("label", "lotNumber")}
 
 
+def _js_truthy(v):
+    """JavaScript truthiness, which is NOT Python's. The falsy set in JS is
+    exactly false / 0 / -0 / "" / null / undefined / NaN — so `{}` and `[]` are
+    TRUTHY there and falsy here. The app filters retired spools with
+    `if (spool.retired) continue`, so a malformed `retired: {}` excludes the
+    spool from every inventory helper while a Python truth test counts it as
+    live, and the audit then reports missing-net / missing-tare / saturation
+    rows for inventory the app does not count."""
+    if v is None or v is False:
+        return False
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return not (v == 0 or v != v)          # 0, -0 and NaN are falsy
+    if isinstance(v, str):
+        return v != ""
+    return True                                # objects and arrays are truthy
+
+
 def _short(v, limit=40):
     """A document-derived value used as an IDENTIFIER inside a message. Values
     here come from the API, so length is not bounded by anything the app
@@ -1424,7 +1443,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []
-        live_spools = [s for s in all_spools if isinstance(s, dict) and not s.get("retired")]
+        live_spools = [s for s in all_spools
+                       if isinstance(s, dict) and not _js_truthy(s.get("retired"))]
 
         # Then every numeric-named leaf at any depth, reported ONCE here so the
         # individual passes can skip quietly.
@@ -2611,6 +2631,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # A soft-deleted nozzle still populates as a truthy object carrying
             # _deletedAt, so a non-empty array is not evidence of a usable
             # assignment — the same trap the calibration check above closes.
+            # An element must be a bare 24-hex ObjectId or a populated object
+            # carrying one. `{}` is neither — it cannot cast on restore, and the
+            # `live` comprehension below would count it as a healthy nozzle
+            # because it merely lacks `_deletedAt`.
+            for _ni, _nel in enumerate(compat):
+                _nref = _nel.get("_id") if isinstance(_nel, dict) else _nel
+                if not (isinstance(_nref, str) and OBJECTID_RE.match(_nref)):
+                    add("structure", f"{name}: compatibleNozzles[{_ni}]="
+                                     f"{_short(repr(_nel))} is not a nozzle reference -> the "
+                                     f"schema declares an ObjectId array, so Mongoose cannot cast "
+                                     f"it and POST /api/snapshot refuses the ENTIRE backup file; "
+                                     f"the assignment checks would also count it as a live nozzle"
+                                     f"{_inh_blame('compatibleNozzles')}", fid)
             stale = [n.get("name") or n.get("_id") for n in compat
                      if isinstance(n, dict) and n.get("_deletedAt")]
             live = [n for n in compat if isinstance(n, dict) and not n.get("_deletedAt")]
@@ -2714,10 +2747,20 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # promotion guarantees. Exempt the parent<->child pair; a genuinely
         # FOREIGN family still reports.
         def _kin_of(candidates):
-            """Filament ids in the SAME family as one of this id's spool owners."""
+            """The promotion carry-over pair, and ONLY that pair.
+
+            Direction matters and the earlier bidirectional test was wrong. The
+            legitimate shape is a CHILD-owned spool whose id matches its
+            PARENT's top-level id — that is what promoteParent produces when it
+            moves the roll onto a new variant. The reverse (a TEMPLATE still
+            owning a spool whose id matches one of its VARIANTS' top-level ids)
+            is a genuine shadow: matchFilament finds the template's spool first,
+            so scanning the variant's own id resolves to the template. Promoting
+            would move the conflicting spool to a NEW variant and still not give
+            the existing variant its identity back."""
             return {i for i, _ in candidates
                     for o in _fids
-                    if _parent_of.get(o) == i or _parent_of.get(i) == o}
+                    if _parent_of.get(o) == i}
 
         _kin = _kin_of(top_owners.get(_sid, []))
         _shadowed = [(i, n) for i, n in top_owners.get(_sid, [])

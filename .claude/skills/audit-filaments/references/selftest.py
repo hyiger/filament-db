@@ -74,12 +74,15 @@ def valid_res(**over):
         # reads were never fuzzed. Found by the table-driven coverage guard below.
         "glassTempTransition": 60, "heatDeflectionTemp": 55,
         "spoolType": "plastic", "inherits": "*PLA*", "notes": "vendor sheet",
-        "compatibleNozzles": [{"_id": "n1", "name": "0.4 Brass", "_deletedAt": None}],
+        # REAL ObjectId shapes: `compatibleNozzles` is an ObjectId array and the
+        # orphan check compares the calibration's nozzle id against it, so "n1"
+        # made the "valid" fixture invalid — caught by case_valid, again.
+        "compatibleNozzles": [{"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass", "_deletedAt": None}],
         "calibrations": [{
-            "_id": "c1", "nozzle": {"_id": "n1", "name": "0.4 Brass"},
-            "printer": {"_id": "p1", "name": "MK4S",
-                        "installedNozzles": [{"_id": "n1", "name": "0.4 Brass"}]},
-            "bedType": {"_id": "b1", "name": "Textured PEI"},
+            "_id": "c1", "nozzle": {"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass"},
+            "printer": {"_id": "6a1a7bee677d648e9ba9cc02", "name": "MK4S",
+                        "installedNozzles": [{"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass"}]},
+            "bedType": {"_id": "6a1a7bef677d648e9ba9cc03", "name": "Textured PEI"},
             "extrusionMultiplier": 0.98, "pressureAdvance": 0.04,
             "maxVolumetricSpeed": 12, "fanMinSpeed": 20, "fanMaxSpeed": 100,
             "chamberTemp": 0, "nozzleTemp": 210, "bedTemp": 60,
@@ -1716,6 +1719,64 @@ def case_unreachable_calibrations():
         "orphan-healthy-silent", f"a ticked calibration must stay silent: {got}")
 
 
+# --- 14r. JS truthiness, and the direction of the carry-over -----------------
+def case_js_truthiness_and_direction():
+    # `if (spool.retired) continue` — `{}` and `[]` are TRUTHY in JS and falsy
+    # in Python, so a Python truth test counted an excluded spool as live and
+    # emitted inventory rows for stock the app does not count.
+    for v in ({}, [], True):
+        r = valid_res(netFilamentWeight=None, spoolWeight=None)
+        r["spools"] = [dict(r["spools"][0], retired=v)]
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_ if "no % bar" in m]
+        if rows:
+            bad("js-truthy-retired",
+                f"retired={v!r} is TRUTHY in JS, so the app excludes this spool from every "
+                f"inventory helper; the audit must not report on it: {rows}")
+            break
+    else:
+        for v in (False, 0, ""):
+            r = valid_res(netFilamentWeight=None, spoolWeight=None)
+            r["spools"] = [dict(r["spools"][0], retired=v)]
+            f, _ = run({"a": rec(r, copy.deepcopy(r))})
+            if not [m for rows_ in f.values() for _, m in rows_ if "no % bar" in m]:
+                bad("js-truthy-retired",
+                    f"retired={v!r} is FALSY in JS, so the spool is live and its missing "
+                    f"inventory inputs must still be reported")
+                break
+        else:
+            ok("js-truthy-retired")
+
+    # Only ONE direction is the #732 carry-over: a CHILD-owned spool matching
+    # its PARENT's top-level id. The reverse is a genuine shadow, and promoting
+    # would not give the existing variant its identity back.
+    def pair(t_over, k_over):
+        t = valid_res(_id="t", name="Tmpl", color=None, colorName=None, totalWeight=None,
+                      lowStockThreshold=None, **t_over)
+        k = valid_res(_id="k", name="Tmpl — Blue", parentId="t", **k_over)
+        f, _ = run({"t": rec(t, copy.deepcopy(t)), "k": rec(k, copy.deepcopy(k))},
+                   topology={"t": True})
+        return [m for rows_ in f.values() for _, m in rows_ if "carry" in m or "FILAMENT-level" in m]
+
+    base_sp = valid_res()["spools"][0]
+    legit = pair({"instanceId": "carryover1", "spools": []},
+                 {"instanceId": "ffffffffff",
+                  "spools": [dict(base_sp, instanceId="carryover1")]})
+    ok("carryover-child-owned-silent") if not legit else bad(
+        "carryover-child-owned-silent",
+        f"a child-owned spool matching its parent's top-level id is what promoteParent "
+        f"produces: {legit}")
+
+    shadow = pair({"instanceId": "tttttttttt",
+                   "spools": [dict(base_sp, instanceId="variantid1")]},
+                  {"instanceId": "variantid1", "spools": []})
+    ok("carryover-reverse-reported") if shadow else bad(
+        "carryover-reverse-reported",
+        "a TEMPLATE-owned spool matching a VARIANT's top-level id is a real shadow — "
+        "matchFilament finds the template's spool first, so scanning the variant's own id "
+        "resolves to the template, and promoting would not fix it")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1803,6 +1864,7 @@ if __name__ == "__main__":
     case_instance_id_shadows()
     case_heuristics_and_negatives()
     case_unreachable_calibrations()
+    case_js_truthiness_and_direction()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
