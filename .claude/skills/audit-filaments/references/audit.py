@@ -1701,7 +1701,14 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # consequence is sharper: with no spools to fall back FROM,
         # selectSpoolForWrite has neither a spool id nor the filament fallback.
         _tid_v = raw.get("instanceId")
-        if _tid_v is None or _tid_v == "":
+        # The scalar-string sweep coerces a non-string to "" in place, so an
+        # unguarded absence test here produced a SECOND, contradictory row for
+        # one stored value: "is dict, not a string" followed by "no
+        # filament-level instanceId ... a row still missing it was written by a
+        # path that bypassed the model". The coercion record is exactly what
+        # distinguishes them.
+        _tid_coerced = "instanceId" in coerced_by_fid.get(fid, (set(), set()))[0]
+        if not _tid_coerced and (_tid_v is None or _tid_v == ""):
             _no_spool_id = not any(
                 isinstance(_s, dict) and isinstance(_s.get("instanceId"), str)
                 and _s.get("instanceId")
@@ -2193,6 +2200,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                         f"'manual', so this entry silently drops out of the manual "
                                         f"usage and cost totals", fid)
                 if isinstance(ue, dict):
+                    _jid = ue.get("jobId")
+                    if _jid is not None and not (isinstance(_jid, str)
+                                                 and OBJECTID_RE.match(_jid)):
+                        add("structure", f"{name}: spool {tag} usage entry jobId="
+                                         f"{_short(repr(_jid))} is not a 24-character hex ObjectId "
+                                         f"-> the schema declares it as an ObjectId ref, so "
+                                         f"Mongoose cannot cast it and POST /api/snapshot refuses "
+                                         f"the ENTIRE backup file; the print-job DELETE also "
+                                         f"matches refunds on this id", fid)
                     _ud = ue.get("date")
                     # `date` carries `default: Date.now`, so a properly written
                     # entry always has one and a restore fills a missing one in
@@ -2612,6 +2628,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         if isinstance(_tid, str) and _tid:
             top_owners.setdefault(_tid, []).append((_fid, _nm))
             top_ci.setdefault(_tid.casefold(), []).append((_fid, _nm))
+        # ...and the same folding for SPOOL ids. matchFilament's spool tier runs
+        # exact-then-case-insensitive, so two spools whose ids differ only by
+        # case collide there just as an exact duplicate does — either returning
+        # both filaments as candidates, or (within one filament) reporting
+        # whichever roll comes first by array order. An exact-key map sees
+        # neither.
         for _sp in (_raw.get("spools") or []):
             if isinstance(_sp, dict):
                 _sid = _sp.get("instanceId")
@@ -2621,6 +2643,22 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
     def _who(rows):
         return ", ".join(sorted(f"{n} [{i}]" for i, n, *_ in rows))
+
+    spool_ci = {}
+    for _sid_k, _rows_k in spool_owners.items():
+        spool_ci.setdefault(_sid_k.casefold(), []).extend((_sid_k, *_r) for _r in _rows_k)
+    for _fold, _rows_k in sorted(spool_ci.items()):
+        _variants = {r[0] for r in _rows_k}
+        if len(_variants) > 1:
+            _fids_k = {r[1] for r in _rows_k}
+            _where = ("on " + _who([(i, n) for _s, i, n, *_ in _rows_k])
+                      if len(_fids_k) > 1 else f"on {_rows_k[0][2]}")
+            add("structure", f"spool instanceIds {sorted(_variants)!r} differ only by CASE ({_where}) "
+                             f"-> matchFilament's spool tier runs exact, then case-insensitive, so "
+                             f"a scan of either resolves through the SAME folded tier: with two "
+                             f"filaments it returns both as candidates and matches nothing, and "
+                             f"within one filament it reports whichever roll comes first by array "
+                             f"order", None)
 
     for _sid, _owners in sorted(spool_owners.items()):
         _fids = {i for i, _, _ in _owners}

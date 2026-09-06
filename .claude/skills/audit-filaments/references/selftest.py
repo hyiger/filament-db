@@ -105,7 +105,9 @@ def valid_res(**over):
             "locationId": "6a1a7bef677d648e9ba9cd8c",
             "purchaseDate": "2026-01-01", "openedDate": None,
             "usageHistory": [{"grams": 30, "debitedGrams": 30, "source": "job",
-                              "date": "2026-02-01", "jobLabel": "bracket"}],
+                              "date": "2026-02-01", "jobLabel": "bracket",
+                              # a declared ObjectId ref, so a real 24-hex shape
+                              "jobId": "6a1a7bef677d648e9ba9cd77"}],
             "dryCycles": [{"tempC": 45, "durationMin": 240, "date": "2026-01-05",
                            "notes": "overnight"}],
             "photoDataUrl": "data:image/png;base64,iVBORw0KGgo=",
@@ -460,7 +462,7 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
 # coverage while staying above the stale value, which is exactly the blind spot
 # this guard exists to close. Every intentional fixture change updates this
 # number.
-FUZZ_COUNT = 16632
+FUZZ_COUNT = 16758
 
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
@@ -1242,6 +1244,28 @@ def case_identity_and_dates():
         ok(f"idcontract-{holder}-normal-silent") if not fp else bad(
             f"idcontract-{holder}-normal-silent", f"a normal 10-hex id was flagged: {fp}")
 
+    # a declared ObjectId ref inside the usage ledger
+    rj = valid_res()
+    rj["spools"][0]["usageHistory"][0]["jobId"] = "not-an-object-id"
+    f, _ = run({"a": rec(rj, copy.deepcopy(rj))})
+    hit = [m for rows in f.values() for _, m in rows if "jobId" in m]
+    ok("usage-jobid-castable") if hit else bad(
+        "usage-jobid-castable",
+        "`usageHistory[].jobId` is an ObjectId ref; an uncastable value fails the restore and the "
+        "print-job DELETE matches refunds on it")
+
+    # a non-string top-level instanceId must produce ONE diagnosis, not two —
+    # the text sweep coerces it to "" in place, and an unguarded absence test
+    # then contradicts the row that was just emitted
+    ri = valid_res(instanceId={"$oid": "x"})
+    ri["spools"] = []
+    f, _ = run({"a": rec(ri, copy.deepcopy(ri))})
+    both = [m for rows in f.values() for _, m in rows if "no filament-level instanceId" in m]
+    ok("instanceid-one-diagnosis") if not both else bad(
+        "instanceid-one-diagnosis",
+        f"a MALFORMED id was also reported as ABSENT — two contradictory rows for one value: "
+        f"{both}")
+
     r2 = valid_res()
     r2["spools"][0]["createdAt"] = "not-a-date"
     f, _ = run({"a": rec(r2, copy.deepcopy(r2))})
@@ -1464,6 +1488,29 @@ def case_instance_id_shadows():
         bad("shadow-duplicate-top",
             f"that tier is a findOne, so the scan resolves SILENTLY to an arbitrary row and "
             f"reports it as a confident match — 'ambiguous' would be the benign outcome: {rows}")
+
+    # (f) two spool ids differing only by CASE — matchFilament's spool tier is
+    #     exact-then-folded, so both scans land in the same folded tier
+    f, _ = two({"instanceId": "aaaaaaaaa1", "spools": spools("abcdefabcd")},
+               {"instanceId": "aaaaaaaaa2", "spools": spools("ABCDEFABCD")})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "differ only by CASE" in m]
+    ok("shadow-spool-case-twins") if rows else bad(
+        "shadow-spool-case-twins",
+        "two spools whose ids differ only by case collide in the case-insensitive spool tier "
+        "exactly as an exact duplicate does, and an exact-key map sees neither")
+    # ...and within ONE filament
+    f, _ = two({"instanceId": "aaaaaaaaa1", "spools": spools("abcdefabcd", "ABCDEFABCD")},
+               {"instanceId": "aaaaaaaaa2"})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "differ only by CASE" in m]
+    ok("shadow-spool-case-twins-same") if rows else bad(
+        "shadow-spool-case-twins-same",
+        "within one filament the folded tier reports whichever roll comes first by array order")
+    # NEGATIVE: distinct ids must stay silent
+    f, _ = two({"instanceId": "aaaaaaaaa1", "spools": spools("abcdefabcd", "0011223399")},
+               {"instanceId": "aaaaaaaaa2"})
+    fp = [m for rows_ in f.values() for _, m in rows_ if "differ only by CASE" in m]
+    ok("shadow-spool-case-negative") if not fp else bad(
+        "shadow-spool-case-negative", f"genuinely distinct ids were flagged: {fp}")
 
     # NEGATIVE: a spool id equal to ITS OWN filament's is the #732 carry-over
     f, _ = two({"instanceId": "carryover1", "spools": spools("carryover1")},
