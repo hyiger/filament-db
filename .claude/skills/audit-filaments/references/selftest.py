@@ -1540,7 +1540,13 @@ def case_unreachable_calibrations():
                       compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
         k = valid_res(_id="k", name="Family — Blue", parentId="t",
                       compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
-        k["_inherited"] = ["calibrations", "compatibleNozzles"] if kid_inherits else []
+        # MIRROR resolveFilament: it records `calibrations` as inherited
+        # (the parent's array is non-empty) but NOT `compatibleNozzles` when
+        # the parent's tick list is empty — which is exactly this scenario.
+        # The earlier fixture asserted both, which encoded an assumption
+        # instead of the app's behaviour and let a family-wide fan-out pass.
+        k["_inherited"] = (["calibrations"] + (["compatibleNozzles"] if ticks else [])
+                           if kid_inherits else [])
         kraw = copy.deepcopy(k)
         if kid_inherits:
             kraw["calibrations"] = []

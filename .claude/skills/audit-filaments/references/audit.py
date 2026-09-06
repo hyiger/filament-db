@@ -2506,8 +2506,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # template by this guard, the inheriting child by an empty stored array.
         _ticks_eff = r.get("compatibleNozzles") or []
         _cals_eff = [c for c in (r.get("calibrations") or []) if isinstance(c, dict)]
-        _both_inherited = ("calibrations" in inherited_fields
-                           and "compatibleNozzles" in inherited_fields)
+        # OWNERSHIP is read from the STORED arrays, not from `_inherited`.
+        # resolveFilament pushes an array root into `_inherited` only when the
+        # PARENT's array is non-empty (resolveFilament.ts: `if
+        # (parent.compatibleNozzles?.length > 0)`) — and the whole point of this
+        # case is that the parent's tick list is EMPTY, so `compatibleNozzles`
+        # is never recorded as inherited and an `_inherited`-based test could
+        # never fire in the one situation it was written for. An empty stored
+        # array IS the inherit sentinel, so emptiness is the ownership test.
+        _owns_cals = bool(raw.get("calibrations"))
+        _owns_ticks = bool(raw.get("compatibleNozzles"))
+        _both_inherited = not _owns_cals and not _owns_ticks
         if (is_template and fid not in abrasive_unassigned
                 and not _ticks_eff and _cals_eff):
             add("nozzles", f"{name}: no compatibleNozzles, but {len(_cals_eff)} calibration(s) are "

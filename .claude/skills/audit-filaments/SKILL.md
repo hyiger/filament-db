@@ -254,6 +254,14 @@ field whose name also appears elsewhere leaves it green while the fuzz quietly l
 The count is the one number that always moves. It is set to the exact current value, not a round
 one: a trim that cost 252 combinations sailed straight past a 16,000 floor.
 
+**`_inherited` cannot tell you an EMPTY array was inherited.** `resolveFilament` pushes an array
+root into `_inherited` only when the *parent's* array is non-empty — so for a template whose tick
+list is empty, `compatibleNozzles` never appears there, and any suppression keyed on it fails in
+exactly the case it was written for. Read ownership from the **stored** array instead: an empty
+stored array IS the inherit sentinel, so emptiness is the ownership test. A fixture that
+hand-writes `_inherited` will happily encode the wrong assumption and let a family-wide fan-out
+pass — mirror what `resolveFilament` actually records.
+
 **A negative-only assertion is not coverage.** Several cases here asserted only that a *wrong*
 sentence was absent — so deleting the entire check they guarded left the suite green. Every
 message assertion now has a positive half naming the consequence clause it expects, and the way to
