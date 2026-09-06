@@ -655,6 +655,34 @@ def _bad_tds_url(v):
 # WITHOUT validation is reported before the user next tries to edit it.
 SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MAX_SPOOL_ID_LENGTH = 128
+# openprinttag.ts: brand_specific_instance_id is capped at 16 characters, and an
+# over-long id is OMITTED rather than truncated (GH #952 — a truncated id reads
+# back as a DIFFERENT id and breaks scan-back). So there are two distinct
+# ceilings, and the lower one costs the tag identity silently.
+MAX_TAG_ID_LENGTH = 16
+
+
+def _id_contract_problem(value):
+    """Which consumer bound a stored instanceId violates, or None."""
+    if not isinstance(value, str):
+        return None                       # a non-string is reported by the shape sweep
+    t = value.strip()
+    if not t:
+        return None                       # absence has its own row
+    if len(t) > MAX_SPOOL_ID_LENGTH:
+        return (f"is {len(t)} characters, past the {MAX_SPOOL_ID_LENGTH}-character contract -> "
+                f"/api/filaments/match caps its query at the same length, so this id can never "
+                f"round-trip through a QR or NFC scan, and any edit through the API is refused")
+    if not SPOOL_ID_RE.match(t):
+        return ("is outside the allowed charset (letters, digits, dot, underscore, hyphen) -> "
+                "validateSpoolInstanceId refuses it, so any later edit to this spool is rejected "
+                "until the id is replaced")
+    if len(t) > MAX_TAG_ID_LENGTH:
+        return (f"is {len(t)} characters, past the {MAX_TAG_ID_LENGTH}-character OpenPrintTag "
+                f"field -> the encoder OMITS it rather than truncating (a truncated id would read "
+                f"back as a different one), so a written tag carries no instance id at all and "
+                f"scan-back falls through to name/vendor/type")
+    return None
 
 # Roots that are REQUIRED and therefore stored on every row, so `_inherited`
 # can never contain them. Naming one as a blame root made the single-owner
@@ -1615,6 +1643,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             add("structure", f"{name}: no filament-level instanceId -> {_tid_cons}. The schema "
                              f"defaults it and a startup backfill mints one, so a row still "
                              f"missing it was written by a path that bypassed the model", fid)
+        else:
+            # The same consumer bounds apply to the filament-level fallback:
+            # selectSpoolForWrite hands THIS value to the tag encoder for a
+            # spool-less filament, so an id past either ceiling cannot round-trip
+            # even though it is present and looks fine.
+            _tid_bad = _id_contract_problem(_tid_v)
+            if _tid_bad:
+                add("structure", f"{name}: filament-level instanceId {_short(repr(_tid_v))} "
+                                 f"{_tid_bad}", fid)
 
         _tds = raw.get("tdsUrl")
         if _tds is not None and not isinstance(_tds, str):
@@ -1950,19 +1987,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"scan still finds the filament but no longer identifies the "
                                  f"roll. The startup backfill mints one, so a spool still missing "
                                  f"it was written by a path that bypassed the model", fid)
-            elif isinstance(_sid_v, str):
-                _sid_t = _sid_v.strip()
-                if len(_sid_t) > MAX_SPOOL_ID_LENGTH:
-                    add("structure", f"{name}: spool {tag} instanceId is {len(_sid_t)} characters, "
-                                     f"past the {MAX_SPOOL_ID_LENGTH}-character contract -> "
-                                     f"/api/filaments/match caps the query at the same length, so "
-                                     f"this id can never round-trip through a QR or NFC scan, and "
-                                     f"any edit through the API is refused", fid)
-                elif not SPOOL_ID_RE.match(_sid_t):
-                    add("structure", f"{name}: spool {tag} instanceId {_sid_v!r} is outside the "
-                                     f"allowed charset (letters, digits, dot, underscore, hyphen) "
-                                     f"-> validateSpoolInstanceId refuses it, so any later edit to "
-                                     f"this spool is rejected until the id is replaced", fid)
+            else:
+                _sid_bad = _id_contract_problem(_sid_v)
+                if _sid_bad:
+                    add("structure", f"{name}: spool {tag} instanceId {_short(repr(_sid_v))} "
+                                     f"{_sid_bad}", fid)
             # `createdAt` is declared `{type: Date, default: Date.now}` on the
             # spool subdocument, so an ABSENT one is filled in on restore and is
             # not a defect — but a present-but-uncastable value fails the cast

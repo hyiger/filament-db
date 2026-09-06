@@ -451,10 +451,12 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
 
 # See the check at the end of main(): this is the guard against a SILENT loss of
 # fuzz reach, which the name-based coverage guard structurally cannot catch.
-# Set to the EXACT count the suite currently explores, not a round number: a
-# loose floor does not catch the case it exists for. Trimming ONE nested fixture
-# field cost 252 combinations and sailed past a 16,000 floor.
-FUZZ_FLOOR = 16632
+# EQUALITY, not a floor. A `>=` floor goes stale the moment the fixture grows —
+# the suite passes without anyone updating it, and a later trim can then remove
+# coverage while staying above the stale value, which is exactly the blind spot
+# this guard exists to close. Every intentional fixture change updates this
+# number.
+FUZZ_COUNT = 16632
 
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
@@ -1164,6 +1166,38 @@ def case_identity_and_dates():
         bad("top-instanceid-absent",
             "a spool-less filament with no instanceId leaves selectSpoolForWrite with no id at "
             f"all, so openprinttag answers 422; got: {hit}")
+    # The instanceId CONTRACT — two ceilings, and the lower one is silent.
+    # `selectSpoolForWrite` hands whichever id it picks to the OpenPrintTag
+    # encoder as `spoolUid`, and that field OMITS anything past 16 characters
+    # (GH #952: truncating would read back as a different id), so both the spool
+    # id and the filament-level fallback need the same three checks.
+    for holder in ("spool", "filament"):
+        for val, needle in ((("a" * 17), "16-character OpenPrintTag"),
+                            (("a" * 129), "128-character contract"),
+                            ("has space!", "allowed charset")):
+            rr = valid_res()
+            if holder == "spool":
+                rr["spools"][0]["instanceId"] = val
+            else:
+                rr["instanceId"] = val
+                rr["spools"] = []
+            f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+            got = [m for rows in f.values() for _, m in rows
+                   if "instanceId" in m and needle in m]
+            ok(f"idcontract-{holder}-{needle[:12]}") if got else bad(
+                f"idcontract-{holder}-{needle[:12]}",
+                f"a {holder}-level id of {val[:6]}... violates {needle} and must be reported — "
+                f"the id is present and looks fine, so nothing else catches it")
+        # ...and a normal id stays silent on BOTH
+        rr = valid_res()
+        if holder == "filament":
+            rr["spools"] = []
+        f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+        fp = [m for rows in f.values() for _, m in rows
+              if "instanceId" in m and "characters" in m]
+        ok(f"idcontract-{holder}-normal-silent") if not fp else bad(
+            f"idcontract-{holder}-normal-silent", f"a normal 10-hex id was flagged: {fp}")
+
     r2 = valid_res()
     r2["spools"][0]["createdAt"] = "not-a-date"
     f, _ = run({"a": rec(r2, copy.deepcopy(r2))})
@@ -1545,10 +1579,12 @@ if __name__ == "__main__":
     # leaves it green while the fuzz quietly loses that path. The count is the
     # one number that always moves when reach is lost. Raise it deliberately
     # when the fixture grows; never lower it to make a run pass.
-    if n < FUZZ_FLOOR:
+    if n != FUZZ_COUNT:
         bad("fuzz-reach",
-            f"the fuzz explored {n} combinations, below the committed floor of {FUZZ_FLOOR}. "
-            f"Something removed a path from valid_res() — the name-based coverage guard cannot "
-            f"see that. Restore the path, or raise the floor deliberately if the drop is real.")
+            f"the fuzz explored {n} combinations, not the committed {FUZZ_COUNT}. "
+            f"{'Coverage was LOST' if n < FUZZ_COUNT else 'Coverage grew'} — the name-based "
+            f"guard above cannot see either, because it matches key NAMES at any depth rather "
+            f"than paths. Update FUZZ_COUNT deliberately if the change is intended; a >= floor "
+            f"would go stale after any growth and let a later trim slip back under it.")
     print(f"\n{passed} passed, {failed} failed   (fuzz: {n} combinations, {ncrash} distinct crash sites)")
     sys.exit(1 if failed else 0)
