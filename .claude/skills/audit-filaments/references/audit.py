@@ -1296,6 +1296,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 missing_gross = 0
                 for s in live_spools:
                     gross = num(s.get("totalWeight"))
+                    # `num()` answers None for present-but-malformed as well as
+                    # absent, and the numeric sweep has already named the
+                    # off-type value — so reporting "has no totalWeight" here
+                    # contradicts it, and letting it feed missing_gross could
+                    # add a second contradictory "every live spool is missing
+                    # its gross weight" on top.
+                    _g_absent = s.get("totalWeight") in (None, "")
+                    if gross is None and not _g_absent:
+                        continue
                     if gross is None:
                         # Schema-supported, but getRemainingPct skips such a spool
                         # and returns null outright when none is left countable.
@@ -1401,6 +1410,27 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # resolved read carries the TEMPLATE's value on every colour variant and
         # a single bad URL on a template would be reported once per child, each
         # naming a document the user cannot fix it on.
+        # The scalar-string sweep catches a NON-STRING top-level instanceId,
+        # but "" and null pass it and the identity pass indexes non-empty
+        # strings only — the same two-way gap the spool id had. Here the
+        # consequence is sharper: with no spools to fall back FROM,
+        # selectSpoolForWrite has neither a spool id nor the filament fallback.
+        _tid_v = raw.get("instanceId")
+        if _tid_v is None or _tid_v == "":
+            _no_spool_id = not any(
+                isinstance(_s, dict) and isinstance(_s.get("instanceId"), str)
+                and _s.get("instanceId")
+                for _s in (raw.get("spools") or []))
+            _tid_cons = ("selectSpoolForWrite has neither a spool id nor this fallback, so "
+                         "GET /api/filaments/{id}/openprinttag answers 422 and no tag can be "
+                         "written for this filament at all" if _no_spool_id else
+                         "its spools still carry their own ids so tag writes keep working, but "
+                         "the transitional filament-level fallback every pre-#732 label and tag "
+                         "relies on is gone")
+            add("structure", f"{name}: no filament-level instanceId -> {_tid_cons}. The schema "
+                             f"defaults it and a startup backfill mints one, so a row still "
+                             f"missing it was written by a path that bypassed the model", fid)
+
         _tds = raw.get("tdsUrl")
         if _tds is not None and not isinstance(_tds, str):
             # `_bad_tds_url` judges URL GRAMMAR and answers False for a
@@ -1707,14 +1737,23 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                      f"allowed charset (letters, digits, dot, underscore, hyphen) "
                                      f"-> validateSpoolInstanceId refuses it, so any later edit to "
                                      f"this spool is rejected until the id is replaced", fid)
-            for _df in ("purchaseDate", "openedDate"):
+            # `createdAt` is declared `{type: Date, default: Date.now}` on the
+            # spool subdocument, so an ABSENT one is filled in on restore and is
+            # not a defect — but a present-but-uncastable value fails the cast
+            # exactly like the other two.
+            for _df in ("purchaseDate", "openedDate", "createdAt"):
                 _dv = sp.get(_df)
                 if _dv is not None and _bad_date(_dv):
+                    # createdAt has no render site of its own, so it gets the
+                    # consequence it actually has rather than the SpoolCard's.
+                    _dcons = ("POST /api/snapshot cannot cast it, so the ENTIRE backup file is "
+                              "refused" if _df == "createdAt" else
+                              "the SpoolCard seeds its date inputs with "
+                              "`new Date(v).toISOString()` at RENDER time, so this throws a "
+                              "RangeError and the whole filament page fails to open; POST "
+                              "/api/snapshot rejects the backup on it too")
                     add("structure", f"{name}: spool {tag} {_df}={_dv!r} cannot be cast to a Date "
-                                     f"-> the SpoolCard seeds its date inputs with "
-                                     f"`new Date(v).toISOString()` at RENDER time, so this throws "
-                                     f"a RangeError and the whole filament page fails to open; "
-                                     f"POST /api/snapshot rejects the backup on it too", fid)
+                                     f"-> {_dcons}", fid)
             for _tf in NESTED_TEXT_MAXLEN["spools"]:
                 _tv = sp.get(_tf)
                 if isinstance(_tv, str) and _utf16_len(_tv) > MAX_SPOOL_TEXT_LENGTH:

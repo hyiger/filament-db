@@ -1037,6 +1037,63 @@ def case_promotion_carryover_exempt():
             "shadowed and must still report")
 
 
+# --- 14j. a MALFORMED value is never a MISSING one ---------------------------
+# num() answers None for both, so every check that branches on a num() result
+# has to test the underlying field before claiming absence — otherwise it
+# contradicts the numeric sweep that just named the off-type value, and can
+# stack a second "every spool is missing its gross weight" on top.
+def case_malformed_is_not_missing():
+    r = valid_res()
+    r["spools"][0]["totalWeight"] = "oops"
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    contradictions = [m for m in rows
+                      if "has no totalWeight" in m or "missing its gross weight" in m]
+    named = [m for m in rows if "not a number" in m]
+    if contradictions:
+        bad("malformed-gross-not-missing",
+            f"a malformed gross weight was reported as ABSENT, contradicting the numeric "
+            f"sweep's own row: {contradictions}")
+    elif not named:
+        bad("malformed-gross-not-missing", "a malformed gross weight produced no finding at all")
+    else:
+        ok("malformed-gross-not-missing")
+    r2 = valid_res()
+    del r2["spools"][0]["totalWeight"]
+    f, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    hit = [m for rows_ in f.values() for _, m in rows_ if "has no totalWeight" in m]
+    ok("absent-gross-still-reported") if hit else bad(
+        "absent-gross-still-reported", "a genuinely absent gross weight stopped being reported")
+
+
+# --- 14k. identity and date fields the schema declares but nothing checked ---
+def case_identity_and_dates():
+    r = valid_res(instanceId=None)
+    r["spools"] = []
+    r["totalWeight"] = 800
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    hit = [m for rows_ in f.values() for _, m in rows_ if "no filament-level instanceId" in m]
+    if hit and "422" in hit[0]:
+        ok("top-instanceid-absent")
+    else:
+        bad("top-instanceid-absent",
+            "a spool-less filament with no instanceId leaves selectSpoolForWrite with no id at "
+            f"all, so openprinttag answers 422; got: {hit}")
+    r2 = valid_res()
+    r2["spools"][0]["createdAt"] = "not-a-date"
+    f, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    hit = [m for rows_ in f.values() for _, m in rows_ if "createdAt" in m]
+    ok("spool-createdat-castable") if hit else bad(
+        "spool-createdat-castable",
+        "`spools[].createdAt` is a declared schema Date; an uncastable value fails the restore")
+    if hit and "RangeError" in hit[0]:
+        bad("spool-createdat-consequence",
+            "createdAt has no render site — it must not inherit the SpoolCard's RangeError "
+            "consequence from purchaseDate/openedDate")
+    else:
+        ok("spool-createdat-consequence")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1116,6 +1173,8 @@ if __name__ == "__main__":
     case_identifier_is_bounded()
     case_density_floor_exempts_foaming()
     case_promotion_carryover_exempt()
+    case_malformed_is_not_missing()
+    case_identity_and_dates()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
