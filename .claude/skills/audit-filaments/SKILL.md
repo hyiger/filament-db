@@ -145,7 +145,15 @@ everything if another such material arrives.
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
 
-**Physical values** — density against a **material-aware** band. The unfilled-polymer ceiling is
+**Physical values** — every numeric field against the **schema's own bounds**, mirrored in
+`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API,
+so a violation proves the row arrived by a path that bypassed validation — a raw-driver sync copy,
+a snapshot restore, or a legacy write — and both exporters serialise these straight into the
+preset. That covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three
+fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
+`prusaSlicerBundle` and `orcaSlicerBundle` both write as `filament_max_volumetric_speed`.
+
+Density additionally gets a **material-aware** band. The unfilled-polymer ceiling is
 2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so a filament carrying
 the metal-fill tag (**20**) gets a much higher one. The schema permits any non-negative density;
 prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
@@ -228,6 +236,27 @@ fibre-filled or metal-filled grades".
 
 **Colour** — malformed hex, and the legacy `#808080` sentinel the pre-v1.70 form stamped on
 everything.
+
+## When the finding is right but the obvious fix is wrong
+
+Several checks flag a genuine inconsistency whose natural remedy would *damage* correct data. This
+is the failure mode to watch for hardest, because the finding reads as authoritative and the fix
+looks obvious:
+
+- **A high-flow calibration above the declared range** — widen `nozzleRangeMax` to what is actually
+  run; do not lower a tuned calibration.
+- **A density above the unfilled ceiling** — if the filament really is metal-filled, add optTag 20;
+  do not "correct" a valid 3.9 g/cm³ down to 2.5, which would corrupt every weight-to-length
+  calculation reading it.
+- **A low nozzle temperature on PCL** — a valid low-temperature grade, not an error.
+- **`glassTempTransition` below the schema's −50 floor** — POM and other low-Tg materials are
+  commonly cited near −60 °C, so a value like that is likely *correct data against a bound that is
+  too tight*. It does prove the row was written by a path that bypassed validation, which is worth
+  knowing; it does not mean the number is wrong. Widening the schema bound is the real fix, and
+  editing the value to satisfy the audit is the one thing not to do.
+
+The shared shape: the audit knows what the schema and the app accept, not what the material is.
+When those disagree, say so and let the owner decide rather than prescribing a write.
 
 ## False positives, learned by hitting them
 

@@ -120,6 +120,31 @@ OPT_TAG_METAL_FILL = 20
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
 DENSITY_FLOOR = 0.7
+
+# Bounds mirrored from the Filament schema. A value outside these cannot be
+# written through the API, so a violation means the row arrived by a path that
+# bypassed validation — a raw-driver sync copy, a snapshot restore, or a legacy
+# write — and both slicer exporters serialise these straight into the preset.
+# `density` and `diameter` are deliberately absent: they have richer,
+# material-aware checks of their own and would otherwise be reported twice.
+NUMERIC_BOUNDS = {
+    "cost": (0, None), "maxVolumetricSpeed": (0, None), "lowStockThreshold": (0, None),
+    "transmissionDistance": (0, None), "minPrintSpeed": (0, None), "maxPrintSpeed": (0, None),
+    "spoolWeight": (0, None), "netFilamentWeight": (0, None), "totalWeight": (0, None),
+    "glassTempTransition": (-50, 500), "heatDeflectionTemp": (-50, 500),
+    "shoreHardnessA": (0, 100), "shoreHardnessD": (0, 100),
+    "shrinkageXY": (0, 100), "shrinkageZ": (0, 100),
+    "dryingTemperature": (0, 300), "dryingTime": (0, 10080),
+}
+# Calibration numerics OTHER than the temperatures, which the temperature pass
+# already checks against the declared range and the type-aware band.
+CALIBRATION_BOUNDS = {
+    "extrusionMultiplier": (0, None), "maxVolumetricSpeed": (0, None),
+    "pressureAdvance": (0, None), "retractLength": (0, None),
+    "retractSpeed": (0, None), "retractLift": (0, None),
+    "fanMinSpeed": (0, 100), "fanMaxSpeed": (0, 100), "fanBridgeSpeed": (0, 100),
+}
+CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
 LOW_TEMP_FLOOR = 60
 NOZZLE_FLOOR = 150
 NOZZLE_CEILING = 450
@@ -322,8 +347,8 @@ def audit(records, abrasive):
             bed_like += [(f"{where} bedTemp", cal.get("bedTemp")),
                          (f"{where} bedTempFirstLayer", cal.get("bedTempFirstLayer"))]
             chamber = cal.get("chamberTemp")
-            if chamber is not None and not 0 <= chamber <= 150:
-                add("temps", f"{name}: {where} chamberTemp {chamber}C implausible", fid)
+            if chamber is not None and not 0 <= chamber <= CHAMBER_MAX:
+                add("temps", f"{name}: {where} chamberTemp {chamber}C outside 0-{CHAMBER_MAX}C", fid)
 
         # Per-plate overrides: filamentToOrcaSlicerKeys writes BOTH temperature
         # and firstLayerTemperature from this array into the exported preset,
@@ -382,10 +407,28 @@ def audit(records, abrasive):
         dia = r.get("diameter")
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
-        for fld in ("cost", "density", "spoolWeight", "netFilamentWeight", "dryingTime", "dryingTemperature"):
+        for fld, (bmin, bmax) in NUMERIC_BOUNDS.items():
             val = r.get(fld)
-            if isinstance(val, (int, float)) and val < 0:
-                add("physical", f"{name}: {fld}={val} is negative", fid)
+            if not isinstance(val, (int, float)) or isinstance(val, bool):
+                continue
+            if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
+                rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
+                add("physical", f"{name}: {fld}={val} outside the schema bound ({rng}) -> "
+                                f"written by a path that bypassed validation", fid)
+        for idx, cal in enumerate(r.get("calibrations") or []):
+            if not isinstance(cal, dict):
+                continue
+            nz = cal.get("nozzle")
+            noz_name = nz.get("name") if isinstance(nz, dict) else None
+            where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
+            for fld, (bmin, bmax) in CALIBRATION_BOUNDS.items():
+                val = cal.get(fld)
+                if not isinstance(val, (int, float)) or isinstance(val, bool):
+                    continue
+                if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
+                    rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
+                    add("physical", f"{name}: {where} {fld}={val} outside the schema bound ({rng}) -> "
+                                    f"exported to the slicer as-is", fid)
 
         # --- missing core spec (EFFECTIVE — a template legitimately has none) -
         if not is_template:
