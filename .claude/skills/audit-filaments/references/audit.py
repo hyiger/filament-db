@@ -81,6 +81,18 @@ def _strip_ids(value):
     return value
 
 
+MAX_CBOR_UINT = 2 ** 64 - 1
+
+
+def _encodable_opt_tag(t):
+    """Mirror of isEncodableOptTag in src/lib/openprinttag.ts.
+
+    bool is excluded explicitly: it is an int subclass in Python, so True would
+    otherwise pass as tag 1 (CONTAINS_ARAMID_FIBER) and read as an abrasive.
+    """
+    return isinstance(t, int) and not isinstance(t, bool) and 0 <= t <= MAX_CBOR_UINT
+
+
 def _disp(v):
     """A name safe to interpolate before the text sweep has run."""
     return v if isinstance(v, str) and v else "?"
@@ -424,6 +436,58 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 str(fid))
     records = usable
 
+    # NORMALISE EVERY RECORD BEFORE AUDITING ANY OF THEM.
+    #
+    # These sweeps used to run per record inside the audit loop, which is only
+    # sound while a record reads nothing but itself. It does not: the pin checks
+    # read the record's PARENT, and iteration is name-ordered, so a variant
+    # sorting before its template reached a template whose shapes had not been
+    # swept yet and a malformed container there aborted the whole run. Doing
+    # every record first makes the loop's "shapes are already safe" assumption
+    # true for cross-record reads as well as self-reads.
+    for fid, v in records.items():
+        r, raw = v["res"], v["raw"]
+        # Text first: `name` is interpolated into every message, and
+        # type/colorName are upper/lower-cased.
+        for doc, which in ((r, "resolved"), (raw, "stored")):
+            for tf in TEXT_FIELDS:
+                tv = doc.get(tf)
+                if tv is not None and not isinstance(tv, str):
+                    add("physical", f"{_disp(r.get('name'))}: {tf} is {type(tv).__name__}, not a "
+                                    f"string ({which}) -> malformed; treated as empty", str(fid))
+                    doc[tf] = ""
+        nm = r.get("name") or "?"
+        for doc, which in ((r, "resolved"), (raw, "stored")):
+            for cf, want in CONTAINER_SHAPES.items():
+                cv = doc.get(cf)
+                if cv is not None and not isinstance(cv, want):
+                    add("physical", f"{nm}: {cf} is {type(cv).__name__}, not a {want.__name__} "
+                                    f"({which}) -> malformed; treated as empty", str(fid))
+                    doc[cf] = want()
+            # …and the containers one level down, inside each spool.
+            for sp in (doc.get("spools") or []):
+                if not isinstance(sp, dict):
+                    continue
+                for sf, swant in SPOOL_CONTAINER_SHAPES.items():
+                    sv = sp.get(sf)
+                    if sv is not None and not isinstance(sv, swant):
+                        add("physical", f"{nm}: spool {sp.get('instanceId') or sp.get('_id')} "
+                                        f"{sf} is {type(sv).__name__}, not a {swant.__name__} "
+                                        f"({which}) -> malformed; treated as empty", str(fid))
+                        sp[sf] = swant()
+        # optTags ELEMENT validity. The container check above accepts a list of
+        # anything, but the schema's setter and the CBOR encoder both keep only
+        # non-negative integers, and the app's abrasive audit matches tags
+        # against a Set<number> — so a string "31" from a raw sync or a restore
+        # is silently dropped from the tag encoding AND misses the carbon-fibre
+        # wear check, in a category where a miss means a ruined nozzle.
+        for doc, which in ((r, "resolved"), (raw, "stored")):
+            badtags = [t for t in (doc.get("optTags") or []) if not _encodable_opt_tag(t)]
+            if badtags:
+                add("physical", f"{nm}: optTags contains non-encodable {badtags!r} ({which}) -> "
+                                f"dropped by the tag encoder and invisible to the abrasive "
+                                f"check; store them as non-negative integers", str(fid))
+
     # Template-ness is DERIVED from having variants — there is no schema flag.
     # Restricted to ids that are actually present: an active variant can point at
     # a missing or soft-deleted parent, and counting that absent id would report a
@@ -441,46 +505,8 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
-
-        # Text fields before anything reads one: `name` is interpolated into every
-        # message below, and type/colorName are upper/lower-cased.
-        for doc, which in ((r, "resolved"), (raw, "stored")):
-            for tf in TEXT_FIELDS:
-                tv = doc.get(tf)
-                if tv is not None and not isinstance(tv, str):
-                    add("physical", f"{_disp(r.get('name'))}: {tf} is {type(tv).__name__}, not a "
-                                    f"string ({which}) -> malformed; treated as empty", str(fid))
-                    doc[tf] = ""
-
         name = r.get("name") or "?"
         is_template = fid in parents
-
-        # SHAPES FIRST — before any derived value. A `spools` holding a string
-        # would otherwise be iterated character by character by the comprehension
-        # below and abort the whole run before the sweep could report it.
-        #
-        # Checked on BOTH reads: resolveFilament normalises some containers, so a
-        # variant's corrupt stored value can be invisible in the resolved
-        # response and only the raw read reveals it. Report from whichever
-        # carries it, then coerce so nothing downstream crashes.
-        for doc, which in ((r, "resolved"), (raw, "stored")):
-            for cf, want in CONTAINER_SHAPES.items():
-                cv = doc.get(cf)
-                if cv is not None and not isinstance(cv, want):
-                    add("physical", f"{name}: {cf} is {type(cv).__name__}, not a {want.__name__} "
-                                    f"({which}) -> malformed; treated as empty", fid)
-                    doc[cf] = want()
-            # …and the containers one level down, inside each spool.
-            for sp in (doc.get("spools") or []):
-                if not isinstance(sp, dict):
-                    continue
-                for sf, swant in SPOOL_CONTAINER_SHAPES.items():
-                    sv = sp.get(sf)
-                    if sv is not None and not isinstance(sv, swant):
-                        add("physical", f"{name}: spool {sp.get('instanceId') or sp.get('_id')} "
-                                        f"{sf} is {type(sv).__name__}, not a {swant.__name__} "
-                                        f"({which}) -> malformed; treated as empty", fid)
-                        sp[sf] = swant()
 
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []

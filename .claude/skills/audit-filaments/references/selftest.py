@@ -242,10 +242,89 @@ def case_side_inputs():
             bad(name, f"audit raised: {type(e).__name__}: {e}")
 
 
+
+# --- 5. CROSS-RECORD: a variant reads its template ---------------------------
+# The single-record fuzz above cannot see this class at all, and that blind spot
+# was real: shape normalisation ran per record inside the audit loop, so a
+# variant sorting BEFORE its template reached a template whose containers had not
+# been swept and aborted the entire run. Any check that reads a second record has
+# the same exposure, so the pair is fuzzed in both orderings.
+def fuzz_cross_record():
+    global failed
+    crashes = {}
+    combos = 0
+    tpl_id, var_id = "tpl0000000000000000001", "var0000000000000000001"
+    # INSERTION order is what matters -- audit() iterates records.items(), and a
+    # plain dict yields insertion order. An earlier version of this harness built
+    # the template first in both cases, so the variant never ran ahead of it and
+    # the fuzz reported clean against code that provably crashed.
+    for first in ("variant", "template"):
+        base = valid_res()
+        for path in walk_paths(base):
+            for hv in HOSTILE:
+                combos += 1
+                tpl = valid_res(_id=tpl_id, name="ZZZ Template", hasVariants=True,
+                                color=None, colorName=None, totalWeight=None, spools=[])
+                var = valid_res(_id=var_id, name="AAA Variant", parentId=tpl_id)
+                try:
+                    put(tpl, path, hv)
+                except Exception:
+                    continue
+                tp = {"res": tpl, "raw": copy.deepcopy(tpl)}
+                vr = {"res": var, "raw": copy.deepcopy(var)}
+                recs = {var_id: vr, tpl_id: tp} if first == "variant" else {tpl_id: tp, var_id: vr}
+                try:
+                    findings, _ = run(recs)
+                    if not isinstance(findings, dict):
+                        crashes.setdefault((".".join(map(str, path)), "non-dict findings"), 0)
+                except Exception as e:
+                    key = (".".join(map(str, path)), f"{type(e).__name__}: {e}")
+                    crashes[key] = crashes.get(key, 0) + 1
+    if crashes:
+        failed += 1
+        print(f"FAIL [fuzz-cross-record] audit RAISED on {len(crashes)} distinct (path, error) "
+              f"pairs when a TEMPLATE held the malformed value:")
+        for (path, err), n in sorted(crashes.items()):
+            print(f"  {path:<44} {err[:64]}  (x{n})")
+        print()
+    else:
+        ok("fuzz-cross-record")
+    return combos, len(crashes)
+
+
+# --- 6. array ELEMENTS, not just containers ----------------------------------
+# A container check accepts a list of anything. optTags is the case that bites:
+# the encoder and the app's abrasive Set both take numbers only, so a string
+# "31" is dropped from the tag encoding AND misses the carbon-fibre wear check.
+def case_opt_tag_elements():
+    for name, tags, want_finding in [
+        ("optTags-string-31", ["31"], True),
+        ("optTags-negative", [-1], True),
+        ("optTags-float", [1.5], True),
+        ("optTags-bool", [True], True),
+        ("optTags-none", [None], True),
+        ("optTags-valid", [4, 31], False),
+    ]:
+        r = valid_res(optTags=tags)
+        try:
+            findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad(name, f"audit raised: {type(e).__name__}: {e}"); continue
+        hit = any("optTags contains non-encodable" in m
+                  for rows in findings.values() for _, m in rows)
+        if hit == want_finding:
+            ok(name)
+        else:
+            bad(name, f"expected finding={want_finding}, got {hit} for optTags={tags!r}")
+
+
 if __name__ == "__main__":
     case_valid()
     case_record_containers()
     case_side_inputs()
+    case_opt_tag_elements()
     n, ncrash = fuzz_shapes()
+    n2, ncrash2 = fuzz_cross_record()
+    n += n2; ncrash += ncrash2
     print(f"\n{passed} passed, {failed} failed   (fuzz: {n} combinations, {ncrash} distinct crash sites)")
     sys.exit(1 if failed else 0)
