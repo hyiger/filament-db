@@ -164,7 +164,13 @@ PRESET_BOUNDS = {"extrusionMultiplier": (0, None)}
 # them. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
 SPOOL_BOUNDS = {"totalWeight": (0, None)}
 DRY_CYCLE_BOUNDS = {"tempC": (0, 300), "durationMin": (0, None)}
-USAGE_BOUNDS = {"grams": (0, 1_000_000), "debitedGrams": (0, 1_000_000)}
+USAGE_BOUNDS = {"grams": (0, 1_000_000)}
+# `debitedGrams` is declared with NO min/max (src/models/Filament.ts), so a bad
+# value is NOT a schema violation and must not be reported as one. It is still
+# corrupt: the refund path states a genuine clamped debit can never exceed the
+# entry's grams, and falls back to a full-grams refund when it does.
+SEMANTIC_BOUNDS_USAGE = {"debitedGrams": (0, 1_000_000)}
+ORDERED_PAIRS_USAGE = [("debited vs requested grams", "debitedGrams", "grams")]
 LOW_TEMP_FLOOR = 60
 NOZZLE_FLOOR = 150
 NOZZLE_CEILING = 450
@@ -473,6 +479,17 @@ def audit(records, abrasive):
                 bounds_check(dc, DRY_CYCLE_BOUNDS, f"spool {tag} dryCycle ")
             for ue in (sp.get("usageHistory") or []):
                 bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ")
+                # Same shape, different provenance — say which, because "outside
+                # the schema bound" would be a false claim for this field.
+                if isinstance(ue, dict):
+                    for f2, (bmin, bmax) in SEMANTIC_BOUNDS_USAGE.items():
+                        val = ue.get(f2)
+                        if isinstance(val, (int, float)) and not isinstance(val, bool) \
+                                and not (bmin <= val <= bmax):
+                            add("physical", f"{name}: spool {tag} usage {f2}={val} is implausible "
+                                            f"(no schema bound on this field, so the API would "
+                                            f"accept it)", fid)
+                ordering_check(ue, ORDERED_PAIRS_USAGE, "physical", f"spool {tag} usage ")
         for idx, cal in enumerate(r.get("calibrations") or []):
             if not isinstance(cal, dict):
                 continue

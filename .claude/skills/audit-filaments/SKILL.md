@@ -155,6 +155,13 @@ fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`
 
 Density additionally gets a **material-aware** band.
 
+**Say which authority a finding rests on.** Most bounds mirror the schema, so a violation proves
+the row bypassed API validation — but `debitedGrams` is declared with no min/max at all, so calling
+a bad value there a "schema bound" violation would be a false claim about how it got there. It is
+reported separately, as implausible-but-acceptable-to-the-API. Keep that distinction when adding a
+check: the remedy differs, because one shape means "something wrote past validation" and the other
+means "validation would not have stopped this".
+
 Coverage here is **verified, not assumed** — an earlier revision claimed the table covered every
 exported numeric "by construction" and it did not, twice. Re-check it after any schema change:
 
@@ -257,9 +264,12 @@ exactly one immediate parent, so a grandparent's values never reach the row howe
 look. Reachable through an import, a snapshot restore or a sync merge — none of them through the
 API.
 
-**Cross-field ordering** — each endpoint of a min/max pair can satisfy its own bound while the
-pair is contradictory, so the bounds table can never catch these. Three pairs exist and all are
-checked from one `ORDERED_PAIRS*` table: the nozzle range, `minPrintSpeed`/`maxPrintSpeed`, and a
+**Cross-field ordering** — each endpoint of a pair can satisfy its own bound while the pair is
+contradictory, so the bounds table can never catch these. Four are checked from one
+`ORDERED_PAIRS*` table, including a usage entry's `debitedGrams` against its `grams`: the refund
+path states that a genuine clamped debit can never exceed the entry's grams and falls back to a
+full-grams refund when it does, so an inverted pair is known-corrupt refund provenance. The other
+three: the nozzle range, `minPrintSpeed`/`maxPrintSpeed`, and a
 calibration's `fanMinSpeed`/`fanMaxSpeed` — which `prusaSlicerBundle` exports directly as
 `min_fan_speed`/`max_fan_speed`, so an inverted pair becomes a contradictory cooling profile.
 
