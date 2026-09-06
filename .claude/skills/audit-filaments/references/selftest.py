@@ -79,7 +79,8 @@ def valid_res(**over):
         # made the "valid" fixture invalid — caught by case_valid, again.
         "compatibleNozzles": [{"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass", "_deletedAt": None}],
         "calibrations": [{
-            "_id": "c1", "nozzle": {"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass"},
+            "_id": "6a1a7bf0677d648e9ba9cd11",
+            "nozzle": {"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass"},
             "printer": {"_id": "6a1a7bee677d648e9ba9cc02", "name": "MK4S",
                         "installedNozzles": [{"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass"}]},
             "bedType": {"_id": "6a1a7bef677d648e9ba9cc03", "name": "Textured PEI"},
@@ -104,7 +105,10 @@ def valid_res(**over):
         "promotionInFlight": {"token": "tok-1", "at": "2026-02-01T00:00:00Z"},
         "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
-            "_id": "s1", "instanceId": "0011223344", "label": "12", "lotNumber": "L-42",
+            # embedded docs get an implicit ObjectId `_id`, so these must be
+            # real 24-hex shapes (case_valid caught the old "s1"/"c1")
+            "_id": "6a1a7bf0677d648e9ba9cd10", "instanceId": "0011223344",
+            "label": "12", "lotNumber": "L-42",
             "totalWeight": 950, "retired": False,
             # a REAL ObjectId shape: Mongoose's cast accepts 24 hex characters
             # and nothing else, so a bare "l1" here made the "valid" fixture
@@ -1943,6 +1947,56 @@ def case_schema_string_paths_covered():
            % (len(declared), len(declared) - len(TEXT_SWEEP_EXEMPT), len(TEXT_SWEEP_EXEMPT)))
 
 
+# --- 14u. ObjectId shapes, everywhere they are declared or implicit ----------
+def case_objectid_contract():
+    # Python's `$` matches before a trailing newline, so the 24-character
+    # contract has to anchor with \Z — Mongoose rejects "<24 hex>\n".
+    r = valid_res()
+    r["spools"][0]["locationId"] = "6a1a7bef677d648e9ba9cd8c" + chr(10)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    hit = [m for rows in f.values() for _, m in rows if "locationId" in m]
+    ok("objectid-anchored") if hit else bad(
+        "objectid-anchored",
+        "24 hex + a trailing newline is 25 characters and Mongoose rejects it; Python's `$` "
+        "matches before that newline, so the regex must use \\Z")
+
+    # every EMBEDDED subdocument gets an implicit ObjectId `_id`, at any depth
+    checks = [
+        ("spools", lambda d: d["spools"][0].__setitem__("_id", "s1")),
+        ("calibrations", lambda d: d["calibrations"][0].__setitem__("_id", "c1")),
+        ("presets", lambda d: d["presets"][0].__setitem__("_id", "p1")),
+        ("usageHistory", lambda d: d["spools"][0]["usageHistory"][0].__setitem__("_id", "u1")),
+        ("dryCycles", lambda d: d["spools"][0]["dryCycles"][0].__setitem__("_id", "d1")),
+    ]
+    for label, mut in checks:
+        rr = valid_res()
+        mut(rr)
+        f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+        if not [m for rows in f.values() for _, m in rows if "._id=" in m]:
+            bad("objectid-subdoc-ids",
+                f"a malformed `_id` on an embedded {label} document cannot be cast, so the whole "
+                f"restore fails — and nothing else in the file looks at a subdocument's own id")
+            break
+    else:
+        ok("objectid-subdoc-ids")
+
+    # the promotion marker requires BOTH members
+    for marker in ({"token": "x"}, {"at": "2026-01-01T00:00:00Z"}, {}, "oops"):
+        rr = valid_res(promotionInFlight=marker)
+        f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+        if not [m for rows in f.values() for _, m in rows if "promotionInFlight" in m]:
+            bad("promotion-marker-members",
+                f"promotionInFlight={marker!r} fails the embedded schema (both members are "
+                f"required), so POST /api/snapshot refuses the whole backup")
+            break
+    else:
+        rr = valid_res(promotionInFlight={"token": "x", "at": "2026-01-01T00:00:00Z"})
+        f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+        fp = [m for rows in f.values() for _, m in rows if "promotionInFlight" in m]
+        ok("promotion-marker-members") if not fp else bad(
+            "promotion-marker-members", f"a complete, valid marker was flagged: {fp}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -2034,6 +2088,7 @@ if __name__ == "__main__":
     case_js_trim_mirror()
     case_schema_string_paths_covered()
     case_schema_date_paths_covered()
+    case_objectid_contract()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

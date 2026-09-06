@@ -747,7 +747,10 @@ def _bad_tds_url(v):
 # and NOTHING else. A 12-byte string, a number and a bare id like "l1" are all
 # BSONErrors, so an unresolvable ref and an UNCASTABLE one are different
 # defects with different consequences.
-OBJECTID_RE = re.compile(r"^[0-9a-fA-F]{24}$")
+# `\Z`, NOT `$`: Python's `$` also matches immediately BEFORE a trailing
+# newline, so "<24 hex>\n" passed a check whose whole contract is "exactly 24
+# characters" -- and Mongoose rejects that value.
+OBJECTID_RE = re.compile(r"^[0-9a-fA-F]{24}\Z")
 
 SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MAX_SPOOL_ID_LENGTH = 128
@@ -1768,6 +1771,29 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                              else _inh_blame(inherit_prefix + f_lo, inherit_prefix + f_hi))
                     add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}{blame}", fid)
 
+        # EMBEDDED SUBDOCUMENT IDS. Mongoose gives every embedded document an
+        # implicit `_id` of type ObjectId, so a raw-sync value like "s1" cannot
+        # be cast and takes the whole restore with it — and nothing else in this
+        # file looks at a subdocument's own id. Walked generically from the
+        # array tables rather than named site by site, which is what kept
+        # producing one finding per container.
+        def _check_subdoc_ids(container, path):
+            for _si, _sd in enumerate(container or []):
+                if not isinstance(_sd, dict):
+                    continue                       # shape reported by the element sweep
+                _sid_own = _sd.get("_id")
+                if _sid_own is not None and not (isinstance(_sid_own, str)
+                                                 and OBJECTID_RE.match(_sid_own)):
+                    add("structure", f"{name}: {path}[{_si}]._id={_short(repr(_sid_own))} is not a "
+                                     f"24-character hex ObjectId -> Mongoose gives every embedded "
+                                     f"document an implicit ObjectId `_id`, so it cannot be cast "
+                                     f"and POST /api/snapshot refuses the ENTIRE backup file", fid)
+                for _nk in NESTED_DICT_ELEMENT_ARRAYS.get(path, ()):
+                    _check_subdoc_ids(_sd.get(_nk), f"{path}[{_si}].{_nk}")
+
+        for _dea in DICT_ELEMENT_ARRAYS:
+            _check_subdoc_ids(raw.get(_dea), _dea)
+
         # tdsUrl is checked on the STORED read only. It is inheritable, so the
         # resolved read carries the TEMPLATE's value on every colour variant and
         # a single bad URL on a template would be reported once per child, each
@@ -1815,7 +1841,22 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # `promotionInFlight.at` is a required Date inside the promotion marker
         # — a real schema path that no spool loop reaches.
         _pif = raw.get("promotionInFlight")
+        if _pif is not None and not isinstance(_pif, dict):
+            add("structure", f"{name}: promotionInFlight is {type(_pif).__name__} "
+                             f"({_short(repr(_pif))}), not a subdocument -> the marker is a "
+                             f"declared embedded path, so POST /api/snapshot refuses the ENTIRE "
+                             f"backup file", fid)
         if isinstance(_pif, dict):
+            # BOTH members are required by the embedded schema, so an incomplete
+            # marker fails the restore just as a malformed one does — checking
+            # only `at`'s castability left `{"token": "x"}` reported as clean.
+            for _pm in ("token", "at"):
+                if _pif.get(_pm) in (None, ""):
+                    add("structure", f"{name}: promotionInFlight is present but has no {_pm!r} -> "
+                                     f"the embedded schema requires both members, so POST "
+                                     f"/api/snapshot refuses the ENTIRE backup file. A marker this "
+                                     f"shape also cannot drive the promotion resume path, which "
+                                     f"pairs the token against a variant's promotedByToken", fid)
             _pat = _pif.get("at")
             if _pat not in (None, "") and _bad_date(_pat):
                 add("structure", f"{name}: promotionInFlight.at={_short(repr(_pat))} cannot be "
