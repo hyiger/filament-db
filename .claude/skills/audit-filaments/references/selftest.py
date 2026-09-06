@@ -864,6 +864,29 @@ def case_calibration_scope_refs():
         "the snapshot carried no `printers` collection, so every printer scope went unchecked "
         "and the report rendered as structurally clean")
 
+    # a spool pointing at a SOFT-DELETED location is just as broken as one
+    # pointing at a purged one — /api/spools/by-location joins with
+    # `_deletedAt: null` — so the location set must be built from ACTIVE rows,
+    # unlike the printer/bedType sets where a tombstone still populates
+    rl = valid_res()
+    rl["spools"][0]["locationId"] = "lDEAD"
+    f, _, _ = A.audit({"a": rec(rl, copy.deepcopy(rl))}, (), None, None, None,
+                      {"printers": set(), "bedTypes": set(), "locations": set(), "cals": {}})
+    hit = [m for rows in f.values() for _, m in rows if "resolves to no Location row" in m]
+    ok("location-dangling") if hit else bad(
+        "location-dangling", "a spool pointing at a location that is gone renders in a second "
+                             "'no location' group and drops out of every kind-filtered view")
+
+    # ...and when the snapshot carried no locations at all, SAY so
+    f, _, _ = A.audit({"a": rec(rl, copy.deepcopy(rl))}, (), None, None, None,
+                      {"printers": set(), "bedTypes": set(), "cals": {}})
+    hit = [m for rows in f.values() for _, m in rows
+           if "location references were NOT checked" in m]
+    ok("location-notchecked-visible") if hit else bad(
+        "location-notchecked-visible",
+        "with no locations collection every locationId went unexamined and the structural section "
+        "read as clean")
+
     # a FAILED snapshot read must say so, not silently render as clean
     f, _, _ = A.audit({"a": base}, (), None, None, None, {"error": "HTTP 500"})
     hit = [m for rows in f.values() for _, m in rows if "were NOT checked" in m]
@@ -1174,7 +1197,11 @@ def case_identity_and_dates():
     for holder in ("spool", "filament"):
         for val, needle in ((("a" * 17), "16-character OpenPrintTag"),
                             (("a" * 129), "128-character contract"),
-                            ("has space!", "allowed charset")):
+                            ("has space!", "allowed charset"),
+                            # trimmed for the CHECK but stored with the spaces:
+                            # every scan path trims before querying while the
+                            # writers encode it as stored, so no tier can match
+                            ("  abc  ", "surrounding whitespace")):
             rr = valid_res()
             if holder == "spool":
                 rr["spools"][0]["instanceId"] = val

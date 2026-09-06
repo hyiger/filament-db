@@ -669,6 +669,14 @@ def _id_contract_problem(value):
     t = value.strip()
     if not t:
         return None                       # absence has its own row
+    if t != value:
+        # Every scan path trims before querying (/api/filaments/match and
+        # /api/nfc/decode both call .trim()), while the tag and label writers
+        # encode the value as STORED. So neither the exact nor the
+        # case-insensitive spool tier can ever match this row.
+        return ("has surrounding whitespace -> the tag and label writers encode it as stored "
+                "while /api/filaments/match and /api/nfc/decode both trim the scanned value "
+                "before querying, so no tier can ever match it")
     if len(t) > MAX_SPOOL_ID_LENGTH:
         return (f"is {len(t)} characters, past the {MAX_SPOOL_ID_LENGTH}-character contract -> "
                 f"/api/filaments/match caps its query at the same length, so this id can never "
@@ -898,6 +906,14 @@ def load(base, api_key, cache_dir=None):
         snap = fetch(f"{base}/api/snapshot", api_key)
         cols = snap.get("collections") if isinstance(snap, dict) else None
         if isinstance(cols, dict):
+            def _active_ids(key):
+                base = _ids(key)
+                if base is None:
+                    return None
+                return {str(x.get("_id")) for x in cols.get(key)
+                        if isinstance(x, dict) and x.get("_id") is not None
+                        and x.get("_deletedAt") in (None, "") and not x.get("_purged")}
+
             def _ids(key):
                 # None when the snapshot does not CARRY the collection, which is
                 # a real state (restore treats an absent key as "leave this
@@ -912,7 +928,14 @@ def load(base, api_key, cache_dir=None):
             ref_index = {
                 "printers": _ids("printers"),
                 "bedTypes": _ids("bedTypes"),
-                "locations": _ids("locations"),
+                # ACTIVE rows only, unlike the two above. The distinction is
+                # not cosmetic: a soft-deleted PRINTER or BEDTYPE still
+                # populates as a truthy object (so "does the row exist at all"
+                # is the right test there), but /api/spools/by-location joins
+                # locations with `_deletedAt: null` — a spool pointing at a
+                # tombstoned location is just as broken as one pointing at a
+                # purged one, and an all-rows set would call it healthy.
+                "locations": _active_ids("locations"),
                 # Every row the collection HOLDS, trashed included: a
                 # soft-deleted target still populates as an object, so the
                 # existing soft-delete rows cover it. Only a target that is
@@ -1434,6 +1457,13 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         if isinstance(_own_bag, dict):
             for _pk in ("compatible_printers_condition", "compatible_printers"):
                 _pv = _own_bag.get(_pk)
+                # A LIST is a supported shape here (GH #678 — the Bambu import
+                # preserves it and writeSection emits PrusaSlicer's coStrings
+                # form), and it imposes the same hard whitelist. A string-only
+                # test called the multi-printer pin healthy.
+                if isinstance(_pv, list):
+                    _pv = ", ".join(str(x) for x in _pv
+                                    if not (isinstance(x, str) and not x.strip()) and x is not None)
                 if isinstance(_pv, str) and _pv.strip():
                     add("structure", f"{name}: settings.{_pk} pins {_pv!r} -> PrusaSlicer treats "
                                      f"this as a hard visibility filter, so the exported preset is "
@@ -2573,6 +2603,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # positive, but silence about it is its own defect: with `printers`
         # omitted, every printer scope goes unchecked and the report looks
         # structurally clean. Say so, in the same words as a failed read.
+        if not isinstance(ref_index.get("locations"), set):
+            add("notchecked", "spool location references were NOT checked: the /api/snapshot "
+                              "response carried no `locations` collection, so no locationId could "
+                              "be resolved. A spool pointing at a deleted location renders in a "
+                              "second 'no location' group and drops out of every kind-filtered "
+                              "view, and nothing else in this report would show it.", None)
         for _f, _coll in (("printer", "printers"), ("bedType", "bedTypes")):
             if not isinstance(_live[_f], set):
                 add("notchecked", f"calibration {_f} references were NOT checked: the /api/snapshot "
