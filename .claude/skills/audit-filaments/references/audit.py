@@ -401,7 +401,11 @@ NESTED_CONTAINER_SHAPES = {
 # each call site is what turns one defect into one review round per site.
 # `inherits` is here because the detail page renders it directly as a React
 # child, exactly like the other five — a non-string throws on open.
-TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits")
+# `instanceId` is here because the detail page renders it DIRECTLY as a React
+# child (`{filament.instanceId}` beside the name), so a non-string throws on
+# open — and the cross-record identity pass indexes strings only, so without
+# this the field had no check at all.
+TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits", "instanceId")
 
 # Schema-required text, with the model's own trim semantics (Filament.ts):
 # `name` is `{required, trim}` so Mongoose trims BEFORE the required check and a
@@ -837,6 +841,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     # swept yet and a malformed container there aborted the whole run. Doing
     # every record first makes the loop's "shapes are already safe" assumption
     # true for cross-record reads as well as self-reads.
+    #
+    # `coerced_by_fid` is keyed by record because these sets are BUILT here and
+    # READ by the colour checks in a LATER loop. A bare loop-local left the FINAL
+    # record's state standing in for every record: one non-string `color` on the
+    # last row silently disabled the malformed-colour check for the whole
+    # library, and a non-string `colorName` there disabled every #808080 sentinel
+    # row. Leakage through a loop-local is invisible in any single-record test,
+    # which is how it survived.
+    coerced_by_fid = {}
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
         # For a standalone or a template the two reads are the same document, so
@@ -870,6 +883,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                      if isinstance(_inh_text, (list, tuple)) else set())
         coerced_text = set()   # stored read — a "" here is the record's own
         coerced_res = set()    # resolved read — a "" here is this sweep's doing
+        coerced_by_fid[fid] = (coerced_text, coerced_res)
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for tf in TEXT_FIELDS:
                 tv = doc.get(tf)
@@ -1702,12 +1716,13 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # already named as a malformed non-string, and would then defeat the
         # documented #808080 exemption below by blanking colorName.
         col = r.get("color")
-        if "color" not in coerced_res and col is not None and not HEX6.match(str(col)):
+        _c_text, _c_res = coerced_by_fid.get(fid, (set(), set()))
+        if "color" not in _c_res and col is not None and not HEX6.match(str(col)):
             add("colour", f"{name}: malformed color {col!r}", fid)
         # #808080 is the legacy default the pre-v1.70 form stamped on everything,
         # but it is ALSO the correct hex for a filament that really is grey.
         cname = (r.get("colorName") or "").lower()
-        _cname_lost = "colorName" in coerced_res
+        _cname_lost = "colorName" in _c_res
         secondaries = r.get("secondaryColors") or []
         if isinstance(secondaries, list):   # shape already reported above
             if len(secondaries) > MAX_SECONDARY_COLORS:

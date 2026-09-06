@@ -430,6 +430,14 @@ When those disagree, say so and let the owner decide rather than prescribing a w
 
 ## False positives, learned by hitting them
 
+**Per-record state must not outlive its record.** The text sweep builds its "what did I coerce"
+sets in one loop and the colour checks read them in a *later* one, so a bare loop-local left the
+**final** record's state standing in for every record — one non-string `color` on the last row
+silently disabled the malformed-colour check for the whole library. It is keyed by record id now,
+and `case_no_cross_record_leak` pins it. Worth internalising rather than just fixing: every other
+case in the suite runs ONE record, which is precisely why this survived. A new check that carries
+state between the loops needs a multi-record, order-sensitive assertion.
+
 **Two active records can share a name.** Hybrid sync, a restore, or a legacy database whose
 unique-name index could not be built all produce it, and every finding identifies its filament by
 name. The checker therefore dedupes on `(record id, message)` and appends the id to **every**

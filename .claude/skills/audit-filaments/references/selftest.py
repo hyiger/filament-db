@@ -50,6 +50,10 @@ def bad(name, detail):
 def valid_res(**over):
     r = {
         "_id": "aaaaaaaaaaaaaaaaaaaaaaa1", "name": "PLA Basic Red", "vendor": "Acme",
+        # TOP-LEVEL instanceId. The coverage guard below collects key NAMES, not
+        # paths, so the spool's own `instanceId` made this read look covered while
+        # no fuzz case ever substituted a hostile value at the top level.
+        "instanceId": "ffeeddccbb",
         "type": "PLA", "color": "#ff0000", "colorName": "Red",
         "density": 1.24, "diameter": 1.75, "cost": 20.0,
         "totalWeight": None, "netFilamentWeight": 1000, "spoolWeight": 200,
@@ -850,6 +854,37 @@ def case_date_mirror():
         f"`new Date(<number|bool>)` is always a valid instant; reported anyway: {live}")
 
 
+# --- 14e. per-record state must not leak between records ---------------------
+# The text sweep BUILDS `coerced_*` in one loop and the colour checks READ them
+# in a LATER one, so a bare loop-local left the FINAL record's state standing in
+# for every record: one non-string `color` on the last row silently disabled the
+# malformed-colour check for the whole library. Every case in this suite bar
+# these ran ONE record, which is exactly why it survived — so the assertion has
+# to be multi-record and order-sensitive.
+def case_no_cross_record_leak():
+    first = valid_res(_id="a", name="First", color="red")          # malformed STRING
+    last = valid_res(_id="b", name="Last", color={"hex": "#fff"})  # non-string -> coerced
+    f, _ = run({"a": rec(first, copy.deepcopy(first)), "b": rec(last, copy.deepcopy(last))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    if any("First: malformed color" in m for m in rows):
+        ok("no-leak-malformed-colour")
+    else:
+        bad("no-leak-malformed-colour",
+            "a non-string `color` on the LAST record suppressed the malformed-colour finding on "
+            "an EARLIER one — per-record coercion state is leaking through a loop-local")
+
+    grey = valid_res(_id="c", name="Grey One", color="#808080", colorName=None)
+    last2 = valid_res(_id="d", name="Last", colorName=["x"])
+    f, _ = run({"c": rec(grey, copy.deepcopy(grey)), "d": rec(last2, copy.deepcopy(last2))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    if any("Grey One" in m and "808080" in m for m in rows):
+        ok("no-leak-colour-sentinel")
+    else:
+        bad("no-leak-colour-sentinel",
+            "a non-string `colorName` on the LAST record suppressed the #808080 sentinel finding "
+            "on an EARLIER one — same loop-local leak")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -924,6 +959,7 @@ if __name__ == "__main__":
     case_calibration_scope_refs()
     case_ref_index_hostile_shapes()
     case_date_mirror()
+    case_no_cross_record_leak()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
