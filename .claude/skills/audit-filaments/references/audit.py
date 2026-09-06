@@ -73,6 +73,25 @@ def _strip_ids(value):
     return value
 
 
+def _json_equal(a, b):
+    """Equality with JSON type semantics.
+
+    Python treats True == 1 and False == 0, but the JavaScript shallow merge does
+    not consider those values identical, so a numeric template value against a
+    boolean variant value would be reported as a redundant pin and the user told
+    to delete a deliberate override.
+    """
+    if isinstance(a, bool) or isinstance(b, bool):
+        return isinstance(a, bool) and isinstance(b, bool) and a == b
+    if isinstance(a, list) and isinstance(b, list):
+        return len(a) == len(b) and all(_json_equal(x, y) for x, y in zip(a, b))
+    if isinstance(a, dict) and isinstance(b, dict):
+        return a.keys() == b.keys() and all(_json_equal(a[k], b[k]) for k in a)
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        return a == b          # JS has one number type: 1 and 1.0 are the same
+    return type(a) is type(b) and a == b
+
+
 def _nozzle_ids(value):
     out = []
     for entry in value or []:
@@ -289,13 +308,19 @@ def audit(records, abrasive):
             pname = parent_eff.get("name")
             for fld in PIN_CHECK_FIELDS:
                 own, inherited = raw.get(fld), parent_eff.get(fld)
-                if own is not None and inherited is not None and own == inherited:
+                # resolveFilament reads `variantVal != null && variantVal !== ""`,
+                # so an empty string is an inheritance sentinel, not an override —
+                # two empty strings are not a pin and a later template edit still
+                # propagates.
+                if own == "" or own is None or inherited is None:
+                    continue
+                if _json_equal(own, inherited):
                     add("pinned", f"{name}: stores {fld}={own}, identical to template {pname!r} -> pinned copy")
             own_t = raw.get("temperatures") or {}
             par_t = parent_eff.get("temperatures") or {}
             for sub in PIN_CHECK_TEMPS:
                 own, inherited = own_t.get(sub), par_t.get(sub)
-                if own is not None and inherited is not None and own == inherited:
+                if own is not None and inherited is not None and _json_equal(own, inherited):
                     add("pinned", f"{name}: stores temperatures.{sub}={own}, identical to template "
                                   f"{pname!r} -> pinned copy")
             # Whole-array inheritance: a NON-EMPTY variant array overrides, so one
@@ -303,7 +328,7 @@ def audit(records, abrasive):
             for fld in PIN_CHECK_ARRAYS:
                 own = raw.get(fld) or []
                 inherited = parent_eff.get(fld) or []
-                if own and _strip_ids(own) == _strip_ids(inherited):
+                if own and _json_equal(_strip_ids(own), _strip_ids(inherited)):
                     add("pinned", f"{name}: stores its own {fld} ({len(own)} entr"
                                   f"{'y' if len(own) == 1 else 'ies'}) identical to template "
                                   f"{pname!r} -> pinned copy")
@@ -321,7 +346,18 @@ def audit(records, abrasive):
             # category.
             own_set = raw.get("settings") or {}
             par_set = parent_eff.get("settings") or {}
-            dup = sorted(k for k, val in own_set.items() if k in par_set and par_set[k] == val)
+            # `settings` is a Mixed field. A legacy row can hold a string or an
+            # array here, which is truthy but has no .items() — calling it would
+            # abort the whole audit with an AttributeError and report nothing at
+            # all, on exactly the historical data this skill exists to inspect.
+            if not isinstance(own_set, dict):
+                add("physical", f"{name}: settings is {type(own_set).__name__}, not an object -> "
+                                f"malformed bag, settings pins not checked")
+                own_set = {}
+            if not isinstance(par_set, dict):
+                par_set = {}
+            dup = sorted(k for k, val in own_set.items()
+                         if k in par_set and _json_equal(par_set[k], val))
             if dup:
                 shown = ", ".join(dup[:4]) + (f", +{len(dup) - 4} more" if len(dup) > 4 else "")
                 add("pinned", f"{name}: stores {len(dup)} of {len(own_set)} settings key(s) identical to "

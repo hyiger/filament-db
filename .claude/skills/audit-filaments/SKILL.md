@@ -192,7 +192,23 @@ tribological grade — say so rather than assuming the tag was right; the user m
 a reason you cannot see, or in error.
 
 **Clear a pinned field to `null`**, do not try to match the template's value. Explicit null is what
-restores inheritance.
+restores inheritance — for a scalar, a temperature subfield, or a whole array (send `[]`).
+
+**A pinned `settings` key is the exception, and `null` does not fix it.** The bag is shallow-merged
+`{...parent, ...variant}`, so a key set to null is still *present* on the variant and keeps
+overriding — with null — every value the template will ever hold. Nor can you `$unset` it: the PUT
+route rejects any body with a `$`-prefixed key. The only repair is to read the raw bag, delete the
+key, and write the whole bag back:
+
+```bash
+BAG=$(curl -s "$BASE/api/filaments/$ID?raw=true" | jq -c '.settings | del(.filament_abrasive)')
+curl -s -X PUT "$BASE/api/filaments/$ID" -H 'Content-Type: application/json' \
+  -d "{\"settings\": $BAG}"
+```
+
+This is the one place the whole-bag write documented as dangerous above is the *correct* operation
+— it is the only way to remove a key. It is a read-modify-write, so do it when nothing else is
+syncing that record, and check the key count before and after.
 
 ## What NOT to fix automatically
 
