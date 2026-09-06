@@ -81,6 +81,11 @@ def _strip_ids(value):
     return value
 
 
+def _disp(v):
+    """A name safe to interpolate before the text sweep has run."""
+    return v if isinstance(v, str) and v else "?"
+
+
 def num(v):
     """A real number, or None.
 
@@ -210,6 +215,17 @@ CONTAINER_SHAPES = {
     "secondaryColors": list, "optTags": list, "compatibleNozzles": list,
 }
 
+# Containers nested INSIDE a spool. CONTAINER_SHAPES only reaches the top level,
+# so a spool holding `usageHistory: 3` was iterated directly and aborted the run.
+SPOOL_CONTAINER_SHAPES = {"usageHistory": list, "dryCycles": list}
+
+# Scalar STRING fields. Mongoose casts most of these, but a raw-driver write, a
+# hybrid-sync copy or a restored snapshot can leave a number, a list or a dict
+# here, and the passes below call .upper()/.lower()/.strip() on them. Swept with
+# the containers for the same reason the containers are swept centrally: guarding
+# each call site is what turns one defect into one review round per site.
+TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName")
+
 # Every `<field>: { type: Number }` leaf in the Filament schema. ONE recursive
 # sweep reports a non-number in any of them, at any depth, so the individual
 # passes can skip quietly instead of each needing its own reporting branch —
@@ -338,6 +354,17 @@ def load(base, api_key, cache_dir=None):
 def audit(records, abrasive, failed=None, listing_topology=None):
     findings = {}
 
+    # Side inputs are guarded here, not at each use. They arrive from separate
+    # HTTP reads, so a route that answers 200 with an unexpected body (a proxy
+    # error page, an older build's shape) must degrade to "not checked" rather
+    # than abort an audit of records that were read perfectly well.
+    if not isinstance(records, dict):
+        records = {}
+    if not isinstance(failed, dict):
+        failed = {} if failed is None else {}
+    if not isinstance(listing_topology, dict):
+        listing_topology = {}
+
     def add(cat, msg, fid=None):
         # Keyed on (record id, message), not text alone: hybrid sync, a restore or
         # a legacy database can leave two ACTIVE records sharing a name, and every
@@ -356,8 +383,15 @@ def audit(records, abrasive, failed=None, listing_topology=None):
     if isinstance(abrasive, dict) and "error" in abrasive:
         add("abrasive", f"COULD NOT REACH /api/abrasive-nozzles ({abrasive['error']}) — "
                         f"abrasive safety was NOT checked")
+    elif not isinstance(abrasive, (list, tuple)):
+        add("abrasive", f"/api/abrasive-nozzles returned {type(abrasive).__name__}, not a list "
+                        f"-> abrasive safety was NOT checked")
     else:
         for f in abrasive:
+            if not isinstance(f, dict):
+                add("abrasive", f"/api/abrasive-nozzles returned a {type(f).__name__} entry "
+                                f"-> that entry was NOT checked")
+                continue
             name = f.get("filamentName", "?")
             why = ", ".join(f.get("reasons") or []) or "abrasive"
             src = f" (inherited from {f['inheritedFrom']})" if f.get("inheritedFrom") else ""
@@ -372,6 +406,23 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 abrasive_unassigned.add(str(f.get("filamentId")))
                 add("abrasive", f"{name}: abrasive ({why}) with no nozzle assignment at all{src}",
                     str(f.get("filamentId")))
+
+    # PAIR SHAPE, ONCE, BEFORE ANY CONSUMER. A record whose two reads are not both
+    # documents is reported and dropped here rather than guarded at each use: the
+    # parents derivation below runs before the main loop, so an in-loop guard left
+    # it exposed and a single malformed pair aborted the audit of every other
+    # record — the failure this whole guard exists to prevent, one scope up.
+    usable = {}
+    for fid, v in records.items():
+        rr = v.get("res") if isinstance(v, dict) else None
+        rw = v.get("raw") if isinstance(v, dict) else None
+        if isinstance(rr, dict) and isinstance(rw, dict):
+            usable[fid] = v
+        else:
+            add("structure", f"filament {fid}: response was {type(rr).__name__}/"
+                             f"{type(rw).__name__}, not two documents -> it was NOT audited",
+                str(fid))
+    records = usable
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
     # Restricted to ids that are actually present: an active variant can point at
@@ -390,7 +441,18 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
-        name = r.get("name", "?")
+
+        # Text fields before anything reads one: `name` is interpolated into every
+        # message below, and type/colorName are upper/lower-cased.
+        for doc, which in ((r, "resolved"), (raw, "stored")):
+            for tf in TEXT_FIELDS:
+                tv = doc.get(tf)
+                if tv is not None and not isinstance(tv, str):
+                    add("physical", f"{_disp(r.get('name'))}: {tf} is {type(tv).__name__}, not a "
+                                    f"string ({which}) -> malformed; treated as empty", str(fid))
+                    doc[tf] = ""
+
+        name = r.get("name") or "?"
         is_template = fid in parents
 
         # SHAPES FIRST — before any derived value. A `spools` holding a string
@@ -408,6 +470,17 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     add("physical", f"{name}: {cf} is {type(cv).__name__}, not a {want.__name__} "
                                     f"({which}) -> malformed; treated as empty", fid)
                     doc[cf] = want()
+            # …and the containers one level down, inside each spool.
+            for sp in (doc.get("spools") or []):
+                if not isinstance(sp, dict):
+                    continue
+                for sf, swant in SPOOL_CONTAINER_SHAPES.items():
+                    sv = sp.get(sf)
+                    if sv is not None and not isinstance(sv, swant):
+                        add("physical", f"{name}: spool {sp.get('instanceId') or sp.get('_id')} "
+                                        f"{sf} is {type(sv).__name__}, not a {swant.__name__} "
+                                        f"({which}) -> malformed; treated as empty", fid)
+                        sp[sf] = swant()
 
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []

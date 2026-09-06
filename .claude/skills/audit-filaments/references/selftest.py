@@ -1,0 +1,251 @@
+#!/usr/bin/env python3
+"""Corpus for audit.py.
+
+WHY THIS FILE EXISTS. Twenty-four review rounds on this script produced sixty-odd
+findings, and the overwhelming majority were ONE defect wearing different field
+names: a record arrives holding a value of the wrong SHAPE at some path -- a
+string where a dict is expected, a dict where a list is -- and the audit either
+raises (so a single corrupt record hides every finding for the whole library) or
+reads past it silently (so the corruption is declared clean). Each round fixed
+the path that round happened to name.
+
+Fixing them one path at a time cannot converge: the script reads well over a
+hundred paths, and every new check adds more. So the fuzz below does not enumerate
+paths a human thought of -- it walks a realistic record, and at EVERY path it
+finds, substitutes each hostile value in turn and asserts the audit still returns.
+A path added next month is covered the day it is read, without anyone adding a case.
+
+Both reads are fuzzed independently AND together, because `res` and `raw` are
+separate documents: a sweep that normalises only `res` leaves every block that
+consumes `raw` exposed, which is exactly how three separate rounds went.
+
+Run: python3 selftest.py
+"""
+import copy
+import itertools
+import sys
+import traceback
+
+import audit as A
+
+passed = failed = 0
+
+
+def ok(name):
+    global passed
+    passed += 1
+
+
+def bad(name, detail):
+    global failed
+    failed += 1
+    print(f"FAIL [{name}] {detail}\n")
+
+
+# --- a realistic, VALID record ----------------------------------------------
+# Deliberately broad: the fuzz's reach is bounded by the paths present here, so
+# a field missing from this fixture is a field the sweep never probes.
+def valid_res(**over):
+    r = {
+        "_id": "aaaaaaaaaaaaaaaaaaaaaaa1", "name": "PLA Basic Red", "vendor": "Acme",
+        "type": "PLA", "color": "#ff0000", "colorName": "Red",
+        "density": 1.24, "diameter": 1.75, "cost": 20.0,
+        "totalWeight": None, "netFilamentWeight": 1000, "spoolWeight": 200,
+        "lowStockThreshold": 100, "parentId": None, "hasVariants": False,
+        "optTags": [4], "secondaryColors": [],
+        "temperatures": {"nozzle": 210, "bed": 60, "chamber": 0,
+                         "nozzleFirstLayer": 215, "bedFirstLayer": 65,
+                         "nozzleRangeMin": 190, "nozzleRangeMax": 230},
+        "bedTypeTemps": [{"bedType": "Textured PEI", "temperature": 60}],
+        "dryingTemp": 45, "dryingTime": 240,
+        "minPrintSpeed": 20, "maxPrintSpeed": 200,
+        "maxVolumetricSpeed": 12, "shrinkageXY": 0.3, "shrinkageZ": 0.1,
+        "shoreA": None, "shoreD": 80, "transmissionDistance": 3,
+        "glassTransition": 60, "heatDeflection": 55,
+        "compatibleNozzles": [{"_id": "n1", "name": "0.4 Brass", "_deletedAt": None}],
+        "calibrations": [{
+            "_id": "c1", "nozzle": {"_id": "n1", "name": "0.4 Brass"},
+            "printer": {"_id": "p1", "name": "MK4S"}, "bedType": {"_id": "b1", "name": "Textured PEI"},
+            "extrusionMultiplier": 0.98, "pressureAdvance": 0.04,
+            "maxVolumetricSpeed": 12, "fanMinSpeed": 20, "fanMaxSpeed": 100,
+            "chamberTemp": 0, "nozzleTemp": 210, "bedTemp": 60,
+        }],
+        "presets": [{"name": "draft", "extrusionMultiplier": 0.99}],
+        "settings": {"filament_abrasive": "0", "compatible_printers_condition": ""},
+        "openprinttagSnapshot": {"density": 1.24},
+        "spools": [{
+            "_id": "s1", "instanceId": "0011223344", "label": "12",
+            "totalWeight": 950, "retired": False, "locationId": "l1",
+            "purchaseDate": "2026-01-01", "openedDate": None,
+            "usageHistory": [{"grams": 30, "debitedGrams": 30, "source": "job",
+                              "date": "2026-02-01", "jobLabel": "bracket"}],
+            "dryCycles": [{"tempC": 45, "durationMin": 240, "date": "2026-01-05"}],
+        }],
+        "_deletedAt": None, "_purged": False,
+    }
+    r.update(over)
+    return r
+
+
+def rec(res=None, raw=None):
+    res = res if res is not None else valid_res()
+    raw = raw if raw is not None else copy.deepcopy(res)
+    return {"res": res, "raw": raw}
+
+
+def run(records, abrasive=(), failed_map=None, topology=None):
+    return A.audit(records, abrasive, failed_map, topology)
+
+
+# --- 1. the valid record must audit cleanly and not crash -------------------
+def case_valid():
+    try:
+        findings, parents = run({"a": rec()})
+    except Exception:
+        return bad("valid-record", "a VALID record raised:\n" + traceback.format_exc())
+    if not isinstance(findings, dict):
+        return bad("valid-record", f"expected dict findings, got {type(findings)}")
+    ok("valid-record")
+
+
+# --- 2. THE CLASS: hostile shapes at every path, on both reads --------------
+HOSTILE = [
+    "oops",            # string where a container is expected
+    "",                # empty string sentinel
+    [],                # empty list
+    {},                # empty dict
+    0,                 # falsy number
+    -1,                # negative
+    True,              # bool (is also an int in Python)
+    None,
+    [None],            # list of junk
+    [{"a": 1}],        # list of unexpected dicts
+    {"a": 1},          # dict where a scalar/list is expected
+    ["x", "y"],        # list of strings
+    float("nan"),
+    float("inf"),
+    1e400,             # overflows to inf
+    "9" * 300,         # absurd string
+    [[]],              # nested container
+    {"_id": {}},       # populated-ref-shaped junk
+]
+
+
+def walk_paths(node, prefix=()):
+    """Every addressable path in the fixture, containers included."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            yield prefix + (k,)
+            yield from walk_paths(v, prefix + (k,))
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield prefix + (i,)
+            yield from walk_paths(v, prefix + (i,))
+
+
+def put(doc, path, value):
+    cur = doc
+    for step in path[:-1]:
+        cur = cur[step]
+    cur[path[-1]] = value
+    return doc
+
+
+def fuzz_shapes(report_all=True):
+    """For every path x every hostile value x {res, raw, both}: must not raise.
+
+    The contract asserted is deliberately weak -- audit() returns rather than
+    raising. It is NOT that a finding is emitted. Demanding a finding per path
+    would encode this fixture's shape into the corpus and break on every legit
+    change; not raising is the property that actually matters, because one raise
+    aborts the audit of the entire library.
+
+    Crashes are COLLECTED, not fatal on first hit, and reported grouped by
+    (path, exception). Stopping at the first one is what turns a single class of
+    defect into twenty review rounds -- the whole point here is to see the class
+    at once.
+    """
+    global failed
+    base = valid_res()
+    paths = list(walk_paths(base))
+    combos = 0
+    crashes = {}
+    for path in paths:
+        for hv in HOSTILE:
+            for where in ("res", "raw", "both"):
+                combos += 1
+                res, raw = valid_res(), valid_res()
+                if where in ("res", "both"):
+                    try: put(res, path, hv)
+                    except Exception: continue
+                if where in ("raw", "both"):
+                    try: put(raw, path, hv)
+                    except Exception: continue
+                try:
+                    findings, _ = run({"a": {"res": res, "raw": raw}})
+                    if not isinstance(findings, dict):
+                        crashes.setdefault((".".join(map(str, path)), "non-dict findings"), []).append((hv, where))
+                except Exception as e:
+                    key = (".".join(map(str, path)), f"{type(e).__name__}: {e}")
+                    crashes.setdefault(key, []).append((hv, where))
+    if crashes:
+        failed += 1
+        print(f"FAIL [fuzz] audit RAISED on {len(crashes)} distinct (path, error) pairs "
+              f"-- each one lets a single corrupt record hide every finding for the whole library:")
+        for (path, err), hits in sorted(crashes.items()):
+            vals = ", ".join(sorted({repr(h[0])[:18] for h in hits}))[:80]
+            wheres = "/".join(sorted({h[1] for h in hits}))
+            print(f"  {path:<44} {err[:62]}")
+            print(f"  {'':<44} on {vals}  [{wheres}]")
+        print()
+    else:
+        ok("fuzz")
+    return combos, len(crashes)
+
+
+# --- 3. top-level container itself malformed --------------------------------
+def case_record_containers():
+    for name, v in [
+        ("res-not-dict", {"res": "oops", "raw": valid_res()}),
+        ("raw-not-dict", {"res": valid_res(), "raw": "oops"}),
+        ("res-none", {"res": None, "raw": valid_res()}),
+        ("raw-none", {"res": valid_res(), "raw": None}),
+        ("res-list", {"res": [], "raw": valid_res()}),
+        ("both-junk", {"res": 7, "raw": 7}),
+    ]:
+        try:
+            findings, _ = run({"a": v})
+            if not isinstance(findings, dict):
+                bad(name, "non-dict findings"); continue
+            ok(name)
+        except Exception as e:
+            bad(name, f"audit raised: {type(e).__name__}: {e}")
+
+
+# --- 4. malformed abrasive / failed / topology inputs -----------------------
+def case_side_inputs():
+    r = {"a": rec()}
+    for name, kw in [
+        ("abrasive-str", {"abrasive": "oops"}),
+        ("abrasive-list-junk", {"abrasive": ["oops", None, 3]}),
+        ("abrasive-none", {"abrasive": None}),
+        ("abrasive-error", {"abrasive": {"error": "boom"}}),
+        ("failed-junk", {"failed_map": {"x": None}}),
+        ("topology-junk", {"topology": "oops"}),
+    ]:
+        try:
+            findings, _ = run(r, **kw)
+            if not isinstance(findings, dict):
+                bad(name, "non-dict findings"); continue
+            ok(name)
+        except Exception as e:
+            bad(name, f"audit raised: {type(e).__name__}: {e}")
+
+
+if __name__ == "__main__":
+    case_valid()
+    case_record_containers()
+    case_side_inputs()
+    n, ncrash = fuzz_shapes()
+    print(f"\n{passed} passed, {failed} failed   (fuzz: {n} combinations, {ncrash} distinct crash sites)")
+    sys.exit(1 if failed else 0)
