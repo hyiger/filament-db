@@ -63,33 +63,49 @@ def valid_res(**over):
         "dryingTemperature": 45, "dryingTime": 240,
         "minPrintSpeed": 20, "maxPrintSpeed": 200,
         "maxVolumetricSpeed": 12, "shrinkageXY": 0.3, "shrinkageZ": 0.1,
-        "shoreA": None, "shoreD": 80, "transmissionDistance": 3,
-        "glassTransition": 60, "heatDeflection": 55,
+        "shoreHardnessA": None, "shoreHardnessD": 80, "transmissionDistance": 3,
+        # The real schema names (Filament.ts:204-212). The fixture used to carry
+        # invented ones -- glassTransition / heatDeflection / shoreA / shoreD --
+        # which exist nowhere in the model, so the four fields audit.py actually
+        # reads were never fuzzed. Found by the table-driven coverage guard below.
+        "glassTempTransition": 60, "heatDeflectionTemp": 55,
+        "spoolType": "plastic", "inherits": "*PLA*", "notes": "vendor sheet",
         "compatibleNozzles": [{"_id": "n1", "name": "0.4 Brass", "_deletedAt": None}],
         "calibrations": [{
             "_id": "c1", "nozzle": {"_id": "n1", "name": "0.4 Brass"},
-            "printer": {"_id": "p1", "name": "MK4S"}, "bedType": {"_id": "b1", "name": "Textured PEI"},
+            "printer": {"_id": "p1", "name": "MK4S",
+                        "installedNozzles": [{"_id": "n1", "name": "0.4 Brass"}]},
+            "bedType": {"_id": "b1", "name": "Textured PEI"},
             "extrusionMultiplier": 0.98, "pressureAdvance": 0.04,
             "maxVolumetricSpeed": 12, "fanMinSpeed": 20, "fanMaxSpeed": 100,
             "chamberTemp": 0, "nozzleTemp": 210, "bedTemp": 60,
             "nozzleTempFirstLayer": 215, "bedTempFirstLayer": 65,
+            "retractLength": 0.8, "retractSpeed": 35, "retractLift": 0.2,
+            "fanBridgeSpeed": 100,
         }],
         "presets": [{"label": "draft", "extrusionMultiplier": 0.99,
                      "temperatures": {"nozzle": 205, "nozzleFirstLayer": 210,
                                       "bed": 60, "bedFirstLayer": 65}}],
         "settings": {"filament_abrasive": "0", "compatible_printers_condition": ""},
         "openprinttagSnapshot": {"density": 1.24},
+        "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
-            "_id": "s1", "instanceId": "0011223344", "label": "12",
+            "_id": "s1", "instanceId": "0011223344", "label": "12", "lotNumber": "L-42",
             "totalWeight": 950, "retired": False, "locationId": "l1",
             "purchaseDate": "2026-01-01", "openedDate": None,
             "usageHistory": [{"grams": 30, "debitedGrams": 30, "source": "job",
                               "date": "2026-02-01", "jobLabel": "bracket"}],
-            "dryCycles": [{"tempC": 45, "durationMin": 240, "date": "2026-01-05"}],
+            "dryCycles": [{"tempC": 45, "durationMin": 240, "date": "2026-01-05",
+                           "notes": "overnight"}],
+            "photoDataUrl": "data:image/png;base64,iVBORw0KGgo=",
         }],
         "_deletedAt": None, "_purged": False,
         # set by resolveFilament on a variant; absent on standalones/templates
         "_inherited": [],
+        # RESPONSE_METADATA — carried by the ?raw=true read. Present here so the
+        # fuzz actually exercises the exclusion that keeps a child's malformed
+        # value from being reported a second time against its template.
+        "_parent": None, "_variants": [], "_strippedTemplateFields": [],
     }
     r.update(over)
     return r
@@ -344,6 +360,34 @@ def case_opt_tag_elements():
 # deliberately-not-a-record-field. A new .get on a record field fails here until
 # the fixture carries it, which is what keeps the fuzz's coverage from silently
 # shrinking as the script grows.
+# The literal-`.get("x")` scan below sees only HARD-CODED reads, and most of
+# audit.py's reads are table-driven -- `container.get(f2)` over
+# NUMERIC_BOUNDS.items(), `sp.get(_tf)` over NESTED_TEXT_MAXLEN, and so on. A
+# field reachable only through a table was therefore invisible to the guard AND
+# absent from the fixture, so nothing probed it: that is how the fixture came to
+# carry four INVENTED names (glassTransition / heatDeflection / shoreA / shoreD)
+# while the four real ones audit.py reads went unfuzzed for the life of the file.
+#
+# So every module-level table is classified, and an UNCLASSIFIED one fails the
+# case. That is the part that keeps this from rotting: adding a table to audit.py
+# without saying which kind it is breaks the suite instead of quietly shrinking
+# the fuzz's reach again.
+FIELD_TABLES = {          # string keys/elements are record FIELD names
+    "CALIBRATION_BOUNDS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
+    "LEDGER_TEXT_FIELDS", "NESTED_BOOL_FIELDS", "NESTED_CONTAINER_SHAPES",
+    "NESTED_DICT_ELEMENT_ARRAYS", "NESTED_TEXT_FIELDS", "NESTED_TEXT_MAXLEN",
+    "NUMERIC_BOUNDS", "NUMERIC_LEAF_NAMES", "OPAQUE_BAGS", "PIN_CHECK_ARRAYS",
+    "PIN_CHECK_FIELDS", "PIN_CHECK_TEMPS", "PRESET_BOUNDS", "RANGE_BOUNDS",
+    "REFERENCE_FIELDS", "REQUIRED_TEXT", "RESPONSE_METADATA", "SEMANTIC_BOUNDS_USAGE",
+    "SPOOL_BOUNDS", "TEMPLATE_STRIP", "TEXT_FIELDS", "USAGE_BOUNDS",
+}
+PAIR_TABLES = {           # rows are (label, lowField, highField) -- skip element 0
+    "ORDERED_PAIRS", "ORDERED_PAIRS_CAL", "ORDERED_PAIRS_TOP", "ORDERED_PAIRS_USAGE",
+}
+VALUE_TABLES = {          # strings are stored VALUES or output text, not field names
+    "CATEGORIES", "LOW_TEMP_TYPES", "ORCA_PLATE_KEYS", "USAGE_SOURCES", "_URL_REMOVE",
+}
+
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
     "filamentName", "filamentId", "reasons", "inheritedFrom", "softNozzles",
@@ -366,6 +410,34 @@ def case_fixture_covers_reads():
     # references directory and fail from the repo root the skill documents.
     src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.py")).read()
     read_keys = set(re.findall(r'\.get\(\s*"([A-Za-z_][A-Za-z0-9_]*)"', src))
+
+    # --- the table-driven half -------------------------------------------
+    tables = {n: getattr(A, n) for n in dir(A)
+              if n.isupper() and isinstance(getattr(A, n), (dict, tuple, list, set, frozenset))}
+    unclassified = sorted(set(tables) - FIELD_TABLES - PAIR_TABLES - VALUE_TABLES)
+    if unclassified:
+        return bad("fixture-coverage",
+                   "audit.py has module-level table(s) this guard cannot classify: "
+                   + ", ".join(unclassified) +
+                   "\n  Add each to FIELD_TABLES (its strings are record field names), "
+                   "PAIR_TABLES ((label, lo, hi) rows) or VALUE_TABLES (stored values).")
+
+    def strings(node, out):
+        if isinstance(node, str):
+            out.add(node)
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                strings(k, out); strings(v, out)
+        elif isinstance(node, (list, tuple, set, frozenset)):
+            for v in node:
+                strings(v, out)
+
+    for tname in FIELD_TABLES:
+        strings(tables[tname], read_keys)
+    for tname in PAIR_TABLES:
+        for row in tables[tname]:
+            strings(tuple(row)[1:], read_keys)
+
     have = set()
 
     def collect(node):

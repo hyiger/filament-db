@@ -32,6 +32,7 @@ import os
 import re
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
@@ -341,10 +342,46 @@ NESTED_DICT_ELEMENT_ARRAYS = {"spools": ("usageHistory", "dryCycles")}
 # coercing would make the audit disagree with what the app actually computes.
 NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 
-# String fields inside a spool. `label` and `lotNumber` are rendered directly as
-# React children on the detail and list pages, so a non-string there throws and
-# the whole filament (or the expanded inventory row) fails to render.
+# String fields inside a spool. These four are checked together but their
+# consequences are NOT the same, so each carries its own -- see
+# _nested_text_consequence. Pasting label's React-child crash onto `instanceId`
+# (an identity key, never rendered as a child) or `photoDataUrl` (an <img src>,
+# which coerces instead of throwing) sent the reader looking for a crash that
+# cannot happen and hid the failure that does.
 NESTED_TEXT_FIELDS = {"spools": ("instanceId", "label", "lotNumber", "photoDataUrl")}
+
+
+def _react_child_throws(v):
+    """React renders string / number / boolean / null children happily and
+    flattens arrays; it throws "Objects are not valid as a React child" only
+    when a plain object reaches it. So a numeric label does NOT crash the page,
+    and claiming it does is a false alarm on the loudest kind of finding."""
+    if isinstance(v, dict):
+        return True
+    if isinstance(v, list):
+        return any(_react_child_throws(e) for e in v)
+    return False
+
+
+def _nested_text_consequence(field, value):
+    """The consequence of a non-string value, per field and per value shape."""
+    if field == "instanceId":
+        return ("this is the durable per-spool identity a printed QR label and a written NFC tag "
+                "carry, and BOTH match tiers are type-strict -- the Mongo `spools.instanceId` "
+                "equality and the `sp.instanceId === id` re-scan that follows it -- so scanning "
+                "this spool resolves to nothing")
+    if field == "photoDataUrl":
+        return ("it goes straight to an <img src>, which COERCES rather than throwing, so the "
+                "spool shows a permanently broken image with no error to explain it")
+    if _react_child_throws(value):
+        return ("it renders directly as a React child and React throws on an object, so opening "
+                "this filament -- or expanding its inventory row -- fails outright")
+    if field == "label":
+        return ("React renders this shape as a child without complaint, so nothing looks "
+                "wrong -- but computeNextSpoolLabel skips every non-string label "
+                "(`typeof raw !== \"string\"`), so the Next # button can hand this same roll "
+                "number out again for a new spool")
+    return "the schema declares a string here, so the value is off-type rather than fatal"
 
 # Text one level deeper still, inside the ledgers. `jobLabel` and `notes` are
 # rendered as React children on the detail page, so a non-string throws when the
@@ -390,6 +427,80 @@ NUMERIC_LEAF_NAMES = {
     "shoreHardnessA", "shoreHardnessD", "shrinkageXY", "shrinkageZ", "spoolWeight",
     "standby", "tempC", "temperature", "totalWeight", "transmissionDistance",
 }
+
+# getRemainingPct CLAMPS with Math.min(100, ...), so remaining mass above the
+# net weight does not overflow -- it SATURATES, and the bar sits at a confident
+# 100% until real usage brings it back under net. Only report past a tolerance:
+# a "1 kg" spool is routinely wound 1000-1050 g, and a kitchen scale drifts, so
+# a few percent over is normal stock rather than a defect.
+OVER_NET_TOLERANCE = 1.10
+
+# Schema constraints that are not numeric min/max. Same rationale as
+# NUMERIC_BOUNDS, sharper consequence: POST /api/snapshot pre-validates EVERY
+# document before it writes anything and 400s the WHOLE file on the first
+# failure, so one of these anywhere in the library makes the user's backup
+# un-restorable -- and they only find out at restore time.
+MAX_SPOOL_TEXT_LENGTH = 200                              # Filament.ts maxlength
+NESTED_TEXT_MAXLEN = {"spools": ("label", "lotNumber")}
+
+
+def _utf16_len(text):
+    """`maxlength` counts JS String.length -- UTF-16 code units, not code
+    points. An emoji or any astral character costs TWO, so a 150-character
+    Python string can be a 300-unit JS string and fail a check that measured
+    len()."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+# WHATWG "strip leading/trailing C0-or-space, then delete every tab and
+# newline ANYWHERE" -- the sanitisation `new URL` performs before it parses.
+_URL_STRIP = "".join(chr(c) for c in range(0x21))
+_URL_REMOVE = {0x09: None, 0x0A: None, 0x0D: None}
+_URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
+
+
+def _bad_tds_url(v):
+    """Mirror of the model's `isValidTdsUrl`: `new URL(v)` with an http(s)
+    protocol. This reports ONLY the three things `new URL` is certain to
+    reject, because a false positive here tells the user to "fix" a URL that
+    already works -- and a tdsUrl is a link they pasted from a vendor site.
+
+    Why neither a `startswith("http")` test nor `urlsplit` mirrors it:
+      - `new URL` strips leading/trailing C0-and-space and deletes interior
+        tabs/newlines, so " https://x.com " and a line-wrapped paste are VALID.
+      - the scheme is case-insensitive: "HTTPS://x.com" is valid.
+      - for a SPECIAL scheme every leading "/" and "\\" after the colon is
+        consumed as authority framing, so "http:/x.com", "http:///x.com" and
+        even "HTTP:\\\\x.com" all parse with the host that follows -- the
+        shapes a `urlsplit`-based mirror wrongly condemns for an empty netloc.
+      - a bare "http:" or "http://" REJECTS: a special scheme demands a host.
+    Deliberately NOT mirrored (reported as fine): a host that parses
+    structurally but fails IDNA/IPv6/port validation. Those throw in the
+    browser too, so this under-reports rather than misdirects."""
+    if not isinstance(v, str) or v == "":
+        return False                       # the schema allows null and ""
+    s = v.strip(_URL_STRIP).translate(_URL_REMOVE)
+    mo = _URL_SCHEME_RE.match(s)
+    if not mo:
+        return True                        # no scheme at all -> `new URL` throws
+    if s[:mo.end() - 1].lower() not in ("http", "https"):
+        return True                        # a real URL, but not one this field takes
+    rest = s[mo.end():].lstrip("/\\")     # special-scheme slash framing
+    for i, ch in enumerate(rest):
+        if ch in "/\\?#":
+            rest = rest[:i]
+            break
+    return not rest.rsplit("@", 1)[-1]     # empty host -> `new URL` throws
+
+
+# src/lib/orcaSlicerBundle.ts — Orca/Bambu is the only EXPORT consumer of
+# bedTypeTemps and indexes BED_TYPE_KEY_MAP by exact string with no else
+# branch. The field is FREE TEXT though (Filament.ts says so, and
+# bedTypeTempRefFilter matches it against user-created BedType names), so this
+# list is used ONLY to spot a case/whitespace twin -- never as a closed
+# vocabulary. See the bedTypeTemps check.
+ORCA_PLATE_KEYS = ("Cool Plate", "Engineering Plate", "Hot Plate",
+                   "Textured PEI Plate", "Textured Cool Plate")
 
 CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
 
@@ -604,8 +715,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
             soft = ([n.get("name") if isinstance(n, dict) else n for n in _soft]
                     if isinstance(_soft, list) else [])
             if f.get("flagMismatch"):
+                # `src` is NOT re-pasted here: the route populates inheritedFrom
+                # for the NOZZLE-scoped findings, so attaching it to a flag row
+                # points the fix at the template when `filament_abrasive` may be
+                # the variant's own bag entry.
                 add("abrasive", f"{name}: material reads abrasive ({why}) but settings.filament_abrasive "
-                                f"is not on -> EXPORTS AS NON-ABRASIVE{src}", str(f.get("filamentId")))
+                                f"is not on -> EXPORTS AS NON-ABRASIVE", str(f.get("filamentId")))
             if soft:
                 add("abrasive", f"{name}: abrasive ({why}) but permitted on unfit nozzle(s) {soft}{src}",
                     str(f.get("filamentId")))
@@ -765,9 +880,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                         if tv2 is not None and not isinstance(tv2, str):
                             add_shape("physical",
                                       f"{nm}: {parent_key}[{tag}].{tf2} is {type(tv2).__name__} "
-                                      f"({tv2!r}), not a string ({which}) -> label and lotNumber "
-                                      f"render directly as React children, so a non-string throws "
-                                      f"and the page fails to render",
+                                      f"({tv2!r}), not a string ({which}) -> "
+                                      f"{_nested_text_consequence(tf2, tv2)}",
                                       ("nested-text", parent_key, str(tag), tf2))
                     for bf in NESTED_BOOL_FIELDS.get(parent_key, ()):
                         bv = sub.get(bf)
@@ -943,6 +1057,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 # non-BMP character (emoji) counts 2 where Python's len() counts
                 # 1: 10,000 emoji measure 10,002 here and 20,002 in the app.
                 measured = len(text.encode("utf-16-le")) // 2
+                # The bag is FLAT by contract — a slicer key mapping to a scalar,
+                # or since #678 an array of scalars. validateSettingsBag checks
+                # only object-ness, the key count and the serialised LENGTH, so an
+                # OBJECT value is accepted by the ordinary write and then
+                # String()-coerced by every emitter, exporting as the literal
+                # "[object Object]" into both the INI bundle and the Orca JSON —
+                # silently, in the bag whose whole purpose is lossless round-trip.
+                if isinstance(v, dict) or (isinstance(v, list)
+                                           and any(isinstance(e, (dict, list)) for e in v)):
+                    add("physical", f"{name}: settings.{k} is a {type(v).__name__}, but the bag "
+                                    f"holds scalars (or an array of scalars) -> every exporter "
+                                    f"String()-coerces it, so it ships as the literal "
+                                    f"'[object Object]'", fid)
                 if measured > MAX_SETTING_VALUE_LENGTH:
                     add("physical", f"{name}: settings.{k} is {measured} UTF-16 units, past the "
                                     f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
@@ -996,15 +1123,61 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                         add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
                                          f"totalWeight (gross) -> it contributes nothing to the bar", fid)
                     elif tare is not None and gross < tare:
+                        # NOT the legacy roll's consequence. getRemainingPct
+                        # clamps this spool's contribution to 0 but STILL counts
+                        # it in validCount, so it adds a whole `net` to the
+                        # denominator while adding nothing to the numerator --
+                        # it drags the filament's bar down rather than emptying
+                        # it. And spool-check answers ok when ANY spool has
+                        # enough, so with a healthy sibling no job is refused.
+                        _alone = len(live_spools) == 1
+                        _conseq = ("so the filament reads as EMPTY and spool-check refuses every "
+                                   "job" if _alone else
+                                   f"so it contributes 0g yet still adds {int(net) if net else 'net'}g "
+                                   f"to the % denominator — it drags the whole filament's bar down")
                         add("inventory", f"{name}: spool {s.get('instanceId') or s.get('_id')} gross "
-                                         f"{gross}g is below tare {tare}g -> clamps "
-                                     f"to 0, so the roll reads as EMPTY everywhere and spool-check "
-                                     f"refuses every job — usually a tare inherited from a template "
-                                     f"whose spools are heavier, or a net weight typed into the "
-                                     f"gross field", fid)
+                                         f"{gross}g is below tare {tare}g -> clamps to 0, {_conseq} "
+                                         f"— usually a tare inherited from a template whose spools "
+                                         f"are heavier, or a net weight typed into the gross field",
+                            fid)
                 if missing_gross and missing_gross == len(live_spools):
                     add("inventory", f"{name}: every live spool is missing its gross weight -> "
                                      f"getRemainingPct returns null, no bar at all", fid)
+
+            # Saturation is the mirror of the below-tare case and is easy to
+            # miss precisely because it looks healthy: the bar reads 100%.
+            # Reproduce getRemainingPct's arithmetic EXACTLY -- numerator
+            # sum(max(0, gross - tare)) over live spools that carry a gross,
+            # denominator net * that same count (NOT net alone; with three
+            # spools the denominator is 3x net, and comparing against one net
+            # would report every healthy multi-spool filament).
+            if net is not None and net > 0 and tare is not None:
+                if legacy_roll:
+                    _gross = num(r.get("totalWeight"))
+                    _numer = max(0.0, _gross - tare) if _gross is not None else None
+                    _denom = net
+                    _scope = "the roll holds"
+                else:
+                    _numer, _valid = 0.0, 0
+                    for s in live_spools:
+                        _g = num(s.get("totalWeight"))
+                        if _g is not None:
+                            _numer += max(0.0, _g - tare)
+                            _valid += 1
+                    _denom = net * _valid if _valid else None
+                    _scope = f"{_valid} weighed spool(s) hold"
+                if _numer is not None and _denom:
+                    _ratio = _numer / _denom
+                    if _ratio > OVER_NET_TOLERANCE:
+                        add("inventory", f"{name}: {_scope} {_numer:.0f}g of filament against a "
+                                         f"{_denom:.0f}g net capacity ({_ratio * 100:.0f}%) -> "
+                                         f"getRemainingPct clamps with Math.min(100, ...), so the "
+                                         f"bar SATURATES at 100% and cannot move until "
+                                         f"{_numer - _denom:.0f}g is consumed; the low-stock "
+                                         f"threshold is measured against the same inflated figure. "
+                                         f"Either netFilamentWeight is set too low for this spool "
+                                         f"size or the tare is too small"
+                                         f"{_inh_blame('netFilamentWeight', 'spoolWeight')}", fid)
 
         # --- drying: the field is minutes, every datasheet says hours --------
         dry_t, dry_temp = num(r.get("dryingTime")), num(r.get("dryingTemperature"))
@@ -1043,6 +1216,16 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                     blame = (_inh_blame(inherit_root) if inherit_root
                              else _inh_blame(inherit_prefix + f_lo, inherit_prefix + f_hi))
                     add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}{blame}", fid)
+
+        # tdsUrl is checked on the STORED read only. It is inheritable, so the
+        # resolved read carries the TEMPLATE's value on every colour variant and
+        # a single bad URL on a template would be reported once per child, each
+        # naming a document the user cannot fix it on.
+        _tds = raw.get("tdsUrl")
+        if _bad_tds_url(_tds):
+            add("structure", f"{name}: tdsUrl {_tds!r} is not a valid http(s) URL -> the model's "
+                             f"validator rejects it, so POST /api/snapshot refuses the ENTIRE "
+                             f"backup file; the detail page also renders no link for it", fid)
 
         ordering_check(temps, ORDERED_PAIRS, "temps", inherit_prefix="temperatures.")
         ordering_check(r, ORDERED_PAIRS_TOP, "physical")   # roots are bare, prefix empty
@@ -1115,6 +1298,26 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                                 f"({plate_raw!r}) -> the schema requires it and the Orca export "
                                 f"indexes on it, so these temperatures are silently dropped"
                                 f"{_inh_blame('bedTypeTemps')}", fid)
+            else:
+                # ONLY a case/whitespace twin of a canonical key is reported.
+                # `bedType` is deliberately FREE TEXT (Filament.ts: "holds a
+                # slicer bed-surface key", and its own example "Textured PEI" is
+                # PrusaSlicer's vocabulary, not Orca's), and `bedTypeTempRefFilter`
+                # matches it against user-created BedType NAMES — so there is no
+                # closed vocabulary to check against, and an "expected one of
+                # [...]" row would condemn every legitimate surface the user
+                # named. A twin is different: it case-folds onto a key the
+                # export DOES recognise, which no vocabulary explains and a
+                # rename certainly fixes.
+                _near = next((k for k in ORCA_PLATE_KEYS
+                              if k.strip().casefold() == plate_raw.strip().casefold()
+                              and k != plate_raw), None)
+                if _near:
+                    add("physical", f"{name}: bedTypeTemps[{idx_bt}] bedType {plate_raw!r} differs "
+                                    f"from {_near!r} only by case/whitespace -> the Orca/Bambu "
+                                    f"export indexes BED_TYPE_KEY_MAP by EXACT string with no "
+                                    f"fallback, so these temperatures are dropped; rename it to "
+                                    f"{_near!r}{_inh_blame('bedTypeTemps')}", fid)
             plate = plate_raw if isinstance(plate_raw, str) and plate_raw.strip() else "?"
             bed_like += [(f"bedTypeTemps[{plate}] temperature", num(bt.get("temperature"))),
                          (f"bedTypeTemps[{plate}] firstLayerTemperature", num(bt.get("firstLayerTemperature")))]
@@ -1234,8 +1437,23 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 continue
             tag = sp.get("instanceId") or sp.get("_id")
             bounds_check(sp, SPOOL_BOUNDS, f"spool {tag} ")
+            for _tf in NESTED_TEXT_MAXLEN["spools"]:
+                _tv = sp.get(_tf)
+                if isinstance(_tv, str) and _utf16_len(_tv) > MAX_SPOOL_TEXT_LENGTH:
+                    add("structure", f"{name}: spool {tag} {_tf} is {_utf16_len(_tv)} UTF-16 units, "
+                                     f"past the schema's {MAX_SPOOL_TEXT_LENGTH}-character "
+                                     f"maxlength -> POST /api/snapshot validates every document "
+                                     f"before writing and 400s the ENTIRE backup on this row", fid)
             for dc in (sp.get("dryCycles") or []):
                 bounds_check(dc, DRY_CYCLE_BOUNDS, f"spool {tag} dryCycle ")
+                # `date` is schema-REQUIRED on a dry cycle with no default, so
+                # unlike the usage-entry fields there is no read that papers
+                # over it -- but nothing validates on the way in through a raw
+                # sync copy or a restore of an older file.
+                if isinstance(dc, dict) and dc.get("date") in (None, ""):
+                    add("structure", f"{name}: spool {tag} dryCycle has no date -> the schema "
+                                     f"requires one, so POST /api/snapshot refuses the ENTIRE "
+                                     f"backup file rather than this row", fid)
             for ue in (sp.get("usageHistory") or []):
                 bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ", source="route")
                 # `grams` is schema-REQUIRED on a usage entry, and bounds_check
@@ -1328,6 +1546,30 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
 
         # --- template violations (v1.70 #605) --------------------------------
         if is_template:
+            # A row that is BOTH a variant and a parent is not a template the
+            # app can act on, and every remedy below assumes it is. Detect it
+            # FIRST and re-aim them: `/promote` tests `filament.parentId ||`
+            # before anything else and refuses with 400 not_a_template, so
+            # "Convert to template" -- the remedy the carrying case would
+            # otherwise prescribe -- is dead on exactly these rows.
+            _gp = str(raw["parentId"]) if raw.get("parentId") else None
+            nested_parent = bool(_gp)
+            if nested_parent:
+                _gp_name = (records.get(_gp, {}).get("res", {}).get("name")
+                            or f"filament {_gp}")
+                add("template", f"{name} (TEMPLATE): also carries parentId -> it is BOTH a variant "
+                                f"of {_gp_name!r} AND a parent, a shape createVariantGated refuses "
+                                f"(parent_is_variant) and no API path can produce — it arrived by "
+                                f"a raw sync copy, a restore, or a direct DB edit. Two "
+                                f"consequences: POST /api/filaments/{fid}/promote refuses this row "
+                                f"with 400 not_a_template, so the app's own repair for everything "
+                                f"below is UNAVAILABLE; and resolveFilament walks exactly ONE "
+                                f"level, so this row's own variants inherit from it and never see "
+                                f"{_gp_name!r}. Repair the SHAPE first — PUT {{\"parentId\": null}} "
+                                f"here (this row then stops inheriting from {_gp_name!r}, so copy "
+                                f"anything it was relying on down first), or re-parent its variants "
+                                f"onto {_gp_name!r} — after that the rows below become actionable.",
+                    fid)
             # Promotion is a WHOLE-TEMPLATE operation, not a per-field one. Its
             # gate is parentPromotionState.needed — a non-empty `color` (NOT
             # trimmed), a `colorName` non-empty AFTER trimming, a spool count, or
@@ -1348,11 +1590,38 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 val = raw.get(fld)
                 if val in (None, "", []):
                     continue
-                how = ("Convert to template — moves this onto a new variant" if promote_runs
-                       else f'promote returns 400 nothing_to_convert here — PUT {{"{fld}": null}}')
+                if nested_parent:
+                    # /promote is refused on this row, so the only working
+                    # remedy is the explicit null — which templateStrip lets
+                    # through on purpose (it filters `!= null`, so clearing a
+                    # legacy value is never blocked).
+                    how = f'/promote refused (see above) — PUT {{"{fld}": null}}'
+                elif promote_runs:
+                    how = "Convert to template — moves this onto a new variant"
+                else:
+                    how = f'promote returns 400 nothing_to_convert here — PUT {{"{fld}": null}}'
                 add("template", f"{name} (TEMPLATE): still carries {fld}={val!r} [{how}]", fid)
             if raw.get("spools"):
-                add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — inventory belongs on a variant", fid)
+                # This row was the ONLY one in the block shipping no remedy, and
+                # it is the one where guessing is most expensive. Two things the
+                # reader needs and cannot infer: promotion is the only move that
+                # PRESERVES the rolls (POST .../spools onto a template is refused
+                # with template_no_spools, and a PUT carrying `spools: []` is
+                # accepted -- it DELETES them rather than relocating them); and
+                # the subdocuments move verbatim, `_id` and `instanceId` included,
+                # so printed QR labels and written NFC tags keep resolving.
+                # `promote_runs` is True by construction here -- carrying spools
+                # is itself one of parentPromotionState's triggers.
+                _spool_how = (
+                    "no safe remedy until the shape above is fixed — /promote is refused on this "
+                    "row and PUT spools:[] DELETES the rolls rather than moving them"
+                    if nested_parent else
+                    f"Convert to template (POST /api/filaments/{fid}/promote) — moves the spools "
+                    f"onto a new variant with their _id and instanceId intact, so printed labels "
+                    f"and NFC tags keep resolving. Do NOT PUT spools:[] — that deletes the rolls "
+                    f"instead of moving them")
+                add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — "
+                                f"inventory belongs on a variant [{_spool_how}]", fid)
 
         # --- pinned inheritance ----------------------------------------------
         pid = str(raw["parentId"]) if raw.get("parentId") else None

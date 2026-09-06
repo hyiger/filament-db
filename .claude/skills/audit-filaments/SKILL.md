@@ -163,6 +163,26 @@ fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`
 
 Density additionally gets a **material-aware** band.
 
+**Schema constraints that are not numeric bounds** get the same treatment, with a sharper
+consequence: `POST /api/snapshot` validates *every* document before it writes anything and 400s the
+**whole file** on the first failure, so one offending row anywhere makes the user's backup
+un-restorable — and they find out at restore time. Three are mirrored: the 200-character
+`maxlength` on `spools[].label` / `lotNumber` (measured in **UTF-16 code units**, as `maxlength`
+counts them — an emoji costs two, so a 150-character Python string can be a 300-unit JS string),
+the schema-**required** `spools[].dryCycles[].date`, and `tdsUrl`.
+
+`tdsUrl` is mirrored against `new URL()`, not against `startsWith("http")`, and it is checked on the
+**stored** read because the field is inheritable — judged on the resolved read, one bad URL on a
+template would be reported once per colour variant, each naming a document the user cannot fix it
+on. The mirror reproduces what WHATWG actually does: leading/trailing C0-and-space are stripped and
+interior tabs/newlines deleted (`" https://x.com "` and a line-wrapped paste are **valid**), the
+scheme is case-insensitive, and for a special scheme every leading `/` and `\` after the colon is
+authority framing — so `http:/x.com` and `http:///x.com` parse fine while a bare `http:` does not.
+It deliberately **under-reports**: a host that parses structurally but fails IDNA, IPv6 or port
+validation is left alone. That direction is chosen on purpose — a false positive here tells the
+user to "fix" a vendor link that already works. Verified against node's own `new URL` over 6,000
+generated inputs: zero disagreements in the reporting direction.
+
 **Say which authority a finding rests on.** Most bounds mirror the schema, so a violation proves
 the row bypassed API validation — but `debitedGrams` is declared with no min/max at all, so calling
 a bad value there a "schema bound" violation would be a false claim about how it got there. It is
@@ -183,6 +203,16 @@ more path where a wrong-typed value either aborted the run (so a single corrupt 
 finding for the whole library) or was read past in silence, and the script reads well over a
 hundred paths. Fuzzing every path covers the next one the day it is added, with nobody writing a
 case for it.
+
+**Every module-level table in `audit.py` must be classified in the selftest**, in one of
+`FIELD_TABLES` / `PAIR_TABLES` / `VALUE_TABLES`; an unclassified one fails the suite by name. That
+rule exists because the coverage guard originally scanned only literal `.get("x")` calls while most
+of the checker's reads are **table-driven** (`container.get(f2)` over `NUMERIC_BOUNDS.items()`), so
+a field reachable only through a table was invisible to the guard *and* absent from the fixture —
+nothing probed it. That is how the fixture came to carry four invented names (`glassTransition`,
+`heatDeflection`, `shoreA`, `shoreD`) while the four real fields the checker reads went unfuzzed for
+the life of the file. Classifying is the cheap part; the failure-on-unclassified is what stops the
+fuzz's reach from silently shrinking again.
 
 Coverage here is **verified, not assumed** — an earlier revision claimed the table covered every
 exported numeric "by construction" and it did not, twice. Re-check it after any schema change:
@@ -377,6 +407,23 @@ Names are compared **trimmed**, because `X` and `X ` are distinct raw keys that 
 That pair is a documented unresolved state rather than a hypothetical — the #1116 trim migration
 deliberately refuses to merge a whitespace twin and Data health surfaces it instead — so it is
 exactly where the reader needs the id. Do not "tidy" any of this back into a text-level dedupe.
+
+**`bedTypeTemps[].bedType` is free text and has no closed vocabulary.** `Filament.ts` says so
+explicitly, and its own example — `"Textured PEI"` — is *PrusaSlicer's* name, not one of the five
+keys `BED_TYPE_KEY_MAP` indexes; `bedTypeTempRefFilter` separately matches this field against
+user-created **BedType names**. So an "expected one of […]" row would condemn every surface the user
+legitimately named, and an earlier revision of this checker did exactly that. Only a **case or
+whitespace twin** of a canonical Orca key is reported (`"hot plate"` vs `"Hot Plate"`): no
+vocabulary explains that, and a rename certainly fixes it. Everything else is left alone.
+
+**One consequence sentence does not fit four fields.** The four spool text fields are checked
+together but fail differently, and pasting one sentence across them sent the reader looking for a
+crash that cannot happen: `instanceId` is an identity key that is never a React child (a non-string
+there makes both type-strict match tiers miss, so a printed QR resolves to nothing); `photoDataUrl`
+goes to an `<img src>`, which **coerces** rather than throwing; and `label`/`lotNumber` throw only
+when the value is an *object* — React renders a number or a flat array child happily, so a numeric
+label breaks nothing visible but is skipped by `computeNextSpoolLabel`'s `typeof raw !== "string"`,
+letting the Next # button hand the same roll number out twice.
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
