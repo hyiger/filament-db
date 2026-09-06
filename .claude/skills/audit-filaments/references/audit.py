@@ -272,7 +272,12 @@ def audit(records, abrasive):
                     str(f.get("filamentId")))
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
-    parents = {str(v["raw"]["parentId"]) for v in records.values() if v["raw"].get("parentId")}
+    # Restricted to ids that are actually present: an active variant can point at
+    # a missing or soft-deleted parent, and counting that absent id would report a
+    # template that does not exist (the structural check below reports the
+    # dangling link itself).
+    parents = {str(v["raw"]["parentId"]) for v in records.values()
+               if v["raw"].get("parentId") and str(v["raw"]["parentId"]) in records}
 
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
@@ -671,20 +676,24 @@ def main():
 
     wanted = set(args.only.split(",")) if args.only else None
 
+    # Records whose NAME is shared with another active record. Keyed on the name
+    # rather than on an identical message: two duplicates usually have DIFFERENT
+    # defects, so every message would be unique and no id would be appended —
+    # leaving the report unable to say which of the two to repair.
+    by_name = {}
+    for rid, rec in records.items():
+        by_name.setdefault(rec["res"].get("name"), []).append(rid)
+    ambiguous = {rid for ids in by_name.values() if len(ids) > 1 for rid in ids}
+
     def render(rows):
-        """Dedupe by (record id, message), then disambiguate shared messages.
+        """Dedupe by (record id, message); append the id where the name is not unique.
 
         Two ACTIVE records can share a name — hybrid sync, a restore, or a legacy
         database whose unique-name index could not be built — and every message
-        names its filament. Collapsing on text would hide the second record; so
-        the id joins the line only when a message really is shared, keeping the
-        common case clean.
+        names its filament. Deduping on text alone would hide the second record.
         """
         uniq = sorted(set(rows), key=lambda t: (t[1], t[0] or ""))
-        owners = {}
-        for fid, msg in uniq:
-            owners.setdefault(msg, set()).add(fid)
-        return [f"{msg}  [{fid}]" if len(owners[msg]) > 1 and fid else msg for fid, msg in uniq]
+        return [f"{msg}  [{fid}]" if fid in ambiguous else msg for fid, msg in uniq]
 
     if args.json:
         out = {k: render(v) for k, v in findings.items() if not wanted or k in wanted}

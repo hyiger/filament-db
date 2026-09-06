@@ -175,7 +175,8 @@ spec = importlib.util.spec_from_file_location("a", ".claude/skills/audit-filamen
 m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
 covered = set()
 for t in ("NUMERIC_BOUNDS","RANGE_BOUNDS","PRESET_BOUNDS","SPOOL_BOUNDS",
-          "DRY_CYCLE_BOUNDS","USAGE_BOUNDS","CALIBRATION_BOUNDS"):
+          "DRY_CYCLE_BOUNDS","USAGE_BOUNDS","CALIBRATION_BOUNDS",
+          "SEMANTIC_BOUNDS_USAGE"):   # checked, just not against a schema bound
     covered |= set(getattr(m, t))
 covered |= {"nozzle","nozzleFirstLayer","bed","bedFirstLayer","standby","temperature",
             "firstLayerTemperature","nozzleTemp","nozzleTempFirstLayer","bedTemp",
@@ -184,7 +185,7 @@ print("UNCOVERED:", sorted(schema - covered) or "none")
 EOF
 ```
 
-At the time of writing that reports **45 of 45 covered**. The unfilled-polymer ceiling is
+At the time of writing that reports **45 of 45 covered**. Re-run it after moving a field between tables, not only after a schema change — omitting one table makes the guard report a permanent false gap. The unfilled-polymer ceiling is
 2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so a filament carrying
 the metal-fill tag (**20**) gets a much higher one. The schema permits any non-negative density;
 prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
