@@ -65,11 +65,19 @@ TEMPLATE_STRIP = ["color", "colorName", "totalWeight", "lowStockThreshold"]
 
 
 def _strip_ids(value):
-    """Compare array contents, not their subdocument identity."""
+    """Compare array contents, ignoring only each ELEMENT's generated id.
+
+    Recursing was wrong: a calibration's `nozzle`/`printer`/`bedType` are
+    POPULATED references whose `_id` IS their identity, so stripping those made
+    two calibrations pointing at DIFFERENT nozzles compare equal — a false pin,
+    whose documented repair (clear the variant's array) would then switch the
+    variant onto the template's targets. Only the array element's own generated
+    subdocument id is noise.
+    """
     if isinstance(value, list):
         return [_strip_ids(v) for v in value]
     if isinstance(value, dict):
-        return {k: _strip_ids(v) for k, v in sorted(value.items()) if k not in ("_id", "id")}
+        return {k: v for k, v in sorted(value.items()) if k not in ("_id", "id")}
     return value
 
 
@@ -383,25 +391,27 @@ def audit(records, abrasive, failed=None, listing_topology=None):
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
         name = r.get("name", "?")
-        temps = r.get("temperatures") or {}
         is_template = fid in parents
-        all_spools = r.get("spools") or []
-        live_spools = [s for s in all_spools if not s.get("retired")]
 
-        # Container shapes first: a truthy non-container crashes every access
-        # below, and both detail reads can succeed while carrying one.
-        for cf, want in CONTAINER_SHAPES.items():
-            cv = r.get(cf)
-            if cv is not None and not isinstance(cv, want):
-                add("physical", f"{name}: {cf} is {type(cv).__name__}, not a "
-                                f"{want.__name__} -> malformed; treated as empty", fid)
-                r[cf] = want()
-        rawv = raw.get("settings")
-        if rawv is not None and not isinstance(rawv, dict):
-            raw["settings"] = {}
-        # Re-bind AFTER the coercion: `temps` was captured before it ran, so a
-        # malformed container would still be the raw string here.
+        # SHAPES FIRST — before any derived value. A `spools` holding a string
+        # would otherwise be iterated character by character by the comprehension
+        # below and abort the whole run before the sweep could report it.
+        #
+        # Checked on BOTH reads: resolveFilament normalises some containers, so a
+        # variant's corrupt stored value can be invisible in the resolved
+        # response and only the raw read reveals it. Report from whichever
+        # carries it, then coerce so nothing downstream crashes.
+        for doc, which in ((r, "resolved"), (raw, "stored")):
+            for cf, want in CONTAINER_SHAPES.items():
+                cv = doc.get(cf)
+                if cv is not None and not isinstance(cv, want):
+                    add("physical", f"{name}: {cf} is {type(cv).__name__}, not a {want.__name__} "
+                                    f"({which}) -> malformed; treated as empty", fid)
+                    doc[cf] = want()
+
         temps = r.get("temperatures") or {}
+        all_spools = r.get("spools") or []
+        live_spools = [s for s in all_spools if isinstance(s, dict) and not s.get("retired")]
 
         # Then every numeric-named leaf at any depth, reported ONCE here so the
         # individual passes can skip quietly.
@@ -417,13 +427,10 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # parent's bag into each child's effective settings, so a malformed one on
         # a template reaches every colour in the family and its slicer exports,
         # and a standalone never enters the pin block at all.
+        # Shape is reported and coerced by the sweep at the top of the loop, on
+        # BOTH reads; only the SIZE limits remain here.
         own_settings = raw.get("settings")
-        if own_settings is not None and not isinstance(own_settings, dict):
-            where = " (TEMPLATE — this spreads into every variant's effective settings " \
-                    "and their slicer exports)" if is_template else ""
-            add("physical", f"{name}: settings is {type(own_settings).__name__}, not an object -> "
-                            f"malformed bag{where}", fid)
-        elif isinstance(own_settings, dict):
+        if isinstance(own_settings, dict):
             if len(own_settings) > MAX_SETTINGS_KEYS:
                 add("physical", f"{name}: settings holds {len(own_settings)} keys, past the "
                                 f"{MAX_SETTINGS_KEYS}-key limit validateSettingsBag enforces -> "

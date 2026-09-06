@@ -295,8 +295,14 @@ stamped on everything, and **every `secondaryColors` entry plus the array's 5-en
 are observable, not cosmetic: the OpenPrintTag encoder silently skips an invalid entry and
 truncates extras, and a slicer export can use the first secondary when the primary is null.
 
-**Malformed shapes and types are reported once, centrally.** Two sweeps run before anything else
-touches a record: `CONTAINER_SHAPES` reports any container that is not the type the schema declares
+**Malformed shapes and types are reported once, centrally.** Two sweeps run **first, before any
+derived value** — a `spools` holding a string would otherwise be iterated character by character
+before the sweep could report it — and the shape sweep runs on **both** reads, because
+`resolveFilament` normalises some containers, so a variant's corrupt *stored* value can be invisible
+in the resolved response. Coerce only after reporting: silently cleaning the raw value is how a
+malformed bag came to be declared clean.
+
+The two sweeps: `CONTAINER_SHAPES` reports any container that is not the type the schema declares
 (a string in `temperatures` crashes every `.get()` below it) and treats it as empty, and
 `malformed_numerics` walks the whole record reporting any schema-numeric leaf, **at any depth**,
 holding a non-number. The individual passes then skip quietly rather than each needing a reporting
@@ -360,6 +366,12 @@ exactly where the reader needs the id. Do not "tidy" any of this back into a tex
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
+
+**Array pins ignore only each element's own generated id.** A calibration's `nozzle`, `printer`
+and `bedType` are *populated references* whose `_id` **is** their identity — stripping those made
+two calibrations pointing at different nozzles compare equal, and the documented repair (clear the
+variant's array) would then switch the variant onto the template's targets. Comparing arrays is not
+the same as comparing them structurally.
 
 **A high-flow calibration above the declared range is usually deliberate.** A tungsten-carbide or
 other high-flow nozzle needs more heat than the material's published window, so a calibration at
