@@ -129,10 +129,18 @@ everything if another such material arrives.
 are exempt: an abstract product line legitimately carries none of it.
 
 **Physical values** — density against a **material-aware** band. The unfilled-polymer ceiling is
-2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so anything carrying the
-metal-fill tag (20) or a metal word in its type or name gets a much higher ceiling. The schema
-itself permits any non-negative density; prompting someone to "correct" a valid one would corrupt
-every weight-to-length calculation that reads it.
+2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so a filament carrying
+the metal-fill tag (**20**) gets a much higher one. The schema permits any non-negative density;
+prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
+reads it.
+
+The tag is the *only* evidence used, and that is deliberate. Matching metal words in the name
+looks equivalent and is not: "Metallic Grey" and "Steel Blue" are pigments, which is exactly why
+the app's own `FILLED_RE` requires the word *fill* after metal/steel/iron. A bare name match would
+raise the ceiling for an ordinary filament and let a corrupt 4 g/cm³ through — trading a false
+positive for a false negative, which is the worse direction. A genuinely metal-filled record that
+trips the check should get tag 20, which the finding says, and which also corrects its abrasive
+classification.
 
 **Template violations (v1.70 #605).** A filament with variants is a template: colourless, no
 inventory. Enforcement is forward-only, so legacy parents keep whatever they had. Inventory
@@ -188,10 +196,13 @@ Three inheritable fields are deliberately excluded because every variant stores 
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
 
-**Structural integrity** — a variant whose `parentId` resolves to no active filament. The listing
-returns only active rows, so an absent parent means missing, soft-deleted or purged, and such a row
-can pass every other check while the detail page and every slicer export resolve *none* of its
-inherited values. Reachable through an import, a snapshot restore or a sync merge.
+**Structural integrity** — a broken parent link, in three shapes: a `parentId` that resolves to no
+active filament (the listing returns only active rows, so it is missing, soft-deleted or purged),
+one pointing at *itself*, and one pointing at another **variant**. All three pass every other check
+while resolving nothing: the write API forbids nested inheritance and `resolveFilament` walks
+exactly one immediate parent, so a grandparent's values never reach the row however complete they
+look. Reachable through an import, a snapshot restore or a sync merge — none of them through the
+API.
 
 **Nozzle assignment** — a non-template filament with no `compatibleNozzles` at all. Anything
 abrasive-related is left to the app's audit above, which also knows that the INDX nozzle is

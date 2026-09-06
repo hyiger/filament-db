@@ -111,8 +111,12 @@ LOW_TEMP_TYPES = ("PCL",)
 # non-negative density. Applying an unfilled-polymer ceiling to them would report
 # correct data as invalid and invite a "fix" that corrupts every weight-to-length
 # calculation downstream.
+# Evidence is the OPT tag ALONE. Name matching is not safe here: "Metallic Grey"
+# and "Steel Blue" are pigments, and the app's own classifier requires the word
+# "fill" after metal/steel/iron for exactly that reason. A bare name match would
+# raise the ceiling to 12 for an ordinary filament and let a corrupt 4 g/cm3
+# through — a false negative in place of a false positive, which is worse.
 OPT_TAG_METAL_FILL = 20
-METAL_FILL_RE = re.compile(r"copper|bronze|brass|steel|iron|tungsten|metal|magnet", re.I)
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
 DENSITY_FLOOR = 0.7
@@ -301,13 +305,15 @@ def audit(records, abrasive):
 
         # --- physical --------------------------------------------------------
         dens = r.get("density")
-        metal_filled = (OPT_TAG_METAL_FILL in (r.get("optTags") or [])
-                        or bool(METAL_FILL_RE.search(f"{r.get('type') or ''} {name}")))
+        metal_filled = OPT_TAG_METAL_FILL in (r.get("optTags") or [])
         ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
         if dens is not None and not DENSITY_FLOOR <= dens <= ceiling:
             kind = "metal-filled" if metal_filled else "unfilled polymer"
+            hint = ("" if metal_filled else
+                    " — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
+                    "corrects its abrasive classification")
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
-                            f"({DENSITY_FLOOR}-{ceiling})")
+                            f"({DENSITY_FLOOR}-{ceiling}){hint}")
         dia = r.get("diameter")
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size")
@@ -365,14 +371,27 @@ def audit(records, abrasive):
 
         # --- pinned inheritance ----------------------------------------------
         pid = str(raw["parentId"]) if raw.get("parentId") else None
-        if pid and pid not in records:
-            # The listing only returns ACTIVE filaments, so an absent parent is
-            # missing, soft-deleted or purged. Such a row can pass every other
-            # check while the detail page and every slicer export resolve NONE of
-            # its inherited values — silently skipping it hides a real breakage.
-            add("structure", f"{name}: parentId {pid} resolves to no active filament -> "
-                             f"nothing inherits, every inherited field reads as empty")
-        if pid and pid in records:
+        parent_ok = False
+        if pid:
+            if pid == fid:
+                add("structure", f"{name}: parentId points at itself -> nothing can inherit")
+            elif pid not in records:
+                # The listing only returns ACTIVE filaments, so an absent parent is
+                # missing, soft-deleted or purged. Such a row can pass every other
+                # check while the detail page and every slicer export resolve NONE
+                # of its inherited values — silently skipping it hides a breakage.
+                add("structure", f"{name}: parentId {pid} resolves to no active filament -> "
+                                 f"nothing inherits, every inherited field reads as empty")
+            elif records[pid]["raw"].get("parentId"):
+                # The write API forbids nested inheritance and resolveFilament
+                # resolves exactly one immediate parent, so the grandparent's
+                # values never reach this row however complete they look.
+                add("structure", f"{name}: parent {records[pid]['res'].get('name')!r} is itself a "
+                                 f"variant (nested inheritance) -> only one level resolves, so the "
+                                 f"grandparent's values never reach this row")
+            else:
+                parent_ok = True
+        if parent_ok:
             parent_eff = records[pid]["res"]
             pname = parent_eff.get("name")
             for fld in PIN_CHECK_FIELDS:
