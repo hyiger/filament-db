@@ -469,30 +469,47 @@ def audit(records, abrasive, failed=None, listing_topology=None):
     # true for cross-record reads as well as self-reads.
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
+        # For a standalone or a template the two reads are the same document, so
+        # sweeping both emitted every shape finding twice. Compared BEFORE the
+        # first sweep, because both docs get coerced and a later test would
+        # always say "equal". The raw doc is still swept — it is read downstream
+        # — only its duplicate REPORTING is suppressed.
+        _dup = (r == raw)
+        _seen_shape = set()
         # Text first: `name` is interpolated into every message, and
         # type/colorName are upper/lower-cased.
+        def add_shape(cat, msg, ident):
+            key = (cat, ident)
+            if _dup and key in _seen_shape:
+                return
+            _seen_shape.add(key)
+            add(cat, msg, str(fid))
+
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for tf in TEXT_FIELDS:
                 tv = doc.get(tf)
                 if tv is not None and not isinstance(tv, str):
-                    add("physical", f"{_disp(r.get('name'))}: {tf} is {type(tv).__name__}, not a "
-                                    f"string ({which}) -> malformed; treated as empty", str(fid))
+                    add_shape("physical", f"{_disp(r.get('name'))}: {tf} is "
+                                          f"{type(tv).__name__}, not a string ({which}) -> "
+                                          f"malformed; treated as empty", ("text", tf))
                     doc[tf] = ""
         nm = r.get("name") or "?"
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for cf, want in CONTAINER_SHAPES.items():
                 cv = doc.get(cf)
                 if cv is not None and not isinstance(cv, want):
-                    add("physical", f"{nm}: {cf} is {type(cv).__name__}, not a {want.__name__} "
-                                    f"({which}) -> malformed; treated as empty", str(fid))
+                    add_shape("physical", f"{nm}: {cf} is {type(cv).__name__}, not a "
+                                          f"{want.__name__} ({which}) -> malformed; treated as "
+                                          f"empty", ("container", cf))
                     doc[cf] = want()
             # Elements of the subdocument arrays must themselves be documents.
             for parent_key in DICT_ELEMENT_ARRAYS:
                 for idx, sub in enumerate(doc.get(parent_key) or []):
                     if not isinstance(sub, dict):
-                        add("physical", f"{nm}: {parent_key}[{idx}] is {type(sub).__name__} "
-                                        f"({sub!r}), not a subdocument ({which}) -> that entry is "
-                                        f"skipped by every check", str(fid))
+                        add_shape("physical", f"{nm}: {parent_key}[{idx}] is "
+                                              f"{type(sub).__name__} ({sub!r}), not a subdocument "
+                                              f"({which}) -> that entry is skipped by every check",
+                                  ("element", parent_key, idx))
 
             # …and the containers one level down, in every list that has them.
             for parent_key, subshapes in NESTED_CONTAINER_SHAPES.items():
@@ -503,9 +520,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     for sf, swant in subshapes.items():
                         sv = sub.get(sf)
                         if sv is not None and not isinstance(sv, swant):
-                            add("physical", f"{nm}: {parent_key}[{tag}] {sf} is "
-                                            f"{type(sv).__name__}, not a {swant.__name__} "
-                                            f"({which}) -> malformed; treated as empty", str(fid))
+                            add_shape("physical", f"{nm}: {parent_key}[{tag}] {sf} is "
+                                                  f"{type(sv).__name__}, not a "
+                                                  f"{swant.__name__} ({which}) -> malformed; "
+                                                  f"treated as empty",
+                                      ("nested", parent_key, str(tag), sf))
                             sub[sf] = swant()
         # optTags ELEMENT validity. The container check above accepts a list of
         # anything, but the schema's setter and the CBOR encoder both keep only
@@ -516,9 +535,10 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         for doc, which in ((r, "resolved"), (raw, "stored")):
             badtags = [t for t in (doc.get("optTags") or []) if not _encodable_opt_tag(t)]
             if badtags:
-                add("physical", f"{nm}: optTags contains non-encodable {badtags!r} ({which}) -> "
-                                f"dropped by the tag encoder and invisible to the abrasive "
-                                f"check; store them as non-negative integers", str(fid))
+                add_shape("physical", f"{nm}: optTags contains non-encodable {badtags!r} "
+                                      f"({which}) -> dropped by the tag encoder and invisible to "
+                                      f"the abrasive check; store them as non-negative integers",
+                          ("optTags", repr(badtags)))
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
     # Restricted to ids that are actually present: an active variant can point at
@@ -539,6 +559,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         r, raw = v["res"], v["raw"]
         name = r.get("name") or "?"
         is_template = fid in parents
+        # resolveFilament reports which fields this row resolved from its parent
+        # (src/lib/resolveFilament.ts). Absent for standalones and templates, and
+        # in exactly those cases nothing is inherited, so "absent means empty" is
+        # safe. Used to attribute a finding to the document that can be FIXED.
+        _inh = r.get("_inherited")
+        inherited_fields = ({x for x in _inh if isinstance(x, str)}
+                            if isinstance(_inh, (list, tuple)) else set())
+        _ppid = str(raw["parentId"]) if raw.get("parentId") else None
+        parent_name = (records.get(_ppid, {}).get("res", {}).get("name")
+                       if _ppid else None) or "its template"
 
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []
@@ -761,7 +791,23 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
-        def bounds_check(container, table, where=""):
+        def _blame(field, where=""):
+            """Whose data is this, and where should the user go?
+
+            A variant that INHERITS a field stores nothing for it, so telling its
+            owner the value "was written by a path that bypassed validation" is
+            false — the variant was never written at all — and it points the
+            repair at the wrong document. One bad value on an 8-colour template
+            otherwise produces 9 identical rows, 8 of them un-actionable. The app
+            already solves this: /api/abrasive-nozzles returns `inheritedFrom`
+            and the UI says to change it on the template.
+            """
+            if not where and field in inherited_fields:
+                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
+                        f"variant keeps it")
+            return " -> written by a path that bypassed validation"
+
+        def bounds_check(container, table, where="", source="schema"):
             if not isinstance(container, dict):
                 return
             for f2, (bmin, bmax) in table.items():
@@ -772,8 +818,8 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     continue   # reported once by the malformed_numerics sweep
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
-                    add("physical", f"{name}: {where}{f2}={val} outside the schema bound ({rng}) -> "
-                                    f"written by a path that bypassed validation", fid)
+                    add("physical", f"{name}: {where}{f2}={val} outside the {source} bound "
+                                    f"({rng}){_blame(f2, where)}", fid)
 
         bounds_check(r, NUMERIC_BOUNDS)
         bounds_check(temps, RANGE_BOUNDS)
@@ -788,7 +834,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             for dc in (sp.get("dryCycles") or []):
                 bounds_check(dc, DRY_CYCLE_BOUNDS, f"spool {tag} dryCycle ")
             for ue in (sp.get("usageHistory") or []):
-                bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ")
+                bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ", source="route")
                 # Same shape, different provenance — say which, because "outside
                 # the schema bound" would be a false claim for this field.
                 if isinstance(ue, dict):

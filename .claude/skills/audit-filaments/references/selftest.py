@@ -86,6 +86,8 @@ def valid_res(**over):
             "dryCycles": [{"tempC": 45, "durationMin": 240, "date": "2026-01-05"}],
         }],
         "_deletedAt": None, "_purged": False,
+        # set by resolveFilament on a variant; absent on standalones/templates
+        "_inherited": [],
     }
     r.update(over)
     return r
@@ -594,6 +596,65 @@ def case_calibration_ref_tombstones():
             f"null {field} is the schema default (generic calibration) but was flagged: {fp}")
 
 
+
+# --- 15. an inherited defect belongs to the template -------------------------
+# A variant that inherits a field stores nothing for it, so telling its owner the
+# value "was written by a path that bypassed validation" is false and points the
+# repair at the wrong document. On an 8-colour line one bad template value
+# otherwise yields 9 rows, 8 of them un-actionable.
+def case_inherited_defect_attributed():
+    tpl_id, var_id = "tplA", "varA"
+    tpl = valid_res(_id=tpl_id, name="Prusament PLA", color=None, colorName=None,
+                    totalWeight=None, spools=[], lowStockThreshold=None, shrinkageXY=250)
+    var = valid_res(_id=var_id, name="Galaxy Black", parentId=tpl_id, shrinkageXY=None)
+    vres = copy.deepcopy(var); vres["shrinkageXY"] = 250; vres["_inherited"] = ["shrinkageXY"]
+    recs = {tpl_id: {"res": tpl, "raw": copy.deepcopy(tpl)},
+            var_id: {"res": vres, "raw": var}}
+    try:
+        findings, _ = run(recs)
+    except Exception as e:
+        return bad("inherited-attribution", f"raised: {type(e).__name__}: {e}")
+    rows = [m for rows_ in findings.values() for _, m in rows_ if "shrinkageXY" in m]
+    tpl_rows = [m for m in rows if m.startswith("Prusament PLA")]
+    var_rows = [m for m in rows if m.startswith("Galaxy Black")]
+    if not tpl_rows:
+        return bad("inherited-attribution", "the TEMPLATE that stores the bad value was not "
+                                            f"reported at all: {rows}")
+    if any("bypassed validation" in m for m in var_rows):
+        return bad("inherited-attribution",
+                   "the variant is told its own write bypassed validation, but it stores "
+                   f"nothing for this field: {var_rows}")
+    if var_rows and not any("INHERITED from template" in m for m in var_rows):
+        return bad("inherited-attribution",
+                   f"the variant row names no template to fix: {var_rows}")
+    ok("inherited-attribution")
+
+
+# --- 16. one defect, one row ------------------------------------------------
+# For a standalone the two reads are the same document, so sweeping both emitted
+# every shape finding twice and doubled the noise in the commonest case.
+def case_no_duplicate_shape_rows():
+    r = valid_res(type=5, spools=["oops"], settings="junk")
+    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in findings.values() for _, m in rows_]
+    if len(rows) == 3:
+        ok("no-duplicate-shape-rows")
+    else:
+        bad("no-duplicate-shape-rows",
+            f"3 defects on a standalone produced {len(rows)} rows:\n    "
+            + "\n    ".join(rows))
+    # a VARIANT whose two reads genuinely differ must still report both
+    raw2 = valid_res(type=5)
+    res2 = valid_res(type="PLA")        # resolved is fine, stored is corrupt
+    f2, _ = run({"b": {"res": res2, "raw": raw2}})
+    if any("(stored)" in m for rows_ in f2.values() for _, m in rows_):
+        ok("differing-reads-still-both-reported")
+    else:
+        bad("differing-reads-still-both-reported",
+            "a corrupt STORED value with a clean resolved one was not reported -- the "
+            "dedup suppressed a real finding")
+
+
 if __name__ == "__main__":
     case_valid()
     case_record_containers()
@@ -607,6 +668,8 @@ if __name__ == "__main__":
     case_only_flag_rejects_unknown()
     case_messages_are_true()
     case_calibration_ref_tombstones()
+    case_inherited_defect_attributed()
+    case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
     n2, ncrash2 = fuzz_cross_record()
     n += n2; ncrash += ncrash2
