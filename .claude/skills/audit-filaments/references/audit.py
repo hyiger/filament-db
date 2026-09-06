@@ -724,7 +724,13 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             # the family and points at rows that store null and cannot fix it. The
             # template audits its own copy, so the child stays quiet — the same
             # attribution the bounds path makes explicit via `_blame`.
-            if where_path in inherited_fields or where_path.split(".")[0] in inherited_fields:
+            # Strip array indices before matching: the traversal yields
+            # `calibrations[0].fanMinSpeed` while `_inherited` records the root as
+            # `calibrations`, so a bare split on "." left every inheriting child
+            # reporting a defect only its template can repair.
+            plain = re.sub(r"\[\d+\]", "", where_path)
+            if (where_path in inherited_fields or plain in inherited_fields
+                    or plain.split(".")[0] in inherited_fields):
                 continue
             add("physical", f"{name}: {where_path} is {type(badv).__name__} ({badv!r}), not a "
                             f"number -> malformed; checks on it are skipped", fid)
@@ -836,8 +842,13 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             if not isinstance(container, dict):
                 return
             for label, f_lo, f_hi in pairs:
-                a, b = container.get(f_lo), container.get(f_hi)
-                if isinstance(a, (int, float)) and isinstance(b, (int, float)) and a > b:
+                # num() rather than isinstance: Python counts bool as int, so
+                # `minPrintSpeed: true` / `maxPrintSpeed: false` compared as 1 > 0
+                # and added an INVERTED claim on top of the malformed-value rows
+                # the sweep had already emitted — asserting an ordering between
+                # two values it had just said were not numbers.
+                a, b = num(container.get(f_lo)), num(container.get(f_hi))
+                if a is not None and b is not None and a > b:
                     add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}", fid)
 
         ordering_check(temps, ORDERED_PAIRS, "temps")
