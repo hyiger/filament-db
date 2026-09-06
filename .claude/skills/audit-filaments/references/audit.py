@@ -1812,6 +1812,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # `timestamps: true` on the Filament schema makes these real Date paths,
         # so an uncastable value fails the restore exactly like a spool date.
         # Read from the STORED doc: they are server-owned, never inherited.
+        # `promotionInFlight.at` is a required Date inside the promotion marker
+        # — a real schema path that no spool loop reaches.
+        _pif = raw.get("promotionInFlight")
+        if isinstance(_pif, dict):
+            _pat = _pif.get("at")
+            if _pat not in (None, "") and _bad_date(_pat):
+                add("structure", f"{name}: promotionInFlight.at={_short(repr(_pat))} cannot be "
+                                 f"cast to a Date -> the marker declares it required, so POST "
+                                 f"/api/snapshot refuses the ENTIRE backup file; the promotion "
+                                 f"resume path also reads this marker", fid)
+
         for _tsf in ("createdAt", "updatedAt"):
             _tsv = raw.get(_tsf)
             if _tsv not in (None, "") and _bad_date(_tsv):
@@ -2743,12 +2754,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             _fids_k = {r[1] for r in _rows_k}
             _where = ("on " + _who([(i, n) for _s, i, n, *_ in _rows_k])
                       if len(_fids_k) > 1 else f"on {_rows_k[0][2]}")
-            add("structure", f"spool instanceIds {sorted(_variants)!r} differ only by CASE ({_where}) "
-                             f"-> matchFilament's spool tier runs exact, then case-insensitive, so "
-                             f"a scan of either resolves through the SAME folded tier: with two "
-                             f"filaments it returns both as candidates and matches nothing, and "
-                             f"within one filament it reports whichever roll comes first by array "
-                             f"order", None)
+            # CONDITIONAL on case drift. The exact-case tier runs FIRST, so
+            # scanning either STORED value still resolves its own row — saying
+            # "no match" outright would push the user to replace identities that
+            # working tags depend on. What breaks is a scan in a THIRD casing.
+            add("structure", f"spool instanceIds {sorted(_variants)!r} differ only by CASE "
+                             f"({_where}) -> each still resolves when scanned exactly as stored "
+                             f"(the exact tier runs first), but a scan in any OTHER casing falls "
+                             f"to the case-insensitive tier and hits both: across filaments that "
+                             f"returns them as candidates and matches nothing, within one "
+                             f"filament it reports whichever roll comes first by array order. "
+                             f"Legacy tags and hand-typed ids are where that drift comes from",
+                None)
 
     for _sid, _owners in sorted(spool_owners.items()):
         _fids = {i for i, _, _ in _owners}
@@ -2828,10 +2845,10 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                      and _v["raw"]["instanceId"].casefold() == _fold)}
         if len(_tvariants) > 1:
             add("structure", f"filament-level instanceIds {sorted(_tvariants)!r} differ only by "
-                             f"CASE ({_who(_rows_t)}) -> matchFilament's filament fallback runs "
-                             f"exact, then case-insensitive, so a scan of either id reaches the "
-                             f"folded tier, gets both rows back as candidates and resolves NO "
-                             f"match at all", None)
+                             f"CASE ({_who(_rows_t)}) -> each still resolves when scanned exactly "
+                             f"as stored (the exact findOne runs first), but a scan in any OTHER "
+                             f"casing falls to the case-insensitive tier, gets both rows back as "
+                             f"candidates and resolves NO match at all", None)
 
     for _tid, _owners in sorted(top_owners.items()):
         if len(_owners) > 1:

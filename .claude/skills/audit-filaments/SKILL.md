@@ -269,7 +269,9 @@ rows for stock that does not exist. Anything mirroring an `if (x)` in the app go
 `_js_truthy`. The same asymmetry is why `_react_child_throws` and `_js_number` exist: the whole
 file is a Python mirror of JS semantics, and every place the two disagree is a defect waiting.
 
-**Derive the field inventory from the schema; do not collect it one finding at a time.** The
+**Derive the field inventory from the schema; do not collect it one finding at a time.** (Now done
+for `type: Number` — the original 45-of-45 script — `type: String`, and `type: Date`. Any future
+class of field finding should be closed the same way; a per-field patch guarantees the next one.) The
 numeric tables have had a coverage script since early on (45 of 45). The STRING sweep did not, and
 it showed: `spoolType` and then `syncId` each arrived as a separate review round, which is a drip
 with no end because the schema decides how many there are.

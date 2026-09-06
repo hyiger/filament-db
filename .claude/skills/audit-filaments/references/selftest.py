@@ -100,6 +100,8 @@ def valid_res(**over):
         "openprinttagSnapshot": {"density": 1.24},
         # server-owned String paths, swept for shape like any other
         "syncId": "sync-0001", "promotedByToken": None,
+        # the v1.70 promotion marker — `at` is a required Date inside it
+        "promotionInFlight": {"token": "tok-1", "at": "2026-02-01T00:00:00Z"},
         "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
             "_id": "s1", "instanceId": "0011223344", "label": "12", "lotNumber": "L-42",
@@ -467,7 +469,7 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
 # coverage while staying above the stale value, which is exactly the blind spot
 # this guard exists to close. Every intentional fixture change updates this
 # number.
-FUZZ_COUNT = 17010
+FUZZ_COUNT = 17388
 
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
@@ -1822,11 +1824,78 @@ def case_js_trim_mirror():
 #
 # Exemptions must state WHY, because "it has its own check" and "we forgot" look
 # identical from here.
+# Same treatment for `type: Date`, and for the same reason: `createdAt`,
+# `usageHistory[].date`, `dryCycles[].date`, then `promotionInFlight.at` each
+# arrived as its own round. An uncastable Date fails the restore exactly like an
+# uncastable String, so the schema — not the review — decides the inventory.
+DATE_SWEEP_EXEMPT = {
+    # A row carrying a non-null `_deletedAt` is outside the audited set BY
+    # CONSTRUCTION: the listing filters `_deletedAt: null`, and the snapshot
+    # fallback filters it too, so such a row is never fetched and the audit
+    # cannot see the bad value in the first place.
+    "_deletedAt",
+}
+
 TEXT_SWEEP_EXEMPT = {
     # richer check of its own (_bad_tds_url + a non-string branch); adding it to
     # TEXT_FIELDS would coerce the value to "" before that check ran
     "tdsUrl",
 }
+
+
+def _schema_paths_of_type(ts_type):
+    """Every `type: <ts_type>` path in FilamentSchema, at any depth, as dotted
+    names. Derived from the schema so the inventory cannot go stale."""
+    import re as _re
+    here = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(here, "..", "..", "..", "..", "src", "models", "Filament.ts")
+    if not os.path.exists(path):
+        return None
+    lines = open(path).read().splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if "FilamentSchema = new Schema" in l)
+        end = next(i for i in range(start, len(lines)) if "timestamps: true" in lines[i])
+    except StopIteration:
+        return None
+    stack, out = [], []
+    for l in lines[start:end]:
+        ind = len(l) - len(l.lstrip())
+        m = _re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*):", l)
+        if not m:
+            continue
+        while stack and stack[-1][1] >= ind:
+            stack.pop()
+        if _re.search(r"type:\s*%s\b" % ts_type, l):
+            out.append(".".join([k for k, _ in stack] + [m.group(1)]))
+        elif _re.search(r"[\[{]\s*$", l):
+            stack.append((m.group(1), ind))
+    return out
+
+
+def case_schema_date_paths_covered():
+    """Every declared Date path must be reachable by the castability sweep."""
+    declared = _schema_paths_of_type("Date")
+    if declared is None:
+        return ok("schema-date-paths (schema not locatable — skipped)")
+    import re as _re2
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.py")).read()
+    missing = []
+    for p in declared:
+        leaf = p.split(".")[-1]
+        if leaf in DATE_SWEEP_EXEMPT or p in DATE_SWEEP_EXEMPT:
+            continue
+        # the sweep reaches a path either by naming the leaf in a date loop or
+        # by reading it explicitly
+        if not _re2.search(r'"%s"' % _re2.escape(leaf), src):
+            missing.append(p)
+    if missing:
+        bad("schema-date-paths",
+            "the Filament schema declares these Date paths that the castability sweep never "
+            "names: " + ", ".join(missing) + ".\n  An uncastable value there makes POST "
+            "/api/snapshot refuse the ENTIRE backup file. Add it to a date loop, or to "
+            "DATE_SWEEP_EXEMPT with the reason.")
+    else:
+        ok("schema-date-paths (%d declared, %d exempt)" % (len(declared), len(DATE_SWEEP_EXEMPT)))
 
 
 def case_schema_string_paths_covered():
@@ -1964,6 +2033,7 @@ if __name__ == "__main__":
     case_js_truthiness_and_direction()
     case_js_trim_mirror()
     case_schema_string_paths_covered()
+    case_schema_date_paths_covered()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
