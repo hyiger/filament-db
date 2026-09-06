@@ -741,6 +741,21 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         parent_name = (records.get(_ppid, {}).get("res", {}).get("name")
                        if _ppid else None) or "its template"
 
+        def _inh_blame(*roots):
+            """Attribution for any inheritable field, by its `_inherited` root.
+
+            Every emit site that reports a VALUE needs this: a variant inheriting
+            a bad value stores nothing, so naming it as the owner is false and
+            points the repair at the one document that cannot make it. Review
+            found this site by site — temperatures, then bounds, then malformed
+            numerics, then ordering and density — so it is now one helper applied
+            at every value-based emission.
+            """
+            if any(x in inherited_fields for x in roots if x):
+                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
+                        f"variant keeps it")
+            return ""
+
         def _temp_blame(label):
             """Attribute a temperature finding the way the bounds path does."""
             if label.startswith("calibration["):
@@ -866,8 +881,9 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # may be a deliberate duration rather than an hours-for-minutes slip, and
         # this is the documented heuristic.
         if isinstance(dry_t, (int, float)) and 0 < dry_t <= 24 and dry_temp is not None:
-            add("drying-units", f"{name}: dryingTime={dry_t} at {dry_temp}C — the field is MINUTES; "
-                                f"{dry_t} hours would be {int(dry_t * 60)}", fid)
+            add("drying-units", f"{name}: dryingTime={dry_t} at {dry_temp}C — the field is "
+                                f"MINUTES; {dry_t} hours would be {int(dry_t * 60)}"
+                                f"{_inh_blame('dryingTime', 'dryingTemperature')}", fid)
 
         # --- temperatures ----------------------------------------------------
         # The schema carries temperatures in FIVE places, and every one of them
@@ -882,7 +898,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         noz, lo, hi, bed = (num(temps.get("nozzle")), num(temps.get("nozzleRangeMin")),
                             num(temps.get("nozzleRangeMax")), num(temps.get("bed")))
         nfl, bfl = num(temps.get("nozzleFirstLayer")), num(temps.get("bedFirstLayer"))
-        def ordering_check(container, pairs, cat, where=""):
+        def ordering_check(container, pairs, cat, where="", inherit_prefix="", inherit_root=""):
             if not isinstance(container, dict):
                 return
             for label, f_lo, f_hi in pairs:
@@ -893,10 +909,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 # two values it had just said were not numbers.
                 a, b = num(container.get(f_lo)), num(container.get(f_hi))
                 if a is not None and b is not None and a > b:
-                    add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}", fid)
+                    blame = _inh_blame(inherit_root, inherit_prefix + f_lo, inherit_prefix + f_hi)
+                    add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}{blame}", fid)
 
-        ordering_check(temps, ORDERED_PAIRS, "temps")
-        ordering_check(r, ORDERED_PAIRS_TOP, "physical")
+        ordering_check(temps, ORDERED_PAIRS, "temps", inherit_prefix="temperatures.")
+        ordering_check(r, ORDERED_PAIRS_TOP, "physical")   # roots are bare, prefix empty
 
         nozzle_like = [("nozzle", noz), ("nozzleFirstLayer", nfl)]
         bed_like = [("bed", bed), ("bedFirstLayer", bfl)]
@@ -928,7 +945,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     add("structure", f"{name}: calibration[{idx}] references soft-deleted "
                                      f"{ref_field} {rv.get('name') or rv.get('_id')!r} -> the "
                                      f"tuning is unreachable", fid)
-            ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ")
+            ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ", inherit_root="calibrations")
             nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
                             (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
             bed_like += [(f"{where} bedTemp", num(cal.get("bedTemp"))),
@@ -1000,7 +1017,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     " — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
                     "corrects its abrasive classification")
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
-                            f"({DENSITY_FLOOR}-{ceiling}){hint}", fid)
+                            f"({DENSITY_FLOOR}-{ceiling}){hint}{_inh_blame('density')}", fid)
         dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
@@ -1057,6 +1074,13 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 bounds_check(dc, DRY_CYCLE_BOUNDS, f"spool {tag} dryCycle ")
             for ue in (sp.get("usageHistory") or []):
                 bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ", source="route")
+                # `grams` is schema-REQUIRED on a usage entry, and bounds_check
+                # skips a None. Spool export and analytics read the missing value
+                # as zero, so the entry vanishes from usage totals in silence.
+                if isinstance(ue, dict) and ue.get("grams") is None:
+                    add("physical", f"{name}: spool {tag} usage entry has no grams -> the schema "
+                                    f"requires it, and export and analytics read it as zero, so "
+                                    f"this entry silently vanishes from usage totals", fid)
                 # Same shape, different provenance — say which, because "outside
                 # the schema bound" would be a false claim for this field.
                 if isinstance(ue, dict):
@@ -1099,12 +1123,13 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         if isinstance(secondaries, list):   # shape already reported above
             if len(secondaries) > MAX_SECONDARY_COLORS:
                 add("colour", f"{name}: {len(secondaries)} secondaryColors, past the OpenPrintTag "
-                              f"limit of {MAX_SECONDARY_COLORS} -> the encoder truncates the extras", fid)
+                              f"limit of {MAX_SECONDARY_COLORS} -> the encoder truncates the extras"
+                              f"{_inh_blame('secondaryColors')}", fid)
             for pos, sc in enumerate(secondaries):
                 if not (isinstance(sc, str) and HEX6.match(sc)):
-                    add("colour", f"{name}: secondaryColors[{pos}]={sc!r} is not #RRGGBB -> the OPT "
-                                  f"encoder skips it, and a slicer export may use it when the "
-                                  f"primary colour is null", fid)
+                    add("colour", f"{name}: secondaryColors[{pos}]={sc!r} is not #RRGGBB -> the "
+                                  f"OPT encoder skips it, and a slicer export may use it when the "
+                                  f"primary colour is null{_inh_blame('secondaryColors')}", fid)
         if col == "#808080" and "grey" not in cname and "gray" not in cname:
             add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})", fid)
 
@@ -1238,13 +1263,14 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                      if isinstance(n, dict) and n.get("_deletedAt")]
             live = [n for n in compat if isinstance(n, dict) and not n.get("_deletedAt")]
             if not compat:
-                add("nozzles", f"{name}: no compatibleNozzles", fid)
+                add("nozzles", f"{name}: no compatibleNozzles"
+                               f"{_inh_blame('compatibleNozzles')}", fid)
             elif not live:
                 add("nozzles", f"{name}: every compatibleNozzles entry is soft-deleted ({stale}) -> "
-                               f"effectively unassigned", fid)
+                               f"effectively unassigned{_inh_blame('compatibleNozzles')}", fid)
             elif stale:
                 add("nozzles", f"{name}: compatibleNozzles includes soft-deleted {stale} -> stale "
-                               f"reference that cannot be used", fid)
+                               f"reference that cannot be used{_inh_blame('compatibleNozzles')}", fid)
 
     # The audited ids, so main() cannot iterate records this function discarded:
     # `records` was rebound to `usable` above, and the grouping in main() used to
