@@ -146,6 +146,14 @@ CALIBRATION_BOUNDS = {
 }
 CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
 
+# Cross-field ORDERING. Each endpoint can satisfy its own bound while the pair is
+# contradictory, so per-field bounds can never catch these — the nozzle range was
+# checked from the start and the other two were not, which is the whole reason
+# this is a table rather than three conditions.
+ORDERED_PAIRS = [("nozzle range", "nozzleRangeMin", "nozzleRangeMax")]      # in `temperatures`
+ORDERED_PAIRS_TOP = [("print speed", "minPrintSpeed", "maxPrintSpeed")]     # top level
+ORDERED_PAIRS_CAL = [("fan speed", "fanMinSpeed", "fanMaxSpeed")]           # per calibration
+
 # The declared nozzle-range ENDPOINTS are themselves schema-bounded and are
 # exported verbatim (filamentToOrcaSlicerKeys writes nozzle_temperature_range_low
 # / _high), so a range of -10..700 exports while containing a valid nozzle temp.
@@ -342,8 +350,16 @@ def audit(records, abrasive):
         noz, lo, hi, bed = (temps.get("nozzle"), temps.get("nozzleRangeMin"),
                             temps.get("nozzleRangeMax"), temps.get("bed"))
         nfl, bfl = temps.get("nozzleFirstLayer"), temps.get("bedFirstLayer")
-        if lo is not None and hi is not None and lo > hi:
-            add("temps", f"{name}: INVERTED nozzle range {lo}-{hi}", fid)
+        def ordering_check(container, pairs, cat, where=""):
+            if not isinstance(container, dict):
+                return
+            for label, f_lo, f_hi in pairs:
+                a, b = container.get(f_lo), container.get(f_hi)
+                if isinstance(a, (int, float)) and isinstance(b, (int, float)) and a > b:
+                    add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}", fid)
+
+        ordering_check(temps, ORDERED_PAIRS, "temps")
+        ordering_check(r, ORDERED_PAIRS_TOP, "physical")
 
         nozzle_like = [("nozzle", noz), ("nozzleFirstLayer", nfl)]
         bed_like = [("bed", bed), ("bedFirstLayer", bfl)]
@@ -365,6 +381,7 @@ def audit(records, abrasive):
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
                 add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
                                  f"{noz_name!r} -> the tuning is unreachable", fid)
+            ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ")
             nozzle_like += [(f"{where} nozzleTemp", cal.get("nozzleTemp")),
                             (f"{where} nozzleTempFirstLayer", cal.get("nozzleTempFirstLayer"))]
             bed_like += [(f"{where} bedTemp", cal.get("bedTemp")),
@@ -602,9 +619,22 @@ def audit(records, abrasive):
         # An abrasive filament with no assignment is already reported, with far
         # better remediation, by /api/abrasive-nozzles. Restating it here would
         # contradict this script's own division of labour and double-count.
-        if (not is_template and not (r.get("compatibleNozzles") or [])
-                and fid not in abrasive_unassigned):
-            add("nozzles", f"{name}: no compatibleNozzles", fid)
+        if not is_template and fid not in abrasive_unassigned:
+            compat = r.get("compatibleNozzles") or []
+            # A soft-deleted nozzle still populates as a truthy object carrying
+            # _deletedAt, so a non-empty array is not evidence of a usable
+            # assignment — the same trap the calibration check above closes.
+            stale = [n.get("name") or n.get("_id") for n in compat
+                     if isinstance(n, dict) and n.get("_deletedAt")]
+            live = [n for n in compat if isinstance(n, dict) and not n.get("_deletedAt")]
+            if not compat:
+                add("nozzles", f"{name}: no compatibleNozzles", fid)
+            elif not live:
+                add("nozzles", f"{name}: every compatibleNozzles entry is soft-deleted ({stale}) -> "
+                               f"effectively unassigned", fid)
+            elif stale:
+                add("nozzles", f"{name}: compatibleNozzles includes soft-deleted {stale} -> stale "
+                               f"reference that cannot be used", fid)
 
     return findings, parents
 

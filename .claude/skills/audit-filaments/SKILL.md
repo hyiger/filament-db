@@ -257,7 +257,16 @@ exactly one immediate parent, so a grandparent's values never reach the row howe
 look. Reachable through an import, a snapshot restore or a sync merge — none of them through the
 API.
 
-**Nozzle assignment** — a non-template filament with no `compatibleNozzles` at all. Anything
+**Cross-field ordering** — each endpoint of a min/max pair can satisfy its own bound while the
+pair is contradictory, so the bounds table can never catch these. Three pairs exist and all are
+checked from one `ORDERED_PAIRS*` table: the nozzle range, `minPrintSpeed`/`maxPrintSpeed`, and a
+calibration's `fanMinSpeed`/`fanMaxSpeed` — which `prusaSlicerBundle` exports directly as
+`min_fan_speed`/`max_fan_speed`, so an inverted pair becomes a contradictory cooling profile.
+
+**Nozzle assignment** — a non-template filament with no usable `compatibleNozzles`. Note that a
+soft-deleted nozzle still populates as a **truthy object carrying `_deletedAt`**, so a non-empty
+array is not evidence of an assignment: the checker separates live from stale entries and reports
+"effectively unassigned" when none survive. Same trap as the calibration-nozzle check above. Anything
 abrasive-related is left to the app's audit above, which also knows that the INDX nozzle is
 nitrocarburized, i.e. surface-treated only, and "not a substitute for a hardened nozzle on
 fibre-filled or metal-filled grades".
