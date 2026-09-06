@@ -448,6 +448,14 @@ MAX_SPOOL_TEXT_LENGTH = 200                              # Filament.ts maxlength
 NESTED_TEXT_MAXLEN = {"spools": ("label", "lotNumber")}
 
 
+def _short(v, limit=40):
+    """A document-derived value used as an IDENTIFIER inside a message. Values
+    here come from the API, so length is not bounded by anything the app
+    enforces; a report is useless if one bad row is 10 KB wide."""
+    t = v if isinstance(v, str) else repr(v)
+    return t if len(t) <= limit else t[:limit] + "…"
+
+
 def _utf16_len(text):
     """`maxlength` counts JS String.length -- UTF-16 code units, not code
     points. An emoji or any astral character costs TWO, so a 150-character
@@ -463,6 +471,9 @@ _URL_REMOVE = {0x09: None, 0x0A: None, 0x0D: None}
 _URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
+# ECMAScript time value range (ES2024 21.4.1.1): a Date outside +/-8.64e15 ms
+# is Invalid, so a raw numeric date past it can be neither cast nor rendered.
+JS_MAX_TIME_VALUE = 8_640_000_000_000_000
 _ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
 # Only the shapes whose components can be READ are judged; an unrecognised
 # tail is left alone rather than guessed at (see _bad_date).
@@ -479,8 +490,15 @@ def _bad_date(v):
     so this deliberately reports only the shapes V8 provably rejects and stays
     silent on the rest. Verified against node's own `new Date` over a corpus of
     real and malformed values: no value node accepts is reported."""
-    if isinstance(v, bool) or isinstance(v, (int, float)):
-        return False              # new Date(<number>) is always a valid instant
+    if isinstance(v, bool):
+        return False              # new Date(true) is 1970-01-01T00:00:00.001Z
+    if isinstance(v, (int, float)):
+        # NOT "always valid": the ECMAScript time value range is +/-8.64e15 ms
+        # (~+/-273,790 years), and one millisecond past it is an Invalid Date.
+        # NaN and the infinities are Invalid too.
+        if v != v or v in (float("inf"), float("-inf")):
+            return True
+        return abs(v) > JS_MAX_TIME_VALUE
     if isinstance(v, dict):
         return True               # new Date({}) is Invalid Date -> CastError
     if isinstance(v, list):
@@ -562,6 +580,12 @@ def _bad_tds_url(v):
 # bedTypeTempRefFilter matches it against user-created BedType names), so this
 # list is used ONLY to spot a case/whitespace twin -- never as a closed
 # vocabulary. See the bedTypeTemps check.
+# src/lib/validateSpoolBody.ts — the charset/length contract every API write
+# to a spool id must satisfy. Mirrored so a value that arrived by a path
+# WITHOUT validation is reported before the user next tries to edit it.
+SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+MAX_SPOOL_ID_LENGTH = 128
+
 ORCA_PLATE_KEYS = ("Cool Plate", "Engineering Plate", "Hot Plate",
                    "Textured PEI Plate", "Textured Cool Plate")
 
@@ -1371,7 +1395,24 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # a single bad URL on a template would be reported once per child, each
         # naming a document the user cannot fix it on.
         _tds = raw.get("tdsUrl")
-        if _bad_tds_url(_tds):
+        if _tds is not None and not isinstance(_tds, str):
+            # `_bad_tds_url` judges URL GRAMMAR and answers False for a
+            # non-string, and tdsUrl is not in the scalar-string sweep, so this
+            # shape had no check at all. A plain object is the definite case:
+            # Mongoose's String cast refuses a value whose only toString is
+            # Object.prototype's, so the restore fails outright. Everything else
+            # casts through its own toString and then faces the URL validator,
+            # which the result will almost never satisfy.
+            _cast = ("Mongoose's String cast refuses a plain object outright, so POST "
+                     "/api/snapshot rejects the ENTIRE backup file"
+                     if isinstance(_tds, dict) else
+                     "Mongoose casts it through its own toString and then applies the http(s) "
+                     "validator to the result, so the backup is refused unless that string "
+                     "happens to be a valid URL")
+            add("structure", f"{name}: tdsUrl is {type(_tds).__name__} ({_tds!r}), not a string -> "
+                             f"the detail page's safeHttpUrl gets a non-string and renders no TDS "
+                             f"link, and {_cast}{_inh_blame('tdsUrl')}", fid)
+        elif _bad_tds_url(_tds):
             add("structure", f"{name}: tdsUrl {_tds!r} is not a valid http(s) URL -> the model's "
                              f"validator rejects it, so POST /api/snapshot refuses the ENTIRE "
                              f"backup file; the detail page also renders no link for it", fid)
@@ -1605,13 +1646,43 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         for sp in (r.get("spools") or []):
             if not isinstance(sp, dict):
                 continue
-            tag = sp.get("instanceId") or sp.get("_id")
+            # The tag is pasted into every row for this spool, and it is read
+            # from the document -- so an over-long or hostile instanceId would
+            # otherwise carry itself, verbatim and in full, through the entire
+            # report. Cap it here rather than at each use.
+            tag = _short(sp.get("instanceId") or sp.get("_id"))
             bounds_check(sp, SPOOL_BOUNDS, f"spool {tag} ")
             # Both are optional `type: Date` with a null default, so a null is
             # correct — but a raw-sync or restore string that Date cannot cast
             # is not, and it fails LOUDLY: the SpoolCard seeds its inputs with
             # `new Date(v).toISOString()` during render, which throws RangeError
             # on an Invalid Date and takes the whole detail page down.
+            # `instanceId` is the spool's durable identity. The type sweep in
+            # the shape pass catches a non-string, but "" and null pass it, and
+            # the cross-record identity pass indexes non-empty strings only — so
+            # the ABSENT case had no check anywhere, and it is the one that
+            # silently degrades every per-spool flow.
+            _sid_v = sp.get("instanceId")
+            if _sid_v is None or _sid_v == "":
+                add("structure", f"{name}: spool {tag} has no instanceId -> selectSpoolForWrite "
+                                 f"answers no-id-available, so writing a tag for THIS spool fails, "
+                                 f"and the QR/NFC flows fall back to the filament-level id — the "
+                                 f"scan still finds the filament but no longer identifies the "
+                                 f"roll. The startup backfill mints one, so a spool still missing "
+                                 f"it was written by a path that bypassed the model", fid)
+            elif isinstance(_sid_v, str):
+                _sid_t = _sid_v.strip()
+                if len(_sid_t) > MAX_SPOOL_ID_LENGTH:
+                    add("structure", f"{name}: spool {tag} instanceId is {len(_sid_t)} characters, "
+                                     f"past the {MAX_SPOOL_ID_LENGTH}-character contract -> "
+                                     f"/api/filaments/match caps the query at the same length, so "
+                                     f"this id can never round-trip through a QR or NFC scan, and "
+                                     f"any edit through the API is refused", fid)
+                elif not SPOOL_ID_RE.match(_sid_t):
+                    add("structure", f"{name}: spool {tag} instanceId {_sid_v!r} is outside the "
+                                     f"allowed charset (letters, digits, dot, underscore, hyphen) "
+                                     f"-> validateSpoolInstanceId refuses it, so any later edit to "
+                                     f"this spool is rejected until the id is replaced", fid)
             for _df in ("purchaseDate", "openedDate"):
                 _dv = sp.get(_df)
                 if _dv is not None and _bad_date(_dv):

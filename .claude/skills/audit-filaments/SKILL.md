@@ -479,6 +479,12 @@ entirely unchecked category read as a clean one. It now emits the same explicit 
 as a failed snapshot read. Both halves are needed: the first stops a wrong finding, the second
 stops a wrong silence.
 
+**A document-derived identifier must not carry itself into the report.** Every row about a spool
+embeds its id, and that id comes from the API — nothing the app enforces bounds it on the way in,
+so one 4 KB `instanceId` reproduced itself in full in every row about that spool. Identifiers go
+through `_short()`. The same reasoning applies to any value you interpolate as a *label* rather
+than as the finding's subject.
+
 **A missing value and a malformed one are different findings.** `num()` returns `None` for both,
 so a `density: "oops"` used to produce a "no density" row *on top of* the malformed-value row the
 numeric sweep had already emitted — and because density, nozzle temp and bed temp are all

@@ -868,11 +868,19 @@ def case_date_mirror():
             f"nothing: {fn}")
     else:
         ok("date-mirror-catches-the-certain")
-    # numbers and booleans cast to a valid instant and must never be reported
-    live = [v for v in (0, 1, 12345, -1, 1.5, True, False) if A._bad_date(v)]
+    # numbers cast to an instant — but only INSIDE the ECMAScript time value
+    # range. Both boundaries verified against node.
+    live = [v for v in (0, 1, 12345, -1, 1.5, True, False,
+                        A.JS_MAX_TIME_VALUE, -A.JS_MAX_TIME_VALUE) if A._bad_date(v)]
     ok("date-mirror-numeric-silent") if not live else bad(
         "date-mirror-numeric-silent",
-        f"`new Date(<number|bool>)` is always a valid instant; reported anyway: {live}")
+        f"`new Date(<number>)` inside +/-8.64e15 is a valid instant; reported anyway: {live}")
+    dead = [v for v in (A.JS_MAX_TIME_VALUE + 1, -A.JS_MAX_TIME_VALUE - 1,
+                        float("nan"), float("inf"), float("-inf")) if not A._bad_date(v)]
+    ok("date-mirror-numeric-range") if not dead else bad(
+        "date-mirror-numeric-range",
+        f"outside +/-8.64e15 (and NaN/Inf) `new Date` is Invalid, so toISOString() throws and the "
+        f"cast fails; not reported: {dead}")
 
 
 # --- 14e. per-record state must not leak between records ---------------------
@@ -936,6 +944,24 @@ def case_preset_label_shapes():
     fp = [m for rows_ in f.values() for _, m in rows_ if "presets[0].label" in m]
     ok("preset-label-valid-silent") if not fp else bad(
         "preset-label-valid-silent", f"a normal label was flagged: {fp}")
+
+
+# --- 14g. a document-derived identifier must not carry itself into the report -
+# Every row for a spool embeds its id, and that id comes from the API — nothing
+# the app enforces bounds it on the way in. A 4 KB instanceId would otherwise
+# reproduce itself, in full, in every row about that spool.
+def case_identifier_is_bounded():
+    r = valid_res()
+    r["spools"][0]["instanceId"] = "x" * 4000
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "instanceId" in m]
+    if not rows:
+        return bad("identifier-bounded", "an over-long instanceId produced no finding at all")
+    worst = max(len(m) for m in rows)
+    ok("identifier-bounded") if worst < 600 else bad(
+        "identifier-bounded",
+        f"a 4000-character instanceId produced a {worst}-character row — a document-derived "
+        f"identifier is carrying itself verbatim through the report")
 
 
 # --- 15. an inherited defect belongs to the template -------------------------
@@ -1014,6 +1040,7 @@ if __name__ == "__main__":
     case_date_mirror()
     case_no_cross_record_leak()
     case_preset_label_shapes()
+    case_identifier_is_bounded()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
