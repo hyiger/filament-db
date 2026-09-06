@@ -170,6 +170,20 @@ reported separately, as implausible-but-acceptable-to-the-API. Keep that distinc
 check: the remedy differs, because one shape means "something wrote past validation" and the other
 means "validation would not have stopped this".
 
+**Before changing the checker, run its suite** — from anywhere:
+
+```bash
+python3 .claude/skills/audit-filaments/references/selftest.py
+```
+
+It walks a realistic record and substitutes hostile values at *every* path it finds, across the
+resolved read, the stored read and both at once — thousands of combinations — asserting the audit
+still returns. That shape exists because the alternative did not converge: review kept naming one
+more path where a wrong-typed value either aborted the run (so a single corrupt record hides every
+finding for the whole library) or was read past in silence, and the script reads well over a
+hundred paths. Fuzzing every path covers the next one the day it is added, with nobody writing a
+case for it.
+
 Coverage here is **verified, not assumed** — an earlier revision claimed the table covered every
 exported numeric "by construction" and it did not, twice. Re-check it after any schema change:
 

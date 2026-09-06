@@ -26,6 +26,8 @@ import itertools
 import sys
 import traceback
 
+import os
+
 import audit as A
 
 passed = failed = 0
@@ -351,7 +353,11 @@ NOT_RECORD_FIELDS = {
 
 def case_fixture_covers_reads():
     import re
-    src = io.open("audit.py").read() if False else open("audit.py").read()
+    # Resolved against THIS file, not the caller's cwd: `import audit` already
+    # works from anywhere (Python puts the script's own directory on sys.path),
+    # so a cwd-relative open was the one thing that made the suite pass from the
+    # references directory and fail from the repo root the skill documents.
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.py")).read()
     read_keys = set(re.findall(r'\.get\(\s*"([A-Za-z_][A-Za-z0-9_]*)"', src))
     have = set()
 
