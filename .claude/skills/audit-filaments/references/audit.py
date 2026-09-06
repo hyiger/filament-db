@@ -533,9 +533,17 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                                 f"-> that entry was NOT checked")
                 continue
             name = f.get("filamentName", "?")
-            why = ", ".join(f.get("reasons") or []) or "abrasive"
+            # Consume the nested fields defensively. `", ".join([1])` raises, and
+            # so does `.get` on a scalar softNozzles entry — and this loop runs
+            # BEFORE the per-record work, so either would abort the whole audit
+            # and hide every finding, in the category where that is worst.
+            _reasons = f.get("reasons")
+            why = (", ".join(str(x) for x in _reasons)
+                   if isinstance(_reasons, list) and _reasons else "abrasive")
             src = f" (inherited from {f['inheritedFrom']})" if f.get("inheritedFrom") else ""
-            soft = [n.get("name") for n in (f.get("softNozzles") or [])]
+            _soft = f.get("softNozzles")
+            soft = ([n.get("name") if isinstance(n, dict) else n for n in _soft]
+                    if isinstance(_soft, list) else [])
             if f.get("flagMismatch"):
                 add("abrasive", f"{name}: material reads abrasive ({why}) but settings.filament_abrasive "
                                 f"is not on -> EXPORTS AS NON-ABRASIVE{src}", str(f.get("filamentId")))
@@ -585,8 +593,14 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # Text first: `name` is interpolated into every message, and
         # type/colorName are upper/lower-cased.
         def add_shape(cat, msg, ident):
-            key = (cat, ident)
-            if _dup and key in _seen_shape:
+            # Keyed on the message with the read marker removed, so ONE defect
+            # present identically in both reads collapses to one row while two
+            # genuinely different malformed values at the same path both report.
+            # `_dup` (whole-document equality) was the wrong test: for a variant
+            # the two reads always differ — inheritance and response metadata see
+            # to that — so a locally stored defect was reported twice.
+            key = (cat, ident, msg.replace(" (resolved)", "").replace(" (stored)", ""))
+            if key in _seen_shape:
                 return
             _seen_shape.add(key)
             add(cat, msg, str(fid))
@@ -929,19 +943,35 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
         typ_upper = (r.get("type") or "").upper()
         floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
+        def _temp_blame(label):
+            """Attribute a temperature finding the way the bounds path does."""
+            if label.startswith("calibration["):
+                root = "calibrations"
+            elif label.startswith("preset["):
+                root = "presets"
+            elif label.startswith("bedTypeTemps["):
+                root = "bedTypeTemps"
+            else:
+                root = f"temperatures.{label}"
+            if root in inherited_fields:
+                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
+                        f"variant keeps it")
+            return ""
+
         for label, val in nozzle_like:
             if val is None:
                 continue
+            blame = _temp_blame(label)
             if lo is not None and val < lo:
-                add("temps", f"{name}: {label} {val} is BELOW the declared range min {lo}", fid)
+                add("temps", f"{name}: {label} {val} is BELOW the declared range min {lo}{blame}", fid)
             if hi is not None and val > hi:
-                add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}", fid)
+                add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}{blame}", fid)
             if not floor <= val <= NOZZLE_CEILING:
                 add("temps", f"{name}: {label} {val}C outside the plausible band for "
-                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C)", fid)
+                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C){blame}", fid)
         for label, val in bed_like:
             if val is not None and not 0 <= val <= 200:
-                add("temps", f"{name}: {label} {val}C implausible", fid)
+                add("temps", f"{name}: {label} {val}C implausible{_temp_blame(label)}", fid)
         # Standby is an IDLE temperature, legitimately far below the print window,
         # so only its ceiling is meaningful.
         standby = num(temps.get("standby"))
