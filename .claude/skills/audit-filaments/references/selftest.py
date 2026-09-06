@@ -412,7 +412,7 @@ NOT_RECORD_FIELDS = {
     # /api/snapshot. Not record fields, and unreachable from the record
     # fixture, so they get a dedicated case instead of fuzz coverage:
     # case_calibration_scope_refs.
-    "printers", "bedTypes", "cals",
+    "printers", "bedTypes", "cals", "locations",
     # process environment, read by main() not by the audit
     "FILAMENTDB_API_KEY", "FILAMENTDB_URL",
 }

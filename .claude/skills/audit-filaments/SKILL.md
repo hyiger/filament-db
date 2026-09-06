@@ -281,13 +281,16 @@ the metal-fill tag (**20**) gets a much higher one. The schema permits any non-n
 prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
 reads it.
 
-The tag is the *only* evidence used, and that is deliberate. Matching metal words in the name
-looks equivalent and is not: "Metallic Grey" and "Steel Blue" are pigments, which is exactly why
-the app's own `FILLED_RE` requires the word *fill* after metal/steel/iron. A bare name match would
-raise the ceiling for an ordinary filament and let a corrupt 4 g/cm³ through — trading a false
-positive for a false negative, which is the worse direction. A genuinely metal-filled record that
-trips the check should get tag 20, which the finding says, and which also corrects its abrasive
-classification.
+The tag is the *only* evidence used, and that is deliberate — but not for the reason an earlier
+revision of this file gave. It claimed the app's `FILLED_RE` "requires the word *fill* after
+metal/steel/iron"; it does not. `metallic` is a standalone alternative in that regex, so
+"Metallic Grey" **does** match it. The app can afford that looseness because the `filled` reason is
+the one an explicit `filament_abrasive = "0"` can suppress — the user has an escape hatch. A
+density ceiling has none: raise it by name and an ordinary filament silently accepts a corrupt
+4 g/cm³, trading a false positive for a false negative, which is the worse direction. So name
+matching is unsafe *here* specifically, and the tag stays the only evidence. Note also that adding
+tag 20 is only ever the remedy for a value above the CEILING — below the floor it changes nothing
+and marks the filament abrasive (see the density-floor note above).
 
 **Template violations (v1.70 #605).** A filament with variants is a template: colourless, no
 inventory. Enforcement is forward-only, so legacy parents keep whatever they had. Inventory
@@ -369,9 +372,12 @@ calibration's `fanMinSpeed`/`fanMaxSpeed` — which `prusaSlicerBundle` exports 
 soft-deleted nozzle still populates as a **truthy object carrying `_deletedAt`**, so a non-empty
 array is not evidence of an assignment: the checker separates live from stale entries and reports
 "effectively unassigned" when none survive. Same trap as the calibration-nozzle check above. Anything
-abrasive-related is left to the app's audit above, which also knows that the INDX nozzle is
-nitrocarburized, i.e. surface-treated only, and "not a substitute for a hardened nozzle on
-fibre-filled or metal-filled grades".
+abrasive-related is left to the app's audit above — and be precise about what that audit knows,
+because it has **no per-nozzle metallurgy**. `/api/abrasive-nozzles` treats a nozzle as unfit iff
+its Nozzle row's `hardened` is not exactly `true` (an unresolvable reference counts as unfit too),
+and nothing more. A surface-treated nozzle — nitrocarburized, nitrided — that someone recorded as
+`hardened: true` is therefore never reported, and that is a data-entry question the app cannot
+answer for you.
 
 **Colour** — malformed hex on the primary, the legacy `#808080` sentinel the pre-v1.70 form
 stamped on everything, and **every `secondaryColors` entry plus the array's 5-entry cap**. Those

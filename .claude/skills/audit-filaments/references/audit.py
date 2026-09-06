@@ -104,16 +104,31 @@ def _disp(v):
     return v if isinstance(v, str) and v else "?"
 
 
+_MAX_DOUBLE = 1.7976931348623157e308
+
+
 def num(v):
-    """A real number, or None.
+    """A real number IN THE DOUBLE RANGE, or None.
 
     Every direct comparison goes through this. A raw-driver sync, a restore or a
     legacy write can leave a string in a numeric field, and `0.7 <= "oops"`
     raises TypeError — which would abort the whole audit over one bad value,
     exactly the failure the per-record fetch guard exists to prevent. The bad
-    value is reported separately by `report_nonnumeric`.
+    value is reported separately by the `malformed_numerics` sweep, which walks
+    every schema-numeric leaf at any depth (its exclusions are OPAQUE_BAGS,
+    populated REFERENCE_FIELDS and RESPONSE_METADATA, so a future bounds table
+    over one of those would have no such companion row).
+
+    Python ints are unbounded while JS numbers are doubles, so a JSON body can
+    carry an integer no float can hold. Rejecting it here is what keeps
+    `float(...)` and `f"{x:.0f}"` at the call sites from raising OverflowError
+    and aborting the run.
     """
-    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    if isinstance(v, int) and abs(v) > _MAX_DOUBLE:
+        return None
+    return v
 
 
 # Free-form bags whose keys COLLIDE with schema numeric names by coincidence.
@@ -163,7 +178,14 @@ def malformed_numerics(node, path=""):
                 if not (k == "nozzle" and not _CAL_ELEMENT_RE.match(path)):
                     continue
             if k in NUMERIC_LEAF_NAMES:
+                # `num()` rejects an int past the double range so the comparison
+                # sites cannot raise OverflowError — which would leave such a
+                # value completely SILENT if the sweep did not name it here. It
+                # is genuinely broken data: JSON.stringify renders it null, so
+                # it cannot survive an export or a snapshot round-trip.
                 if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool)):
+                    yield where, v
+                elif isinstance(v, int) and not isinstance(v, bool) and abs(v) > _MAX_DOUBLE:
                     yield where, v
                 continue
             yield from malformed_numerics(v, where)
@@ -213,11 +235,13 @@ LOW_TEMP_TYPES = ("PCL", "FACILAN")
 # non-negative density. Applying an unfilled-polymer ceiling to them would report
 # correct data as invalid and invite a "fix" that corrupts every weight-to-length
 # calculation downstream.
-# Evidence is the OPT tag ALONE. Name matching is not safe here: "Metallic Grey"
-# and "Steel Blue" are pigments, and the app's own classifier requires the word
-# "fill" after metal/steel/iron for exactly that reason. A bare name match would
-# raise the ceiling to 12 for an ordinary filament and let a corrupt 4 g/cm3
-# through — a false negative in place of a false positive, which is worse.
+# Evidence is the OPT tag ALONE. Name matching is not safe HERE -- and not
+# because the app avoids it: FILLED_RE carries `metallic` as a standalone
+# alternative, so "Metallic Grey" DOES match it. The app can afford that because
+# `filled` is the one reason an explicit `filament_abrasive = "0"` suppresses.
+# A density ceiling has no such escape hatch: raised by name, an ordinary
+# filament silently accepts a corrupt 4 g/cm3 -- a false negative in place of a
+# false positive, which is worse.
 OPT_TAG_METAL_FILL = 20
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
@@ -277,7 +301,13 @@ def _js_number(x):
     while 0 < n <= 21, a leading `0.000…` while -6 < n <= 0, and exponential
     otherwise — with an unpadded exponent, unlike Python's `e-07`.
     """
-    f = float(x)
+    try:
+        f = float(x)
+    except OverflowError:
+        # An int past the double range is not representable as a JS number --
+        # the same answer JSON.stringify gives Infinity, which the screen below
+        # already maps to null.
+        return "null"
     if f != f or f in (float("inf"), float("-inf")):
         return "null"                       # JSON.stringify(NaN|Infinity) === null
     if f == 0:
@@ -841,6 +871,7 @@ def load(base, api_key, cache_dir=None):
             ref_index = {
                 "printers": _ids("printers"),
                 "bedTypes": _ids("bedTypes"),
+                "locations": _ids("locations"),
                 # Every row the collection HOLDS, trashed included: a
                 # soft-deleted target still populates as an object, so the
                 # existing soft-delete rows cover it. Only a target that is
@@ -1294,7 +1325,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     where_path in inherited_fields or plain in inherited_fields
                     or plain.split(".")[0] in inherited_fields):
                 continue
-            add("physical", f"{name}: {where_path} is {type(badv).__name__} ({badv!r}), not a "
+            add("physical", f"{name}: {where_path} is {type(badv).__name__} ({_short(repr(badv))}), not a "
                             f"number ({which_read}) -> malformed; checks on it are skipped", fid)
 
         # (legacy note) density/diameter are covered by the sweep above too.
@@ -1321,7 +1352,10 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # JavaScript's String.length counts UTF-16 CODE UNITS, so a
                 # non-BMP character (emoji) counts 2 where Python's len() counts
                 # 1: 10,000 emoji measure 10,002 here and 20,002 in the app.
-                measured = len(text.encode("utf-16-le")) // 2
+                # The helper, not a second inline copy of the same expression:
+                # its `surrogatepass` is what keeps a lone surrogate (legal in
+                # JSON, and JS counts it as one unit) from aborting the run.
+                measured = _utf16_len(text)
                 # The bag is FLAT by contract — a slicer key mapping to a scalar,
                 # or since #678 an array of scalars. validateSettingsBag checks
                 # only object-ness, the key count and the serialised LENGTH, so an
@@ -1347,6 +1381,26 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 if measured > MAX_SETTING_VALUE_LENGTH:
                     add("physical", f"{name}: settings.{k} is {measured} UTF-16 units, past the "
                                     f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
+
+        # A settings-bag `compatible_printers_condition` is the #1066 defect:
+        # PrusaSlicer evaluates it as a hard VISIBILITY filter, so a preset
+        # duplicated in the slicer from another printer's profile carries that
+        # printer's condition in and the synced preset then appears on NO other
+        # machine — silently, with no in-app cause. Read from the STORED bag, so
+        # a variant that merely inherits the pin has no own key and the row
+        # lands on the template that can clear it.
+        _own_bag = raw.get("settings")
+        if isinstance(_own_bag, dict):
+            for _pk in ("compatible_printers_condition", "compatible_printers"):
+                _pv = _own_bag.get(_pk)
+                if isinstance(_pv, str) and _pv.strip():
+                    add("structure", f"{name}: settings.{_pk} pins {_pv!r} -> PrusaSlicer treats "
+                                     f"this as a hard visibility filter, so the exported preset is "
+                                     f"HIDDEN on every printer that fails it, with nothing in the "
+                                     f"slicer to say why. It is editable on the form's Slicer tab; "
+                                     f"clearing it means writing an explicit empty string, not "
+                                     f"deleting the key (a null is PrusaSlicer's inherit marker)",
+                        fid)
 
         # --- inventory: what makes the remaining bar work --------------------
         # A pre-migration record carries its stock on the TOP-LEVEL totalWeight
@@ -1900,6 +1954,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # spool subdocument, so an ABSENT one is filled in on restore and is
             # not a defect — but a present-but-uncastable value fails the cast
             # exactly like the other two.
+            # A dangling `locationId` survives every other check: /inventory
+            # groups by it, and a spool pointing at a deleted Location joins no
+            # row, so the group renders as a SECOND "no location" bucket while
+            # the spool also vanishes from every `?kind=` filtered view. Same
+            # "cannot judge" posture as the calibration scope refs.
+            _loc_live = ref_index.get("locations") if isinstance(ref_index, dict) else None
+            _lid = sp.get("locationId")
+            if (isinstance(_loc_live, set) and _lid is not None and _lid != ""
+                    and not isinstance(_lid, (dict, list)) and str(_lid) not in _loc_live):
+                add("structure", f"{name}: spool {tag} locationId={str(_lid)!r} resolves to no "
+                                 f"Location row -> /inventory joins nothing for it, so the spool "
+                                 f"falls into a second 'no location' bucket and drops out of every "
+                                 f"kind-filtered view", fid)
             for _df in ("purchaseDate", "openedDate", "createdAt"):
                 _dv = sp.get(_df)
                 # `""` is NOT a bad date here: Mongoose's castDate returns null
