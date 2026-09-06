@@ -26,6 +26,7 @@ Exit status is 0 even when findings exist: this reports, it does not gate.
 """
 
 import argparse
+import decimal
 import json
 import os
 import re
@@ -236,28 +237,42 @@ MAX_SETTING_VALUE_LENGTH = 20_000
 
 
 def _js_number(x):
-    """Render a number as `JSON.stringify` would.
+    """Render a number exactly as `JSON.stringify` does.
 
-    Python and JavaScript disagree on numeric text, and the difference is not
-    cosmetic here: `json.dumps(1e20)` is `1e+20` (5 chars) while
-    `JSON.stringify(1e20)` is `100000000000000000000` (21). A settings value of
-    1,000 such numbers measures 6,001 in Python and 22,001 in the app — rejected
-    by validateSettingsBag, reported clean by this audit.
+    This implements ECMAScript's Number::toString rather than approximating it,
+    because the divergences from Python are not cosmetic when the result is
+    MEASURED against a 20,000-character limit:
 
-    ECMAScript writes decimal notation while the decimal exponent is under 21,
-    and its exponent carries no zero padding (`1e-7`, not Python's `1e-07`).
+      * `json.dumps(1e20)`  -> `1e+20`  (5)   JS -> `100000000000000000000` (21)
+      * `json.dumps(1e-6)`  -> `1e-06`  (5)   JS -> `0.000001`              (8)
+      * `repr(float(123456789012345678901))` gives the exact binary value
+        (`...683968`) where JS prints the shortest round-trip digits zero-padded
+        (`...680000`).
+
+    The rule, over the shortest round-trip digits `s` (length k) and the decimal
+    point position n: integer form while k <= n <= 21, a point inside the digits
+    while 0 < n <= 21, a leading `0.000…` while -6 < n <= 0, and exponential
+    otherwise — with an unpadded exponent, unlike Python's `e-07`.
     """
     f = float(x)
     if f != f or f in (float("inf"), float("-inf")):
-        return "null"                      # JSON.stringify(NaN|Infinity) === null
-    if f == int(f) and abs(f) < 1e21:
-        return str(int(f))
-    text = repr(f)
-    if "e" in text:
-        mant, exp = text.split("e")
-        n = int(exp)
-        text = f"{mant}e{'+' if n >= 0 else '-'}{abs(n)}"
-    return text
+        return "null"                       # JSON.stringify(NaN|Infinity) === null
+    if f == 0:
+        return "0"                          # and JSON.stringify(-0) === "0"
+    sign = "-" if f < 0 else ""
+    digits_t, exp = decimal.Decimal(repr(abs(f))).normalize().as_tuple()[1:]
+    s_dig = "".join(map(str, digits_t))
+    k = len(s_dig)
+    n = exp + k
+    if k <= n <= 21:
+        return sign + s_dig + "0" * (n - k)
+    if 0 < n <= 21:
+        return sign + s_dig[:n] + "." + s_dig[n:]
+    if -6 < n <= 0:
+        return sign + "0." + "0" * (-n) + s_dig
+    mant = s_dig[0] + ("." + s_dig[1:] if k > 1 else "")
+    e = n - 1
+    return f"{sign}{mant}e{'+' if e >= 0 else '-'}{abs(e)}"
 
 
 def _js_stringify(v):
@@ -450,7 +465,15 @@ def load(base, api_key, cache_dir=None):
     # The authoritative abrasive audit. A failure here must be visible, not
     # silently rendered as "no abrasive problems".
     try:
-        abrasive = fetch(f"{base}/api/abrasive-nozzles", api_key).get("findings", [])
+        payload = fetch(f"{base}/api/abrasive-nozzles", api_key)
+        # Defaulting a missing key to [] would render "no abrasive problems" for a
+        # 200 carrying an error object — the one category where a silent miss
+        # means a ruined nozzle. An unexpected shape is NOT CHECKED, not clean.
+        if isinstance(payload, dict) and isinstance(payload.get("findings"), list):
+            abrasive = payload["findings"]
+        else:
+            abrasive = {"error": f"unexpected response shape: {type(payload).__name__} "
+                                 f"without a 'findings' list"}
     except Exception as e:
         abrasive = {"error": str(e)}
     return records, abrasive, failed, listing_topology
@@ -574,7 +597,17 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             sv = raw.get(rf)
             # A non-string is already reported by the sweep above; reporting the
             # "" it was coerced to would be one defect wearing two rows.
-            if sv is None or rf in coerced_text or not isinstance(sv, str):
+            if rf in coerced_text:
+                continue
+            if sv is None:
+                # Absent or null. Especially invisible on a variant, where the
+                # resolved read inherits vendor/type from the template and looks
+                # complete.
+                add_shape("physical", f"{_disp(r.get('name'))}: {rf} is missing but the schema "
+                                      f"requires it -> written by a path that bypassed validation",
+                          ("required-text", rf))
+                continue
+            if not isinstance(sv, str):
                 continue
             empty = (str(sv).strip() == "") if trims else (sv == "")
             if empty:
@@ -686,6 +719,13 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # Then every numeric-named leaf at any depth, reported ONCE here so the
         # individual passes can skip quietly.
         for where_path, badv in malformed_numerics(r):
+            # A template storing a bad inheritable value appears in EVERY child's
+            # resolved read, so reporting it per child duplicates one defect across
+            # the family and points at rows that store null and cannot fix it. The
+            # template audits its own copy, so the child stays quiet — the same
+            # attribution the bounds path makes explicit via `_blame`.
+            if where_path in inherited_fields or where_path.split(".")[0] in inherited_fields:
+                continue
             add("physical", f"{name}: {where_path} is {type(badv).__name__} ({badv!r}), not a "
                             f"number -> malformed; checks on it are skipped", fid)
 
