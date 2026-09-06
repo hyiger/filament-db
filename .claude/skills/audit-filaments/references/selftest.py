@@ -55,9 +55,10 @@ def valid_res(**over):
         "optTags": [4], "secondaryColors": [],
         "temperatures": {"nozzle": 210, "bed": 60, "chamber": 0,
                          "nozzleFirstLayer": 215, "bedFirstLayer": 65,
-                         "nozzleRangeMin": 190, "nozzleRangeMax": 230},
-        "bedTypeTemps": [{"bedType": "Textured PEI", "temperature": 60}],
-        "dryingTemp": 45, "dryingTime": 240,
+                         "nozzleRangeMin": 190, "nozzleRangeMax": 230, "standby": 175},
+        "bedTypeTemps": [{"bedType": "Textured PEI", "temperature": 60,
+                          "firstLayerTemperature": 65}],
+        "dryingTemperature": 45, "dryingTime": 240,
         "minPrintSpeed": 20, "maxPrintSpeed": 200,
         "maxVolumetricSpeed": 12, "shrinkageXY": 0.3, "shrinkageZ": 0.1,
         "shoreA": None, "shoreD": 80, "transmissionDistance": 3,
@@ -69,8 +70,12 @@ def valid_res(**over):
             "extrusionMultiplier": 0.98, "pressureAdvance": 0.04,
             "maxVolumetricSpeed": 12, "fanMinSpeed": 20, "fanMaxSpeed": 100,
             "chamberTemp": 0, "nozzleTemp": 210, "bedTemp": 60,
+            "nozzleTempFirstLayer": 215, "bedTempFirstLayer": 65,
+            "temperatures": {"nozzle": 210, "bed": 60},
         }],
-        "presets": [{"name": "draft", "extrusionMultiplier": 0.99}],
+        "presets": [{"label": "draft", "extrusionMultiplier": 0.99,
+                     "temperatures": {"nozzle": 205, "nozzleFirstLayer": 210,
+                                      "bed": 60, "bedFirstLayer": 65}}],
         "settings": {"filament_abrasive": "0", "compatible_printers_condition": ""},
         "openprinttagSnapshot": {"density": 1.24},
         "spools": [{
@@ -303,6 +308,8 @@ def case_opt_tag_elements():
         ("optTags-float", [1.5], True),
         ("optTags-bool", [True], True),
         ("optTags-none", [None], True),
+        ("optTags-above-32bit", [4294967296], True),   # encoder truncates above 0xffffffff
+        ("optTags-at-ceiling", [4294967295], False),
         ("optTags-valid", [4, 31], False),
     ]:
         r = valid_res(optTags=tags)
@@ -318,11 +325,109 @@ def case_opt_tag_elements():
             bad(name, f"expected finding={want_finding}, got {hit} for optTags={tags!r}")
 
 
+
+# --- 7. FIXTURE COVERAGE: the fuzz only reaches paths the fixture has ---------
+# The reach of every fuzz above is bounded by valid_res(). A field the script
+# reads but the fixture omits is a field nothing probes -- and that is not
+# theoretical: `presets[].temperatures` was absent, so a malformed container
+# there went unreported until a reviewer found it by reading the code.
+#
+# So the fixture is checked against the script: every key audit.py reads with a
+# literal .get("...") must exist somewhere in the fixture, or be listed as
+# deliberately-not-a-record-field. A new .get on a record field fails here until
+# the fixture carries it, which is what keeps the fuzz's coverage from silently
+# shrinking as the script grows.
+NOT_RECORD_FIELDS = {
+    # /api/abrasive-nozzles payload
+    "filamentName", "filamentId", "reasons", "inheritedFrom", "softNozzles",
+    "flagMismatch", "unassigned", "findings", "error",
+    # listing projection / internal plumbing
+    "res", "raw", "hasCalibrations", "id",
+    # process environment, read by main() not by the audit
+    "FILAMENTDB_API_KEY", "FILAMENTDB_URL",
+}
+
+
+def case_fixture_covers_reads():
+    import re
+    src = io.open("audit.py").read() if False else open("audit.py").read()
+    read_keys = set(re.findall(r'\.get\(\s*"([A-Za-z_][A-Za-z0-9_]*)"', src))
+    have = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                have.add(k); collect(v)
+        elif isinstance(node, list):
+            for v in node:
+                collect(v)
+
+    collect(valid_res())
+    missing = sorted(read_keys - have - NOT_RECORD_FIELDS)
+    if missing:
+        bad("fixture-coverage",
+            "audit.py reads these keys, but the fixture has no such path, so NO fuzz "
+            "case ever probes them:\n    " + ", ".join(missing) +
+            "\n  Add them to valid_res(), or to NOT_RECORD_FIELDS if they are not "
+            "record fields.")
+    else:
+        ok("fixture-coverage")
+
+
+
+# --- 8. nested containers must be REPORTED, not merely survived --------------
+# The fuzz's contract is deliberately weak: it asserts audit() returns. That
+# catches the crash half of the shape class and is blind to the other half --
+# a malformed container that is skipped in silence, leaving the record declared
+# clean. `presets[].temperatures: "oops"` was exactly that: no crash, no finding.
+# So every nested container gets a positive assertion that the defect is named.
+# Listed HERE, not read from A.NESTED_CONTAINER_SHAPES. Sourcing a test's own
+# case list from the table under test makes it vacuous the moment that table is
+# emptied -- and untestable against any version that predates it, which is
+# exactly how this case first appeared to pass against the broken code.
+NESTED_CONTAINERS = [("spools", "usageHistory"), ("spools", "dryCycles"),
+                     ("presets", "temperatures"), ("calibrations", "temperatures")]
+
+
+def case_nested_containers_reported():
+    for parent, sf in NESTED_CONTAINERS:
+        if True:
+            for hv in ("oops", 1, [1]):
+                r = valid_res()
+                lst = r.get(parent) or []
+                if not lst or not isinstance(lst[0], dict):
+                    bad(f"nested-{parent}.{sf}",
+                        f"fixture has no {parent}[0] dict to corrupt — the case cannot run")
+                    break
+                if isinstance(hv, type(lst[0].get(sf))) and lst[0].get(sf) is not None:
+                    continue  # not actually malformed for this field
+                lst[0][sf] = hv
+                try:
+                    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+                except Exception as e:
+                    bad(f"nested-{parent}.{sf}", f"raised on {hv!r}: {type(e).__name__}: {e}")
+                    continue
+                # Match the SEMANTIC claim (this subfield is malformed), not the
+                # parent key literal: an earlier version keyed on "spools" while
+                # the message said "spool <id>", so it reported a pre-existing,
+                # correctly-reported case as a regression.
+                hit = any(sf in m and "malformed" in m
+                          for rows in findings.values() for _, m in rows)
+                if hit:
+                    ok(f"nested-{parent}.{sf}-{hv!r}")
+                else:
+                    bad(f"nested-{parent}.{sf}",
+                        f"{parent}[0].{sf}={hv!r} produced NO finding -> a malformed "
+                        f"container was silently declared clean")
+
+
 if __name__ == "__main__":
     case_valid()
     case_record_containers()
     case_side_inputs()
+    case_fixture_covers_reads()
     case_opt_tag_elements()
+    case_nested_containers_reported()
     n, ncrash = fuzz_shapes()
     n2, ncrash2 = fuzz_cross_record()
     n += n2; ncrash += ncrash2

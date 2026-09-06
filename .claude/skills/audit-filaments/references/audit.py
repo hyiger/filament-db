@@ -81,7 +81,11 @@ def _strip_ids(value):
     return value
 
 
-MAX_CBOR_UINT = 2 ** 64 - 1
+# 0xffffffff, NOT 2**64-1. Verified against src/lib/openprinttag.ts:214 — the
+# encoder's arithmetic is 32-bit and truncates above this, so a larger tag is
+# rejected there. Mirroring the app's EXPRESSION while guessing the constant's
+# value from its name is how this was wrong the first time.
+MAX_CBOR_UINT = 0xFFFFFFFF
 
 
 def _encodable_opt_tag(t):
@@ -227,9 +231,16 @@ CONTAINER_SHAPES = {
     "secondaryColors": list, "optTags": list, "compatibleNozzles": list,
 }
 
-# Containers nested INSIDE a spool. CONTAINER_SHAPES only reaches the top level,
-# so a spool holding `usageHistory: 3` was iterated directly and aborted the run.
-SPOOL_CONTAINER_SHAPES = {"usageHistory": list, "dryCycles": list}
+# Containers nested one level down, keyed by the list that holds them.
+# CONTAINER_SHAPES only reaches the top level, so a spool holding
+# `usageHistory: 3` was iterated directly and aborted the run, and a preset
+# holding `temperatures: "oops"` was skipped in silence. Keyed by parent so a new
+# subdocument container is one table entry rather than another bespoke guard.
+NESTED_CONTAINER_SHAPES = {
+    "spools": {"usageHistory": list, "dryCycles": list},
+    "presets": {"temperatures": dict},
+    "calibrations": {"temperatures": dict},
+}
 
 # Scalar STRING fields. Mongoose casts most of these, but a raw-driver write, a
 # hybrid-sync copy or a restored snapshot can leave a number, a list or a dict
@@ -464,17 +475,19 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     add("physical", f"{nm}: {cf} is {type(cv).__name__}, not a {want.__name__} "
                                     f"({which}) -> malformed; treated as empty", str(fid))
                     doc[cf] = want()
-            # …and the containers one level down, inside each spool.
-            for sp in (doc.get("spools") or []):
-                if not isinstance(sp, dict):
-                    continue
-                for sf, swant in SPOOL_CONTAINER_SHAPES.items():
-                    sv = sp.get(sf)
-                    if sv is not None and not isinstance(sv, swant):
-                        add("physical", f"{nm}: spool {sp.get('instanceId') or sp.get('_id')} "
-                                        f"{sf} is {type(sv).__name__}, not a {swant.__name__} "
-                                        f"({which}) -> malformed; treated as empty", str(fid))
-                        sp[sf] = swant()
+            # …and the containers one level down, in every list that has them.
+            for parent_key, subshapes in NESTED_CONTAINER_SHAPES.items():
+                for idx, sub in enumerate(doc.get(parent_key) or []):
+                    if not isinstance(sub, dict):
+                        continue
+                    tag = sub.get("instanceId") or sub.get("label") or sub.get("_id") or idx
+                    for sf, swant in subshapes.items():
+                        sv = sub.get(sf)
+                        if sv is not None and not isinstance(sv, swant):
+                            add("physical", f"{nm}: {parent_key}[{tag}] {sf} is "
+                                            f"{type(sv).__name__}, not a {swant.__name__} "
+                                            f"({which}) -> malformed; treated as empty", str(fid))
+                            sub[sf] = swant()
         # optTags ELEMENT validity. The container check above accepts a list of
         # anything, but the schema's setter and the CBOR encoder both keep only
         # non-negative integers, and the app's abrasive audit matches tags
