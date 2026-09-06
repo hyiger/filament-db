@@ -200,6 +200,19 @@ def audit(records, abrasive):
         all_spools = r.get("spools") or []
         live_spools = [s for s in all_spools if not s.get("retired")]
 
+        # --- settings bag shape ----------------------------------------------
+        # `settings` is Mixed, so a legacy row can hold a string or an array.
+        # Checked for EVERY record, not just variants: resolveFilament spreads a
+        # parent's bag into each child's effective settings, so a malformed one on
+        # a template reaches every colour in the family and its slicer exports,
+        # and a standalone never enters the pin block at all.
+        own_settings = raw.get("settings")
+        if own_settings is not None and not isinstance(own_settings, dict):
+            where = " (TEMPLATE — this spreads into every variant's effective settings " \
+                    "and their slicer exports)" if is_template else ""
+            add("physical", f"{name}: settings is {type(own_settings).__name__}, not an object -> "
+                            f"malformed bag{where}")
+
         # --- inventory: what makes the remaining bar work --------------------
         # A pre-migration record carries its stock on the TOP-LEVEL totalWeight
         # with no spools[] subdocument, and the app counts that as one tracked
@@ -346,13 +359,11 @@ def audit(records, abrasive):
             # category.
             own_set = raw.get("settings") or {}
             par_set = parent_eff.get("settings") or {}
-            # `settings` is a Mixed field. A legacy row can hold a string or an
-            # array here, which is truthy but has no .items() — calling it would
-            # abort the whole audit with an AttributeError and report nothing at
-            # all, on exactly the historical data this skill exists to inspect.
+            # A malformed bag on either side is already reported by the shape
+            # check above; here it only needs to not crash. Calling .items() on a
+            # legacy string or array would abort the whole audit with an
+            # AttributeError and report nothing at all.
             if not isinstance(own_set, dict):
-                add("physical", f"{name}: settings is {type(own_set).__name__}, not an object -> "
-                                f"malformed bag, settings pins not checked")
                 own_set = {}
             if not isinstance(par_set, dict):
                 par_set = {}

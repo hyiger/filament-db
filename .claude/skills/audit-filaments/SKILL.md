@@ -16,10 +16,27 @@ This is the **read-and-report** counterpart to `add-filament`. That skill puts o
 correctly; this one finds the ones that went in wrong — including the ones that went in wrong
 years ago through a form that no longer exists.
 
-Run the checker, then triage. The script is mechanical; the judgement is yours.
+Set these up first — the repair commands later in this skill all use `$BASE`, and it is empty
+until you do. The script takes its own `--base`, which is internal to Python and creates no shell
+variable, so a `curl "$BASE/api/..."` after an otherwise successful audit would be sent to a URL
+with no host.
 
 ```bash
-python3 .claude/skills/audit-filaments/references/audit.py
+BASE="${FILAMENTDB_URL:-http://localhost:3456}"
+BASE="${BASE%/}"                 # a trailing slash yields //api/... and a 308
+AUTH=""
+[ -n "${FILAMENTDB_API_KEY:-}" ] && AUTH="Authorization: Bearer $FILAMENTDB_API_KEY"
+curl -s ${AUTH:+-H "$AUTH"} -o /dev/null -w '%{http_code}\n' "$BASE/api/filaments"
+```
+
+Expect `200`. A connection error means the app is not running — say so and stop rather than
+auditing nothing. A `401` means the instance sets `FILAMENTDB_API_KEY`; export it and retry.
+Pass `${AUTH:+-H "$AUTH"}` on every later call; the examples below omit it only to stay readable.
+
+Then run the checker and triage. The script is mechanical; the judgement is yours.
+
+```bash
+python3 .claude/skills/audit-filaments/references/audit.py --base "$BASE"
 ```
 
 Options: `--base` (default `http://localhost:3456`, or `$FILAMENTDB_URL`), `--api-key` (or
