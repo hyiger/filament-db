@@ -350,6 +350,9 @@ NOT_RECORD_FIELDS = {
     "flagMismatch", "unassigned", "findings", "error",
     # listing projection / internal plumbing
     "res", "raw", "hasCalibrations", "id",
+    # /api/snapshot envelope, read only by the discovery fallback that runs when
+    # the listing aggregation errors on a malformed container
+    "collections", "filaments",
     # process environment, read by main() not by the audit
     "FILAMENTDB_API_KEY", "FILAMENTDB_URL",
 }
@@ -529,7 +532,9 @@ def case_only_flag_rejects_unknown():
     import contextlib, io as _io
     def run_main(argv):
         orig_load, orig_argv = A.load, sys.argv
-        A.load = lambda *a, **k: ({"a": rec(valid_res(dryingTime=4))}, [], {}, {})
+        # load() returns (records, abrasive, failed, topology, degraded);
+        # the last is the discovery-fallback note.
+        A.load = lambda *a, **k: ({"a": rec(valid_res(dryingTime=4))}, [], {}, {}, None)
         sys.argv = ["audit.py"] + argv
         out, err, code = _io.StringIO(), _io.StringIO(), 0
         try:

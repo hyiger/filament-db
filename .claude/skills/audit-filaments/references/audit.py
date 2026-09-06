@@ -450,19 +450,56 @@ def fetch(url, api_key=None, timeout=30):
 
 def load(base, api_key, cache_dir=None):
     """Return (records, abrasive_findings). records[id] = {'res':…, 'raw':…}."""
+    # DISCOVERY. The listing is an aggregation: `$size` over secondaryColors /
+    # calibrations and `$map` over spools all ERROR on a non-array — which are
+    # precisely the shapes this audit exists to find. So one corrupt row can
+    # break the very read that discovers the records, and the whole library goes
+    # unaudited. On failure, fall back to the snapshot export, which is a plain
+    # `find().lean()` and therefore shape-tolerant.
+    degraded = None
+    listing = None
     try:
         listing = fetch(f"{base}/api/filaments", api_key)
     except urllib.error.HTTPError as e:
-        sys.exit(f"lookup failed: HTTP {e.code}. 401 = this instance sets FILAMENTDB_API_KEY; pass --api-key.")
+        if e.code == 401:
+            sys.exit("lookup failed: HTTP 401. This instance sets FILAMENTDB_API_KEY; pass --api-key.")
+        degraded = f"HTTP {e.code}"
     except Exception as e:
-        sys.exit(f"lookup failed: {e}. Is the app running at {base}?")
+        degraded = f"{type(e).__name__}: {e}"
 
-    if not isinstance(listing, list):
-        sys.exit("unexpected /api/filaments response shape")
-    ids = [f["_id"] for f in listing]
-    # hasVariants comes straight from the listing aggregation, so it stays true
-    # even when a child's detail read fails below.
-    listing_topology = {str(f["_id"]): bool(f.get("hasVariants")) for f in listing}
+    if listing is None or not isinstance(listing, list):
+        if listing is not None and degraded is None:
+            degraded = f"unexpected response shape: {type(listing).__name__}"
+        try:
+            snap = fetch(f"{base}/api/snapshot", api_key)
+            rows = ((snap.get("collections") or {}).get("filaments")
+                    if isinstance(snap, dict) else None) or []
+            # The snapshot carries trashed and purged rows too; the listing does
+            # not, and every later check assumes ACTIVE records.
+            listing = [{"_id": str(x.get("_id")), "parentId": x.get("parentId"),
+                        "hasVariants": False}
+                       for x in rows if isinstance(x, dict)
+                       and x.get("_deletedAt") in (None, "") and not x.get("_purged")]
+            # ACTIVE children only, matching the listing's own hasVariants: a
+            # parent whose sole variant is trashed is not a template, and
+            # counting it as one would make the fallback disagree with the
+            # normal path (13 templates against 12 on the library under test).
+            parents_seen = {str(x.get("parentId")) for x in rows
+                            if isinstance(x, dict) and x.get("parentId")
+                            and x.get("_deletedAt") in (None, "") and not x.get("_purged")}
+            for row in listing:
+                row["hasVariants"] = row["_id"] in parents_seen
+            degraded = (f"the /api/filaments listing failed ({degraded}); records were discovered "
+                        f"through the snapshot export instead. That listing is an aggregation and "
+                        f"errors on exactly the malformed containers this audit looks for, so the "
+                        f"failure itself is likely a finding — check the shape rows below.")
+        except Exception as e:
+            sys.exit(f"lookup failed: {degraded}; the snapshot fallback also failed "
+                     f"({type(e).__name__}: {e}). Is the app running at {base}?")
+
+    ids = [str(f["_id"]) for f in listing if isinstance(f, dict) and f.get("_id") is not None]
+    listing_topology = {str(f["_id"]): bool(f.get("hasVariants"))
+                        for f in listing if isinstance(f, dict) and f.get("_id") is not None}
     if not ids:
         sys.exit("no filaments returned — refusing to report a clean audit of an empty read")
 
@@ -505,10 +542,10 @@ def load(base, api_key, cache_dir=None):
                                  f"without a 'findings' list"}
     except Exception as e:
         abrasive = {"error": str(e)}
-    return records, abrasive, failed, listing_topology
+    return records, abrasive, failed, listing_topology, degraded
 
 
-def audit(records, abrasive, failed=None, listing_topology=None):
+def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
     findings = {}
 
     # Side inputs are guarded here, not at each use. They arrive from separate
@@ -528,6 +565,9 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # message identifies a filament by name. Deduping on text would collapse
         # two real defects into one row and hide the second record entirely.
         findings.setdefault(cat, []).append((fid, msg))
+
+    if degraded:
+        add("structure", f"DISCOVERY DEGRADED: {degraded}", None)
 
     for bad_id, err in (failed or {}).items():
         add("structure", f"filament {bad_id}: could NOT be read ({err}) -> it was not audited", bad_id)
@@ -1166,9 +1206,15 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     # `source` carries `default: "manual"`, so a properly written
                     # entry always has one — an explicit null means it was written
                     # past validation, and analytics then skips it.
-                    if "source" in ue and (not isinstance(src_v, str)
-                                           or src_v not in USAGE_SOURCES):
-                        add("physical", f"{name}: spool {tag} usage source={src_v!r} is not one of "
+                    # Absent as well as null: the schema DEFAULTS this to
+                    # "manual", so a properly written entry always carries one,
+                    # and analytics counts only exact "manual" — an omitted
+                    # source removes that usage from the totals just as a null
+                    # does. Legacy rows predating the field land here too, which
+                    # is correct: their usage is genuinely missing from analytics.
+                    if not isinstance(src_v, str) or src_v not in USAGE_SOURCES:
+                        _shown = "absent" if "source" not in ue else repr(src_v)
+                        add("physical", f"{name}: spool {tag} usage source={_shown} is not one of "
                                         f"{sorted(USAGE_SOURCES)} -> analytics counts only exact "
                                         f"'manual', so this entry silently drops out of the manual "
                                         f"usage and cost totals", fid)
@@ -1385,8 +1431,8 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    records, abrasive, failed, topology = load(base, args.api_key, args.cache)
-    findings, parents, audited = audit(records, abrasive, failed, topology)
+    records, abrasive, failed, topology, degraded = load(base, args.api_key, args.cache)
+    findings, parents, audited = audit(records, abrasive, failed, topology, degraded)
 
     # A filter that matches NO known category must never render as a clean audit.
     # `--only abrasives` (plural) printed "0 findings" over a library with a real
