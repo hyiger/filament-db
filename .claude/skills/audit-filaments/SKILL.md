@@ -147,7 +147,9 @@ are exempt: an abstract product line legitimately carries none of it.
 
 **Physical values** — every numeric field against the **schema's own bounds**, mirrored in
 `NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API,
-so a violation proves the row arrived by a path that bypassed validation — a raw-driver sync copy,
+so a violation proves the row arrived by a path that bypassed validation (the settings bag's
+own limits — 400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored
+the same way) — a raw-driver sync copy,
 a snapshot restore, or a legacy write — and both exporters serialise these straight into the
 preset. That covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three
 fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
@@ -282,8 +284,16 @@ abrasive-related is left to the app's audit above, which also knows that the IND
 nitrocarburized, i.e. surface-treated only, and "not a substitute for a hardened nozzle on
 fibre-filled or metal-filled grades".
 
-**Colour** — malformed hex, and the legacy `#808080` sentinel the pre-v1.70 form stamped on
-everything.
+**Colour** — malformed hex on the primary, the legacy `#808080` sentinel the pre-v1.70 form
+stamped on everything, and **every `secondaryColors` entry plus the array's 5-entry cap**. Those
+are observable, not cosmetic: the OpenPrintTag encoder silently skips an invalid entry and
+truncates extras, and a slicer export can use the first secondary when the primary is null.
+
+**A record that cannot be read is reported, not fatal.** One row that vanished between the listing
+and the detail read, or whose GET route 500s, used to abort the whole run before anything was
+rendered — one bad row hiding every other row's defects. Each failure now becomes a `structure`
+finding naming the id, and the audit continues; only an all-failed read exits, rather than
+reporting a clean library.
 
 ## When the finding is right but the obvious fix is wrong
 

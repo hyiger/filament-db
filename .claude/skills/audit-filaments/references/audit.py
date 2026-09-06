@@ -144,6 +144,12 @@ CALIBRATION_BOUNDS = {
     "retractSpeed": (0, None), "retractLift": (0, None),
     "fanMinSpeed": (0, 100), "fanMaxSpeed": (0, 100), "fanBridgeSpeed": (0, 100),
 }
+# Mirrored from src/lib/slicerSettings.ts — validateSettingsBag rejects these,
+# so a bag past either limit bloats every detail read and every export.
+MAX_SETTINGS_KEYS = 400
+MAX_SETTING_VALUE_LENGTH = 20_000
+MAX_SECONDARY_COLORS = 5   # OpenPrintTag spec limit, enforced by the schema
+
 CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
 
 # Cross-field ORDERING. Each endpoint can satisfy its own bound while the pair is
@@ -216,8 +222,16 @@ def load(base, api_key, cache_dir=None):
         sys.exit("no filaments returned — refusing to report a clean audit of an empty read")
 
     def one(i):
-        res = fetch(f"{base}/api/filaments/{i}", api_key)
-        raw = fetch(f"{base}/api/filaments/{i}?raw=true", api_key)
+        # A record can vanish between the listing and the detail read, or a
+        # corrupted restored row can 500 its own GET route. Letting that
+        # propagate out of pool.map would abort the entire audit before ANY
+        # finding is rendered — one bad row hiding every other row's defects,
+        # which is the opposite of what this tool is for.
+        try:
+            res = fetch(f"{base}/api/filaments/{i}", api_key)
+            raw = fetch(f"{base}/api/filaments/{i}?raw=true", api_key)
+        except Exception as e:  # noqa: BLE001 - reported, never swallowed
+            return i, {"error": f"{type(e).__name__}: {e}"}
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             json.dump(res, open(os.path.join(cache_dir, f"{i}.resolved.json"), "w"))
@@ -225,7 +239,12 @@ def load(base, api_key, cache_dir=None):
         return i, {"res": res, "raw": raw}
 
     with ThreadPoolExecutor(max_workers=8) as pool:
-        records = dict(pool.map(one, ids))
+        fetched = dict(pool.map(one, ids))
+    failed = {i: v["error"] for i, v in fetched.items() if "error" in v}
+    records = {i: v for i, v in fetched.items() if "error" not in v}
+    if not records:
+        sys.exit(f"every detail read failed (e.g. {next(iter(failed.values()), '?')}) — "
+                 f"refusing to report a clean audit")
 
     # The authoritative abrasive audit. A failure here must be visible, not
     # silently rendered as "no abrasive problems".
@@ -233,10 +252,10 @@ def load(base, api_key, cache_dir=None):
         abrasive = fetch(f"{base}/api/abrasive-nozzles", api_key).get("findings", [])
     except Exception as e:
         abrasive = {"error": str(e)}
-    return records, abrasive
+    return records, abrasive, failed
 
 
-def audit(records, abrasive):
+def audit(records, abrasive, failed=None):
     findings = {}
 
     def add(cat, msg, fid=None):
@@ -245,6 +264,9 @@ def audit(records, abrasive):
         # message identifies a filament by name. Deduping on text would collapse
         # two real defects into one row and hide the second record entirely.
         findings.setdefault(cat, []).append((fid, msg))
+
+    for bad_id, err in (failed or {}).items():
+        add("structure", f"filament {bad_id}: could NOT be read ({err}) -> it was not audited", bad_id)
 
     # Filaments the authoritative audit already reported as having no nozzle
     # assignment. The generic check below must not restate the same defect.
@@ -299,6 +321,16 @@ def audit(records, abrasive):
                     "and their slicer exports)" if is_template else ""
             add("physical", f"{name}: settings is {type(own_settings).__name__}, not an object -> "
                             f"malformed bag{where}", fid)
+        elif isinstance(own_settings, dict):
+            if len(own_settings) > MAX_SETTINGS_KEYS:
+                add("physical", f"{name}: settings holds {len(own_settings)} keys, past the "
+                                f"{MAX_SETTINGS_KEYS}-key limit validateSettingsBag enforces -> "
+                                f"bloats every detail read and export", fid)
+            for k, v in own_settings.items():
+                text = v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
+                if len(text) > MAX_SETTING_VALUE_LENGTH:
+                    add("physical", f"{name}: settings.{k} is {len(text)} characters, past the "
+                                    f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
 
         # --- inventory: what makes the remaining bar work --------------------
         # A pre-migration record carries its stock on the TOP-LEVEL totalWeight
@@ -526,6 +558,16 @@ def audit(records, abrasive):
         # #808080 is the legacy default the pre-v1.70 form stamped on everything,
         # but it is ALSO the correct hex for a filament that really is grey.
         cname = (r.get("colorName") or "").lower()
+        secondaries = r.get("secondaryColors") or []
+        if isinstance(secondaries, list):
+            if len(secondaries) > MAX_SECONDARY_COLORS:
+                add("colour", f"{name}: {len(secondaries)} secondaryColors, past the OpenPrintTag "
+                              f"limit of {MAX_SECONDARY_COLORS} -> the encoder truncates the extras", fid)
+            for pos, sc in enumerate(secondaries):
+                if not (isinstance(sc, str) and HEX6.match(sc)):
+                    add("colour", f"{name}: secondaryColors[{pos}]={sc!r} is not #RRGGBB -> the OPT "
+                                  f"encoder skips it, and a slicer export may use it when the "
+                                  f"primary colour is null", fid)
         if col == "#808080" and "grey" not in cname and "gray" not in cname:
             add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})", fid)
 
@@ -671,8 +713,8 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    records, abrasive = load(base, args.api_key, args.cache)
-    findings, parents = audit(records, abrasive)
+    records, abrasive, failed = load(base, args.api_key, args.cache)
+    findings, parents = audit(records, abrasive, failed)
 
     wanted = set(args.only.split(",")) if args.only else None
 
