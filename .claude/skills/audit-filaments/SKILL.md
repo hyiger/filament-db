@@ -58,6 +58,10 @@ request time — that live inheritance is the feature. The existing script reads
 and reports every inherited field as "missing", which on a library with a dozen templates is most
 of the output and buries everything real.
 
+Template-ness comes from the **listing's** `hasVariants`, not only from the loaded records: if a
+template's sole variant fails its detail read, deriving topology from what loaded would reclassify
+the parent as a standalone and invent missing-core and nozzle findings against it.
+
 So the checker fetches each filament **twice**: `GET /api/filaments/{id}` (resolved — what the app
 and the slicer actually see) and `?raw=true` (stored — what this row owns). Missing-ness is judged
 on the resolved read, and ownership questions on the raw one. Keep that distinction if you extend
@@ -288,6 +292,12 @@ fibre-filled or metal-filled grades".
 stamped on everything, and **every `secondaryColors` entry plus the array's 5-entry cap**. Those
 are observable, not cosmetic: the OpenPrintTag encoder silently skips an invalid entry and
 truncates extras, and a slicer export can use the first secondary when the primary is null.
+
+**A malformed value is reported, not fatal — and neither is an unreadable record.** Both are the
+same hazard: one corrupt row killing the run. A raw-driver sync, a restore or a legacy write can
+leave a *string* in a numeric field, and `0.7 <= "oops"` raises `TypeError`, so every direct
+comparison goes through a `num()` helper that yields `None` for a non-number while the bad value is
+reported separately. Do not "simplify" those back to bare comparisons.
 
 **A record that cannot be read is reported, not fatal.** One row that vanished between the listing
 and the detail read, or whose GET route 500s, used to abort the whole run before anything was

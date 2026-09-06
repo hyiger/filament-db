@@ -73,6 +73,18 @@ def _strip_ids(value):
     return value
 
 
+def num(v):
+    """A real number, or None.
+
+    Every direct comparison goes through this. A raw-driver sync, a restore or a
+    legacy write can leave a string in a numeric field, and `0.7 <= "oops"`
+    raises TypeError — which would abort the whole audit over one bad value,
+    exactly the failure the per-record fetch guard exists to prevent. The bad
+    value is reported separately by `report_nonnumeric`.
+    """
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
 def _json_equal(a, b):
     """Equality with JSON type semantics.
 
@@ -218,6 +230,9 @@ def load(base, api_key, cache_dir=None):
     if not isinstance(listing, list):
         sys.exit("unexpected /api/filaments response shape")
     ids = [f["_id"] for f in listing]
+    # hasVariants comes straight from the listing aggregation, so it stays true
+    # even when a child's detail read fails below.
+    listing_topology = {str(f["_id"]): bool(f.get("hasVariants")) for f in listing}
     if not ids:
         sys.exit("no filaments returned — refusing to report a clean audit of an empty read")
 
@@ -252,10 +267,10 @@ def load(base, api_key, cache_dir=None):
         abrasive = fetch(f"{base}/api/abrasive-nozzles", api_key).get("findings", [])
     except Exception as e:
         abrasive = {"error": str(e)}
-    return records, abrasive, failed
+    return records, abrasive, failed, listing_topology
 
 
-def audit(records, abrasive, failed=None):
+def audit(records, abrasive, failed=None, listing_topology=None):
     findings = {}
 
     def add(cat, msg, fid=None):
@@ -300,6 +315,13 @@ def audit(records, abrasive, failed=None):
     # dangling link itself).
     parents = {str(v["raw"]["parentId"]) for v in records.values()
                if v["raw"].get("parentId") and str(v["raw"]["parentId"]) in records}
+    # A template whose ONLY variant failed its detail read would otherwise be
+    # reclassified as a standalone — inviting false missing-core and nozzle
+    # findings and skipping its template-state checks. The listing already
+    # carries the topology, so trust it when a child could not be loaded.
+    for lid, flag in (listing_topology or {}).items():
+        if flag and lid in records:
+            parents.add(lid)
 
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
@@ -308,6 +330,19 @@ def audit(records, abrasive, failed=None):
         is_template = fid in parents
         all_spools = r.get("spools") or []
         live_spools = [s for s in all_spools if not s.get("retired")]
+
+        # A numeric field holding a non-number is malformed AND would crash every
+        # comparison below, so report it and let `num()` treat it as absent.
+        for fld in NUMERIC_BOUNDS:
+            val = r.get(fld)
+            if val is not None and num(val) is None:
+                add("physical", f"{name}: {fld} is {type(val).__name__} ({val!r}), not a number -> "
+                                f"malformed; every check on it is skipped", fid)
+        for fld in ("density", "diameter"):
+            val = r.get(fld)
+            if val is not None and num(val) is None:
+                add("physical", f"{name}: {fld} is {type(val).__name__} ({val!r}), not a number -> "
+                                f"malformed; every check on it is skipped", fid)
 
         # --- settings bag shape ----------------------------------------------
         # `settings` is Mixed, so a legacy row can hold a string or an array.
@@ -327,7 +362,11 @@ def audit(records, abrasive, failed=None):
                                 f"{MAX_SETTINGS_KEYS}-key limit validateSettingsBag enforces -> "
                                 f"bloats every detail read and export", fid)
             for k, v in own_settings.items():
-                text = v if isinstance(v, str) else json.dumps(v, separators=(",", ":"))
+                # validateSettingsBag measures JSON.stringify(value ?? null), so a
+                # string's quotes and escapes COUNT: 10,001 quote characters
+                # measure as 10,001 raw but serialise to 20,004 and are rejected.
+                text = json.dumps(v if v is not None else None, ensure_ascii=False,
+                                  separators=(",", ":"))
                 if len(text) > MAX_SETTING_VALUE_LENGTH:
                     add("physical", f"{name}: settings.{k} is {len(text)} characters, past the "
                                     f"{MAX_SETTING_VALUE_LENGTH}-character limit", fid)
@@ -342,23 +381,23 @@ def audit(records, abrasive, failed=None):
         legacy_roll = not all_spools and r.get("totalWeight") is not None
         if live_spools or legacy_roll:
             unit = "legacy top-level roll" if legacy_roll else f"{len(live_spools)} live spool(s)"
-            net = r.get("netFilamentWeight")
+            net = num(r.get("netFilamentWeight"))
             # getRemainingPct rejects a non-positive denominator, not just null.
             if net is None or net <= 0:
                 add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar", fid)
-            tare = r.get("spoolWeight")
+            tare = num(r.get("spoolWeight"))
             if tare is None:
                 add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> "
                                  f"computeRemaining returns null, nothing displays", fid)
 
             if legacy_roll:
-                gross = r.get("totalWeight")
+                gross = num(r.get("totalWeight"))
                 if tare is not None and gross < tare:
                     add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining", fid)
             else:
                 missing_gross = 0
                 for s in live_spools:
-                    gross = s.get("totalWeight")
+                    gross = num(s.get("totalWeight"))
                     if gross is None:
                         # Schema-supported, but getRemainingPct skips such a spool
                         # and returns null outright when none is left countable.
@@ -372,7 +411,7 @@ def audit(records, abrasive, failed=None):
                                      f"getRemainingPct returns null, no bar at all", fid)
 
         # --- drying: the field is minutes, every datasheet says hours --------
-        dry_t, dry_temp = r.get("dryingTime"), r.get("dryingTemperature")
+        dry_t, dry_temp = num(r.get("dryingTime")), num(r.get("dryingTemperature"))
         # Gated on a drying TEMPERATURE being present: without it, a small value
         # may be a deliberate duration rather than an hours-for-minutes slip, and
         # this is the documented heuristic.
@@ -390,9 +429,9 @@ def audit(records, abrasive, failed=None):
         # every temperature the record carries FIRST, then check them uniformly;
         # a new temperature-bearing field needs adding to one of these lists and
         # nothing else.
-        noz, lo, hi, bed = (temps.get("nozzle"), temps.get("nozzleRangeMin"),
-                            temps.get("nozzleRangeMax"), temps.get("bed"))
-        nfl, bfl = temps.get("nozzleFirstLayer"), temps.get("bedFirstLayer")
+        noz, lo, hi, bed = (num(temps.get("nozzle")), num(temps.get("nozzleRangeMin")),
+                            num(temps.get("nozzleRangeMax")), num(temps.get("bed")))
+        nfl, bfl = num(temps.get("nozzleFirstLayer")), num(temps.get("bedFirstLayer"))
         def ordering_check(container, pairs, cat, where=""):
             if not isinstance(container, dict):
                 return
@@ -425,11 +464,11 @@ def audit(records, abrasive, failed=None):
                 add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
                                  f"{noz_name!r} -> the tuning is unreachable", fid)
             ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ")
-            nozzle_like += [(f"{where} nozzleTemp", cal.get("nozzleTemp")),
-                            (f"{where} nozzleTempFirstLayer", cal.get("nozzleTempFirstLayer"))]
-            bed_like += [(f"{where} bedTemp", cal.get("bedTemp")),
-                         (f"{where} bedTempFirstLayer", cal.get("bedTempFirstLayer"))]
-            chamber = cal.get("chamberTemp")
+            nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
+                            (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
+            bed_like += [(f"{where} bedTemp", num(cal.get("bedTemp"))),
+                         (f"{where} bedTempFirstLayer", num(cal.get("bedTempFirstLayer")))]
+            chamber = num(cal.get("chamberTemp"))
             if chamber is not None and not 0 <= chamber <= CHAMBER_MAX:
                 add("temps", f"{name}: {where} chamberTemp {chamber}C outside 0-{CHAMBER_MAX}C", fid)
 
@@ -440,8 +479,8 @@ def audit(records, abrasive, failed=None):
             if not isinstance(bt, dict):
                 continue
             plate = bt.get("bedType") or "?"
-            bed_like += [(f"bedTypeTemps[{plate}] temperature", bt.get("temperature")),
-                         (f"bedTypeTemps[{plate}] firstLayerTemperature", bt.get("firstLayerTemperature"))]
+            bed_like += [(f"bedTypeTemps[{plate}] temperature", num(bt.get("temperature"))),
+                         (f"bedTypeTemps[{plate}] firstLayerTemperature", num(bt.get("firstLayerTemperature")))]
 
         for idx, pre in enumerate(r.get("presets") or []):
             if not isinstance(pre, dict):
@@ -450,10 +489,10 @@ def audit(records, abrasive, failed=None):
             pt = pre.get("temperatures") or {}
             if not isinstance(pt, dict):
                 continue
-            nozzle_like += [(f"preset[{label}] nozzle", pt.get("nozzle")),
-                            (f"preset[{label}] nozzleFirstLayer", pt.get("nozzleFirstLayer"))]
-            bed_like += [(f"preset[{label}] bed", pt.get("bed")),
-                         (f"preset[{label}] bedFirstLayer", pt.get("bedFirstLayer"))]
+            nozzle_like += [(f"preset[{label}] nozzle", num(pt.get("nozzle"))),
+                            (f"preset[{label}] nozzleFirstLayer", num(pt.get("nozzleFirstLayer")))]
+            bed_like += [(f"preset[{label}] bed", num(pt.get("bed"))),
+                         (f"preset[{label}] bedFirstLayer", num(pt.get("bedFirstLayer")))]
 
         typ_upper = (r.get("type") or "").upper()
         floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
@@ -472,12 +511,12 @@ def audit(records, abrasive, failed=None):
                 add("temps", f"{name}: {label} {val}C implausible", fid)
         # Standby is an IDLE temperature, legitimately far below the print window,
         # so only its ceiling is meaningful.
-        standby = temps.get("standby")
+        standby = num(temps.get("standby"))
         if standby is not None and not 0 <= standby <= NOZZLE_CEILING:
             add("temps", f"{name}: standby {standby}C implausible", fid)
 
         # --- physical --------------------------------------------------------
-        dens = r.get("density")
+        dens = num(r.get("density"))
         metal_filled = OPT_TAG_METAL_FILL in (r.get("optTags") or [])
         ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
         if dens is not None and not DENSITY_FLOOR <= dens <= ceiling:
@@ -487,7 +526,7 @@ def audit(records, abrasive, failed=None):
                     "corrects its abrasive classification")
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
                             f"({DENSITY_FLOOR}-{ceiling}){hint}", fid)
-        dia = r.get("diameter")
+        dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
         def bounds_check(container, table, where=""):
@@ -713,8 +752,8 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    records, abrasive, failed = load(base, args.api_key, args.cache)
-    findings, parents = audit(records, abrasive, failed)
+    records, abrasive, failed, topology = load(base, args.api_key, args.cache)
+    findings, parents = audit(records, abrasive, failed, topology)
 
     wanted = set(args.only.split(",")) if args.only else None
 
