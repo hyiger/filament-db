@@ -90,7 +90,10 @@ def valid_res(**over):
         "presets": [{"label": "draft", "extrusionMultiplier": 0.99,
                      "temperatures": {"nozzle": 205, "nozzleFirstLayer": 210,
                                       "bed": 60, "bedFirstLayer": 65}}],
-        "settings": {"filament_abrasive": "0", "compatible_printers_condition": ""},
+        # openprinttag_slug is here so the PIN_EXEMPT_SETTINGS carve-out is
+        # actually exercised by the pinned-inheritance fuzz, not just declared.
+        "settings": {"filament_abrasive": "0", "compatible_printers_condition": "",
+                     "openprinttag_slug": "prusament-pla", "openprinttag_uuid": "u-1"},
         "openprinttagSnapshot": {"density": 1.24},
         "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
@@ -110,6 +113,10 @@ def valid_res(**over):
         # fuzz actually exercises the exclusion that keeps a child's malformed
         # value from being reported a second time against its template.
         "_parent": None, "_variants": [], "_strippedTemplateFields": [],
+        # #1103: set by the detail route when the row has trashed children. A
+        # carrying parent with ONLY trashed variants is not `is_template`, so it
+        # needs its own check — and its own fuzz coverage.
+        "_hasTrashedVariants": False,
     }
     r.update(over)
     return r
@@ -377,7 +384,7 @@ def case_opt_tag_elements():
 # without saying which kind it is breaks the suite instead of quietly shrinking
 # the fuzz's reach again.
 FIELD_TABLES = {          # string keys/elements are record FIELD names
-    "ALWAYS_STORED_ROOTS", "CALIBRATION_BOUNDS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
+    "ALWAYS_STORED_ROOTS", "CALIBRATION_BOUNDS", "PIN_EXEMPT_SETTINGS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
     "LEDGER_TEXT_FIELDS", "NESTED_BOOL_FIELDS", "NESTED_CONTAINER_SHAPES",
     "NESTED_DICT_ELEMENT_ARRAYS", "NESTED_TEXT_FIELDS", "NESTED_TEXT_MAXLEN",
     "NUMERIC_BOUNDS", "NUMERIC_LEAF_NAMES", "OPAQUE_BAGS", "PIN_CHECK_ARRAYS",

@@ -619,6 +619,13 @@ MAX_SPOOL_ID_LENGTH = 128
 # genuinely inherited value there into the MIXED branch instead.
 ALWAYS_STORED_ROOTS = ("name", "vendor", "type")
 
+# Settings keys a variant is SUPPOSED to duplicate from its template. The detail
+# route computes `_hasOwnOptLink` from the RAW row, so a variant that carries its
+# own OPT linkage needs these stored locally even when the template has the same
+# values — deleting them as "pinned copies" would disable the variant's own
+# "Check for updates" button. (v1.52 #753 Approach C.)
+PIN_EXEMPT_SETTINGS = ("openprinttag_slug", "openprinttag_uuid")
+
 ORCA_PLATE_KEYS = ("Cool Plate", "Engineering Plate", "Hot Plate",
                    "Textured PEI Plate", "Textured Cool Plate")
 
@@ -659,6 +666,13 @@ NOZZLE_CEILING = 450
 HEX6 = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 
 CATEGORIES = [
+    # `notchecked` is a CROSS-CUTTING completeness channel, not a defect
+    # category: it carries the rows that say part of the library was not
+    # audited at all. It is deliberately exempt from --only, because a filter
+    # is exactly when those rows matter most — `--only abrasive` over a library
+    # where three records failed their detail read used to print a clean
+    # abrasive section with nothing to say that three rows were never examined.
+    ("notchecked",   "NOT CHECKED (completeness caveats — always shown)"),
     ("abrasive",     "ABRASIVE / NOZZLE SAFETY (from the app's own audit)"),
     ("inventory",    "INVENTORY / REMAINING-BAR BLOCKERS"),
     ("drying-units", "DRYING TIME UNIT ERRORS (the field is MINUTES)"),
@@ -748,13 +762,33 @@ def load(base, api_key, cache_dir=None):
         except Exception as e:  # noqa: BLE001 - reported, never swallowed
             return i, {"error": f"{type(e).__name__}: {e}"}
         if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-            json.dump(res, open(os.path.join(cache_dir, f"{i}.resolved.json"), "w"))
-            json.dump(raw, open(os.path.join(cache_dir, f"{i}.raw.json"), "w"))
+            # OUTSIDE the fetch try/except is not good enough: an unwritable or
+            # mistyped --cache path raises OSError here, and that propagates out
+            # of pool.map and aborts the whole audit AFTER every record has
+            # already been fetched. A debugging convenience must never be able
+            # to destroy the run it was meant to help debug.
+            try:
+                for _fn, _doc in ((f"{i}.resolved.json", res), (f"{i}.raw.json", raw)):
+                    with open(os.path.join(cache_dir, _fn), "w") as _fh:
+                        json.dump(_doc, _fh)
+            except OSError as e:
+                return i, {"res": res, "raw": raw, "cache_error": f"{type(e).__name__}: {e}"}
         return i, {"res": res, "raw": raw}
+
+    # Hoisted out of one(): an unusable directory should fail FAST and by name,
+    # not after 2N HTTP round-trips, and not once per worker.
+    if cache_dir:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+        except OSError as e:
+            sys.exit(f"--cache {cache_dir!r} is unusable ({type(e).__name__}: {e})")
 
     with ThreadPoolExecutor(max_workers=8) as pool:
         fetched = dict(pool.map(one, ids))
+    _cache_errs = {i: v["cache_error"] for i, v in fetched.items() if "cache_error" in v}
+    if _cache_errs:
+        print(f"warning: --cache could not write {len(_cache_errs)} record(s); "
+              f"e.g. {next(iter(_cache_errs.values()))}", file=sys.stderr)
     failed = {i: v["error"] for i, v in fetched.items() if "error" in v}
     records = {i: v for i, v in fetched.items() if "error" not in v}
     if not records:
@@ -845,10 +879,10 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         findings.setdefault(cat, []).append((fid, msg))
 
     if degraded:
-        add("structure", f"DISCOVERY DEGRADED: {degraded}", None)
+        add("notchecked", f"DISCOVERY DEGRADED: {degraded}", None)
 
     for bad_id, err in (failed or {}).items():
-        add("structure", f"filament {bad_id}: could NOT be read ({err}) -> it was not audited", bad_id)
+        add("notchecked", f"filament {bad_id}: could NOT be read ({err}) -> it was not audited", bad_id)
 
     # Filaments the authoritative audit already reported as having no nozzle
     # assignment. The generic check below must not restate the same defect.
@@ -906,7 +940,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         if isinstance(rr, dict) and isinstance(rw, dict):
             usable[fid] = v
         else:
-            add("structure", f"filament {fid}: response was {type(rr).__name__}/"
+            add("notchecked", f"filament {fid}: response was {type(rr).__name__}/"
                              f"{type(rw).__name__}, not two documents -> it was NOT audited",
                 str(fid))
     records = usable
@@ -932,11 +966,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
         # For a standalone or a template the two reads are the same document, so
-        # sweeping both emitted every shape finding twice. Compared BEFORE the
-        # first sweep, because both docs get coerced and a later test would
-        # always say "equal". The raw doc is still swept — it is read downstream
-        # — only its duplicate REPORTING is suppressed.
-        _dup = (r == raw)
+        # sweeping both would emit every shape finding twice. The duplicate
+        # REPORTING is suppressed by `_seen_shape` below, which dedupes on
+        # (category, identity) — an earlier revision compared the two documents
+        # up front instead, and that comparison is gone; the raw doc is still
+        # swept either way, because later passes read it.
         _seen_shape = set()
         # Text first: `name` is interpolated into every message, and
         # type/colorName are upper/lower-cased.
@@ -944,7 +978,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # Keyed on the message with the read marker removed, so ONE defect
             # present identically in both reads collapses to one row while two
             # genuinely different malformed values at the same path both report.
-            # `_dup` (whole-document equality) was the wrong test: for a variant
+            # Whole-document equality was the wrong test: for a variant
             # the two reads always differ — inheritance and response metadata see
             # to that — so a locally stored defect was reported twice.
             key = (cat, ident, msg.replace(" (resolved)", "").replace(" (stored)", ""))
@@ -2046,11 +2080,46 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     add("colour", f"{name}: secondaryColors[{pos}]={sc!r} is not #RRGGBB -> the "
                                   f"OPT encoder skips it, and a slicer export may use it when the "
                                   f"primary colour is null{_inh_blame('secondaryColors')}", fid)
+        # The exemption used to be a two-spelling substring test over colorName,
+        # which asserted "legacy sentinel" for every OTHER grey the user might
+        # have named — Silver, Graphite, Slate, Ash, Gunmetal — and for a grey
+        # stated only in `name`. #808080 IS the correct hex for those. What the
+        # pre-v1.70 form actually left behind is the hex with NO colour name at
+        # all, so that is the only shape reported; any non-empty colorName means
+        # a human named this colour and it is theirs.
         if (col == "#808080" and not _cname_lost
-                and "grey" not in cname and "gray" not in cname):
-            add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})", fid)
+                and not (isinstance(r.get("colorName"), str) and r["colorName"].strip())):
+            add("colour", f"{name}: colour is the legacy #808080 sentinel with no colorName -> the "
+                          f"pre-v1.70 form stamped this on every filament, so it is probably not "
+                          f"the real colour; a genuinely grey filament wants a colorName", fid)
 
         # --- template violations (v1.70 #605) --------------------------------
+        # parentPromotionState's own predicate, lifted out so the all-trashed
+        # case below can reuse it verbatim rather than re-deriving it.
+        _colour, _cname_raw = raw.get("color"), raw.get("colorName")
+        promote_runs = (
+            (isinstance(_colour, str) and _colour != "")
+            or (isinstance(_cname_raw, str) and _cname_raw.strip() != "")
+            or bool(raw.get("spools"))
+            or raw.get("totalWeight") is not None
+        )
+        # A parent whose variants are ALL TRASHED is not `is_template` (that is
+        # derived from LIVE children), so the whole block below is skipped and
+        # the row audits as an ordinary standalone — while every one of those
+        # variants answers 409 parent_must_be_template_first on restore (#1103).
+        # The family is stuck, and nothing in the report said so.
+        if not is_template and r.get("_hasTrashedVariants") and promote_runs:
+            _carried = [f for f in TEMPLATE_STRIP if raw.get(f) not in (None, "", [])]
+            if raw.get("spools"):
+                _carried.append(f"{len(raw['spools'])} spool(s)")
+            add("template", f"{name}: has TRASHED variants and still carries "
+                            f"{', '.join(_carried) or 'promotable state'} -> it is not a template "
+                            f"(that is derived from LIVE children), so nothing else in this report "
+                            f"treats it as one — but POST /api/filaments/<variant>/restore answers "
+                            f"409 parent_must_be_template_first for every one of those variants, "
+                            f"so the family cannot be restored [POST /api/filaments/{fid}/promote "
+                            f"accepts this row: /promote counts variants INCLUDING trashed ones]",
+                fid)
         if is_template:
             # A row that is BOTH a variant and a parent is not a template the
             # app can act on, and every remedy below assumes it is. Detect it
@@ -2084,14 +2153,6 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # the new variant. So the repair must be chosen from the parent's full
             # state: deciding per field would tell the user to null a threshold
             # that promotion would have preserved, destroying it.
-            colour = raw.get("color")
-            cname = raw.get("colorName")
-            promote_runs = (
-                (isinstance(colour, str) and colour != "")
-                or (isinstance(cname, str) and cname.strip() != "")
-                or bool(raw.get("spools"))
-                or raw.get("totalWeight") is not None
-            )
             for fld in TEMPLATE_STRIP:
                 val = raw.get(fld)
                 if val in (None, "", []):
@@ -2149,7 +2210,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # broken link would be a false report of data loss against a
                 # perfectly healthy row; the read failure is already reported
                 # separately under `structure`.
-                add("structure", f"{name}: parent {pid} could not be read, so this row's "
+                add("notchecked", f"{name}: parent {pid} could not be read, so this row's "
                                  f"inheritance was NOT audited (the parent exists and is active)",
                     fid)
             elif pid not in records:
@@ -2220,7 +2281,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not isinstance(par_set, dict):
                 par_set = {}
             dup = sorted(k for k, val in own_set.items()
-                         if k in par_set and _json_equal(par_set[k], val))
+                         if k in par_set and _json_equal(par_set[k], val)
+                         and k not in PIN_EXEMPT_SETTINGS)
             if dup:
                 shown = ", ".join(dup[:4]) + (f", +{len(dup) - 4} more" if len(dup) > 4 else "")
                 add("pinned", f"{name}: stores {len(dup)} of {len(own_set)} settings key(s) identical to "
@@ -2239,8 +2301,27 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                      if isinstance(n, dict) and n.get("_deletedAt")]
             live = [n for n in compat if isinstance(n, dict) and not n.get("_deletedAt")]
             if not compat:
-                add("nozzles", f"{name}: no compatibleNozzles"
-                               f"{_inh_blame('compatibleNozzles')}", fid)
+                # An empty tick list is NORMAL, not a defect: since #1021 the
+                # export derives nothing from it (it fails open, visible on
+                # every printer), and the #859 slicer sync-back resolves a
+                # nozzle from the global catalog without ever writing ticks. The
+                # bare row condemned the app's own documented default — and was
+                # the one finding in the file carrying no consequence at all.
+                # It costs the user something ONLY when calibrations exist:
+                # isCalibrationRowReachable starts with
+                # `if (!ctx.compatibleNozzleIds.includes(nozzleId)) return false`,
+                # so with no ticks EVERY stored calibration drops out of the
+                # form's grid into the orphan list, where it can be removed but
+                # not corrected.
+                _cal_n = len([c for c in (raw.get("calibrations") or [])
+                              if isinstance(c, dict)])
+                if _cal_n:
+                    add("nozzles", f"{name}: no compatibleNozzles, but {_cal_n} calibration(s) are "
+                                   f"stored -> isCalibrationRowReachable requires the row's nozzle "
+                                   f"to be ticked, so every one of them drops out of the "
+                                   f"FilamentForm grid into the orphan list and can only be "
+                                   f"removed, not edited"
+                                   f"{_inh_blame('compatibleNozzles')}", fid)
             elif not live:
                 add("nozzles", f"{name}: every compatibleNozzles entry is soft-deleted ({stale}) -> "
                                f"effectively unassigned{_inh_blame('compatibleNozzles')}", fid)
@@ -2362,7 +2443,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     # per child, at an index the child does not own. Keyed by document, this
     # always names the row that stores the reference.
     if isinstance(ref_index, dict) and "error" in ref_index:
-        add("structure", f"calibration scope references were NOT checked: the /api/snapshot read "
+        add("notchecked", f"calibration scope references were NOT checked: the /api/snapshot read "
                          f"failed ({ref_index['error']}). Both detail reads populate "
                          f"`calibrations.printer`/`.bedType`, so a purged target is "
                          f"indistinguishable from the generic state without it.", None)
@@ -2374,7 +2455,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # structurally clean. Say so, in the same words as a failed read.
         for _f, _coll in (("printer", "printers"), ("bedType", "bedTypes")):
             if not isinstance(_live[_f], set):
-                add("structure", f"calibration {_f} references were NOT checked: the /api/snapshot "
+                add("notchecked", f"calibration {_f} references were NOT checked: the /api/snapshot "
                                  f"response carried no `{_coll}` collection, so no {_f} id could be "
                                  f"resolved. Both detail reads populate these refs, and populate() "
                                  f"nulls a purged target, so they are invisible without it.", None)
@@ -2489,14 +2570,15 @@ def main():
         return [f"{msg}  [{fid}]" if fid in ambiguous else msg for fid, msg in uniq]
 
     if args.json:
-        out = {k: render(v) for k, v in findings.items() if not wanted or k in wanted}
+        out = {k: render(v) for k, v in findings.items()
+               if not wanted or k in wanted or k == "notchecked"}
         print(json.dumps({"filaments": len(records), "templates": len(parents), "findings": out}, indent=2))
         return
 
     total = 0
     for key, title in CATEGORIES:
         raw_rows = findings.get(key)
-        if not raw_rows or (wanted and key not in wanted):
+        if not raw_rows or (wanted and key not in wanted and key != "notchecked"):
             continue
         rows = render(raw_rows)
         total += len(rows)
