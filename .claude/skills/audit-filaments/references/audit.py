@@ -346,6 +346,12 @@ NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 # the whole filament (or the expanded inventory row) fails to render.
 NESTED_TEXT_FIELDS = {"spools": ("instanceId", "label", "lotNumber", "photoDataUrl")}
 
+# Text one level deeper still, inside the ledgers. `jobLabel` and `notes` are
+# rendered as React children on the detail page, so a non-string throws when the
+# usage history or dry-cycle list is expanded.
+LEDGER_TEXT_FIELDS = {("spools", "usageHistory"): ("jobLabel",),
+                      ("spools", "dryCycles"): ("notes",)}
+
 NESTED_CONTAINER_SHAPES = {
     "spools": {"usageHistory": list, "dryCycles": list},
     "presets": {"temperatures": dict},
@@ -714,6 +720,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                                           f"{type(ent).__name__} ({ent!r}), not a subdocument "
                                           f"({which}) -> that entry is skipped by every check",
                                           ("nested-element", parent_key, str(tag), sf, eidx))
+                                continue
+                            for lf in LEDGER_TEXT_FIELDS.get((parent_key, sf), ()):
+                                lv = ent.get(lf)
+                                if lv is not None and not isinstance(lv, str):
+                                    add_shape("physical",
+                                              f"{nm}: {parent_key}[{tag}] {sf}[{eidx}].{lf} is "
+                                              f"{type(lv).__name__} ({lv!r}), not a string "
+                                              f"({which}) -> it renders as a React child, so "
+                                              f"expanding this list throws",
+                                              ("ledger-text", parent_key, str(tag), sf, eidx, lf))
         # optTags ELEMENT validity. The container check above accepts a list of
         # anything, but the schema's setter and the CBOR encoder both keep only
         # non-negative integers, and the app's abrasive audit matches tags
@@ -973,10 +989,12 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             # tuning silently becomes unreachable.
             if nz is None:
                 add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
-                                 f"exists -> the tuning is unreachable", fid)
+                                 f"exists -> the tuning is unreachable"
+                                 f"{_inh_blame('calibrations')}", fid)
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
                 add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
-                                 f"{noz_name!r} -> the tuning is unreachable", fid)
+                                 f"{noz_name!r} -> the tuning is unreachable"
+                                 f"{_inh_blame('calibrations')}", fid)
             # `printer` and `bedType` are `default: null`, unlike the required
             # nozzle above, so null is the schema's supported "generic" state and
             # must NOT be reported. A TOMBSTONED ref is different: the row points
@@ -1018,7 +1036,14 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         for idx, pre in enumerate(r.get("presets") or []):
             if not isinstance(pre, dict):
                 continue
-            label = pre.get("label") or idx
+            _plabel = pre.get("label")
+            if not isinstance(_plabel, str) or not _plabel.strip():
+                # `label` is a required string and the detail page renders it as
+                # a React child, so a missing or non-string one throws on open.
+                add("physical", f"{name}: presets[{idx}].label is {_plabel!r} -> the schema "
+                                f"requires a string and the detail page renders it directly, "
+                                f"so opening this filament throws", fid)
+            label = _plabel if isinstance(_plabel, str) and _plabel.strip() else idx
             pt = pre.get("temperatures") or {}
             if not isinstance(pt, dict):
                 continue
@@ -1044,8 +1069,12 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}"
                              f"{_inh_blame(_temp_root(label), 'temperatures.nozzleRangeMax')}", fid)
             if not floor <= val <= NOZZLE_CEILING:
+                # The band is chosen BY TYPE, so type ownership matters as much as
+                # the temperature's: a child overriding type against an inherited
+                # temperature must not be told to edit the template.
                 add("temps", f"{name}: {label} {val}C outside the plausible band for "
-                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C){blame}", fid)
+                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C)"
+                             f"{_inh_blame(_temp_root(label), 'type')}", fid)
         for label, val in bed_like:
             if val is not None and not 0 <= val <= 200:
                 add("temps", f"{name}: {label} {val}C implausible{_temp_blame(label)}", fid)
@@ -1065,10 +1094,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     " — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
                     "corrects its abrasive classification")
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
-                            f"({DENSITY_FLOOR}-{ceiling}){hint}{_inh_blame('density')}", fid)
+                            f"({DENSITY_FLOOR}-{ceiling}){hint}{_inh_blame('density', 'optTags')}", fid)
         dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
-            add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
+            add("physical", f"{name}: diameter {dia}mm is not a standard size"
+                            f"{_inh_blame('diameter')}", fid)
         def _blame(field, where="", inherit_root=""):
             """Whose data is this, and where should the user go?
 
