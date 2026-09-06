@@ -341,6 +341,11 @@ NESTED_DICT_ELEMENT_ARRAYS = {"spools": ("usageHistory", "dryCycles")}
 # coercing would make the audit disagree with what the app actually computes.
 NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 
+# String fields inside a spool. `label` and `lotNumber` are rendered directly as
+# React children on the detail and list pages, so a non-string there throws and
+# the whole filament (or the expanded inventory row) fails to render.
+NESTED_TEXT_FIELDS = {"spools": ("instanceId", "label", "lotNumber", "photoDataUrl")}
+
 NESTED_CONTAINER_SHAPES = {
     "spools": {"usageHistory": list, "dryCycles": list},
     "presets": {"temperatures": dict},
@@ -683,6 +688,15 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     # …and the ELEMENTS of those nested lists. Reported, never
                     # removed: the wording promises the entry is skipped, and the
                     # audit stays non-mutating beyond the container coercions.
+                    for tf2 in NESTED_TEXT_FIELDS.get(parent_key, ()):
+                        tv2 = sub.get(tf2)
+                        if tv2 is not None and not isinstance(tv2, str):
+                            add_shape("physical",
+                                      f"{nm}: {parent_key}[{tag}].{tf2} is {type(tv2).__name__} "
+                                      f"({tv2!r}), not a string ({which}) -> label and lotNumber "
+                                      f"render directly as React children, so a non-string throws "
+                                      f"and the page fails to render",
+                                      ("nested-text", parent_key, str(tag), tf2))
                     for bf in NESTED_BOOL_FIELDS.get(parent_key, ()):
                         bv = sub.get(bf)
                         if bv is not None and not isinstance(bv, bool):
@@ -770,20 +784,18 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     f"{', '.join(local)} is stored here — correcting the template would change "
                     f"every sibling, so fix whichever value is actually wrong")
 
-        def _temp_blame(label):
-            """Attribute a temperature finding the way the bounds path does."""
+        def _temp_root(label):
+            """The `_inherited` root that owns a collected temperature."""
             if label.startswith("calibration["):
-                root = "calibrations"
-            elif label.startswith("preset["):
-                root = "presets"
-            elif label.startswith("bedTypeTemps["):
-                root = "bedTypeTemps"
-            else:
-                root = f"temperatures.{label}"
-            if root in inherited_fields:
-                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
-                        f"variant keeps it")
-            return ""
+                return "calibrations"
+            if label.startswith("preset["):
+                return "presets"
+            if label.startswith("bedTypeTemps["):
+                return "bedTypeTemps"
+            return f"temperatures.{label}"
+
+        def _temp_blame(label):
+            return _inh_blame(_temp_root(label))
 
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []
@@ -791,7 +803,17 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
         # Then every numeric-named leaf at any depth, reported ONCE here so the
         # individual passes can skip quietly.
-        for where_path, badv in malformed_numerics(r):
+        # Both reads: resolveFilament treats "" as an inheritance sentinel and
+        # substitutes the parent's number, so a variant storing `cost: ""` looks
+        # perfectly valid in the resolved response and only `raw` reveals it.
+        # Deduped on (path, value) so a defect visible in both is one row.
+        _seen_num = set()
+        for where_path, badv, which_read in (
+                [(p_, v_, "resolved") for p_, v_ in malformed_numerics(r)]
+                + [(p_, v_, "stored") for p_, v_ in malformed_numerics(raw)]):
+            if (where_path, repr(badv)) in _seen_num:
+                continue
+            _seen_num.add((where_path, repr(badv)))
             # A template storing a bad inheritable value appears in EVERY child's
             # resolved read, so reporting it per child duplicates one defect across
             # the family and points at rows that store null and cannot fix it. The
@@ -802,11 +824,17 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             # `calibrations`, so a bare split on "." left every inheriting child
             # reporting a defect only its template can repair.
             plain = re.sub(r"\[\d+\]", "", where_path)
-            if (where_path in inherited_fields or plain in inherited_fields
+            # Only the RESOLVED read can be showing a value the row does not own.
+            # A defect found in the STORED read is this record's own by
+            # definition — and that is exactly the `cost: ""` case, where the
+            # variant's malformed value is invisible in the resolved response
+            # because resolveFilament read it as an inheritance sentinel.
+            if which_read == "resolved" and (
+                    where_path in inherited_fields or plain in inherited_fields
                     or plain.split(".")[0] in inherited_fields):
                 continue
             add("physical", f"{name}: {where_path} is {type(badv).__name__} ({badv!r}), not a "
-                            f"number -> malformed; checks on it are skipped", fid)
+                            f"number ({which_read}) -> malformed; checks on it are skipped", fid)
 
         # (legacy note) density/diameter are covered by the sweep above too.
 
@@ -1005,10 +1033,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             if val is None:
                 continue
             blame = _temp_blame(label)
+            # A range comparison has TWO owners — the value and the bound it is
+            # judged against. A child with a LOCAL range and an inherited
+            # calibration is the case that matters: blaming the template alone
+            # would change every sibling to satisfy this one child's range.
             if lo is not None and val < lo:
-                add("temps", f"{name}: {label} {val} is BELOW the declared range min {lo}{blame}", fid)
+                add("temps", f"{name}: {label} {val} is BELOW the declared range min {lo}"
+                             f"{_inh_blame(_temp_root(label), 'temperatures.nozzleRangeMin')}", fid)
             if hi is not None and val > hi:
-                add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}{blame}", fid)
+                add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}"
+                             f"{_inh_blame(_temp_root(label), 'temperatures.nozzleRangeMax')}", fid)
             if not floor <= val <= NOZZLE_CEILING:
                 add("temps", f"{name}: {label} {val}C outside the plausible band for "
                              f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C){blame}", fid)
@@ -1099,8 +1133,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                     # `x in <set>` raises on an unhashable x, so the type test
                     # comes first — a dict or list here is malformed anyway and
                     # is reported by the same row.
-                    if src_v is not None and (not isinstance(src_v, str)
-                                              or src_v not in USAGE_SOURCES):
+                    # `source` carries `default: "manual"`, so a properly written
+                    # entry always has one — an explicit null means it was written
+                    # past validation, and analytics then skips it.
+                    if "source" in ue and (not isinstance(src_v, str)
+                                           or src_v not in USAGE_SOURCES):
                         add("physical", f"{name}: spool {tag} usage source={src_v!r} is not one of "
                                         f"{sorted(USAGE_SOURCES)} -> analytics counts only exact "
                                         f"'manual', so this entry silently drops out of the manual "
