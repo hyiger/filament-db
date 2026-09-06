@@ -109,15 +109,35 @@ are exempt: an abstract product line legitimately carries none of it.
 
 **Template violations (v1.70 #605).** A filament with variants is a template: colourless, no
 inventory. Enforcement is forward-only, so legacy parents keep whatever they had. Inventory
-stranded on a template is the serious case — its spools are invisible to the family's stats. The
-remedy is the **Convert to template** action on the parent (`POST /api/filaments/{id}/promote`),
-never a hand-written `PUT`.
+stranded on a template is the serious case — its spools are invisible to the family's stats.
+
+The remedy for **colour, colourName, spools or `totalWeight`** is the **Convert to template**
+action on the parent (`POST /api/filaments/{id}/promote`), never a hand-written `PUT` — it moves
+that state onto a new sibling variant rather than deleting it.
+
+**`lowStockThreshold` is the exception, and prescribing promote for it is wrong.**
+`parentPromotionState` computes `needed` from colour, colourName, spool count and `totalWeight`
+only — a threshold is deliberately not in it, because a promotion that moves nothing is not worth
+confirming. So a template whose *only* leftover is a threshold returns **400 `nothing_to_convert`**,
+and pointing the user at promote sends them to an operation that cannot clear the finding. Clear
+that one field explicitly instead:
+
+```bash
+curl -s -X PUT "$BASE/api/filaments/$TEMPLATE_ID" -H 'Content-Type: application/json' \
+  -d '{"lowStockThreshold": null}'
+```
+
+An explicit `null` passes the template strip (which only drops non-null values), which is exactly
+how a legacy template gets cleaned up.
 
 **Pinned inheritance.** A variant storing a value byte-identical to its template's is a copy that
 looks right today and stops following the template the day it is edited. Latent, never urgent, and
 worth reporting as such rather than alarming about it. The field list is `resolveFilament`'s own
-`INHERITABLE_FIELDS` **plus every `temperatures.*` subfield** — that subdocument resolves subfield
-by subfield, so a variant storing its template's nozzle temp pins exactly like a top-level field.
+`INHERITABLE_FIELDS`, **every `temperatures.*` subfield** — that subdocument resolves subfield by
+subfield, so a variant storing its template's nozzle temp pins exactly like a top-level field —
+and **the six whole-array fields** (`optTags`, `secondaryColors`, `bedTypeTemps`, `calibrations`,
+`presets`, `compatibleNozzles`), which inherit only while the variant's own array is *empty*, so a
+non-empty copy of the template's array is a pin too.
 Three inheritable fields are deliberately excluded because every variant stores them by
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.

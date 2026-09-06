@@ -53,8 +53,33 @@ PIN_CHECK_TEMPS = [
     "nozzleRangeMin", "nozzleRangeMax", "standby",
 ]
 
+# `resolveFilament` inherits these arrays WHOLE when the variant's own is empty
+# (GH #106/#477), so a variant storing a non-empty array equal to its template's
+# is a pin exactly like a scalar. `compatibleNozzles` is handled separately
+# because the resolved read populates it into objects while the raw read keeps
+# bare ids.
+PIN_CHECK_ARRAYS = ["optTags", "secondaryColors", "bedTypeTemps", "calibrations", "presets"]
+
 # Stripped from a template on write (v1.70 #605). Present on one = legacy shape.
 TEMPLATE_STRIP = ["color", "colorName", "totalWeight", "lowStockThreshold"]
+
+
+def _strip_ids(value):
+    """Compare array contents, not their subdocument identity."""
+    if isinstance(value, list):
+        return [_strip_ids(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _strip_ids(v) for k, v in sorted(value.items()) if k not in ("_id", "id")}
+    return value
+
+
+def _nozzle_ids(value):
+    out = []
+    for entry in value or []:
+        ref = entry.get("_id") if isinstance(entry, dict) else entry
+        if ref is not None:
+            out.append(str(ref))
+    return sorted(out)
 
 HEX6 = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 
@@ -192,7 +217,10 @@ def audit(records, abrasive):
 
         # --- drying: the field is minutes, every datasheet says hours --------
         dry_t, dry_temp = r.get("dryingTime"), r.get("dryingTemperature")
-        if isinstance(dry_t, (int, float)) and 0 < dry_t <= 24:
+        # Gated on a drying TEMPERATURE being present: without it, a small value
+        # may be a deliberate duration rather than an hours-for-minutes slip, and
+        # this is the documented heuristic.
+        if isinstance(dry_t, (int, float)) and 0 < dry_t <= 24 and dry_temp is not None:
             add("drying-units", f"{name}: dryingTime={dry_t} at {dry_temp}C — the field is MINUTES; "
                                 f"{dry_t} hours would be {int(dry_t * 60)}")
 
@@ -265,6 +293,19 @@ def audit(records, abrasive):
                 if own is not None and inherited is not None and own == inherited:
                     add("pinned", f"{name}: stores temperatures.{sub}={own}, identical to template "
                                   f"{pname!r} -> pinned copy")
+            # Whole-array inheritance: a NON-EMPTY variant array overrides, so one
+            # equal to the template's is a pin. An empty one correctly inherits.
+            for fld in PIN_CHECK_ARRAYS:
+                own = raw.get(fld) or []
+                inherited = parent_eff.get(fld) or []
+                if own and _strip_ids(own) == _strip_ids(inherited):
+                    add("pinned", f"{name}: stores its own {fld} ({len(own)} entr"
+                                  f"{'y' if len(own) == 1 else 'ies'}) identical to template "
+                                  f"{pname!r} -> pinned copy")
+            own_nz = _nozzle_ids(raw.get("compatibleNozzles"))
+            if own_nz and own_nz == _nozzle_ids(parent_eff.get("compatibleNozzles")):
+                add("pinned", f"{name}: stores its own compatibleNozzles ({len(own_nz)}) identical to "
+                              f"template {pname!r} -> pinned copy")
 
         # --- nozzle assignment (non-abrasive; abrasive is the app's job) ------
         if not is_template and not (r.get("compatibleNozzles") or []):
