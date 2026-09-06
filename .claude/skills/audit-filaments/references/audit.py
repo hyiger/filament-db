@@ -202,7 +202,10 @@ def _nozzle_ids(value):
 # technical reference documents PCL 100 at ~120 C and the orthotic Facilan Ortho
 # at 130-170 C, with the polymer softening near 60 C — a flat 150 C floor would
 # call every one of those a validity error.
-LOW_TEMP_TYPES = ("PCL",)
+# Matched as a SUBSTRING of the upper-cased type, so "FACILAN" covers
+# "Facilan Ortho". Listed because the comment above names it: a tuple that
+# contradicts its own rationale is worse than no comment.
+LOW_TEMP_TYPES = ("PCL", "FACILAN")
 
 # Metal-filled composites are legitimately far denser than any unfilled polymer —
 # copper- and bronze-filled PLA sit around 3-4 g/cm3 — and the schema permits any
@@ -738,6 +741,21 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         parent_name = (records.get(_ppid, {}).get("res", {}).get("name")
                        if _ppid else None) or "its template"
 
+        def _temp_blame(label):
+            """Attribute a temperature finding the way the bounds path does."""
+            if label.startswith("calibration["):
+                root = "calibrations"
+            elif label.startswith("preset["):
+                root = "presets"
+            elif label.startswith("bedTypeTemps["):
+                root = "bedTypeTemps"
+            else:
+                root = f"temperatures.{label}"
+            if root in inherited_fields:
+                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
+                        f"variant keeps it")
+            return ""
+
         temps = r.get("temperatures") or {}
         all_spools = r.get("spools") or []
         live_spools = [s for s in all_spools if isinstance(s, dict) and not s.get("retired")]
@@ -917,15 +935,24 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                          (f"{where} bedTempFirstLayer", num(cal.get("bedTempFirstLayer")))]
             chamber = num(cal.get("chamberTemp"))
             if chamber is not None and not 0 <= chamber <= CHAMBER_MAX:
-                add("temps", f"{name}: {where} chamberTemp {chamber}C outside 0-{CHAMBER_MAX}C", fid)
+                add("temps", f"{name}: {where} chamberTemp {chamber}C outside 0-{CHAMBER_MAX}C"
+                             f"{_temp_blame('calibration[')}", fid)
 
         # Per-plate overrides: filamentToOrcaSlicerKeys writes BOTH temperature
         # and firstLayerTemperature from this array into the exported preset,
         # overriding the otherwise-valid base values.
-        for bt in (r.get("bedTypeTemps") or []):
+        for idx_bt, bt in enumerate(r.get("bedTypeTemps") or []):
             if not isinstance(bt, dict):
                 continue
-            plate = bt.get("bedType") or "?"
+            plate_raw = bt.get("bedType")
+            if not isinstance(plate_raw, str) or not plate_raw.strip():
+                # `bedType` is schema-required, and orcaSlicerBundle indexes
+                # BED_TYPE_KEY_MAP with it — so a missing or blank key silently
+                # drops this row's temperatures from the exported preset.
+                add("physical", f"{name}: bedTypeTemps[{idx_bt}] has no usable bedType "
+                                f"({plate_raw!r}) -> the schema requires it and the Orca export "
+                                f"indexes on it, so these temperatures are silently dropped", fid)
+            plate = plate_raw if isinstance(plate_raw, str) and plate_raw.strip() else "?"
             bed_like += [(f"bedTypeTemps[{plate}] temperature", num(bt.get("temperature"))),
                          (f"bedTypeTemps[{plate}] firstLayerTemperature", num(bt.get("firstLayerTemperature")))]
 
@@ -943,21 +970,6 @@ def audit(records, abrasive, failed=None, listing_topology=None):
 
         typ_upper = (r.get("type") or "").upper()
         floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
-        def _temp_blame(label):
-            """Attribute a temperature finding the way the bounds path does."""
-            if label.startswith("calibration["):
-                root = "calibrations"
-            elif label.startswith("preset["):
-                root = "presets"
-            elif label.startswith("bedTypeTemps["):
-                root = "bedTypeTemps"
-            else:
-                root = f"temperatures.{label}"
-            if root in inherited_fields:
-                return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
-                        f"variant keeps it")
-            return ""
-
         for label, val in nozzle_like:
             if val is None:
                 continue
@@ -976,7 +988,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # so only its ceiling is meaningful.
         standby = num(temps.get("standby"))
         if standby is not None and not 0 <= standby <= NOZZLE_CEILING:
-            add("temps", f"{name}: standby {standby}C implausible", fid)
+            add("temps", f"{name}: standby {standby}C implausible{_temp_blame('standby')}", fid)
 
         # --- physical --------------------------------------------------------
         dens = num(r.get("density"))
