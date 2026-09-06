@@ -147,6 +147,10 @@ def audit(records, abrasive):
     def add(cat, msg):
         findings.setdefault(cat, []).append(msg)
 
+    # Filaments the authoritative audit already reported as having no nozzle
+    # assignment. The generic check below must not restate the same defect.
+    abrasive_unassigned = set()
+
     # --- abrasive: report what the app determined, do not re-derive ----------
     if isinstance(abrasive, dict) and "error" in abrasive:
         add("abrasive", f"COULD NOT REACH /api/abrasive-nozzles ({abrasive['error']}) — "
@@ -163,6 +167,7 @@ def audit(records, abrasive):
             if soft:
                 add("abrasive", f"{name}: abrasive ({why}) but permitted on unfit nozzle(s) {soft}{src}")
             if f.get("unassigned"):
+                abrasive_unassigned.add(str(f.get("filamentId")))
                 add("abrasive", f"{name}: abrasive ({why}) with no nozzle assignment at all{src}")
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
@@ -307,8 +312,27 @@ def audit(records, abrasive):
                 add("pinned", f"{name}: stores its own compatibleNozzles ({len(own_nz)}) identical to "
                               f"template {pname!r} -> pinned copy")
 
+            # `settings` is SHALLOW-MERGED ({...parent, ...variant}), so a key
+            # the variant stores overrides that key alone and stops tracking it.
+            # Reported per VARIANT rather than per key on purpose: a slicer
+            # round trip echoes the whole bag back, so a real library yields
+            # hundreds of matching keys (341 across 32 variants on the library
+            # this was built against) and per-key rows would bury every other
+            # category.
+            own_set = raw.get("settings") or {}
+            par_set = parent_eff.get("settings") or {}
+            dup = sorted(k for k, val in own_set.items() if k in par_set and par_set[k] == val)
+            if dup:
+                shown = ", ".join(dup[:4]) + (f", +{len(dup) - 4} more" if len(dup) > 4 else "")
+                add("pinned", f"{name}: stores {len(dup)} of {len(own_set)} settings key(s) identical to "
+                              f"template {pname!r} ({shown}) -> pinned copies")
+
         # --- nozzle assignment (non-abrasive; abrasive is the app's job) ------
-        if not is_template and not (r.get("compatibleNozzles") or []):
+        # An abrasive filament with no assignment is already reported, with far
+        # better remediation, by /api/abrasive-nozzles. Restating it here would
+        # contradict this script's own division of labour and double-count.
+        if (not is_template and not (r.get("compatibleNozzles") or [])
+                and fid not in abrasive_unassigned):
             add("nozzles", f"{name}: no compatibleNozzles")
 
     return findings, parents

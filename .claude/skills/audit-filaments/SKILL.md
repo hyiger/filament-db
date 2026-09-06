@@ -135,9 +135,15 @@ looks right today and stops following the template the day it is edited. Latent,
 worth reporting as such rather than alarming about it. The field list is `resolveFilament`'s own
 `INHERITABLE_FIELDS`, **every `temperatures.*` subfield** — that subdocument resolves subfield by
 subfield, so a variant storing its template's nozzle temp pins exactly like a top-level field —
-and **the six whole-array fields** (`optTags`, `secondaryColors`, `bedTypeTemps`, `calibrations`,
+**the six whole-array fields** (`optTags`, `secondaryColors`, `bedTypeTemps`, `calibrations`,
 `presets`, `compatibleNozzles`), which inherit only while the variant's own array is *empty*, so a
-non-empty copy of the template's array is a pin too.
+non-empty copy of the template's array is a pin too — and **`settings`**, which is shallow-merged
+`{...parent, ...variant}`, so each duplicated key overrides that key alone.
+
+Settings pins are reported **per variant with a count, not per key**, and that is a deliberate
+granularity choice rather than laziness: a slicer round trip echoes the whole bag back, so a real
+library produces hundreds of matching keys — 341 across 32 variants on the one this was built
+against — and per-key rows would bury every other category in the report.
 Three inheritable fields are deliberately excluded because every variant stores them by
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
