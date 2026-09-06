@@ -153,7 +153,31 @@ preset. That covers the non-temperature calibration overrides too (`extrusionMul
 fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
 `prusaSlicerBundle` and `orcaSlicerBundle` both write as `filament_max_volumetric_speed`.
 
-Density additionally gets a **material-aware** band. The unfilled-polymer ceiling is
+Density additionally gets a **material-aware** band.
+
+Coverage here is **verified, not assumed** — an earlier revision claimed the table covered every
+exported numeric "by construction" and it did not, twice. Re-check it after any schema change:
+
+```bash
+# every `<field>: { type: Number` leaf in the model, against the checker's tables
+python3 - <<'EOF'
+import re, importlib.util
+schema = set(re.findall(r'^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\{\s*type:\s*Number',
+                        open('src/models/Filament.ts', encoding='utf-8').read(), re.M))
+spec = importlib.util.spec_from_file_location("a", ".claude/skills/audit-filaments/references/audit.py")
+m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+covered = set()
+for t in ("NUMERIC_BOUNDS","RANGE_BOUNDS","PRESET_BOUNDS","SPOOL_BOUNDS",
+          "DRY_CYCLE_BOUNDS","USAGE_BOUNDS","CALIBRATION_BOUNDS"):
+    covered |= set(getattr(m, t))
+covered |= {"nozzle","nozzleFirstLayer","bed","bedFirstLayer","standby","temperature",
+            "firstLayerTemperature","nozzleTemp","nozzleTempFirstLayer","bedTemp",
+            "bedTempFirstLayer","chamberTemp","density","diameter"}
+print("UNCOVERED:", sorted(schema - covered) or "none")
+EOF
+```
+
+At the time of writing that reports **45 of 45 covered**. The unfilled-polymer ceiling is
 2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so a filament carrying
 the metal-fill tag (**20**) gets a much higher one. The schema permits any non-negative density;
 prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
@@ -221,7 +245,11 @@ Three inheritable fields are deliberately excluded because every variant stores 
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
 
-**Structural integrity** — a broken parent link, in three shapes: a `parentId` that resolves to no
+**Structural integrity** — a calibration whose nozzle is gone (`populate` yields `null` for a
+purged nozzle, or an object still carrying `_deletedAt` for a soft-deleted one; neither can be
+diameter-matched by the dynamic calibration route, and the Prusa bundle drops the row from its
+per-nozzle fan-out, so valid tuning silently becomes unreachable) — and a broken parent link, in
+three shapes: a `parentId` that resolves to no
 active filament (the listing returns only active rows, so it is missing, soft-deleted or purged),
 one pointing at *itself*, and one pointing at another **variant**. All three pass every other check
 while resolving nothing: the write API forbids nested inheritance and `resolveFilament` walks

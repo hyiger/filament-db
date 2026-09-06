@@ -145,6 +145,18 @@ CALIBRATION_BOUNDS = {
     "fanMinSpeed": (0, 100), "fanMaxSpeed": (0, 100), "fanBridgeSpeed": (0, 100),
 }
 CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
+
+# The declared nozzle-range ENDPOINTS are themselves schema-bounded and are
+# exported verbatim (filamentToOrcaSlicerKeys writes nozzle_temperature_range_low
+# / _high), so a range of -10..700 exports while containing a valid nozzle temp.
+RANGE_BOUNDS = {"nozzleRangeMin": (0, 600), "nozzleRangeMax": (0, 600)}
+PRESET_BOUNDS = {"extrusionMultiplier": (0, None)}
+# Per-spool and ledger numerics. Not filament spec, but they are the same class
+# of "written by a path that bypassed validation" evidence and analytics reads
+# them. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
+SPOOL_BOUNDS = {"totalWeight": (0, None)}
+DRY_CYCLE_BOUNDS = {"tempC": (0, 300), "durationMin": (0, None)}
+USAGE_BOUNDS = {"grams": (0, 1_000_000), "debitedGrams": (0, 1_000_000)}
 LOW_TEMP_FLOOR = 60
 NOZZLE_FLOOR = 150
 NOZZLE_CEILING = 450
@@ -342,6 +354,17 @@ def audit(records, abrasive):
             nz = cal.get("nozzle")
             noz_name = nz.get("name") if isinstance(nz, dict) else None
             where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
+            # populate() returns null for a PURGED nozzle and an object still
+            # carrying _deletedAt for a soft-deleted one. Neither can be
+            # diameter-matched by the dynamic calibration route, and the Prusa
+            # bundle drops such a row from its per-nozzle fan-out, so valid
+            # tuning silently becomes unreachable.
+            if nz is None:
+                add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
+                                 f"exists -> the tuning is unreachable", fid)
+            elif isinstance(nz, dict) and nz.get("_deletedAt"):
+                add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
+                                 f"{noz_name!r} -> the tuning is unreachable", fid)
             nozzle_like += [(f"{where} nozzleTemp", cal.get("nozzleTemp")),
                             (f"{where} nozzleTempFirstLayer", cal.get("nozzleTempFirstLayer"))]
             bed_like += [(f"{where} bedTemp", cal.get("bedTemp")),
@@ -407,14 +430,32 @@ def audit(records, abrasive):
         dia = r.get("diameter")
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
-        for fld, (bmin, bmax) in NUMERIC_BOUNDS.items():
-            val = r.get(fld)
-            if not isinstance(val, (int, float)) or isinstance(val, bool):
+        def bounds_check(container, table, where=""):
+            if not isinstance(container, dict):
+                return
+            for f2, (bmin, bmax) in table.items():
+                val = container.get(f2)
+                if not isinstance(val, (int, float)) or isinstance(val, bool):
+                    continue
+                if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
+                    rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
+                    add("physical", f"{name}: {where}{f2}={val} outside the schema bound ({rng}) -> "
+                                    f"written by a path that bypassed validation", fid)
+
+        bounds_check(r, NUMERIC_BOUNDS)
+        bounds_check(temps, RANGE_BOUNDS)
+        for idx, pre in enumerate(r.get("presets") or []):
+            if isinstance(pre, dict):
+                bounds_check(pre, PRESET_BOUNDS, f"preset[{pre.get('label') or idx}] ")
+        for sp in (r.get("spools") or []):
+            if not isinstance(sp, dict):
                 continue
-            if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
-                rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
-                add("physical", f"{name}: {fld}={val} outside the schema bound ({rng}) -> "
-                                f"written by a path that bypassed validation", fid)
+            tag = sp.get("instanceId") or sp.get("_id")
+            bounds_check(sp, SPOOL_BOUNDS, f"spool {tag} ")
+            for dc in (sp.get("dryCycles") or []):
+                bounds_check(dc, DRY_CYCLE_BOUNDS, f"spool {tag} dryCycle ")
+            for ue in (sp.get("usageHistory") or []):
+                bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ")
         for idx, cal in enumerate(r.get("calibrations") or []):
             if not isinstance(cal, dict):
                 continue
