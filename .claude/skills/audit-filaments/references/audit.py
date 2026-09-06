@@ -12,6 +12,16 @@ produce a useless filament audit is to read stored documents and report every
 inherited-and-therefore-null field as "missing". On a library with templates
 that is most of the output, and it buries the real findings.
 
+Abrasive findings are NOT computed here. They come from the app's own
+`/api/abrasive-nozzles`, which is the authoritative implementation
+(src/lib/abrasiveNozzleAudit.ts) and is unit-tested. Reimplementing it in this
+script produced a strictly worse duplicate: it missed every abrasive OPT tag
+except 4 (the real set is 0, 1, 4, 19-24, 31, 32), compared `filament_abrasive`
+by identity so a legitimate per-extruder `['1','1']` read as "off", called a
+setting-only record unrestricted when FilamentForm computes
+`abrasive || optTags.includes(4)`, audited non-printable templates as stock, and
+treated a soft-deleted nozzle reference as a safe assignment. Ask the app.
+
 Exit status is 0 even when findings exist: this reports, it does not gate.
 """
 
@@ -24,26 +34,32 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-# Fields resolveFilament() inherits from a template when the variant leaves them
-# null. A variant storing a value here that EQUALS the template's is a pinned
-# copy: it looks identical today and silently stops tracking the template.
-INHERITABLE = [
-    "density", "dryingTemperature", "dryingTime", "spoolWeight",
-    "netFilamentWeight", "maxVolumetricSpeed", "glassTempTransition",
-    "heatDeflectionTemp", "shrinkageXY", "shrinkageZ",
+# resolveFilament's own INHERITABLE_FIELDS, minus three that every variant
+# stores by construction and would therefore report as pinned every time:
+# `vendor` and `type` are required by POST /api/filaments, and `diameter` is
+# materialised by a schema default of 1.75.
+PIN_CHECK_FIELDS = [
+    "cost", "density", "maxVolumetricSpeed", "spoolWeight", "netFilamentWeight",
+    "dryingTemperature", "dryingTime", "transmissionDistance", "glassTempTransition",
+    "heatDeflectionTemp", "shoreHardnessA", "shoreHardnessD", "minPrintSpeed",
+    "maxPrintSpeed", "spoolType", "tdsUrl", "inherits", "shrinkageXY", "shrinkageZ",
+]
+
+# `temperatures` is a subdocument resolved SUBFIELD BY SUBFIELD, so each one
+# pins independently — a variant storing its template's nozzle temp stops
+# tracking it exactly like a top-level field would.
+PIN_CHECK_TEMPS = [
+    "nozzle", "nozzleFirstLayer", "bed", "bedFirstLayer",
+    "nozzleRangeMin", "nozzleRangeMax", "standby",
 ]
 
 # Stripped from a template on write (v1.70 #605). Present on one = legacy shape.
 TEMPLATE_STRIP = ["color", "colorName", "totalWeight", "lowStockThreshold"]
 
-# Type substrings implying an abrasive filler. Deliberately broad — a false
-# positive costs one glance, a false negative costs a nozzle.
-ABRASIVE_TYPE = re.compile(r"-(CF|GF)\b|CF\d|GF\d|glow|metal|stone|wood|carbon|glass", re.I)
-
 HEX6 = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 
 CATEGORIES = [
-    ("abrasive",     "ABRASIVE FLAG MISMATCH (exports wrong)"),
+    ("abrasive",     "ABRASIVE / NOZZLE SAFETY (from the app's own audit)"),
     ("inventory",    "INVENTORY / REMAINING-BAR BLOCKERS"),
     ("drying-units", "DRYING TIME UNIT ERRORS (the field is MINUTES)"),
     ("temps",        "TEMPERATURE VALIDITY"),
@@ -51,7 +67,7 @@ CATEGORIES = [
     ("missing-core", "MISSING CORE SPEC (effective, after inheritance)"),
     ("template",     "TEMPLATE HOLDING COLOUR / INVENTORY (v1.70)"),
     ("pinned",       "PINNED INHERITANCE (variant copies its template's value)"),
-    ("nozzles",      "NOZZLE COMPATIBILITY"),
+    ("nozzles",      "NOZZLE ASSIGNMENT"),
     ("colour",       "COLOUR"),
 ]
 
@@ -65,7 +81,7 @@ def fetch(url, api_key=None, timeout=30):
 
 
 def load(base, api_key, cache_dir=None):
-    """Return (records, nozzles). records[id] = {'res': resolved, 'raw': stored}."""
+    """Return (records, abrasive_findings). records[id] = {'res':…, 'raw':…}."""
     try:
         listing = fetch(f"{base}/api/filaments", api_key)
     except urllib.error.HTTPError as e:
@@ -91,18 +107,38 @@ def load(base, api_key, cache_dir=None):
     with ThreadPoolExecutor(max_workers=8) as pool:
         records = dict(pool.map(one, ids))
 
+    # The authoritative abrasive audit. A failure here must be visible, not
+    # silently rendered as "no abrasive problems".
     try:
-        nozzles = fetch(f"{base}/api/nozzles", api_key)
-    except Exception:
-        nozzles = []
-    return records, nozzles
+        abrasive = fetch(f"{base}/api/abrasive-nozzles", api_key).get("findings", [])
+    except Exception as e:
+        abrasive = {"error": str(e)}
+    return records, abrasive
 
 
-def audit(records):
+def audit(records, abrasive):
     findings = {}
 
     def add(cat, msg):
         findings.setdefault(cat, []).append(msg)
+
+    # --- abrasive: report what the app determined, do not re-derive ----------
+    if isinstance(abrasive, dict) and "error" in abrasive:
+        add("abrasive", f"COULD NOT REACH /api/abrasive-nozzles ({abrasive['error']}) — "
+                        f"abrasive safety was NOT checked")
+    else:
+        for f in abrasive:
+            name = f.get("filamentName", "?")
+            why = ", ".join(f.get("reasons") or []) or "abrasive"
+            src = f" (inherited from {f['inheritedFrom']})" if f.get("inheritedFrom") else ""
+            soft = [n.get("name") for n in (f.get("softNozzles") or [])]
+            if f.get("flagMismatch"):
+                add("abrasive", f"{name}: material reads abrasive ({why}) but settings.filament_abrasive "
+                                f"is not on -> EXPORTS AS NON-ABRASIVE{src}")
+            if soft:
+                add("abrasive", f"{name}: abrasive ({why}) but permitted on unfit nozzle(s) {soft}{src}")
+            if f.get("unassigned"):
+                add("abrasive", f"{name}: abrasive ({why}) with no nozzle assignment at all{src}")
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
     parents = {str(v["raw"]["parentId"]) for v in records.values() if v["raw"].get("parentId")}
@@ -110,31 +146,21 @@ def audit(records):
     for fid, v in records.items():
         r, raw = v["res"], v["raw"]
         name = r.get("name", "?")
-        typ = r.get("type") or ""
         temps = r.get("temperatures") or {}
-        tags = r.get("optTags") or []
-        settings = r.get("settings") or {}
         is_template = fid in parents
         live_spools = [s for s in (r.get("spools") or []) if not s.get("retired")]
 
-        # --- abrasive: the tag and the setting have DIFFERENT consumers -------
-        abrasive_setting = settings.get("filament_abrasive")
-        if 4 in tags and abrasive_setting != "1":
-            add("abrasive", f"{name}: optTag 4 (abrasive) but settings.filament_abrasive="
-                            f"{abrasive_setting!r} -> EXPORTS AS NON-ABRASIVE")
-        if abrasive_setting == "1" and 4 not in tags:
-            add("abrasive", f"{name}: filament_abrasive='1' but no optTag 4 -> the nozzle picker will not restrict it")
-        if ABRASIVE_TYPE.search(typ) and 4 not in tags:
-            add("abrasive", f"{name}: type {typ!r} implies an abrasive filler but no optTag 4")
-
         # --- inventory: what makes the remaining bar work --------------------
         if live_spools:
-            if r.get("netFilamentWeight") is None:
-                add("inventory", f"{name}: {len(live_spools)} live spool(s) but no netFilamentWeight -> no % bar")
-            if r.get("spoolWeight") is None:
+            net = r.get("netFilamentWeight")
+            # getRemainingPct rejects a non-positive denominator, not just null.
+            if net is None or net <= 0:
+                add("inventory", f"{name}: {len(live_spools)} live spool(s) but netFilamentWeight="
+                                 f"{net!r} -> no % bar")
+            tare = r.get("spoolWeight")
+            if tare is None:
                 add("inventory", f"{name}: {len(live_spools)} live spool(s) but no spoolWeight (tare) -> "
                                  f"computeRemaining returns null, nothing displays")
-            tare = r.get("spoolWeight")
             for s in live_spools:
                 gross = s.get("totalWeight")
                 if tare is not None and gross is not None and gross < tare:
@@ -186,11 +212,10 @@ def audit(records):
         if col is not None and not HEX6.match(str(col)):
             add("colour", f"{name}: malformed color {col!r}")
         # #808080 is the legacy default the pre-v1.70 form stamped on everything,
-        # but it is ALSO the correct hex for a filament that is actually grey.
-        if col == "#808080" and "grey" not in (r.get("colorName") or "").lower() \
-                and "gray" not in (r.get("colorName") or "").lower():
-            add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName="
-                          f"{r.get('colorName')!r})")
+        # but it is ALSO the correct hex for a filament that really is grey.
+        cname = (r.get("colorName") or "").lower()
+        if col == "#808080" and "grey" not in cname and "gray" not in cname:
+            add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})")
 
         # --- template violations (v1.70 #605) --------------------------------
         if is_template:
@@ -204,20 +229,22 @@ def audit(records):
         pid = str(raw["parentId"]) if raw.get("parentId") else None
         if pid and pid in records:
             parent_eff = records[pid]["res"]
-            for fld in INHERITABLE:
+            pname = parent_eff.get("name")
+            for fld in PIN_CHECK_FIELDS:
                 own, inherited = raw.get(fld), parent_eff.get(fld)
                 if own is not None and inherited is not None and own == inherited:
-                    add("pinned", f"{name}: stores {fld}={own}, identical to template "
-                                  f"{parent_eff.get('name')!r} -> pinned copy, stops tracking")
+                    add("pinned", f"{name}: stores {fld}={own}, identical to template {pname!r} -> pinned copy")
+            own_t = raw.get("temperatures") or {}
+            par_t = parent_eff.get("temperatures") or {}
+            for sub in PIN_CHECK_TEMPS:
+                own, inherited = own_t.get(sub), par_t.get(sub)
+                if own is not None and inherited is not None and own == inherited:
+                    add("pinned", f"{name}: stores temperatures.{sub}={own}, identical to template "
+                                  f"{pname!r} -> pinned copy")
 
-        # --- nozzle compatibility --------------------------------------------
-        compat = [n for n in (r.get("compatibleNozzles") or []) if isinstance(n, dict)]
-        if not compat and not is_template:
+        # --- nozzle assignment (non-abrasive; abrasive is the app's job) ------
+        if not is_template and not (r.get("compatibleNozzles") or []):
             add("nozzles", f"{name}: no compatibleNozzles")
-        if 4 in tags:
-            soft = [n.get("name") for n in compat if not n.get("hardened")]
-            if soft:
-                add("nozzles", f"{name}: marked ABRASIVE but permitted on non-hardened {soft}")
 
     return findings, parents
 
@@ -232,8 +259,8 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    records, _nozzles = load(base, args.api_key, args.cache)
-    findings, parents = audit(records)
+    records, abrasive = load(base, args.api_key, args.cache)
+    findings, parents = audit(records, abrasive)
 
     wanted = set(args.only.split(",")) if args.only else None
     if args.json:

@@ -26,7 +26,7 @@ Options: `--base` (default `http://localhost:3456`, or `$FILAMENTDB_URL`), `--ap
 `$FILAMENTDB_API_KEY`), `--only <categories>`, `--json`, `--cache <dir>` to keep the fetched
 records for follow-up analysis.
 
-## Two traps that make a naive audit worse than none
+## Traps that make a naive audit worse than none
 
 **Do not audit through `MONGODB_URI`.** `scripts/audit-filaments.ts` connects with the URI from
 `.env.local`, which is frequently a *different database* from the one the running app is using —
@@ -46,21 +46,42 @@ and the slicer actually see) and `?raw=true` (stored — what this row owns). Mi
 on the resolved read, and ownership questions on the raw one. Keep that distinction if you extend
 it.
 
-## What it checks, worst first
+## And do not re-derive abrasiveness
 
-**Abrasive flag mismatch — the only category with physical consequences.** `optTags` id 4 and
-`settings.filament_abrasive` are read by *different consumers*: the app's nozzle picker honours the
-tag, while the **exporter reads only the setting**, and that is the value a firmware `M862.1` check
-sees. They diverge silently, and the common cause is benign — the FilamentForm writes the setting
-from its own checkbox, so saving a record that was tagged some other way stamps `'0'`, an *active
-assertion that a carbon-filled filament is not abrasive*. Treat `tag 4 + setting '0'` as the top
-finding in any report.
+**The app already has an authoritative, unit-tested abrasive audit** —
+`src/lib/abrasiveNozzleAudit.ts`, exposed as `GET /api/abrasive-nozzles`. The checker calls it and
+reports what it says. Reimplementing it in the script produced a strictly worse duplicate that
+was wrong in five separate ways, every one of them a false negative or a false alarm in the
+highest-severity category:
+
+- it recognised only `optTags` 4, where the real `ABRASIVE_OPT_TAGS` is `0, 1, 4, 19–24, 31, 32` —
+  so an imported `type: "PLA", optTags: [31]` carbon-fibre record passed clean;
+- it compared `filament_abrasive` by identity, so a legitimate per-extruder `['1','1']` from an
+  Orca/Bambu round trip read as "off" (the app collapses it with `settingFlagScalar`, GH #678);
+- it called a setting-only record unrestricted, when `FilamentForm` computes
+  `isAbrasive = form.abrasive || form.optTags.includes(4)`;
+- it audited templates, which are not printable stock and whose values every child may override;
+- it accepted a **soft-deleted** nozzle as a safe assignment, where the app treats a reference
+  missing from the active catalogue as unsafe, because a dangling ref is not evidence of hardness.
+
+Ask the app. If the endpoint is unreachable the checker says so loudly rather than printing an
+empty category, because "no abrasive findings" and "abrasive was never checked" must not look
+alike.
+
+Why this category matters at all: `optTags` 4 and `settings.filament_abrasive` are read by
+*different consumers*. The nozzle picker honours the tag; the **exporter reads only the setting**,
+and that is the value a firmware `M862.1` check sees. The usual cause of divergence is benign —
+FilamentForm writes the setting from its own checkbox, so saving a record tagged some other way
+stamps `'0'`, an *active assertion that a carbon-filled filament is not abrasive*.
+
+## What else it checks, worst first
 
 **Inventory blockers.** `computeRemaining` returns null the moment `spoolWeight` is null, before it
 ever reaches the percentage, and the bar divides by `netFilamentWeight`. A live spool on a filament
 missing either one tracks a gross number and nothing else — the record looks complete, the bar is
-simply blank, and no error was ever raised. Also catches a spool whose gross weight is below its
-own tare.
+simply blank, and no error was ever raised. Note `getRemainingPct` rejects a **non-positive**
+denominator, not just a null one, so a schema-valid `netFilamentWeight: 0` is equally a blocker.
+Also catches a spool whose gross weight is below its own tare.
 
 **Drying time in hours.** `dryingTime` is **minutes** and no vendor datasheet uses minutes — they
 all say hours. The schema cap is 10080, so `4` is accepted silently and reads as four minutes of
@@ -82,11 +103,17 @@ never a hand-written `PUT`.
 
 **Pinned inheritance.** A variant storing a value byte-identical to its template's is a copy that
 looks right today and stops following the template the day it is edited. Latent, never urgent, and
-worth reporting as such rather than alarming about it.
+worth reporting as such rather than alarming about it. The field list is `resolveFilament`'s own
+`INHERITABLE_FIELDS` **plus every `temperatures.*` subfield** — that subdocument resolves subfield
+by subfield, so a variant storing its template's nozzle temp pins exactly like a top-level field.
+Three inheritable fields are deliberately excluded because every variant stores them by
+construction and they would report as pinned every time: `vendor` and `type` are required by
+`POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
 
-**Nozzle compatibility** — an abrasive-tagged filament permitted on a nozzle whose `hardened` flag
-is false. Note the INDX nozzle is nitrocarburized, i.e. surface-treated only; its own record says it
-is "not a substitute for a hardened nozzle on fibre-filled or metal-filled grades".
+**Nozzle assignment** — a non-template filament with no `compatibleNozzles` at all. Anything
+abrasive-related is left to the app's audit above, which also knows that the INDX nozzle is
+nitrocarburized, i.e. surface-treated only, and "not a substitute for a hardened nozzle on
+fibre-filled or metal-filled grades".
 
 **Colour** — malformed hex, and the legacy `#808080` sentinel the pre-v1.70 form stamped on
 everything.
@@ -96,12 +123,9 @@ everything.
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
 
-**A CF/GF filament without tag 4 may carry no exposure at all** if its `compatibleNozzles` already
-lists only hardened nozzles. Check before escalating: the finding is about metadata consistency,
-not an imminent nozzle death.
-
-**Wood-fill is a judgement call.** The type heuristic flags it as abrasive; wood fill is mildly
-abrasive at most, and the user may reasonably have decided it does not warrant the tag.
+**A flag mismatch is not always an imminent nozzle death.** A CF grade whose `compatibleNozzles`
+already lists only hardened nozzles is safe to print today; what is broken is the value it
+*exports* to the slicer. Say which of the two you mean.
 
 **A template with no temperatures is fine.** So is a variant with no density. Neither is a finding.
 
