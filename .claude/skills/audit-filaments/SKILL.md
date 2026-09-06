@@ -121,7 +121,10 @@ an hours figure.
 the everyday value falling outside its own declared range — a nozzle temp above its range max is
 common and invisible. **First-layer values are checked too**: `nozzleFirstLayer` and
 `bedFirstLayer` resolve and export independently, so a malformed one reaches a print while the
-steady-state temperature beside it looks perfectly sane. Plus implausible absolute values, against a band that is **type-aware at the
+steady-state temperature beside it looks perfectly sane. So are **per-calibration overrides** —
+`prusaSlicerBundle` writes `temperature`/`bed_temperature` and `orcaSlicerBundle`
+`nozzle_temperature`/`hot_plate_temp` straight from a calibration entry, so an out-of-range one
+reaches the preset regardless of what the filament-level values say. Plus implausible absolute values, against a band that is **type-aware at the
 bottom**: the general floor is 150 °C, but the bundled technical reference documents PCL 100 at
 ~120 °C and the orthotic Facilan Ortho at 130–170 °C, so a flat floor would call every valid
 low-temperature grade an error. Widen `LOW_TEMP_TYPES` rather than lowering the floor for
@@ -224,6 +227,13 @@ message really is shared, so the count stays accurate and both records can be re
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
+
+**A high-flow calibration above the declared range is usually deliberate.** A tungsten-carbide or
+other high-flow nozzle needs more heat than the material's published window, so a calibration at
+270 °C against a declared 230–260 is a real inconsistency but rarely an error. The repair is almost
+always to widen `nozzleRangeMax` to match what is actually being run — not to lower the calibration,
+which would change a tuned profile. Report it as "the export sends X while the record claims Y" and
+let the owner decide.
 
 **A flag mismatch is not always an imminent nozzle death.** A CF grade whose `compatibleNozzles`
 already lists only hardened nozzles is safe to print today; what is broken is the value it
