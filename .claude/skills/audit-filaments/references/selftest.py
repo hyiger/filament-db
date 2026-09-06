@@ -144,7 +144,52 @@ def case_valid():
         return bad("valid-record", "a VALID record raised:\n" + traceback.format_exc())
     if not isinstance(findings, dict):
         return bad("valid-record", f"expected dict findings, got {type(findings)}")
+    # "did not raise" was the ONLY assertion here, which left the suite with no
+    # general false-positive guard at all — a check mis-tuned to fire on healthy
+    # data would have passed every case in this file.
+    rows = [m for rows_ in findings.values() for _, m in rows_]
+    if rows:
+        return bad("valid-record", "a VALID record produced findings:\n    "
+                                   + "\n    ".join(rows))
     ok("valid-record")
+
+    # ...and again as a healthy TEMPLATE + VARIANT pair. The standalone fixture
+    # can never enter the pinned / template / inheritance blocks, so a false
+    # positive that only fires on a family would go unnoticed.
+    t = valid_res(_id="t", name="Family", parentId=None, spools=[], color=None, colorName=None,
+                  totalWeight=None, lowStockThreshold=None, instanceId="tttttttttt")
+    k = valid_res(_id="k", name="Family — Blue", parentId="t", instanceId="kkkkkkkkkk")
+    # A HEALTHY variant stores none of what it inherits — that is the whole
+    # point of the model, and it is what the pinned-inheritance block exists to
+    # push people toward. Build it by stripping every inheritable from the raw
+    # read and declaring them inherited, exactly as resolveFilament reports.
+    inh = list(A.PIN_CHECK_FIELDS) + list(A.PIN_CHECK_ARRAYS) + \
+        [f"temperatures.{t2}" for t2 in A.PIN_CHECK_TEMPS]
+    k["_inherited"] = inh
+    kraw = copy.deepcopy(k)
+    for f3 in A.PIN_CHECK_FIELDS:
+        kraw.pop(f3, None)
+    for f3 in A.PIN_CHECK_ARRAYS:
+        kraw[f3] = []
+    kraw["temperatures"] = {t2: v2 for t2, v2 in kraw["temperatures"].items()
+                            if t2 not in A.PIN_CHECK_TEMPS}
+    kraw["settings"] = {}                      # nothing pinned
+    kraw["tdsUrl"] = None
+    kraw["inherits"] = None
+    # checked by its own pin rule, not via PIN_CHECK_ARRAYS
+    kraw["compatibleNozzles"] = []
+    k["_inherited"].append("compatibleNozzles")
+    try:
+        f2, _ = run({"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}},
+                    topology={"t": True})
+    except Exception:
+        return bad("valid-family", "a VALID template/variant pair raised:\n"
+                                   + traceback.format_exc())
+    rows = [m for rows_ in f2.values() for _, m in rows_]
+    if rows:
+        return bad("valid-family", "a VALID template/variant pair produced findings:\n    "
+                                   + "\n    ".join(rows))
+    ok("valid-family")
 
 
 # --- 2. THE CLASS: hostile shapes at every path, on both reads --------------
@@ -297,28 +342,33 @@ def fuzz_cross_record():
     # plain dict yields insertion order. An earlier version of this harness built
     # the template first in both cases, so the variant never ran ahead of it and
     # the fuzz reported clean against code that provably crashed.
+    # WHICH SIDE holds the hostile value is a second dimension, and it was
+    # missing: the value only ever went into the template, so every read the
+    # pinned-inheritance and attribution blocks make against the VARIANT's own
+    # document was fuzzed with nothing but the clean fixture.
     for first in ("variant", "template"):
         base = valid_res()
         for path in walk_paths(base):
             for hv in HOSTILE:
-                combos += 1
-                tpl = valid_res(_id=tpl_id, name="ZZZ Template", hasVariants=True,
-                                color=None, colorName=None, totalWeight=None, spools=[])
-                var = valid_res(_id=var_id, name="AAA Variant", parentId=tpl_id)
-                try:
-                    put(tpl, path, hv)
-                except Exception:
-                    continue
-                tp = {"res": tpl, "raw": copy.deepcopy(tpl)}
-                vr = {"res": var, "raw": copy.deepcopy(var)}
-                recs = {var_id: vr, tpl_id: tp} if first == "variant" else {tpl_id: tp, var_id: vr}
-                try:
-                    findings, _ = run(recs)
-                    if not isinstance(findings, dict):
-                        crashes.setdefault((".".join(map(str, path)), "non-dict findings"), 0)
-                except Exception as e:
-                    key = (".".join(map(str, path)), f"{type(e).__name__}: {e}")
-                    crashes[key] = crashes.get(key, 0) + 1
+                for holder in ("template", "variant"):
+                    combos += 1
+                    tpl = valid_res(_id=tpl_id, name="ZZZ Template", hasVariants=True,
+                                    color=None, colorName=None, totalWeight=None, spools=[])
+                    var = valid_res(_id=var_id, name="AAA Variant", parentId=tpl_id)
+                    try:
+                        put(tpl if holder == "template" else var, path, hv)
+                    except Exception:
+                        continue
+                    tp = {"res": tpl, "raw": copy.deepcopy(tpl)}
+                    vr = {"res": var, "raw": copy.deepcopy(var)}
+                    recs = {var_id: vr, tpl_id: tp} if first == "variant" else {tpl_id: tp, var_id: vr}
+                    try:
+                        findings, _ = run(recs)
+                        if not isinstance(findings, dict):
+                            crashes.setdefault((".".join(map(str, path)), "non-dict findings"), 0)
+                    except Exception as e:
+                        key = (".".join(map(str, path)), f"{type(e).__name__}: {e}")
+                        crashes[key] = crashes.get(key, 0) + 1
     if crashes:
         failed += 1
         print(f"FAIL [fuzz-cross-record] audit RAISED on {len(crashes)} distinct (path, error) "
@@ -663,8 +713,11 @@ def case_messages_are_true():
     if any("nothing displays" in m for m in msgs):
         bad("msg-null-tare", "still claims 'nothing displays' -- inventoryStats substitutes a "
                              "0 g tare and the gram figure still renders")
-    else:
+    elif any("no spoolWeight (tare)" in m and "counts the spool" in m for m in msgs):
         ok("msg-null-tare")
+    else:
+        # Negative-only, this passed with the whole missing-tare check deleted.
+        bad("msg-null-tare", f"the missing-tare case produced no finding at all: {msgs}")
 
     r2 = valid_res()
     r2["spools"][0]["totalWeight"] = 150      # below the 200 g tare
@@ -673,10 +726,28 @@ def case_messages_are_true():
     if any("negative remaining" in m for m in msgs2):
         bad("msg-below-tare", "still claims 'negative remaining' -- every remaining computation "
                               "clamps at 0")
-    elif any("clamps" in m and "below tare" in m for m in msgs2):
+    elif any("clamps" in m and "below tare" in m and "reads as EMPTY" in m for m in msgs2):
         ok("msg-below-tare")
     else:
-        bad("msg-below-tare", f"the below-tare case produced no finding at all: {msgs2}")
+        bad("msg-below-tare",
+            f"a SINGLE weighed spool below its tare empties the filament — matching only the "
+            f"message prefix let the two consequences be swapped undetected: {msgs2}")
+
+    # ...and the multi-spool consequence, which the app genuinely computes
+    # differently: the spool clamps to 0 but still adds a whole `net` to
+    # getRemainingPct's denominator, so it DRAGS the bar down rather than
+    # emptying the filament.
+    r3 = valid_res()
+    r3["spools"] = [dict(r3["spools"][0], _id="s1", instanceId="bad", totalWeight=50),
+                    dict(r3["spools"][0], _id="s2", instanceId="ok", totalWeight=950)]
+    f3, _ = run({"c": rec(r3, copy.deepcopy(r3))})
+    msgs3 = [m for rows in f3.values() for _, m in rows if "below tare" in m]
+    if msgs3 and "drags the whole filament" in msgs3[0] and "reads as EMPTY" not in msgs3[0]:
+        ok("msg-below-tare-multi")
+    else:
+        bad("msg-below-tare-multi",
+            f"with a healthy weighed sibling the filament does NOT read as empty and spool-check "
+            f"does not refuse every job: {msgs3}")
 
 
 # --- 14. tombstoned calibration refs ----------------------------------------
@@ -1170,6 +1241,83 @@ def case_inh_blame_attribution():
         ok("inh-blame-empty-array-not-owned")
 
 
+# --- 14m. the abrasive category, which nothing exercised ---------------------
+# The whole /api/abrasive-nozzles consumption loop — all three emit branches —
+# never executed under this suite, in the category where a miss means a ruined
+# nozzle. Five regressions could ship silently, including the deliberate rule
+# that `inheritedFrom` must NOT be pasted onto a flag-only row.
+def case_abrasive_payload():
+    r = valid_res(_id="a", name="CF PLA")
+    payload = [
+        {"filamentId": "a", "filamentName": "CF PLA", "reasons": ["tagged"],
+         "flagMismatch": True, "softNozzles": [], "unassigned": False,
+         "inheritedFrom": "Some Template"},
+        {"filamentId": "b", "filamentName": "GF PA", "reasons": ["filled"],
+         "flagMismatch": False, "softNozzles": [{"name": "0.4 Brass"}], "unassigned": False,
+         "inheritedFrom": "GF PA Template"},
+        {"filamentId": "c", "filamentName": "Metal PLA", "reasons": ["tagged"],
+         "flagMismatch": False, "softNozzles": [], "unassigned": True,
+         "inheritedFrom": "Metal Template"},
+    ]
+    f, _ = run({"a": rec(r, copy.deepcopy(r))}, abrasive=payload)
+    rows = [m for _, m in f.get("abrasive", [])]
+
+    flag = [m for m in rows if "EXPORTS AS NON-ABRASIVE" in m]
+    soft = [m for m in rows if "unfit nozzle" in m]
+    unas = [m for m in rows if "no nozzle assignment" in m]
+    for label, got in (("flagMismatch", flag), ("softNozzles", soft), ("unassigned", unas)):
+        ok(f"abrasive-{label}") if got else bad(
+            f"abrasive-{label}", f"the {label} branch emitted nothing; rows were {rows}")
+
+    # The route populates `inheritedFrom` only for NOZZLE-scoped findings; on a
+    # flag-only row the inherited nozzle set is already correct, so pasting it
+    # would send the user to edit something healthy.
+    if flag and "inherited from" in flag[0]:
+        bad("abrasive-flag-no-inherited-hint",
+            "the nozzle-scoped 'inherited from' hint was pasted onto a FLAG-ONLY row — it points "
+            "the fix at the template when filament_abrasive may be this variant's own bag entry")
+    else:
+        ok("abrasive-flag-no-inherited-hint")
+    if soft and "inherited from" in soft[0]:
+        ok("abrasive-soft-keeps-hint")
+    else:
+        bad("abrasive-soft-keeps-hint",
+            "a nozzle-scoped row must keep the hint that says WHERE the nozzles come from")
+
+    # a malformed payload entry must be reported, never skipped in silence
+    f, _ = run({"a": rec(r, copy.deepcopy(r))}, abrasive=["oops", 42])
+    rows = [m for _, m in f.get("abrasive", [])]
+    ok("abrasive-malformed-entry") if len(rows) >= 2 else bad(
+        "abrasive-malformed-entry",
+        f"a non-dict entry in the abrasive payload must be reported as NOT CHECKED; got {rows}")
+
+    # and a payload that is not a list at all (the route returned an error body)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))}, abrasive={"error": "HTTP 500"})
+    rows = [m for _, m in f.get("abrasive", [])]
+    ok("abrasive-error-payload") if rows else bad(
+        "abrasive-error-payload",
+        "an abrasive payload that failed to load rendered as 'no abrasive problems'")
+
+
+# --- 14n. add_shape dedups identical rows, NOT different ones ----------------
+# Only the "collapse to one row" half was asserted, so regressing the key to
+# (cat, ident) — dropping the message — would silently discard the stored-read
+# row whenever the two reads carry DIFFERENT malformed values.
+def case_shape_dedup_keeps_distinct():
+    res = valid_res(type=5)
+    raw = valid_res(type=["x"])
+    f, _ = run({"c": {"res": res, "raw": raw}})
+    rows = [m for rows_ in f.values() for _, m in rows_ if ": type is" in m]
+    has_res = any("is int" in m and "(resolved)" in m for m in rows)
+    has_raw = any("is list" in m and "(stored)" in m for m in rows)
+    if has_res and has_raw:
+        ok("shape-dedup-keeps-distinct")
+    else:
+        bad("shape-dedup-keeps-distinct",
+            f"two DIFFERENT malformed values at the same path are two defects and must both "
+            f"report; got: {rows}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1252,6 +1400,8 @@ if __name__ == "__main__":
     case_malformed_is_not_missing()
     case_identity_and_dates()
     case_inh_blame_attribution()
+    case_abrasive_payload()
+    case_shape_dedup_keeps_distinct()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

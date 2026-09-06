@@ -242,6 +242,13 @@ finding for the whole library) or was read past in silence, and the script reads
 hundred paths. Fuzzing every path covers the next one the day it is added, with nobody writing a
 case for it.
 
+**A negative-only assertion is not coverage.** Several cases here asserted only that a *wrong*
+sentence was absent — so deleting the entire check they guarded left the suite green. Every
+message assertion now has a positive half naming the consequence clause it expects, and the way to
+prove one is real is to delete the code it covers and watch the suite go red. That is worth doing
+for any new case: two of the ones written during this review passed against deleted code on the
+first attempt.
+
 **Every module-level table in `audit.py` must be classified in the selftest**, in one of
 `FIELD_TABLES` / `PAIR_TABLES` / `VALUE_TABLES`; an unclassified one fails the suite by name. That
 rule exists because the coverage guard originally scanned only literal `.get("x")` calls while most

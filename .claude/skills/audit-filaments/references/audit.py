@@ -214,8 +214,21 @@ def _json_equal(a, b):
 
 
 def _nozzle_ids(value):
+    """Identity-only comparison for `compatibleNozzles`.
+
+    NOT because the raw read carries bare ObjectIds -- it does not; the detail
+    route runs ONE populated query and both reads come back with full nozzle
+    documents, so the non-dict branch below is defensive only. The real reason
+    this array is handled separately is the opposite: a populated nozzle's `_id`
+    IS its identity, and the structural comparison used for the other arrays
+    strips generated ids -- which would make two lists pointing at DIFFERENT
+    nozzles compare equal, and the prescribed repair (clear the variant's array)
+    would then switch the variant onto the template's nozzles.
+    """
     out = []
     for entry in value or []:
+        # A bare id is not reachable through either detail read today; kept so a
+        # cached or snapshot-sourced document cannot crash the comparison.
         ref = entry.get("_id") if isinstance(entry, dict) else entry
         if ref is not None:
             out.append(str(ref))
@@ -2114,14 +2127,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             def _absent(container, key):
                 return not isinstance(container, dict) or container.get(key) in (None, "")
 
+            # All three are inheritable, so on a VARIANT the fix belongs on the
+            # template — one write clears the row for the whole colour family,
+            # and writing it here instead pins this row off the template. The
+            # absence is not attributable via _inh_blame (nothing is inherited:
+            # the value is missing on BOTH sides), so say it directly.
+            _where_to_set = ("" if not _ppid or not parent_name else
+                             f" -> this field is inheritable; setting it once on template "
+                             f"{parent_name!r} fills it for every colour, while setting it here "
+                             f"pins this row off the template")
             if noz is None and _absent(temps, "nozzle"):
-                add("missing-core", f"{name}: no nozzle temperature"
-                                    f"{_inh_blame('temperatures.nozzle')}", fid)
+                add("missing-core", f"{name}: no nozzle temperature{_where_to_set}", fid)
             if bed is None and _absent(temps, "bed"):
-                add("missing-core", f"{name}: no bed temperature"
-                                    f"{_inh_blame('temperatures.bed')}", fid)
+                add("missing-core", f"{name}: no bed temperature{_where_to_set}", fid)
             if dens is None and _absent(r, "density"):
-                add("missing-core", f"{name}: no density{_inh_blame('density')}", fid)
+                add("missing-core", f"{name}: no density{_where_to_set}", fid)
 
         # --- colour ----------------------------------------------------------
         # A colour the TEXT SWEEP just coerced to "" is not a colour defect —
@@ -2339,10 +2359,14 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # category.
             own_set = raw.get("settings") or {}
             par_set = parent_eff.get("settings") or {}
-            # A malformed bag on either side is already reported by the shape
-            # check above; here it only needs to not crash. Calling .items() on a
-            # legacy string or array would abort the whole audit with an
-            # AttributeError and report nothing at all.
+            # DEFENCE IN DEPTH, not the primary guard: the CONTAINER_SHAPES
+            # sweep already coerced `settings` to {} on BOTH reads, so as the
+            # code stands neither branch can fire. Kept because .items() on a
+            # legacy string would abort the whole audit, and a future caller
+            # that reaches this block without going through normalisation would
+            # otherwise take the whole run down. The earlier comment credited
+            # THIS site with the protection, which was misleading about where
+            # the invariant actually comes from.
             if not isinstance(own_set, dict):
                 own_set = {}
             if not isinstance(par_set, dict):
