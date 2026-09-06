@@ -119,7 +119,11 @@ an hours figure.
 
 **Temperatures.** The schema rejects an *inverted* range (min > max, GH #574) but nothing catches
 the everyday value falling outside its own declared range — a nozzle temp above its range max is
-common and invisible. Plus implausible absolute values.
+common and invisible. Plus implausible absolute values, against a band that is **type-aware at the
+bottom**: the general floor is 150 °C, but the bundled technical reference documents PCL 100 at
+~120 °C and the orthotic Facilan Ortho at 130–170 °C, so a flat floor would call every valid
+low-temperature grade an error. Widen `LOW_TEMP_TYPES` rather than lowering the floor for
+everything if another such material arrives.
 
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
@@ -172,6 +176,11 @@ Three inheritable fields are deliberately excluded because every variant stores 
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
 
+**Structural integrity** — a variant whose `parentId` resolves to no active filament. The listing
+returns only active rows, so an absent parent means missing, soft-deleted or purged, and such a row
+can pass every other check while the detail page and every slicer export resolve *none* of its
+inherited values. Reachable through an import, a snapshot restore or a sync merge.
+
 **Nozzle assignment** — a non-template filament with no `compatibleNozzles` at all. Anything
 abrasive-related is left to the app's audit above, which also knows that the INDX nozzle is
 nitrocarburized, i.e. surface-treated only, and "not a substitute for a hardened nozzle on
@@ -189,7 +198,10 @@ that colour. The checker exempts it; do not "fix" one by hand either.
 already lists only hardened nozzles is safe to print today; what is broken is the value it
 *exports* to the slicer. Say which of the two you mean.
 
-**A template with no temperatures is fine.** So is a variant with no density. Neither is a finding.
+**A template with no temperatures is fine**, and so is a variant with no *stored* density —
+it resolves one from its template. Say "stored" and not just "no density": the checker judges
+`missing-core` on the **effective** read, so a non-template whose density is absent *after*
+inheritance is a real finding and must not be waved away as inheritance.
 
 ## Fixing what you find
 

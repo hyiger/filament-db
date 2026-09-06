@@ -100,6 +100,15 @@ def _nozzle_ids(value):
             out.append(str(ref))
     return sorted(out)
 
+# Materials that legitimately print below the general FFF floor. The bundled
+# technical reference documents PCL 100 at ~120 C and the orthotic Facilan Ortho
+# at 130-170 C, with the polymer softening near 60 C — a flat 150 C floor would
+# call every one of those a validity error.
+LOW_TEMP_TYPES = ("PCL",)
+LOW_TEMP_FLOOR = 60
+NOZZLE_FLOOR = 150
+NOZZLE_CEILING = 450
+
 HEX6 = re.compile(r"#[0-9A-Fa-f]{6}\Z")
 
 CATEGORIES = [
@@ -111,6 +120,7 @@ CATEGORIES = [
     ("missing-core", "MISSING CORE SPEC (effective, after inheritance)"),
     ("template",     "TEMPLATE HOLDING COLOUR / INVENTORY (v1.70)"),
     ("pinned",       "PINNED INHERITANCE (variant copies its template's value)"),
+    ("structure",    "STRUCTURAL INTEGRITY"),
     ("nozzles",      "NOZZLE ASSIGNMENT"),
     ("colour",       "COLOUR"),
 ]
@@ -270,8 +280,11 @@ def audit(records, abrasive):
             add("temps", f"{name}: nozzle {noz} is BELOW its own range min {lo}")
         if noz is not None and hi is not None and noz > hi:
             add("temps", f"{name}: nozzle {noz} is ABOVE its own range max {hi}")
-        if noz is not None and not 150 <= noz <= 450:
-            add("temps", f"{name}: nozzle {noz}C outside the plausible FFF band")
+        typ_upper = (r.get("type") or "").upper()
+        floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
+        if noz is not None and not floor <= noz <= NOZZLE_CEILING:
+            add("temps", f"{name}: nozzle {noz}C outside the plausible band for {r.get('type') or '?'} "
+                         f"({floor}-{NOZZLE_CEILING}C)")
         if bed is not None and not 0 <= bed <= 200:
             add("temps", f"{name}: bed {bed}C implausible")
 
@@ -331,6 +344,13 @@ def audit(records, abrasive):
 
         # --- pinned inheritance ----------------------------------------------
         pid = str(raw["parentId"]) if raw.get("parentId") else None
+        if pid and pid not in records:
+            # The listing only returns ACTIVE filaments, so an absent parent is
+            # missing, soft-deleted or purged. Such a row can pass every other
+            # check while the detail page and every slicer export resolve NONE of
+            # its inherited values — silently skipping it hides a real breakage.
+            add("structure", f"{name}: parentId {pid} resolves to no active filament -> "
+                             f"nothing inherits, every inherited field reads as empty")
         if pid and pid in records:
             parent_eff = records[pid]["res"]
             pname = parent_eff.get("name")
