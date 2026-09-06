@@ -128,6 +128,12 @@ everything if another such material arrives.
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
 
+**Physical values** — density against a **material-aware** band. The unfilled-polymer ceiling is
+2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so anything carrying the
+metal-fill tag (20) or a metal word in its type or name gets a much higher ceiling. The schema
+itself permits any non-negative density; prompting someone to "correct" a valid one would corrupt
+every weight-to-length calculation that reads it.
+
 **Template violations (v1.70 #605).** A filament with variants is a template: colourless, no
 inventory. Enforcement is forward-only, so legacy parents keep whatever they had. Inventory
 stranded on a template is the serious case — its spools are invisible to the family's stats.
@@ -136,21 +142,27 @@ The remedy for **colour, colourName, spools or `totalWeight`** is the **Convert 
 action on the parent (`POST /api/filaments/{id}/promote`), never a hand-written `PUT` — it moves
 that state onto a new sibling variant rather than deleting it.
 
-**Two leftovers promote will NOT clear**, and prescribing it for them is wrong.
-`parentPromotionState` computes `needed` as: a non-empty `color` (**not** trimmed), a `colorName`
-that is non-empty **after trimming**, a spool count, or `totalWeight`. Anything outside that set
-returns **400 `nothing_to_convert`**, so the audit tags each template row with the repair that
-actually works:
+**Whether promote works is a question about the WHOLE template, not about the field in front of
+you** — and getting that backwards destroys data. `parentPromotionState` computes `needed` as: a
+non-empty `color` (**not** trimmed), a `colorName` non-empty **after trimming**, a spool count, or
+`totalWeight`. When that gate passes, `performParentPromotion` moves colour, colourName, spools,
+`totalWeight` **and `lowStockThreshold`** onto the new variant. So on a template carrying a colour
+*and* a threshold, promote handles both — and telling the user to null the threshold first would
+throw away a value promotion would have preserved.
 
-- **`lowStockThreshold`** — deliberately excluded, because a promotion that moves nothing is not
-  worth confirming.
-- **A whitespace-only `colorName`** — trimmed to empty by that check, so it does not count as
-  state to move. Reachable when a standalone with a blank-looking name gains its first variant.
-  Note the asymmetry: a whitespace-only *`color`* is **not** trimmed, so promote does handle it.
+Only when the gate does **not** pass does anything need a manual write, and then the leftovers can
+only be:
 
-Clear those two explicitly instead:
+- **`lowStockThreshold`** — deliberately outside the gate, because a promotion that moves nothing
+  is not worth confirming.
+- **A whitespace-only `colorName`** — trimmed to empty by that check. Reachable when a standalone
+  with a blank-looking name gains its first variant. Note the asymmetry: a whitespace-only
+  *`color`* is **not** trimmed, so it does satisfy the gate.
+
+The checker tags every template row with whichever applies, computed from the parent's full state:
 
 ```bash
+# only when the audit says promote returns 400 nothing_to_convert
 curl -s -X PUT "$BASE/api/filaments/$TEMPLATE_ID" -H 'Content-Type: application/json' \
   -d '{"lowStockThreshold": null}'      # or {"colorName": null}
 ```

@@ -105,6 +105,17 @@ def _nozzle_ids(value):
 # at 130-170 C, with the polymer softening near 60 C — a flat 150 C floor would
 # call every one of those a validity error.
 LOW_TEMP_TYPES = ("PCL",)
+
+# Metal-filled composites are legitimately far denser than any unfilled polymer —
+# copper- and bronze-filled PLA sit around 3-4 g/cm3 — and the schema permits any
+# non-negative density. Applying an unfilled-polymer ceiling to them would report
+# correct data as invalid and invite a "fix" that corrupts every weight-to-length
+# calculation downstream.
+OPT_TAG_METAL_FILL = 20
+METAL_FILL_RE = re.compile(r"copper|bronze|brass|steel|iron|tungsten|metal|magnet", re.I)
+DENSITY_CEILING = 2.5
+DENSITY_CEILING_FILLED = 12.0
+DENSITY_FLOOR = 0.7
 LOW_TEMP_FLOOR = 60
 NOZZLE_FLOOR = 150
 NOZZLE_CEILING = 450
@@ -290,8 +301,13 @@ def audit(records, abrasive):
 
         # --- physical --------------------------------------------------------
         dens = r.get("density")
-        if dens is not None and not 0.7 <= dens <= 2.5:
-            add("physical", f"{name}: density {dens} g/cm3 outside the plausible polymer range")
+        metal_filled = (OPT_TAG_METAL_FILL in (r.get("optTags") or [])
+                        or bool(METAL_FILL_RE.search(f"{r.get('type') or ''} {name}")))
+        ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
+        if dens is not None and not DENSITY_FLOOR <= dens <= ceiling:
+            kind = "metal-filled" if metal_filled else "unfilled polymer"
+            add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
+                            f"({DENSITY_FLOOR}-{ceiling})")
         dia = r.get("diameter")
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size")
@@ -321,23 +337,28 @@ def audit(records, abrasive):
 
         # --- template violations (v1.70 #605) --------------------------------
         if is_template:
+            # Promotion is a WHOLE-TEMPLATE operation, not a per-field one. Its
+            # gate is parentPromotionState.needed — a non-empty `color` (NOT
+            # trimmed), a `colorName` non-empty AFTER trimming, a spool count, or
+            # totalWeight. When that is satisfied, performParentPromotion MOVES
+            # colour, colourName, spools, totalWeight AND lowStockThreshold onto
+            # the new variant. So the repair must be chosen from the parent's full
+            # state: deciding per field would tell the user to null a threshold
+            # that promotion would have preserved, destroying it.
+            colour = raw.get("color")
+            cname = raw.get("colorName")
+            promote_runs = (
+                (isinstance(colour, str) and colour != "")
+                or (isinstance(cname, str) and cname.strip() != "")
+                or bool(raw.get("spools"))
+                or raw.get("totalWeight") is not None
+            )
             for fld in TEMPLATE_STRIP:
                 val = raw.get(fld)
                 if val in (None, "", []):
                     continue
-                # `POST .../promote` only moves what parentPromotionState counts as
-                # `needed`: a non-empty `color` (NOT trimmed), a `colorName` that is
-                # non-empty AFTER trimming, spools, or totalWeight. A leftover
-                # outside that set returns 400 nothing_to_convert, so pointing the
-                # user at promote would send them to an operation that cannot clear
-                # the finding — name the explicit write instead.
-                promote_clears = (
-                    fld in ("color", "totalWeight")
-                    or (fld == "colorName" and isinstance(val, str) and val.strip() != "")
-                )
-                how = ("Convert to template" if promote_clears
-                       else f'promote will NOT clear this (400 nothing_to_convert) — '
-                            f'PUT {{"{fld}": null}}')
+                how = ("Convert to template — moves this onto a new variant" if promote_runs
+                       else f'promote returns 400 nothing_to_convert here — PUT {{"{fld}": null}}')
                 add("template", f"{name} (TEMPLATE): still carries {fld}={val!r} [{how}]")
             if raw.get("spools"):
                 add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — inventory belongs on a variant")
