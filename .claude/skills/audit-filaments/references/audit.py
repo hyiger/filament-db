@@ -653,6 +653,13 @@ def _bad_tds_url(v):
 # src/lib/validateSpoolBody.ts — the charset/length contract every API write
 # to a spool id must satisfy. Mirrored so a value that arrived by a path
 # WITHOUT validation is reported before the user next tries to edit it.
+# What Mongoose's ObjectId cast actually accepts — verified against the
+# installed mongoose/lib/cast/objectid: 24 hex characters, case-insensitive,
+# and NOTHING else. A 12-byte string, a number and a bare id like "l1" are all
+# BSONErrors, so an unresolvable ref and an UNCASTABLE one are different
+# defects with different consequences.
+OBJECTID_RE = re.compile(r"^[0-9a-fA-F]{24}$")
+
 SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MAX_SPOOL_ID_LENGTH = 128
 # openprinttag.ts: brand_specific_instance_id is capped at 16 characters, and an
@@ -1683,6 +1690,16 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 add("structure", f"{name}: filament-level instanceId {_short(repr(_tid_v))} "
                                  f"{_tid_bad}", fid)
 
+        # `timestamps: true` on the Filament schema makes these real Date paths,
+        # so an uncastable value fails the restore exactly like a spool date.
+        # Read from the STORED doc: they are server-owned, never inherited.
+        for _tsf in ("createdAt", "updatedAt"):
+            _tsv = raw.get(_tsf)
+            if _tsv not in (None, "") and _bad_date(_tsv):
+                add("structure", f"{name}: {_tsf}={_short(repr(_tsv))} cannot be cast to a Date "
+                                 f"-> the schema declares it through `timestamps: true`, so POST "
+                                 f"/api/snapshot refuses the ENTIRE backup file", fid)
+
         _tds = raw.get("tdsUrl")
         if _tds is not None and not isinstance(_tds, str):
             # `_bad_tds_url` judges URL GRAMMAR and answers False for a
@@ -2033,9 +2050,25 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # "cannot judge" posture as the calibration scope refs.
             _loc_live = ref_index.get("locations") if isinstance(ref_index, dict) else None
             _lid = sp.get("locationId")
-            if (isinstance(_loc_live, set) and _lid is not None and _lid != ""
-                    and not isinstance(_lid, (dict, list)) and str(_lid) not in _loc_live):
-                add("structure", f"{name}: spool {tag} locationId={str(_lid)!r} resolves to no "
+            if isinstance(_lid, str) and _lid and not OBJECTID_RE.match(_lid):
+                add("structure", f"{name}: spool {tag} locationId={_short(repr(_lid))} is not a "
+                                 f"24-character hex ObjectId -> Mongoose's cast raises on it "
+                                 f"(a 12-byte string and a bare id are BOTH rejected), so POST "
+                                 f"/api/snapshot refuses the ENTIRE backup file", fid)
+            elif _lid is not None and _lid != "" and not isinstance(_lid, str):
+                # Excluding these as "uncheckable" hid a defect rather than
+                # avoiding a false one. `locationId` is a plain ObjectId ref and
+                # is NEVER populated by either detail read, so a dict or an array
+                # here cannot be a joined document — it is a value Mongoose
+                # cannot cast, and POST /api/snapshot refuses the whole file.
+                add("structure", f"{name}: spool {tag} locationId is "
+                                 f"{type(_lid).__name__} ({_short(repr(_lid))}) -> this ref is "
+                                 f"never populated, so it should be an id string; Mongoose cannot "
+                                 f"cast this to an ObjectId, so POST /api/snapshot refuses the "
+                                 f"ENTIRE backup file", fid)
+            elif (isinstance(_loc_live, set) and isinstance(_lid, str) and _lid
+                    and OBJECTID_RE.match(_lid) and _lid not in _loc_live):
+                add("structure", f"{name}: spool {tag} locationId={_lid!r} resolves to no "
                                  f"Location row -> /inventory joins nothing for it, so the spool "
                                  f"falls into a second 'no location' bucket and drops out of every "
                                  f"kind-filtered view", fid)

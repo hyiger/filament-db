@@ -98,7 +98,11 @@ def valid_res(**over):
         "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
             "_id": "s1", "instanceId": "0011223344", "label": "12", "lotNumber": "L-42",
-            "totalWeight": 950, "retired": False, "locationId": "l1",
+            "totalWeight": 950, "retired": False,
+            # a REAL ObjectId shape: Mongoose's cast accepts 24 hex characters
+            # and nothing else, so a bare "l1" here made the "valid" fixture
+            # invalid — which is precisely what case_valid now catches.
+            "locationId": "6a1a7bef677d648e9ba9cd8c",
             "purchaseDate": "2026-01-01", "openedDate": None,
             "usageHistory": [{"grams": 30, "debitedGrams": 30, "source": "job",
                               "date": "2026-02-01", "jobLabel": "bracket"}],
@@ -869,7 +873,7 @@ def case_calibration_scope_refs():
     # `_deletedAt: null` — so the location set must be built from ACTIVE rows,
     # unlike the printer/bedType sets where a tombstone still populates
     rl = valid_res()
-    rl["spools"][0]["locationId"] = "lDEAD"
+    rl["spools"][0]["locationId"] = "6a1a7bef677d648e9ba9cd99"   # real shape, no such row
     f, _, _ = A.audit({"a": rec(rl, copy.deepcopy(rl))}, (), None, None, None,
                       {"printers": set(), "bedTypes": set(), "locations": set(), "cals": {}})
     hit = [m for rows in f.values() for _, m in rows if "resolves to no Location row" in m]

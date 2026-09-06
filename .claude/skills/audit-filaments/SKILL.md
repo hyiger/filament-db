@@ -365,11 +365,16 @@ Three inheritable fields are deliberately excluded because every variant stores 
 construction and they would report as pinned every time: `vendor` and `type` are required by
 `POST /api/filaments`, and `diameter` is materialised by a schema default of 1.75.
 
-**Structural integrity** — a calibration whose nozzle is gone (`populate` yields `null` for a
-purged nozzle, or an object still carrying `_deletedAt` for a soft-deleted one; neither can be
-diameter-matched by the dynamic calibration route, and the Prusa bundle drops the row from its
-per-nozzle fan-out, so valid tuning silently becomes unreachable) — a calibration whose
-**printer or bed-type scope** is gone — and a broken parent link, in
+**Structural integrity** — a calibration whose nozzle is gone, and the two states are NOT the
+same: `populate` yields `null` for a **purged** nozzle, and that row genuinely cannot be
+diameter-matched by the calibration route while the Prusa fan-out drops it, so the tuning becomes
+unreachable. A **soft-deleted** nozzle populates as a full document that still carries its
+`diameter`, and neither consumer filters tombstones (the calibration route filters the *printer*
+explicitly, which shows the omission is deliberate) — so that tuning is still served and still
+exported, and what is lost is the ability to EDIT it: `isCalibrationRowReachable` drops the row
+into the FilamentForm orphan list. Reporting the purged consequence for the soft-deleted case
+sends the reader to repair an export path that works. Likewise a calibration whose **printer or
+bed-type scope** is gone — again with its own consequence per field — and a broken parent link, in
 three shapes: a `parentId` that resolves to no
 active filament (the listing returns only active rows, so it is missing, soft-deleted or purged),
 one pointing at *itself*, and one pointing at another **variant**. All three pass every other check
