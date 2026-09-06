@@ -79,9 +79,21 @@ stamps `'0'`, an *active assertion that a carbon-filled filament is not abrasive
 **Inventory blockers.** `computeRemaining` returns null the moment `spoolWeight` is null, before it
 ever reaches the percentage, and the bar divides by `netFilamentWeight`. A live spool on a filament
 missing either one tracks a gross number and nothing else — the record looks complete, the bar is
-simply blank, and no error was ever raised. Note `getRemainingPct` rejects a **non-positive**
-denominator, not just a null one, so a schema-valid `netFilamentWeight: 0` is equally a blocker.
-Also catches a spool whose gross weight is below its own tare.
+simply blank, and no error was ever raised. Three subtleties, each of which the app's own maths
+enforces and a naive check misses:
+
+- `getRemainingPct` rejects a **non-positive** denominator, not just a null one, so a schema-valid
+  `netFilamentWeight: 0` blocks the bar exactly like a missing one.
+- A spool with **no gross weight** is skipped by that function's `validCount`, and when no spool is
+  left countable it returns null outright. So audit the missing gross explicitly, and say so
+  louder when it is *every* live spool.
+- A **legacy roll** carries its stock on the top-level `totalWeight` with no `spools[]` at all, and
+  the app counts that as one tracked spool (`getSpoolCount`, and `getRemainingPct`'s second
+  branch). Gate the whole category on "live spools **or** a legacy roll", or you skip precisely
+  the pre-migration records this skill exists to find. Branch selection keys off `spools` being
+  non-empty at all — retired included — which is what the app does.
+
+Also catches a gross weight below its own tare, in both shapes.
 
 **Drying time in hours.** `dryingTime` is **minutes** and no vendor datasheet uses minutes — they
 all say hours. The schema cap is 10080, so `4` is accepted silently and reads as four minutes of

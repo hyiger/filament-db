@@ -148,23 +148,47 @@ def audit(records, abrasive):
         name = r.get("name", "?")
         temps = r.get("temperatures") or {}
         is_template = fid in parents
-        live_spools = [s for s in (r.get("spools") or []) if not s.get("retired")]
+        all_spools = r.get("spools") or []
+        live_spools = [s for s in all_spools if not s.get("retired")]
 
         # --- inventory: what makes the remaining bar work --------------------
-        if live_spools:
+        # A pre-migration record carries its stock on the TOP-LEVEL totalWeight
+        # with no spools[] subdocument, and the app counts that as one tracked
+        # spool (getSpoolCount, and getRemainingPct's second branch). Auditing
+        # only spools[] would skip exactly the legacy records this skill exists
+        # to find. Note the branch selection keys off spools being non-empty at
+        # ALL, retired included — matching getRemainingPct.
+        legacy_roll = not all_spools and r.get("totalWeight") is not None
+        if live_spools or legacy_roll:
+            unit = "legacy top-level roll" if legacy_roll else f"{len(live_spools)} live spool(s)"
             net = r.get("netFilamentWeight")
             # getRemainingPct rejects a non-positive denominator, not just null.
             if net is None or net <= 0:
-                add("inventory", f"{name}: {len(live_spools)} live spool(s) but netFilamentWeight="
-                                 f"{net!r} -> no % bar")
+                add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar")
             tare = r.get("spoolWeight")
             if tare is None:
-                add("inventory", f"{name}: {len(live_spools)} live spool(s) but no spoolWeight (tare) -> "
+                add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> "
                                  f"computeRemaining returns null, nothing displays")
-            for s in live_spools:
-                gross = s.get("totalWeight")
-                if tare is not None and gross is not None and gross < tare:
-                    add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> negative remaining")
+
+            if legacy_roll:
+                gross = r.get("totalWeight")
+                if tare is not None and gross < tare:
+                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining")
+            else:
+                missing_gross = 0
+                for s in live_spools:
+                    gross = s.get("totalWeight")
+                    if gross is None:
+                        # Schema-supported, but getRemainingPct skips such a spool
+                        # and returns null outright when none is left countable.
+                        missing_gross += 1
+                        add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
+                                         f"totalWeight (gross) -> it contributes nothing to the bar")
+                    elif tare is not None and gross < tare:
+                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> negative remaining")
+                if missing_gross and missing_gross == len(live_spools):
+                    add("inventory", f"{name}: every live spool is missing its gross weight -> "
+                                     f"getRemainingPct returns null, no bar at all")
 
         # --- drying: the field is minutes, every datasheet says hours --------
         dry_t, dry_temp = r.get("dryingTime"), r.get("dryingTemperature")
