@@ -293,65 +293,80 @@ def audit(records, abrasive):
                                 f"{dry_t} hours would be {int(dry_t * 60)}", fid)
 
         # --- temperatures ----------------------------------------------------
+        # The schema carries temperatures in FIVE places, and every one of them
+        # resolves and exports independently: the top-level `temperatures`,
+        # per-plate `bedTypeTemps`, per-calibration overrides, per-preset blocks,
+        # and the standby value. Checking only the first two let malformed data
+        # reach a slicer preset while the values beside it looked valid — three
+        # separate review rounds each found the next unchecked site. So collect
+        # every temperature the record carries FIRST, then check them uniformly;
+        # a new temperature-bearing field needs adding to one of these lists and
+        # nothing else.
         noz, lo, hi, bed = (temps.get("nozzle"), temps.get("nozzleRangeMin"),
                             temps.get("nozzleRangeMax"), temps.get("bed"))
+        nfl, bfl = temps.get("nozzleFirstLayer"), temps.get("bedFirstLayer")
         if lo is not None and hi is not None and lo > hi:
             add("temps", f"{name}: INVERTED nozzle range {lo}-{hi}", fid)
-        if noz is not None and lo is not None and noz < lo:
-            add("temps", f"{name}: nozzle {noz} is BELOW its own range min {lo}", fid)
-        if noz is not None and hi is not None and noz > hi:
-            add("temps", f"{name}: nozzle {noz} is ABOVE its own range max {hi}", fid)
-        # First-layer values resolve and export independently of the steady-state
-        # ones, so a malformed nozzleFirstLayer reaches a print while the regular
-        # nozzle temp looks perfectly sane.
-        nfl, bfl = temps.get("nozzleFirstLayer"), temps.get("bedFirstLayer")
-        if nfl is not None and lo is not None and nfl < lo:
-            add("temps", f"{name}: nozzleFirstLayer {nfl} is BELOW the declared range min {lo}", fid)
-        if nfl is not None and hi is not None and nfl > hi:
-            add("temps", f"{name}: nozzleFirstLayer {nfl} is ABOVE the declared range max {hi}", fid)
-        if bfl is not None and not 0 <= bfl <= 200:
-            add("temps", f"{name}: bedFirstLayer {bfl}C implausible", fid)
 
-        # Calibration entries carry their OWN temperatures, and both slicer
-        # exporters write them into the preset — prusaSlicerBundle sets
-        # "temperature"/"bed_temperature" and orcaSlicerBundle
-        # "nozzle_temperature"/"hot_plate_temp" from them. So an out-of-range
-        # override reaches a print while the filament-level temperatures beside
-        # it look perfectly valid.
+        nozzle_like = [("nozzle", noz), ("nozzleFirstLayer", nfl)]
+        bed_like = [("bed", bed), ("bedFirstLayer", bfl)]
+
         for idx, cal in enumerate(r.get("calibrations") or []):
             if not isinstance(cal, dict):
                 continue
-            noz_name = (cal.get("nozzle") or {}).get("name") if isinstance(cal.get("nozzle"), dict) else None
+            nz = cal.get("nozzle")
+            noz_name = nz.get("name") if isinstance(nz, dict) else None
             where = f"calibration[{idx}]" + (f" ({noz_name})" if noz_name else "")
-            for label in ("nozzleTemp", "nozzleTempFirstLayer"):
-                val = cal.get(label)
-                if val is None:
-                    continue
-                if lo is not None and val < lo:
-                    add("temps", f"{name}: {where} {label} {val} is BELOW the declared range min {lo}", fid)
-                if hi is not None and val > hi:
-                    add("temps", f"{name}: {where} {label} {val} is ABOVE the declared range max {hi}", fid)
-            for label in ("bedTemp", "bedTempFirstLayer"):
-                val = cal.get(label)
-                if val is not None and not 0 <= val <= 200:
-                    add("temps", f"{name}: {where} {label} {val}C implausible", fid)
+            nozzle_like += [(f"{where} nozzleTemp", cal.get("nozzleTemp")),
+                            (f"{where} nozzleTempFirstLayer", cal.get("nozzleTempFirstLayer"))]
+            bed_like += [(f"{where} bedTemp", cal.get("bedTemp")),
+                         (f"{where} bedTempFirstLayer", cal.get("bedTempFirstLayer"))]
             chamber = cal.get("chamberTemp")
             if chamber is not None and not 0 <= chamber <= 150:
                 add("temps", f"{name}: {where} chamberTemp {chamber}C implausible", fid)
 
+        # Per-plate overrides: filamentToOrcaSlicerKeys writes BOTH temperature
+        # and firstLayerTemperature from this array into the exported preset,
+        # overriding the otherwise-valid base values.
+        for bt in (r.get("bedTypeTemps") or []):
+            if not isinstance(bt, dict):
+                continue
+            plate = bt.get("bedType") or "?"
+            bed_like += [(f"bedTypeTemps[{plate}] temperature", bt.get("temperature")),
+                         (f"bedTypeTemps[{plate}] firstLayerTemperature", bt.get("firstLayerTemperature"))]
+
+        for idx, pre in enumerate(r.get("presets") or []):
+            if not isinstance(pre, dict):
+                continue
+            label = pre.get("label") or idx
+            pt = pre.get("temperatures") or {}
+            if not isinstance(pt, dict):
+                continue
+            nozzle_like += [(f"preset[{label}] nozzle", pt.get("nozzle")),
+                            (f"preset[{label}] nozzleFirstLayer", pt.get("nozzleFirstLayer"))]
+            bed_like += [(f"preset[{label}] bed", pt.get("bed")),
+                         (f"preset[{label}] bedFirstLayer", pt.get("bedFirstLayer"))]
+
         typ_upper = (r.get("type") or "").upper()
         floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
-        band_checks = [("nozzle", noz), ("nozzleFirstLayer", nfl)]
-        for idx, cal in enumerate(r.get("calibrations") or []):
-            if isinstance(cal, dict):
-                for label in ("nozzleTemp", "nozzleTempFirstLayer"):
-                    band_checks.append((f"calibration[{idx}] {label}", cal.get(label)))
-        for label, val in band_checks:
-            if val is not None and not floor <= val <= NOZZLE_CEILING:
+        for label, val in nozzle_like:
+            if val is None:
+                continue
+            if lo is not None and val < lo:
+                add("temps", f"{name}: {label} {val} is BELOW the declared range min {lo}", fid)
+            if hi is not None and val > hi:
+                add("temps", f"{name}: {label} {val} is ABOVE the declared range max {hi}", fid)
+            if not floor <= val <= NOZZLE_CEILING:
                 add("temps", f"{name}: {label} {val}C outside the plausible band for "
                              f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C)", fid)
-        if bed is not None and not 0 <= bed <= 200:
-            add("temps", f"{name}: bed {bed}C implausible", fid)
+        for label, val in bed_like:
+            if val is not None and not 0 <= val <= 200:
+                add("temps", f"{name}: {label} {val}C implausible", fid)
+        # Standby is an IDLE temperature, legitimately far below the print window,
+        # so only its ceiling is meaningful.
+        standby = temps.get("standby")
+        if standby is not None and not 0 <= standby <= NOZZLE_CEILING:
+            add("temps", f"{name}: standby {standby}C implausible", fid)
 
         # --- physical --------------------------------------------------------
         dens = r.get("density")

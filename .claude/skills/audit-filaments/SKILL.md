@@ -119,12 +119,24 @@ an hours figure.
 
 **Temperatures.** The schema rejects an *inverted* range (min > max, GH #574) but nothing catches
 the everyday value falling outside its own declared range — a nozzle temp above its range max is
-common and invisible. **First-layer values are checked too**: `nozzleFirstLayer` and
-`bedFirstLayer` resolve and export independently, so a malformed one reaches a print while the
-steady-state temperature beside it looks perfectly sane. So are **per-calibration overrides** —
-`prusaSlicerBundle` writes `temperature`/`bed_temperature` and `orcaSlicerBundle`
-`nozzle_temperature`/`hot_plate_temp` straight from a calibration entry, so an out-of-range one
-reaches the preset regardless of what the filament-level values say. Plus implausible absolute values, against a band that is **type-aware at the
+common and invisible. **The schema carries temperatures in FIVE places, and all five are checked**, because each
+resolves and exports independently — a malformed value in any of them reaches a slicer preset while
+the values beside it look perfectly sane:
+
+1. top-level `temperatures` (including `nozzleFirstLayer`/`bedFirstLayer`, which export separately);
+2. `temperatures.standby` — an *idle* temperature, legitimately far below the print window, so only
+   its ceiling is meaningful;
+3. `bedTypeTemps[]` per-plate overrides — `filamentToOrcaSlicerKeys` writes **both**
+   `temperature` and `firstLayerTemperature` from this array into the preset, overriding otherwise
+   valid base values;
+4. `calibrations[]` overrides — `prusaSlicerBundle` writes `temperature`/`bed_temperature` and
+   `orcaSlicerBundle` `nozzle_temperature`/`hot_plate_temp` straight from the entry;
+5. `presets[].temperatures`.
+
+The checker collects every temperature the record carries **first** and then checks them
+uniformly. Three separate review rounds each found the next unchecked site, which is why it is
+built this way: a new temperature-bearing field needs adding to one of those lists and nothing
+else. Plus implausible absolute values, against a band that is **type-aware at the
 bottom**: the general floor is 150 °C, but the bundled technical reference documents PCL 100 at
 ~120 °C and the orthotic Facilan Ortho at 130–170 °C, so a flat floor would call every valid
 low-temperature grade an error. Widen `LOW_TEMP_TYPES` rather than lowering the floor for
