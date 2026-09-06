@@ -309,8 +309,23 @@ def audit(records, abrasive):
         # --- template violations (v1.70 #605) --------------------------------
         if is_template:
             for fld in TEMPLATE_STRIP:
-                if raw.get(fld) not in (None, "", []):
-                    add("template", f"{name} (TEMPLATE): still carries {fld}={raw.get(fld)!r}")
+                val = raw.get(fld)
+                if val in (None, "", []):
+                    continue
+                # `POST .../promote` only moves what parentPromotionState counts as
+                # `needed`: a non-empty `color` (NOT trimmed), a `colorName` that is
+                # non-empty AFTER trimming, spools, or totalWeight. A leftover
+                # outside that set returns 400 nothing_to_convert, so pointing the
+                # user at promote would send them to an operation that cannot clear
+                # the finding — name the explicit write instead.
+                promote_clears = (
+                    fld in ("color", "totalWeight")
+                    or (fld == "colorName" and isinstance(val, str) and val.strip() != "")
+                )
+                how = ("Convert to template" if promote_clears
+                       else f'promote will NOT clear this (400 nothing_to_convert) — '
+                            f'PUT {{"{fld}": null}}')
+                add("template", f"{name} (TEMPLATE): still carries {fld}={val!r} [{how}]")
             if raw.get("spools"):
                 add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — inventory belongs on a variant")
 

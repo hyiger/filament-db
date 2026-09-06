@@ -132,16 +132,23 @@ The remedy for **colour, colourName, spools or `totalWeight`** is the **Convert 
 action on the parent (`POST /api/filaments/{id}/promote`), never a hand-written `PUT` — it moves
 that state onto a new sibling variant rather than deleting it.
 
-**`lowStockThreshold` is the exception, and prescribing promote for it is wrong.**
-`parentPromotionState` computes `needed` from colour, colourName, spool count and `totalWeight`
-only — a threshold is deliberately not in it, because a promotion that moves nothing is not worth
-confirming. So a template whose *only* leftover is a threshold returns **400 `nothing_to_convert`**,
-and pointing the user at promote sends them to an operation that cannot clear the finding. Clear
-that one field explicitly instead:
+**Two leftovers promote will NOT clear**, and prescribing it for them is wrong.
+`parentPromotionState` computes `needed` as: a non-empty `color` (**not** trimmed), a `colorName`
+that is non-empty **after trimming**, a spool count, or `totalWeight`. Anything outside that set
+returns **400 `nothing_to_convert`**, so the audit tags each template row with the repair that
+actually works:
+
+- **`lowStockThreshold`** — deliberately excluded, because a promotion that moves nothing is not
+  worth confirming.
+- **A whitespace-only `colorName`** — trimmed to empty by that check, so it does not count as
+  state to move. Reachable when a standalone with a blank-looking name gains its first variant.
+  Note the asymmetry: a whitespace-only *`color`* is **not** trimmed, so promote does handle it.
+
+Clear those two explicitly instead:
 
 ```bash
 curl -s -X PUT "$BASE/api/filaments/$TEMPLATE_ID" -H 'Content-Type: application/json' \
-  -d '{"lowStockThreshold": null}'
+  -d '{"lowStockThreshold": null}'      # or {"colorName": null}
 ```
 
 An explicit `null` passes the template strip (which only drops non-null values), which is exactly
