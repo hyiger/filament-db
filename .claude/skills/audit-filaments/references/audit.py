@@ -362,7 +362,9 @@ NESTED_CONTAINER_SHAPES = {
 # here, and the passes below call .upper()/.lower()/.strip() on them. Swept with
 # the containers for the same reason the containers are swept centrally: guarding
 # each call site is what turns one defect into one review round per site.
-TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName")
+# `inherits` is here because the detail page renders it directly as a React
+# child, exactly like the other five — a non-string throws on open.
+TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits")
 
 # Schema-required text, with the model's own trim semantics (Filament.ts):
 # `name` is `{required, trim}` so Mongoose trims BEFORE the required check and a
@@ -662,19 +664,28 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
             _seen_shape.add(key)
             add(cat, msg, str(fid))
 
-        coerced_text = set()
+        # `vendor`, `type` and `inherits` are inheritable, so a template's
+        # malformed value arrives in every child's RESOLVED read. Suppress the
+        # duplicate REPORT — never the coercion, which every later pass depends
+        # on. name/color/colorName are VARIANT_ONLY and never appear here.
+        _inh_text = r.get("_inherited")
+        _inh_text = ({x for x in _inh_text if isinstance(x, str)}
+                     if isinstance(_inh_text, (list, tuple)) else set())
+        coerced_text = set()   # stored read — a "" here is the record's own
+        coerced_res = set()    # resolved read — a "" here is this sweep's doing
         for doc, which in ((r, "resolved"), (raw, "stored")):
             for tf in TEXT_FIELDS:
                 tv = doc.get(tf)
                 if tv is not None and not isinstance(tv, str):
-                    if doc is raw:
-                        # Remember it: the sweep replaces the value with "", and
-                        # the required-content check below would then report that
-                        # "" as a second, phantom defect for the same field.
-                        coerced_text.add(tf)
-                    add_shape("physical", f"{_disp(r.get('name'))}: {tf} is "
-                                          f"{type(tv).__name__}, not a string ({which}) -> "
-                                          f"malformed; treated as empty", ("text", tf))
+                    # Keyed on `which`, not `doc is raw`: if one object is ever
+                    # passed for both reads, `doc is raw` is False on the first
+                    # pass and the second already sees the coerced "", so the
+                    # field would land in neither set.
+                    (coerced_text if which == "stored" else coerced_res).add(tf)
+                    if not (which == "resolved" and tf in _inh_text):
+                        add_shape("physical", f"{_disp(r.get('name'))}: {tf} is "
+                                              f"{type(tv).__name__}, not a string ({which}) -> "
+                                              f"malformed; treated as empty", ("text", tf))
                     doc[tf] = ""
         for rf, trims in REQUIRED_TEXT.items():
             sv = raw.get(rf)
@@ -700,12 +711,27 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                           ("required-text", rf))
         nm = r.get("name") or "?"
         for doc, which in ((r, "resolved"), (raw, "stored")):
+            _inh_here = v["res"].get("_inherited")
+            _inh_here = ({x for x in _inh_here if isinstance(x, str)}
+                         if isinstance(_inh_here, (list, tuple)) else set())
             for cf, want in CONTAINER_SHAPES.items():
                 cv = doc.get(cf)
                 if cv is not None and not isinstance(cv, want):
-                    add_shape("physical", f"{nm}: {cf} is {type(cv).__name__}, not a "
-                                          f"{want.__name__} ({which}) -> malformed; treated as "
-                                          f"empty", ("container", cf))
+                    # SUPPRESS THE REPORT, NEVER THE COERCION. A template's
+                    # malformed inheritable container arrives verbatim in every
+                    # child's resolved read — resolveFilament copies the array
+                    # wholesale, and `"31"?.length` is 2 so a STRING passes its
+                    # non-empty test — and the template reports its own copy, so
+                    # a child reporting it again duplicates one defect. But every
+                    # later pass assumes these shapes are safe: skipping the
+                    # coercion left a string in `optTags` and crashed the entire
+                    # run, and iterated `spools`/`calibrations`/`presets`
+                    # character by character. The value is in THIS document
+                    # whoever owns it, so it is always made safe.
+                    if not (which == "resolved" and cf in _inh_here):
+                        add_shape("physical", f"{nm}: {cf} is {type(cv).__name__}, not a "
+                                              f"{want.__name__} ({which}) -> malformed; treated as "
+                                              f"empty", ("container", cf))
                     doc[cf] = want()
             # Elements of the subdocument arrays must themselves be documents.
             for parent_key in DICT_ELEMENT_ARRAYS:
@@ -931,19 +957,25 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
         legacy_roll = not all_spools and r.get("totalWeight") is not None
         if live_spools or legacy_roll:
             unit = "legacy top-level roll" if legacy_roll else f"{len(live_spools)} live spool(s)"
-            net = num(r.get("netFilamentWeight"))
-            # getRemainingPct rejects a non-positive denominator, not just null.
-            if net is None or net <= 0:
-                add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar", fid)
-            tare = num(r.get("spoolWeight"))
-            if tare is None:
+            _raw_net = r.get("netFilamentWeight")
+            net = num(_raw_net)
+            # Claim "absent" only when it IS absent: a present-but-malformed
+            # value is named by the central sweep, and saying the field is
+            # missing would be a false statement about the record.
+            if _raw_net is None or (net is not None and net <= 0):
+                add("inventory", f"{name}: {unit} but netFilamentWeight={_raw_net!r} -> no % bar"
+                                 f"{_inh_blame('netFilamentWeight')}", fid)
+            _raw_tare = r.get("spoolWeight")
+            tare = num(_raw_tare)
+            if _raw_tare is None:
                 # NOT "nothing displays": getRemainingGrams substitutes a 0 g
                 # tare (inventoryStats.ts), so the list still shows a gram
                 # figure — one that silently counts the empty spool's own mass
                 # as filament. What is actually lost is the percentage bar,
                 # which needs the tare as its denominator.
                 add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> no % bar, and the "
-                                 f"gram figure counts the spool's own mass as filament", fid)
+                                 f"gram figure counts the spool's own mass as filament"
+                                 f"{_inh_blame('spoolWeight')}", fid)
 
             if legacy_roll:
                 gross = num(r.get("totalWeight"))
@@ -964,7 +996,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                         add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
                                          f"totalWeight (gross) -> it contributes nothing to the bar", fid)
                     elif tare is not None and gross < tare:
-                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> clamps "
+                        add("inventory", f"{name}: spool {s.get('instanceId') or s.get('_id')} gross "
+                                         f"{gross}g is below tare {tare}g -> clamps "
                                      f"to 0, so the roll reads as EMPTY everywhere and spool-check "
                                      f"refuses every job — usually a tare inherited from a template "
                                      f"whose spools are heavier, or a net weight typed into the "
@@ -1007,7 +1040,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 # two values it had just said were not numbers.
                 a, b = num(container.get(f_lo)), num(container.get(f_hi))
                 if a is not None and b is not None and a > b:
-                    blame = _inh_blame(inherit_root, inherit_prefix + f_lo, inherit_prefix + f_hi)
+                    blame = (_inh_blame(inherit_root) if inherit_root
+                             else _inh_blame(inherit_prefix + f_lo, inherit_prefix + f_hi))
                     add(cat, f"{name}: {where}INVERTED {label} — {f_lo}={a} is above {f_hi}={b}{blame}", fid)
 
         ordering_check(temps, ORDERED_PAIRS, "temps", inherit_prefix="temperatures.")
@@ -1027,6 +1061,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
             # diameter-matched by the dynamic calibration route, and the Prusa
             # bundle drops such a row from its per-nozzle fan-out, so valid
             # tuning silently becomes unreachable.
+            # NOTE, deliberately not a check: `printer` and `bedType` are
+            # optional refs whose null is the supported "generic" state, and BOTH
+            # reads populate them (the detail route runs one populated query for
+            # raw and resolved alike), so a purged target and a genuine generic
+            # are indistinguishable here. That matters — pickRepresentativeCalibration
+            # (orcaSlicerBundle.ts:234) takes the first row with both refs null as
+            # the export default, so a purged scope silently promotes that tuning
+            # to every printer. Detecting it needs the UNPOPULATED ids, which only
+            # /api/snapshot carries; a version that compared the two populated
+            # reads was dead code and was removed rather than left looking like
+            # coverage.
             if nz is None:
                 add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
                                  f"exists -> the tuning is unreachable"
@@ -1044,7 +1089,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 if isinstance(rv, dict) and rv.get("_deletedAt"):
                     add("structure", f"{name}: calibration[{idx}] references soft-deleted "
                                      f"{ref_field} {rv.get('name') or rv.get('_id')!r} -> the "
-                                     f"tuning is unreachable", fid)
+                                     f"tuning is unreachable{_inh_blame('calibrations')}", fid)
             ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ", inherit_root="calibrations")
             nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
                             (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
@@ -1068,7 +1113,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 # drops this row's temperatures from the exported preset.
                 add("physical", f"{name}: bedTypeTemps[{idx_bt}] has no usable bedType "
                                 f"({plate_raw!r}) -> the schema requires it and the Orca export "
-                                f"indexes on it, so these temperatures are silently dropped", fid)
+                                f"indexes on it, so these temperatures are silently dropped"
+                                f"{_inh_blame('bedTypeTemps')}", fid)
             plate = plate_raw if isinstance(plate_raw, str) and plate_raw.strip() else "?"
             bed_like += [(f"bedTypeTemps[{plate}] temperature", num(bt.get("temperature"))),
                          (f"bedTypeTemps[{plate}] firstLayerTemperature", num(bt.get("firstLayerTemperature")))]
@@ -1082,7 +1128,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 # a React child, so a missing or non-string one throws on open.
                 add("physical", f"{name}: presets[{idx}].label is {_plabel!r} -> the schema "
                                 f"requires a string and the detail page renders it directly, "
-                                f"so opening this filament throws", fid)
+                                f"so opening this filament throws{_inh_blame('presets')}", fid)
             label = _plabel if isinstance(_plabel, str) and _plabel.strip() else idx
             pt = pre.get("temperatures") or {}
             if not isinstance(pt, dict):
@@ -1254,12 +1300,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                 add("missing-core", f"{name}: no density", fid)
 
         # --- colour ----------------------------------------------------------
+        # A colour the TEXT SWEEP just coerced to "" is not a colour defect —
+        # reporting it would emit a phantom `malformed color ''` for a field
+        # already named as a malformed non-string, and would then defeat the
+        # documented #808080 exemption below by blanking colorName.
         col = r.get("color")
-        if col is not None and not HEX6.match(str(col)):
+        if "color" not in coerced_res and col is not None and not HEX6.match(str(col)):
             add("colour", f"{name}: malformed color {col!r}", fid)
         # #808080 is the legacy default the pre-v1.70 form stamped on everything,
         # but it is ALSO the correct hex for a filament that really is grey.
         cname = (r.get("colorName") or "").lower()
+        _cname_lost = "colorName" in coerced_res
         secondaries = r.get("secondaryColors") or []
         if isinstance(secondaries, list):   # shape already reported above
             if len(secondaries) > MAX_SECONDARY_COLORS:
@@ -1271,7 +1322,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                     add("colour", f"{name}: secondaryColors[{pos}]={sc!r} is not #RRGGBB -> the "
                                   f"OPT encoder skips it, and a slicer export may use it when the "
                                   f"primary colour is null{_inh_blame('secondaryColors')}", fid)
-        if col == "#808080" and "grey" not in cname and "gray" not in cname:
+        if (col == "#808080" and not _cname_lost
+                and "grey" not in cname and "gray" not in cname):
             add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})", fid)
 
         # --- template violations (v1.70 #605) --------------------------------
@@ -1418,6 +1470,61 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
     # read `rec["res"].get(...)` off the ORIGINAL mapping and die on the very
     # record audit() had just reported as unreadable — the one-bad-row-hides-
     # everything failure, one scope up.
+    # --- cross-record spool identity ------------------------------------------
+    # The only check that cannot be made per record. `matchFilament` resolves a
+    # scanned id against spools[].instanceId BEFORE the filament-level fallback
+    # (src/lib/matchFilament.ts), so a duplicate id makes a printed QR or an NFC
+    # tag resolve to nothing, or to the wrong filament. The API refuses these at
+    # write time (isSpoolInstanceIdTaken) but there is NO unique index, so hybrid
+    # sync's replaceOne, a snapshot restore or a promotion can still land one.
+    # Read from the STORED documents only: `instanceId` and `spools` are
+    # VARIANT_ONLY, so nothing here is inherited and nothing can be misattributed.
+    spool_owners, top_owners = {}, {}
+    for _fid, _v in records.items():
+        _raw = _v["raw"]
+        _nm = _raw.get("name") or _v["res"].get("name") or "?"
+        _tid = _raw.get("instanceId")
+        if isinstance(_tid, str) and _tid:
+            top_owners.setdefault(_tid, []).append((_fid, _nm))
+        for _sp in (_raw.get("spools") or []):
+            if isinstance(_sp, dict):
+                _sid = _sp.get("instanceId")
+                if isinstance(_sid, str) and _sid:
+                    spool_owners.setdefault(_sid, []).append(
+                        (_fid, _nm, _sp.get("label") or _sp.get("_id")))
+
+    def _who(rows):
+        return ", ".join(sorted(f"{n} [{i}]" for i, n, *_ in rows))
+
+    for _sid, _owners in sorted(spool_owners.items()):
+        _fids = {i for i, _, _ in _owners}
+        if len(_fids) > 1:
+            add("structure", f"spool instanceId {_sid!r} is carried by spools on {len(_fids)} "
+                             f"different filaments ({_who(_owners)}) -> matchFilament returns NO "
+                             f"match with both as candidates, so every QR label and NFC tag "
+                             f"holding this id stops resolving", None)
+        elif len(_owners) > 1:
+            add("structure", f"{_owners[0][1]}: spool instanceId {_sid!r} is carried by "
+                             f"{len(_owners)} of its own spools "
+                             f"({', '.join(str(t) for _, _, t in _owners)}) -> the filament still "
+                             f"resolves, but WHICH roll a scan reports is array order, so a "
+                             f"weight update can land on the wrong spool", _owners[0][0])
+        # A spool id equal to ITS OWN filament's is the #732 Phase 1 carry-over
+        # and is legitimate — exactly what `ownFilamentId` excludes in
+        # isSpoolInstanceIdTaken. Only a FOREIGN filament's id is a shadow.
+        _shadowed = [(i, n) for i, n in top_owners.get(_sid, []) if i not in _fids]
+        if _shadowed:
+            add("structure", f"spool instanceId {_sid!r} (on {_owners[0][1]}) equals the "
+                             f"FILAMENT-level instanceId of {_who(_shadowed)} -> the spool tier "
+                             f"runs first, so a label carrying that filament's id resolves to "
+                             f"the WRONG filament", None)
+
+    for _tid, _owners in sorted(top_owners.items()):
+        if len(_owners) > 1:
+            add("structure", f"filament-level instanceId {_tid!r} is shared by {_who(_owners)} "
+                             f"-> the exact-case tier matches more than one row, so scans of "
+                             f"this id are ambiguous", None)
+
     return findings, parents, set(records)
 
 
