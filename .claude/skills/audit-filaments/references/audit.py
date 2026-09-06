@@ -251,7 +251,6 @@ DICT_ELEMENT_ARRAYS = ("spools", "calibrations", "presets", "bedTypeTemps")
 NESTED_CONTAINER_SHAPES = {
     "spools": {"usageHistory": list, "dryCycles": list},
     "presets": {"temperatures": dict},
-    "calibrations": {"temperatures": dict},
 }
 
 # Scalar STRING fields. Mongoose casts most of these, but a raw-driver write, a
@@ -597,13 +596,22 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar", fid)
             tare = num(r.get("spoolWeight"))
             if tare is None:
-                add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> "
-                                 f"computeRemaining returns null, nothing displays", fid)
+                # NOT "nothing displays": getRemainingGrams substitutes a 0 g
+                # tare (inventoryStats.ts), so the list still shows a gram
+                # figure — one that silently counts the empty spool's own mass
+                # as filament. What is actually lost is the percentage bar,
+                # which needs the tare as its denominator.
+                add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> no % bar, and the "
+                                 f"gram figure counts the spool's own mass as filament", fid)
 
             if legacy_roll:
                 gross = num(r.get("totalWeight"))
                 if tare is not None and gross is not None and gross < tare:
-                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining", fid)
+                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> clamps "
+                                     f"to 0, so the roll reads as EMPTY everywhere and spool-check "
+                                     f"refuses every job — usually a tare inherited from a template "
+                                     f"whose spools are heavier, or a net weight typed into the "
+                                     f"gross field", fid)
             else:
                 missing_gross = 0
                 for s in live_spools:
@@ -615,7 +623,11 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                         add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
                                          f"totalWeight (gross) -> it contributes nothing to the bar", fid)
                     elif tare is not None and gross < tare:
-                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> negative remaining", fid)
+                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> clamps "
+                                     f"to 0, so the roll reads as EMPTY everywhere and spool-check "
+                                     f"refuses every job — usually a tare inherited from a template "
+                                     f"whose spools are heavier, or a net weight typed into the "
+                                     f"gross field", fid)
                 if missing_gross and missing_gross == len(live_spools):
                     add("inventory", f"{name}: every live spool is missing its gross weight -> "
                                      f"getRemainingPct returns null, no bar at all", fid)
@@ -673,6 +685,16 @@ def audit(records, abrasive, failed=None, listing_topology=None):
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
                 add("structure", f"{name}: calibration[{idx}] references soft-deleted nozzle "
                                  f"{noz_name!r} -> the tuning is unreachable", fid)
+            # `printer` and `bedType` are `default: null`, unlike the required
+            # nozzle above, so null is the schema's supported "generic" state and
+            # must NOT be reported. A TOMBSTONED ref is different: the row points
+            # at a deleted machine or plate, so the tuning is unreachable.
+            for ref_field in ("printer", "bedType"):
+                rv = cal.get(ref_field)
+                if isinstance(rv, dict) and rv.get("_deletedAt"):
+                    add("structure", f"{name}: calibration[{idx}] references soft-deleted "
+                                     f"{ref_field} {rv.get('name') or rv.get('_id')!r} -> the "
+                                     f"tuning is unreachable", fid)
             ordering_check(cal, ORDERED_PAIRS_CAL, "physical", f"{where} ")
             nozzle_like += [(f"{where} nozzleTemp", num(cal.get("nozzleTemp"))),
                             (f"{where} nozzleTempFirstLayer", num(cal.get("nozzleTempFirstLayer")))]
@@ -972,7 +994,20 @@ def main():
     records, abrasive, failed, topology = load(base, args.api_key, args.cache)
     findings, parents = audit(records, abrasive, failed, topology)
 
-    wanted = set(args.only.split(",")) if args.only else None
+    # A filter that matches NO known category must never render as a clean audit.
+    # `--only abrasives` (plural) printed "0 findings" over a library with a real
+    # abrasive defect — a silence the user has every reason to read as safety.
+    wanted = None
+    if args.only:
+        wanted = {k.strip().lower() for k in args.only.split(",") if k.strip()}
+        known = {k for k, _ in CATEGORIES}
+        unknown = sorted(wanted - known)
+        if not wanted:
+            ap.error("--only: no category given")
+        if unknown:
+            ap.error("--only: unknown categor%s %s; known keys are: %s"
+                     % ("y" if len(unknown) == 1 else "ies",
+                        ", ".join(unknown), ", ".join(sorted(known))))
 
     # Records whose NAME is shared with another active record. Keyed on the name
     # rather than on an identical message: two duplicates usually have DIFFERENT

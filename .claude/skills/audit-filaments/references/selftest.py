@@ -71,7 +71,6 @@ def valid_res(**over):
             "maxVolumetricSpeed": 12, "fanMinSpeed": 20, "fanMaxSpeed": 100,
             "chamberTemp": 0, "nozzleTemp": 210, "bedTemp": 60,
             "nozzleTempFirstLayer": 215, "bedTempFirstLayer": 65,
-            "temperatures": {"nozzle": 210, "bed": 60},
         }],
         "presets": [{"label": "draft", "extrusionMultiplier": 0.99,
                      "temperatures": {"nozzle": 205, "nozzleFirstLayer": 210,
@@ -386,7 +385,7 @@ def case_fixture_covers_reads():
 # emptied -- and untestable against any version that predates it, which is
 # exactly how this case first appeared to pass against the broken code.
 NESTED_CONTAINERS = [("spools", "usageHistory"), ("spools", "dryCycles"),
-                     ("presets", "temperatures"), ("calibrations", "temperatures")]
+                     ("presets", "temperatures")]
 
 
 def case_nested_containers_reported():
@@ -509,6 +508,92 @@ def case_unreadable_parent_not_missing():
             "a genuinely missing parent is no longer reported -- the fix went too far")
 
 
+
+# --- 12. --only must never turn a typo into a clean bill of health -----------
+# The worst failure this tool can have is silence that reads as safety.
+# `--only abrasives` (plural) printed "0 findings" over a library with a real
+# abrasive defect, indistinguishable from a genuinely clean run.
+def case_only_flag_rejects_unknown():
+    import contextlib, io as _io
+    def run_main(argv):
+        orig_load, orig_argv = A.load, sys.argv
+        A.load = lambda *a, **k: ({"a": rec(valid_res(dryingTime=4))}, [], {}, {})
+        sys.argv = ["audit.py"] + argv
+        out, err, code = _io.StringIO(), _io.StringIO(), 0
+        try:
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                A.main()
+        except SystemExit as e:
+            code = e.code if isinstance(e.code, int) else 1
+        finally:
+            A.load, sys.argv = orig_load, orig_argv
+        return code, out.getvalue() + err.getvalue()
+
+    code, txt = run_main(["--only", "drying-units"])
+    if "dryingTime" in txt:
+        ok("only-valid-key-works")
+    else:
+        bad("only-valid-key-works", f"a VALID --only key hid the finding:\n{txt[:300]}")
+
+    for typo in ("abrasives", "temperatures", "nonsense", "ABRASIVE,bogus"):
+        code, txt = run_main(["--only", typo])
+        if code != 0 and "unknown categor" in txt:
+            ok(f"only-rejects-{typo}")
+        else:
+            bad(f"only-rejects-{typo}",
+                f"--only {typo} exited {code} and printed a clean-looking report -- a typo "
+                f"renders a defective library as clean:\n{txt[:220]}")
+
+
+# --- 13. messages must not state app behaviour that cannot occur -------------
+# A finding the user cannot trust is worse than no finding. Both of these named
+# a consequence the app does not have.
+def case_messages_are_true():
+    r = valid_res(spoolWeight=None)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    msgs = [m for rows in f.values() for _, m in rows]
+    if any("nothing displays" in m for m in msgs):
+        bad("msg-null-tare", "still claims 'nothing displays' -- inventoryStats substitutes a "
+                             "0 g tare and the gram figure still renders")
+    else:
+        ok("msg-null-tare")
+
+    r2 = valid_res()
+    r2["spools"][0]["totalWeight"] = 150      # below the 200 g tare
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    msgs2 = [m for rows in f2.values() for _, m in rows]
+    if any("negative remaining" in m for m in msgs2):
+        bad("msg-below-tare", "still claims 'negative remaining' -- every remaining computation "
+                              "clamps at 0")
+    elif any("clamps" in m and "below tare" in m for m in msgs2):
+        ok("msg-below-tare")
+    else:
+        bad("msg-below-tare", f"the below-tare case produced no finding at all: {msgs2}")
+
+
+# --- 14. tombstoned calibration refs ----------------------------------------
+# null `printer`/`bedType` is the schema's supported generic state and must stay
+# silent; a SOFT-DELETED one means the tuning is unreachable.
+def case_calibration_ref_tombstones():
+    for field in ("printer", "bedType"):
+        r = valid_res()
+        r["calibrations"][0][field] = {"_id": "x1", "name": "Gone", "_deletedAt": "2026-01-01"}
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = any(f"soft-deleted {field}" in m for rows in f.values() for _, m in rows)
+        ok(f"cal-tombstone-{field}") if hit else bad(
+            f"cal-tombstone-{field}",
+            f"a soft-deleted calibration {field} produced no finding -> the tuning is "
+            f"unreachable and the audit says nothing")
+        # null is legitimate and must stay silent
+        r2 = valid_res()
+        r2["calibrations"][0][field] = None
+        f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+        fp = [m for rows in f2.values() for _, m in rows if field in m]
+        ok(f"cal-null-{field}-silent") if not fp else bad(
+            f"cal-null-{field}-silent",
+            f"null {field} is the schema default (generic calibration) but was flagged: {fp}")
+
+
 if __name__ == "__main__":
     case_valid()
     case_record_containers()
@@ -519,6 +604,9 @@ if __name__ == "__main__":
     case_nozzle_exemption_scope()
     case_subdoc_elements_reported()
     case_unreadable_parent_not_missing()
+    case_only_flag_rejects_unknown()
+    case_messages_are_true()
+    case_calibration_ref_tombstones()
     n, ncrash = fuzz_shapes()
     n2, ncrash2 = fuzz_cross_record()
     n += n2; ncrash += ncrash2
