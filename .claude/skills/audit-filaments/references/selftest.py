@@ -397,6 +397,11 @@ NOT_RECORD_FIELDS = {
     # /api/snapshot envelope, read only by the discovery fallback that runs when
     # the listing aggregation errors on a malformed container
     "collections", "filaments",
+    # ref_index — the UNPOPULATED calibration scope refs, also from
+    # /api/snapshot. Not record fields, and unreachable from the record
+    # fixture, so they get a dedicated case instead of fuzz coverage:
+    # case_calibration_scope_refs.
+    "printers", "bedTypes", "cals",
     # process environment, read by main() not by the audit
     "FILAMENTDB_API_KEY", "FILAMENTDB_URL",
 }
@@ -604,9 +609,12 @@ def case_only_flag_rejects_unknown():
     import contextlib, io as _io
     def run_main(argv):
         orig_load, orig_argv = A.load, sys.argv
-        # load() returns (records, abrasive, failed, topology, degraded);
+        # load() returns (records, abrasive, failed, topology, degraded,
+        # ref_index) — the last is the UNPOPULATED calibration refs from
+        # /api/snapshot. None here means "not fetched", which the pass treats
+        # as "nothing to cross-check" rather than as a failure.
         # the last is the discovery-fallback note.
-        A.load = lambda *a, **k: ({"a": rec(valid_res(dryingTime=4))}, [], {}, {}, None)
+        A.load = lambda *a, **k: ({"a": rec(valid_res(dryingTime=4))}, [], {}, {}, None, None)
         sys.argv = ["audit.py"] + argv
         out, err, code = _io.StringIO(), _io.StringIO(), 0
         try:
@@ -684,6 +692,54 @@ def case_calibration_ref_tombstones():
 
 
 
+# --- 14b. calibration SCOPE refs, which populate() hides ---------------------
+# Both detail reads populate `calibrations.printer`/`.bedType`, so a purged
+# target arrives as null — identical to the supported generic state. The pass
+# therefore reads the UNPOPULATED ids from /api/snapshot instead, and this case
+# exists because the record fuzz cannot reach that input at all.
+def case_calibration_scope_refs():
+    def idx(cal, printers=("p1",), bedtypes=("b1",)):
+        return {"printers": set(printers), "bedTypes": set(bedtypes),
+                "cals": {"a": [cal]}}
+
+    r = valid_res()
+    base = {"res": r, "raw": copy.deepcopy(r)}
+
+    # a stored id that resolves to no row -> reported
+    for field, dead in (("printer", "p_gone"), ("bedType", "b_gone")):
+        f, _, _ = A.audit({"a": base}, (), None, None, None, idx({field: dead}))
+        hit = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
+        ok(f"cal-scope-dangling-{field}") if hit else bad(
+            f"cal-scope-dangling-{field}",
+            f"a {field} id with no surviving row produced no finding -> populate() nulls it, "
+            f"so pickRepresentativeCalibration promotes that tuning to every machine")
+
+    # a LIVE id, and a genuine generic null, must both stay silent
+    for label, cal in (("live", {"printer": "p1", "bedType": "b1"}),
+                       ("generic-null", {"printer": None, "bedType": None}),
+                       ("absent", {})):
+        f, _, _ = A.audit({"a": base}, (), None, None, None, idx(cal))
+        fp = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
+        ok(f"cal-scope-{label}-silent") if not fp else bad(
+            f"cal-scope-{label}-silent", f"a {label} calibration scope was flagged: {fp}")
+
+    # a filament the run did not audit must not be reported on
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      {"printers": set(), "bedTypes": set(),
+                       "cals": {"other": [{"printer": "p_gone"}]}})
+    fp = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
+    ok("cal-scope-unaudited-skipped") if not fp else bad(
+        "cal-scope-unaudited-skipped", f"reported on a filament this run never audited: {fp}")
+
+    # a FAILED snapshot read must say so, not silently render as clean
+    f, _, _ = A.audit({"a": base}, (), None, None, None, {"error": "HTTP 500"})
+    hit = [m for rows in f.values() for _, m in rows if "were NOT checked" in m]
+    ok("cal-scope-degraded-visible") if hit else bad(
+        "cal-scope-degraded-visible",
+        "the snapshot read failed and the audit reported nothing about it -> an unchecked "
+        "category rendering as a clean one")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -755,6 +811,7 @@ if __name__ == "__main__":
     case_only_flag_rejects_unknown()
     case_messages_are_true()
     case_calibration_ref_tombstones()
+    case_calibration_scope_refs()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

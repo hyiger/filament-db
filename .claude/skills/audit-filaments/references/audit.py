@@ -655,10 +655,47 @@ def load(base, api_key, cache_dir=None):
                                  f"without a 'findings' list"}
     except Exception as e:
         abrasive = {"error": str(e)}
-    return records, abrasive, failed, listing_topology, degraded
+
+    # UNPOPULATED calibration references. Both detail reads populate
+    # `calibrations.printer` / `.bedType`, and populate() yields null for a
+    # target that no longer exists -- which is byte-identical to the SUPPORTED
+    # generic state (a calibration deliberately scoped to no printer and no
+    # bed). So the two reads in hand physically cannot tell a purged scope from
+    # a generic one, and the difference matters: pickRepresentativeCalibration
+    # (orcaSlicerBundle.ts) takes the FIRST row with both refs null as the
+    # export default, so a purged printer silently promotes one machine's
+    # tuning to every machine. /api/snapshot is a plain find().lean() and is
+    # the only read that carries the raw ObjectIds. ~0.5 MB / 25 ms on the
+    # library under test, but it is the WHOLE database including spool photos,
+    # so it is fetched once and only the ids are kept.
+    ref_index = None
+    try:
+        snap = fetch(f"{base}/api/snapshot", api_key)
+        cols = snap.get("collections") if isinstance(snap, dict) else None
+        if isinstance(cols, dict):
+            def _ids(key):
+                return {str(x.get("_id")) for x in (cols.get(key) or [])
+                        if isinstance(x, dict) and x.get("_id") is not None}
+            ref_index = {
+                "printers": _ids("printers"),
+                "bedTypes": _ids("bedTypes"),
+                # Every row the collection HOLDS, trashed included: a
+                # soft-deleted target still populates as an object, so the
+                # existing soft-delete rows cover it. Only a target that is
+                # gone entirely populates as null, and that is what this finds.
+                "cals": {str(x.get("_id")): (x.get("calibrations") or [])
+                         for x in (cols.get("filaments") or [])
+                         if isinstance(x, dict) and x.get("_id") is not None},
+            }
+        else:
+            ref_index = {"error": f"unexpected snapshot shape: {type(snap).__name__}"}
+    except Exception as e:
+        ref_index = {"error": f"{type(e).__name__}: {e}"}
+    return records, abrasive, failed, listing_topology, degraded, ref_index
 
 
-def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
+def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
+          ref_index=None):
     findings = {}
 
     # Side inputs are guarded here, not at each use. They arrive from separate
@@ -849,9 +886,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                                               f"empty", ("container", cf))
                     doc[cf] = want()
             # Elements of the subdocument arrays must themselves be documents.
+            # Same suppression rule as the container sweep above, for the same
+            # reason one level down: `calibrations: ["oops"]` on a template has a
+            # perfectly good CONTAINER shape, so the guard above never fires, and
+            # resolveFilament hands the whole array to every child that stores an
+            # empty one -- so the element row fanned out across the family,
+            # naming documents that cannot repair it. `_inherited` is
+            # resolveFilament's own report of which arrays came from the
+            # template, so this can never mis-suppress a variant-owned array.
             for parent_key in DICT_ELEMENT_ARRAYS:
+                _inh_arr = which == "resolved" and parent_key in _inh_here
                 for idx, sub in enumerate(doc.get(parent_key) or []):
-                    if not isinstance(sub, dict):
+                    if not isinstance(sub, dict) and not _inh_arr:
                         add_shape("physical", f"{nm}: {parent_key}[{idx}] is "
                                               f"{type(sub).__name__} ({sub!r}), not a subdocument "
                                               f"({which}) -> that entry is skipped by every check",
@@ -859,6 +905,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
 
             # …and the containers one level down, in every list that has them.
             for parent_key, subshapes in NESTED_CONTAINER_SHAPES.items():
+                # As above: an inherited array's contents belong to the template.
+                # Suppresses the REPORTS only -- every coercion below still runs,
+                # because this document is the one the later passes read.
+                # Applied to EVERY sweep in this block, not only the ones whose
+                # table currently lists an inheritable key: today the nested
+                # text/bool/ledger tables are keyed on `spools` alone, which is
+                # VARIANT_ONLY and can never be inherited, so those guards are
+                # inert -- but three separate review rounds each found the NEXT
+                # unguarded site in this file, and a uniform invariant is what
+                # stops the fan-out returning silently the day an inheritable
+                # array is added to one of those tables.
+                _inh_arr = which == "resolved" and parent_key in _inh_here
                 for idx, sub in enumerate(doc.get(parent_key) or []):
                     if not isinstance(sub, dict):
                         continue
@@ -866,18 +924,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                     for sf, swant in subshapes.items():
                         sv = sub.get(sf)
                         if sv is not None and not isinstance(sv, swant):
-                            add_shape("physical", f"{nm}: {parent_key}[{tag}] {sf} is "
-                                                  f"{type(sv).__name__}, not a "
-                                                  f"{swant.__name__} ({which}) -> malformed; "
-                                                  f"treated as empty",
-                                      ("nested", parent_key, str(tag), sf))
+                            if not _inh_arr:
+                                add_shape("physical", f"{nm}: {parent_key}[{tag}] {sf} is "
+                                                      f"{type(sv).__name__}, not a "
+                                                      f"{swant.__name__} ({which}) -> malformed; "
+                                                      f"treated as empty",
+                                          ("nested", parent_key, str(tag), sf))
                             sub[sf] = swant()
                     # …and the ELEMENTS of those nested lists. Reported, never
                     # removed: the wording promises the entry is skipped, and the
                     # audit stays non-mutating beyond the container coercions.
                     for tf2 in NESTED_TEXT_FIELDS.get(parent_key, ()):
                         tv2 = sub.get(tf2)
-                        if tv2 is not None and not isinstance(tv2, str):
+                        if tv2 is not None and not isinstance(tv2, str) and not _inh_arr:
                             add_shape("physical",
                                       f"{nm}: {parent_key}[{tag}].{tf2} is {type(tv2).__name__} "
                                       f"({tv2!r}), not a string ({which}) -> "
@@ -885,7 +944,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                                       ("nested-text", parent_key, str(tag), tf2))
                     for bf in NESTED_BOOL_FIELDS.get(parent_key, ()):
                         bv = sub.get(bf)
-                        if bv is not None and not isinstance(bv, bool):
+                        if bv is not None and not isinstance(bv, bool) and not _inh_arr:
                             add_shape("physical",
                                       f"{nm}: {parent_key}[{tag}].{bf} is {type(bv).__name__} "
                                       f"({bv!r}), not a boolean ({which}) -> the app tests it by "
@@ -895,15 +954,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                     for sf in NESTED_DICT_ELEMENT_ARRAYS.get(parent_key, ()):
                         for eidx, ent in enumerate(sub.get(sf) or []):
                             if not isinstance(ent, dict):
-                                add_shape("physical",
-                                          f"{nm}: {parent_key}[{tag}] {sf}[{eidx}] is "
-                                          f"{type(ent).__name__} ({ent!r}), not a subdocument "
-                                          f"({which}) -> that entry is skipped by every check",
-                                          ("nested-element", parent_key, str(tag), sf, eidx))
+                                if not _inh_arr:
+                                    add_shape("physical",
+                                              f"{nm}: {parent_key}[{tag}] {sf}[{eidx}] is "
+                                              f"{type(ent).__name__} ({ent!r}), not a "
+                                              f"subdocument ({which}) -> that entry is skipped "
+                                              f"by every check",
+                                              ("nested-element", parent_key, str(tag), sf, eidx))
                                 continue
                             for lf in LEDGER_TEXT_FIELDS.get((parent_key, sf), ()):
                                 lv = ent.get(lf)
-                                if lv is not None and not isinstance(lv, str):
+                                if lv is not None and not isinstance(lv, str) and not _inh_arr:
                                     add_shape("physical",
                                               f"{nm}: {parent_key}[{tag}] {sf}[{eidx}].{lf} is "
                                               f"{type(lv).__name__} ({lv!r}), not a string "
@@ -1244,17 +1305,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
             # diameter-matched by the dynamic calibration route, and the Prusa
             # bundle drops such a row from its per-nozzle fan-out, so valid
             # tuning silently becomes unreachable.
-            # NOTE, deliberately not a check: `printer` and `bedType` are
-            # optional refs whose null is the supported "generic" state, and BOTH
-            # reads populate them (the detail route runs one populated query for
-            # raw and resolved alike), so a purged target and a genuine generic
-            # are indistinguishable here. That matters — pickRepresentativeCalibration
-            # (orcaSlicerBundle.ts:234) takes the first row with both refs null as
-            # the export default, so a purged scope silently promotes that tuning
-            # to every printer. Detecting it needs the UNPOPULATED ids, which only
-            # /api/snapshot carries; a version that compared the two populated
-            # reads was dead code and was removed rather than left looking like
-            # coverage.
+            # `printer` and `bedType` are NOT checked here, and cannot be:
+            # their null is the supported "generic" state, and BOTH reads
+            # populate them (the detail route runs one populated query for raw
+            # and resolved alike), so a purged target and a genuine generic are
+            # indistinguishable in this loop. They are checked instead by the
+            # calibration-scope pass at the end of audit(), against the
+            # UNPOPULATED ids from /api/snapshot — the only read that carries
+            # them. Keyed by the document that STORES the array, so an inherited
+            # calibrations array is not re-reported against every child.
             if nz is None:
                 add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
                                  f"exists -> the tuning is unreachable"
@@ -1794,6 +1853,41 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None):
                              f"-> the exact-case tier matches more than one row, so scans of "
                              f"this id are ambiguous", None)
 
+    # --- calibration scope references (needs the UNPOPULATED ids) ---------
+    # Run over the SNAPSHOT's own per-filament arrays rather than the resolved
+    # read: a variant that inherits `calibrations` carries the TEMPLATE's array,
+    # so walking the resolved read would report the template's dangling ref once
+    # per child, at an index the child does not own. Keyed by document, this
+    # always names the row that stores the reference.
+    if isinstance(ref_index, dict) and "error" in ref_index:
+        add("structure", f"calibration scope references were NOT checked: the /api/snapshot read "
+                         f"failed ({ref_index['error']}). Both detail reads populate "
+                         f"`calibrations.printer`/`.bedType`, so a purged target is "
+                         f"indistinguishable from the generic state without it.", None)
+    elif isinstance(ref_index, dict):
+        _live = {"printer": ref_index.get("printers") or set(),
+                 "bedType": ref_index.get("bedTypes") or set()}
+        for _fid, _cals in (ref_index.get("cals") or {}).items():
+            if _fid not in records or not isinstance(_cals, list):
+                continue           # only rows this run actually audited
+            _nm = records[_fid]["res"].get("name") or "?"
+            for _i, _cal in enumerate(_cals):
+                if not isinstance(_cal, dict):
+                    continue       # shape already reported by the element sweep
+                for _f in ("printer", "bedType"):
+                    _ref = _cal.get(_f)
+                    if _ref is None or _ref == "" or isinstance(_ref, (dict, list)):
+                        continue   # a genuine generic scope, or already reported
+                    if str(_ref) not in _live[_f]:
+                        add("structure",
+                            f"{_nm}: calibration[{_i}] stores {_f}={str(_ref)!r}, which resolves "
+                            f"to no {_f} row at all -> populate() returns null for it, and that "
+                            f"is EXACTLY the shape pickRepresentativeCalibration reads as the "
+                            f"generic any-printer/any-bed default, so this calibration's tuning "
+                            f"is baked into the single-preset Orca/Bambu export for every "
+                            f"machine. Re-point it at a live {_f}, or clear it deliberately if "
+                            f"the tuning really is generic.", _fid)
+
     return findings, parents, set(records)
 
 
@@ -1807,8 +1901,10 @@ def main():
     args = ap.parse_args()
 
     base = args.base.rstrip("/")
-    records, abrasive, failed, topology, degraded = load(base, args.api_key, args.cache)
-    findings, parents, audited = audit(records, abrasive, failed, topology, degraded)
+    records, abrasive, failed, topology, degraded, ref_index = load(
+        base, args.api_key, args.cache)
+    findings, parents, audited = audit(records, abrasive, failed, topology, degraded,
+                                       ref_index)
 
     # A filter that matches NO known category must never render as a clean audit.
     # `--only abrasives` (plural) printed "0 findings" over a library with a real

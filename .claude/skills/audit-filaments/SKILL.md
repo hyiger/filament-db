@@ -146,6 +146,20 @@ bottom**: the general floor is 150 °C, but the bundled technical reference docu
 low-temperature grade an error. Widen `LOW_TEMP_TYPES` rather than lowering the floor for
 everything if another such material arrives.
 
+The scope refs need a **third read**. `calibrations[].printer` and `.bedType` are optional, and
+their null is the *supported* generic state — but both detail reads populate them, and `populate`
+yields null for a target that no longer exists, so a purged scope and a deliberate generic are
+byte-identical in those two reads. The difference is not cosmetic:
+`pickRepresentativeCalibration` takes the **first row with both refs null** as the export default,
+so a purged printer silently promotes one machine's tuning into the single-preset Orca/Bambu export
+for *every* machine. `GET /api/snapshot` is a plain `find().lean()` and is the only read carrying
+the raw ObjectIds, so the checker fetches it once (~0.5 MB / 25 ms on the library under test, but it
+is the whole database — fetch it once and keep only the ids). The pass walks the **snapshot's own
+per-filament arrays**, never the resolved read: a variant inheriting `calibrations` carries the
+template's array, so walking the resolved read would report the template's dangling ref once per
+child at an index the child does not own. If that read fails, the report **says the category was
+not checked** rather than rendering as clean.
+
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
 
@@ -308,7 +322,8 @@ construction and they would report as pinned every time: `vendor` and `type` are
 **Structural integrity** — a calibration whose nozzle is gone (`populate` yields `null` for a
 purged nozzle, or an object still carrying `_deletedAt` for a soft-deleted one; neither can be
 diameter-matched by the dynamic calibration route, and the Prusa bundle drops the row from its
-per-nozzle fan-out, so valid tuning silently becomes unreachable) — and a broken parent link, in
+per-nozzle fan-out, so valid tuning silently becomes unreachable) — a calibration whose
+**printer or bed-type scope** is gone — and a broken parent link, in
 three shapes: a `parentId` that resolves to no
 active filament (the listing returns only active rows, so it is missing, soft-deleted or purged),
 one pointing at *itself*, and one pointing at another **variant**. All three pass every other check
