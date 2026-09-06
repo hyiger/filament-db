@@ -85,6 +85,37 @@ def num(v):
     return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
 
 
+# Free-form bags whose keys COLLIDE with schema numeric names by coincidence.
+# `settings` is a slicer passthrough where values are strings by definition — an
+# INI `temperature = 240` is the string "240" and is entirely correct — so
+# descending into it reported 30+ false positives on the first real library it
+# met. `openprinttagSnapshot` is provenance, not live spec.
+OPAQUE_BAGS = {"settings", "openprinttagSnapshot"}
+
+
+def malformed_numerics(node, path=""):
+    """Yield (path, value) for every numeric-named leaf holding a non-number."""
+    if isinstance(node, dict):
+        for k, v in node.items():
+            where = f"{path}.{k}" if path else k
+            if k in OPAQUE_BAGS:
+                continue
+            # `calibrations[].nozzle` shares its name with the numeric
+            # `temperatures.nozzle` but holds a POPULATED NOZZLE, so a dict there
+            # is correct rather than malformed.
+            if k == "nozzle" and isinstance(v, dict):
+                yield from malformed_numerics(v, where)
+                continue
+            if k in NUMERIC_LEAF_NAMES:
+                if v is not None and not (isinstance(v, (int, float)) and not isinstance(v, bool)):
+                    yield where, v
+                continue
+            yield from malformed_numerics(v, where)
+    elif isinstance(node, list):
+        for i, v in enumerate(node):
+            yield from malformed_numerics(v, f"{path}[{i}]")
+
+
 def _json_equal(a, b):
     """Equality with JSON type semantics.
 
@@ -161,6 +192,32 @@ CALIBRATION_BOUNDS = {
 MAX_SETTINGS_KEYS = 400
 MAX_SETTING_VALUE_LENGTH = 20_000
 MAX_SECONDARY_COLORS = 5   # OpenPrintTag spec limit, enforced by the schema
+
+# Containers whose SHAPE a raw-driver sync or restore can break. A truthy
+# non-container here crashes any `.get()`/iteration, so each is reported and
+# treated as empty for the rest of the run.
+CONTAINER_SHAPES = {
+    "temperatures": dict, "settings": dict, "bedTypeTemps": list,
+    "calibrations": list, "presets": list, "spools": list,
+    "secondaryColors": list, "optTags": list, "compatibleNozzles": list,
+}
+
+# Every `<field>: { type: Number }` leaf in the Filament schema. ONE recursive
+# sweep reports a non-number in any of them, at any depth, so the individual
+# passes can skip quietly instead of each needing its own reporting branch —
+# four consecutive review rounds found the next unreported site otherwise.
+NUMERIC_LEAF_NAMES = {
+    "bed", "bedFirstLayer", "bedTemp", "bedTempFirstLayer", "chamberTemp", "cost",
+    "debitedGrams", "density", "diameter", "dryingTemperature", "dryingTime",
+    "durationMin", "extrusionMultiplier", "fanBridgeSpeed", "fanMaxSpeed",
+    "fanMinSpeed", "firstLayerTemperature", "glassTempTransition", "grams",
+    "heatDeflectionTemp", "lowStockThreshold", "maxPrintSpeed", "maxVolumetricSpeed",
+    "minPrintSpeed", "netFilamentWeight", "nozzle", "nozzleFirstLayer",
+    "nozzleRangeMax", "nozzleRangeMin", "nozzleTemp", "nozzleTempFirstLayer",
+    "pressureAdvance", "retractLength", "retractLift", "retractSpeed",
+    "shoreHardnessA", "shoreHardnessD", "shrinkageXY", "shrinkageZ", "spoolWeight",
+    "standby", "tempC", "temperature", "totalWeight", "transmissionDistance",
+}
 
 CHAMBER_MAX = 300   # schema bound; PEEK runs an active chamber at 150-200 C
 
@@ -331,16 +388,28 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         all_spools = r.get("spools") or []
         live_spools = [s for s in all_spools if not s.get("retired")]
 
-        # A numeric field holding a non-number is malformed AND would crash every
-        # comparison below, so report it and let `num()` treat it as absent.
-        # Only density/diameter here: every other top-level numeric is in
-        # NUMERIC_BOUNDS, which `bounds_check` now reports itself — sweeping them
-        # here as well produced two rows for one defect.
-        for fld in ("density", "diameter"):
-            val = r.get(fld)
-            if val is not None and num(val) is None:
-                add("physical", f"{name}: {fld} is {type(val).__name__} ({val!r}), not a number -> "
-                                f"malformed; every check on it is skipped", fid)
+        # Container shapes first: a truthy non-container crashes every access
+        # below, and both detail reads can succeed while carrying one.
+        for cf, want in CONTAINER_SHAPES.items():
+            cv = r.get(cf)
+            if cv is not None and not isinstance(cv, want):
+                add("physical", f"{name}: {cf} is {type(cv).__name__}, not a "
+                                f"{want.__name__} -> malformed; treated as empty", fid)
+                r[cf] = want()
+        rawv = raw.get("settings")
+        if rawv is not None and not isinstance(rawv, dict):
+            raw["settings"] = {}
+        # Re-bind AFTER the coercion: `temps` was captured before it ran, so a
+        # malformed container would still be the raw string here.
+        temps = r.get("temperatures") or {}
+
+        # Then every numeric-named leaf at any depth, reported ONCE here so the
+        # individual passes can skip quietly.
+        for where_path, badv in malformed_numerics(r):
+            add("physical", f"{name}: {where_path} is {type(badv).__name__} ({badv!r}), not a "
+                            f"number -> malformed; checks on it are skipped", fid)
+
+        # (legacy note) density/diameter are covered by the sweep above too.
 
         # --- settings bag shape ----------------------------------------------
         # `settings` is Mixed, so a legacy row can hold a string or an array.
@@ -539,14 +608,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
                 if val is None:
                     continue
                 if num(val) is None:
-                    # Nested containers (presets, calibrations, spools, ledgers)
-                    # are not covered by the top-level malformed-type sweep, so
-                    # skipping quietly here would let the record read clean —
-                    # contradicting the promise that every malformed numeric is
-                    # reported.
-                    add("physical", f"{name}: {where}{f2} is {type(val).__name__} ({val!r}), not a "
-                                    f"number -> malformed; its bounds check is skipped", fid)
-                    continue
+                    continue   # reported once by the malformed_numerics sweep
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
                     add("physical", f"{name}: {where}{f2}={val} outside the schema bound ({rng}) -> "
@@ -605,7 +667,7 @@ def audit(records, abrasive, failed=None, listing_topology=None):
         # but it is ALSO the correct hex for a filament that really is grey.
         cname = (r.get("colorName") or "").lower()
         secondaries = r.get("secondaryColors") or []
-        if isinstance(secondaries, list):
+        if isinstance(secondaries, list):   # shape already reported above
             if len(secondaries) > MAX_SECONDARY_COLORS:
                 add("colour", f"{name}: {len(secondaries)} secondaryColors, past the OpenPrintTag "
                               f"limit of {MAX_SECONDARY_COLORS} -> the encoder truncates the extras", fid)

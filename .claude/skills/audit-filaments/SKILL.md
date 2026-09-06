@@ -295,6 +295,19 @@ stamped on everything, and **every `secondaryColors` entry plus the array's 5-en
 are observable, not cosmetic: the OpenPrintTag encoder silently skips an invalid entry and
 truncates extras, and a slicer export can use the first secondary when the primary is null.
 
+**Malformed shapes and types are reported once, centrally.** Two sweeps run before anything else
+touches a record: `CONTAINER_SHAPES` reports any container that is not the type the schema declares
+(a string in `temperatures` crashes every `.get()` below it) and treats it as empty, and
+`malformed_numerics` walks the whole record reporting any schema-numeric leaf, **at any depth**,
+holding a non-number. The individual passes then skip quietly rather than each needing a reporting
+branch — four consecutive review rounds found the next unreported site before it was done this way.
+
+Two exclusions are load-bearing. `settings` and `openprinttagSnapshot` are **opaque bags** whose
+keys collide with schema numeric names by coincidence: a slicer `temperature = 240` is legitimately
+the *string* `"240"`, and descending into that bag produced 30+ false positives the first time this
+sweep met a real library. And `calibrations[].nozzle` shares its name with the numeric
+`temperatures.nozzle` while holding a populated nozzle document, so a dict there is correct.
+
 **A malformed value is reported, not fatal — and neither is an unreadable record.** Both are the
 same hazard: one corrupt row killing the run. A raw-driver sync, a restore or a legacy write can
 leave a *string* in a numeric field, and `0.7 <= "oops"` raises `TypeError`, so every direct
