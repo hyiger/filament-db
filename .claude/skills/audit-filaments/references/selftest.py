@@ -769,6 +769,51 @@ def case_calibration_scope_refs():
         "category rendering as a clean one")
 
 
+# --- 14c. ref_index is EXTERNAL input, so fuzz it like one -------------------
+# The record fuzz walks valid_res() and can never reach audit()'s ref_index
+# argument, which is built from a /api/snapshot response — a partial, older or
+# hostile one included. A crash there aborts the whole run and hides every
+# finding, which is the one failure this checker must not have, so the shapes
+# get their own sweep. This found four crash sites the first time it ran
+# (`x in 42` raises rather than returning False).
+def case_ref_index_hostile_shapes():
+    hostile = [None, "", 0, [], {}, "oops", 42, True, {"x": 1}, ["a"], set(), 3.5,
+               float("nan")]
+    cals = [None, "oops", 42, [], [None], ["oops"], [42], [{"printer": "p"}],
+            [{"printer": ["p"]}], [{"printer": {"_id": "p"}}], [{"bedType": 0}],
+            [{"printer": True}], [{"printer": float("inf")}], {"not": "a list"},
+            [{"printer": "p", "bedType": "b"}], [{}], [[{"printer": "p"}]]]
+    rec_one = {"a": rec(valid_res())}
+    sites, n = {}, 0
+    for printers in hostile:
+        for bedtypes in hostile[:8]:
+            for cal in cals:
+                for key in ("a", "missing", 42, None):
+                    n += 1
+                    try:
+                        A.audit(rec_one, (), None, None, None,
+                                {"printers": printers, "bedTypes": bedtypes,
+                                 "cals": {key: cal}})
+                    except Exception:
+                        tb = traceback.format_exc().strip().splitlines()
+                        sites[next((l.strip() for l in reversed(tb) if "audit.py" in l),
+                                   tb[-1])] = tb[-1]
+    for idx in hostile + [{"error": None}, {"error": []}, {"cals": None}, {"cals": "oops"},
+                          {"cals": {"a": None}}, {"error": "x", "cals": {"a": [{}]}}]:
+        n += 1
+        try:
+            A.audit(rec_one, (), None, None, None, idx)
+        except Exception:
+            tb = traceback.format_exc().strip().splitlines()
+            sites[next((l.strip() for l in reversed(tb) if "audit.py" in l), tb[-1])] = tb[-1]
+    if sites:
+        bad("ref-index-hostile",
+            f"{len(sites)} crash site(s) over {n} ref_index shapes — a crash here aborts the "
+            f"whole audit:\n    " + "\n    ".join(f"{k}\n      {v}" for k, v in sites.items()))
+    else:
+        ok(f"ref-index-hostile ({n} shapes)")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -841,6 +886,7 @@ if __name__ == "__main__":
     case_messages_are_true()
     case_calibration_ref_tombstones()
     case_calibration_scope_refs()
+    case_ref_index_hostile_shapes()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

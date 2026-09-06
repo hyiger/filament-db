@@ -1878,14 +1878,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         def _dangles(cal, field):
             """True when this ref is STORED but resolves to no row — the state
             populate() renders as null. None when it cannot be judged."""
-            if _live[field] is None:
+            # `not isinstance(..., set)` rather than `is None`: this index is
+            # built from an external HTTP response, and `x in 42` raises rather
+            # than returning False — which would abort the WHOLE audit and hide
+            # every finding, the one failure this checker must never have.
+            # Anything that is not a set of ids cannot judge anything, which is
+            # the same answer as an absent collection.
+            if not isinstance(_live[field], set):
                 return None        # the snapshot did not carry that collection
             ref = cal.get(field)
             if ref is None or ref == "" or isinstance(ref, (dict, list)):
                 return False       # unset (a genuine generic scope), or malformed
             return str(ref) not in _live[field]
 
-        for _fid, _cals in (ref_index.get("cals") or {}).items():
+        _cal_map = ref_index.get("cals")
+        for _fid, _cals in (_cal_map if isinstance(_cal_map, dict) else {}).items():
             if _fid not in records or not isinstance(_cals, list):
                 continue           # only rows this run actually audited
             _nm = records[_fid]["res"].get("name") or "?"
