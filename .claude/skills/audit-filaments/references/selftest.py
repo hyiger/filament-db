@@ -814,6 +814,42 @@ def case_ref_index_hostile_shapes():
         ok(f"ref-index-hostile ({n} shapes)")
 
 
+# --- 14d. the Date mirror must never condemn a date the app accepts ----------
+# Mongoose casts a string with `new Date(v)`, so the predicate has to mirror V8
+# — which accepts far more than ISO 8601, INCLUDING "2020-02-30" (rolled over to
+# Mar 1) and "2026-1-5". Anything stricter condemns a date the app stores
+# happily. Ground truth below was taken from node's own `new Date` and is
+# pinned here so a future "tightening" cannot silently start lying.
+def case_date_mirror():
+    accepted = ["2026-01-05", "2026-01-05T00:00:00.000Z", "2026-01-05T12:34:56+02:00",
+                "2026-1-5", "2026/01/05", "Jan 1 2020", "1 Jan 2020", "January 1, 2020",
+                "2020", "2020-02-30", "2019-02-29", "2020-02-29", "9999-12-31",
+                "  2026-01-05  ", "5/6/2020", "12345", "0", "2026-01-05 12:00",
+                "Mon Jan 01 2020", "1970-01-01T00:00:00.000Z"]
+    rejected = ["2020-13-01", "2020-00-10", "2020-01-32", "2020-01-00", "not-a-date",
+                "", "   ", "0000-00-00", "null", "undefined", "NaN", "Invalid Date",
+                "-", "T", "Z", "true", "false", "date", {}, []]
+    fp = [v for v in accepted if A._bad_date(v)]
+    fn = [v for v in rejected if not A._bad_date(v)]
+    if fp:
+        bad("date-mirror-no-false-positives",
+            f"node's `new Date` ACCEPTS these, so the app stores them and Mongoose casts them "
+            f"— condemning one tells the user to break working data: {fp}")
+    else:
+        ok("date-mirror-no-false-positives")
+    if fn:
+        bad("date-mirror-catches-the-certain",
+            f"node's `new Date` REJECTS these, so Mongoose raises CastError and the audit says "
+            f"nothing: {fn}")
+    else:
+        ok("date-mirror-catches-the-certain")
+    # numbers and booleans cast to a valid instant and must never be reported
+    live = [v for v in (0, 1, 12345, -1, 1.5, True, False) if A._bad_date(v)]
+    ok("date-mirror-numeric-silent") if not live else bad(
+        "date-mirror-numeric-silent",
+        f"`new Date(<number|bool>)` is always a valid instant; reported anyway: {live}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -887,6 +923,7 @@ if __name__ == "__main__":
     case_calibration_ref_tombstones()
     case_calibration_scope_refs()
     case_ref_index_hostile_shapes()
+    case_date_mirror()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

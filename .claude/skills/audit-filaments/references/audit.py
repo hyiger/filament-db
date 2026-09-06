@@ -459,6 +459,43 @@ _URL_REMOVE = {0x09: None, 0x0A: None, 0x0D: None}
 _URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+
+
+def _bad_date(v):
+    """True ONLY when Mongoose's Date cast is certain to fail. Mongoose casts a
+    string with `new Date(v)` and raises CastError on an Invalid Date, so this
+    has to mirror V8 -- and V8 accepts far more than ISO 8601 ("Jan 1 2020",
+    "2020/01/01", "2026-1-5", even "2020-02-30", which it rolls over to Mar 1).
+    Anything stricter than V8 here would condemn a date the app stores happily,
+    so this deliberately reports only the shapes V8 provably rejects and stays
+    silent on the rest. Verified against node's own `new Date` over a corpus of
+    real and malformed values: no value node accepts is reported."""
+    if isinstance(v, bool) or isinstance(v, (int, float)):
+        return False              # new Date(<number>) is always a valid instant
+    if isinstance(v, dict):
+        return True               # new Date({}) is Invalid Date -> CastError
+    if isinstance(v, list):
+        return not v              # new Date([]) is Invalid; a non-empty array
+                                  # stringifies and may well parse
+    if not isinstance(v, str):
+        return False              # None is handled by the presence checks
+    t = v.strip()
+    if not t:
+        return True               # "" and whitespace-only are Invalid Date
+    if not any(c.isascii() and c.isdigit() for c in t):
+        return True               # no ASCII digit -> no date format can match
+    mo = _ISO_DATE_RE.match(t)
+    if mo:
+        # An ISO-SHAPED string is parsed by the spec path, which rejects an
+        # out-of-range month or day outright (V8 rolls 02-30 over, so the day
+        # ceiling is the calendar maximum of 31, not the month's own length).
+        _m, _d = int(mo.group(2)), int(mo.group(3))
+        if not (1 <= _m <= 12) or not (1 <= _d <= 31):
+            return True
+    return False
+
+
 def _bad_tds_url(v):
     """Mirror of the model's `isValidTdsUrl`: `new URL(v)` with an http(s)
     protocol. This reports ONLY the three things `new URL` is certain to
@@ -985,9 +1022,16 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # against a Set<number> — so a string "31" from a raw sync or a restore
         # is silently dropped from the tag encoding AND misses the carbon-fibre
         # wear check, in a category where a miss means a ruined nozzle.
+        _inh_tags = v["res"].get("_inherited")
+        _inh_tags = ({x for x in _inh_tags if isinstance(x, str)}
+                     if isinstance(_inh_tags, (list, tuple)) else set())
         for doc, which in ((r, "resolved"), (raw, "stored")):
             badtags = [t for t in (doc.get("optTags") or []) if not _encodable_opt_tag(t)]
-            if badtags:
+            # `optTags` is a whole-array inheritable (GH #477), so a template's
+            # bad tag arrives in every child's RESOLVED read. The child stores an
+            # empty array, so "store them as non-negative integers" would have it
+            # create a local override instead of repairing the source.
+            if badtags and not (which == "resolved" and "optTags" in _inh_tags):
                 add_shape("physical", f"{nm}: optTags contains non-encodable {badtags!r} "
                                       f"({which}) -> dropped by the tag encoder and invisible to "
                                       f"the abrasive check; store them as non-negative integers",
@@ -1393,12 +1437,25 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not isinstance(pre, dict):
                 continue
             _plabel = pre.get("label")
-            if not isinstance(_plabel, str) or not _plabel.strip():
-                # `label` is a required string and the detail page renders it as
-                # a React child, so a missing or non-string one throws on open.
-                add("physical", f"{name}: presets[{idx}].label is {_plabel!r} -> the schema "
-                                f"requires a string and the detail page renders it directly, "
-                                f"so opening this filament throws{_inh_blame('presets')}", fid)
+            # THREE different states, and they do not fail the same way. The
+            # schema declares `label: {type: String, required: true}` with NO
+            # `trim`, so "   " is a perfectly valid document and React renders a
+            # whitespace child without complaint -- calling that a crash was a
+            # false alarm on the loudest kind of row.
+            if _plabel is None or _plabel == "":
+                add("physical", f"{name}: presets[{idx}].label is {_plabel!r} -> `label` is "
+                                f"schema-REQUIRED, so POST /api/snapshot refuses the ENTIRE "
+                                f"backup file{_inh_blame('presets')}", fid)
+            elif not isinstance(_plabel, str):
+                add("physical", f"{name}: presets[{idx}].label is {type(_plabel).__name__} "
+                                f"({_plabel!r}) -> the detail page renders it directly as a React "
+                                f"child, and React throws on an object, so opening this filament "
+                                f"fails outright{_inh_blame('presets')}", fid)
+            elif not _plabel.strip():
+                add("physical", f"{name}: presets[{idx}].label is {_plabel!r} — whitespace only "
+                                f"-> the schema accepts it (required, but not trimmed) and React "
+                                f"renders it, so the preset row simply shows an EMPTY name and "
+                                f"cannot be told from its siblings{_inh_blame('presets')}", fid)
             label = _plabel if isinstance(_plabel, str) and _plabel.strip() else idx
             pt = pre.get("temperatures") or {}
             if not isinstance(pt, dict):
@@ -1504,6 +1561,19 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 continue
             tag = sp.get("instanceId") or sp.get("_id")
             bounds_check(sp, SPOOL_BOUNDS, f"spool {tag} ")
+            # Both are optional `type: Date` with a null default, so a null is
+            # correct — but a raw-sync or restore string that Date cannot cast
+            # is not, and it fails LOUDLY: the SpoolCard seeds its inputs with
+            # `new Date(v).toISOString()` during render, which throws RangeError
+            # on an Invalid Date and takes the whole detail page down.
+            for _df in ("purchaseDate", "openedDate"):
+                _dv = sp.get(_df)
+                if _dv is not None and _bad_date(_dv):
+                    add("structure", f"{name}: spool {tag} {_df}={_dv!r} cannot be cast to a Date "
+                                     f"-> the SpoolCard seeds its date inputs with "
+                                     f"`new Date(v).toISOString()` at RENDER time, so this throws "
+                                     f"a RangeError and the whole filament page fails to open; "
+                                     f"POST /api/snapshot rejects the backup on it too", fid)
             for _tf in NESTED_TEXT_MAXLEN["spools"]:
                 _tv = sp.get(_tf)
                 if isinstance(_tv, str) and _utf16_len(_tv) > MAX_SPOOL_TEXT_LENGTH:
@@ -1517,10 +1587,20 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # unlike the usage-entry fields there is no read that papers
                 # over it -- but nothing validates on the way in through a raw
                 # sync copy or a restore of an older file.
-                if isinstance(dc, dict) and dc.get("date") in (None, ""):
-                    add("structure", f"{name}: spool {tag} dryCycle has no date -> the schema "
-                                     f"requires one, so POST /api/snapshot refuses the ENTIRE "
-                                     f"backup file rather than this row", fid)
+                if isinstance(dc, dict):
+                    _dcd = dc.get("date")
+                    if _dcd is None or _dcd == "":
+                        add("structure", f"{name}: spool {tag} dryCycle has no date -> the schema "
+                                         f"requires one, so POST /api/snapshot refuses the ENTIRE "
+                                         f"backup file rather than this row", fid)
+                    elif _bad_date(_dcd):
+                        # Presence alone was not enough: a value Mongoose cannot
+                        # CAST fails identically at restore, and the row looks
+                        # populated to every other check.
+                        add("structure", f"{name}: spool {tag} dryCycle date={_dcd!r} cannot be "
+                                         f"cast to a Date -> the schema requires a real one, so "
+                                         f"POST /api/snapshot refuses the ENTIRE backup file "
+                                         f"rather than this row", fid)
             for ue in (sp.get("usageHistory") or []):
                 bounds_check(ue, USAGE_BOUNDS, f"spool {tag} usage ", source="route")
                 # `grams` is schema-REQUIRED on a usage entry, and bounds_check
@@ -1549,6 +1629,26 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                         f"{sorted(USAGE_SOURCES)} -> analytics counts only exact "
                                         f"'manual', so this entry silently drops out of the manual "
                                         f"usage and cost totals", fid)
+                if isinstance(ue, dict):
+                    _ud = ue.get("date")
+                    # `date` carries `default: Date.now`, so a properly written
+                    # entry always has one and a restore fills a missing one in
+                    # -- the loss is in ANALYTICS, which builds `new Date(u.date)`
+                    # and `continue`s on NaN, so the grams and their cost vanish
+                    # from every total while the spool's own ledger still shows
+                    # them. That mismatch is the symptom a user actually reports.
+                    if _ud is None:
+                        add("physical", f"{name}: spool {tag} usage entry has no date -> analytics "
+                                        f"builds `new Date(u.date)` and skips the entry when it is "
+                                        f"invalid, so these grams and their cost are missing from "
+                                        f"every total while the spool's ledger still lists them",
+                            fid)
+                    elif _bad_date(_ud):
+                        add("physical", f"{name}: spool {tag} usage date={_ud!r} cannot be cast to "
+                                        f"a Date -> analytics builds `new Date(u.date)` and skips "
+                                        f"the entry when it is invalid, so these grams and their "
+                                        f"cost are missing from every total while the spool's "
+                                        f"ledger still lists them", fid)
                 if isinstance(ue, dict) and ue.get("grams") is None:
                     add("physical", f"{name}: spool {tag} usage entry has no grams -> the schema "
                                     f"requires it, and export and analytics read it as zero, so "
@@ -1577,12 +1677,24 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
         # --- missing core spec (EFFECTIVE — a template legitimately has none) -
         if not is_template:
-            if noz is None:
-                add("missing-core", f"{name}: no nozzle temperature", fid)
-            if bed is None:
-                add("missing-core", f"{name}: no bed temperature", fid)
-            if dens is None:
-                add("missing-core", f"{name}: no density", fid)
+            # `noz`/`bed`/`dens` are num() results, and num() returns None for a
+            # PRESENT-but-malformed value too -- so a `density: "oops"` produced
+            # a second, contradictory row saying the field is absent, on top of
+            # the malformed-value row the numeric sweep had already emitted. And
+            # because all three are inheritable, the template got the accurate
+            # row while every child got this misleading one. Test the underlying
+            # field for absence, and attribute what remains.
+            def _absent(container, key):
+                return not isinstance(container, dict) or container.get(key) in (None, "")
+
+            if noz is None and _absent(temps, "nozzle"):
+                add("missing-core", f"{name}: no nozzle temperature"
+                                    f"{_inh_blame('temperatures.nozzle')}", fid)
+            if bed is None and _absent(temps, "bed"):
+                add("missing-core", f"{name}: no bed temperature"
+                                    f"{_inh_blame('temperatures.bed')}", fid)
+            if dens is None and _absent(r, "density"):
+                add("missing-core", f"{name}: no density{_inh_blame('density')}", fid)
 
         # --- colour ----------------------------------------------------------
         # A colour the TEXT SWEEP just coerced to "" is not a colour defect —
@@ -1815,13 +1927,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     # sync's replaceOne, a snapshot restore or a promotion can still land one.
     # Read from the STORED documents only: `instanceId` and `spools` are
     # VARIANT_ONLY, so nothing here is inherited and nothing can be misattributed.
-    spool_owners, top_owners = {}, {}
+    # `top_ci` is the same index case-FOLDED, because matchFilament's tier order
+    # is spool-exact, spool case-insensitive, THEN filament-exact: a spool id
+    # differing from a filament id only by case shadows it just as completely as
+    # an exact duplicate, and an exact-key comparison cannot see it.
+    spool_owners, top_owners, top_ci = {}, {}, {}
     for _fid, _v in records.items():
         _raw = _v["raw"]
         _nm = _raw.get("name") or _v["res"].get("name") or "?"
         _tid = _raw.get("instanceId")
         if isinstance(_tid, str) and _tid:
             top_owners.setdefault(_tid, []).append((_fid, _nm))
+            top_ci.setdefault(_tid.casefold(), []).append((_fid, _nm))
         for _sp in (_raw.get("spools") or []):
             if isinstance(_sp, dict):
                 _sid = _sp.get("instanceId")
@@ -1854,12 +1971,30 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                              f"FILAMENT-level instanceId of {_who(_shadowed)} -> the spool tier "
                              f"runs first, so a label carrying that filament's id resolves to "
                              f"the WRONG filament", None)
+        else:
+            # matchFilament runs spool-exact, then spool CASE-INSENSITIVE, and
+            # only THEN the filament-level exact tier -- so a spool id that
+            # differs from a filament id only by case shadows it just as
+            # completely, and an exact-key comparison sees nothing at all.
+            _ci = [(i, n) for i, n in top_ci.get(_sid.casefold(), [])
+                   if i not in _fids and n is not None]
+            if _ci:
+                add("structure", f"spool instanceId {_sid!r} (on {_owners[0][1]}) differs only by "
+                                 f"CASE from the filament-level instanceId of {_who(_ci)} -> "
+                                 f"matchFilament runs its case-insensitive SPOOL tier before the "
+                                 f"exact filament tier, so a scan of that filament's own id "
+                                 f"resolves to this spool's filament instead", None)
 
     for _tid, _owners in sorted(top_owners.items()):
         if len(_owners) > 1:
+            # NOT "ambiguous": the exact-case filament tier is a findOne
+            # (matchFilament.ts), which returns whichever row Mongo happens to
+            # pick and reports it as a confident single match. The scan does not
+            # fail visibly -- it silently answers with one of them.
             add("structure", f"filament-level instanceId {_tid!r} is shared by {_who(_owners)} "
-                             f"-> the exact-case tier matches more than one row, so scans of "
-                             f"this id are ambiguous", None)
+                             f"-> the exact-case tier is a findOne, so a scan of this id resolves "
+                             f"SILENTLY to whichever row Mongo returns first, reported as a "
+                             f"confident match — it never surfaces as ambiguous", None)
 
     # --- calibration scope references (needs the UNPOPULATED ids) ---------
     # Run over the SNAPSHOT's own per-filament arrays rather than the resolved

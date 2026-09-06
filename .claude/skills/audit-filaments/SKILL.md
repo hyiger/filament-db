@@ -167,6 +167,18 @@ The consequence branches, because `pickRepresentativeCalibration`'s predicate is
 does **not** become the export default — it merely loses its printer scope. Two different
 sentences, chosen from the other ref's state.
 
+**Dates** are checked for *castability*, not format. Mongoose casts a string with `new Date(v)`
+and raises `CastError` on an Invalid Date, so the mirror has to match **V8**, which accepts far
+more than ISO 8601 — `"Jan 1 2020"`, `"2026-1-5"`, and even `"2020-02-30"`, which it rolls over to
+March 1. Anything stricter would condemn a date the app stores happily, so the predicate reports
+only the shapes V8 provably rejects and stays silent on the rest (pinned against node's own
+`new Date` in `case_date_mirror`). Three sites, three different consequences: a spool's
+`purchaseDate`/`openedDate` throws a **`RangeError` during render** (the SpoolCard seeds its inputs
+with `new Date(v).toISOString()`, so the whole filament page fails to open); a `dryCycles[].date`
+is schema-**required** and 400s the entire backup; a `usageHistory[].date` has a `Date.now`
+default, so the loss is in **analytics**, which `continue`s past an invalid one — the grams vanish
+from every total while the spool's own ledger still lists them.
+
 **Missing core spec** — no effective nozzle temp, bed temp or density after inheritance. Templates
 are exempt: an abstract product line legitimately carries none of it.
 
@@ -446,6 +458,12 @@ goes to an `<img src>`, which **coerces** rather than throwing; and `label`/`lot
 when the value is an *object* — React renders a number or a flat array child happily, so a numeric
 label breaks nothing visible but is skipped by `computeNextSpoolLabel`'s `typeof raw !== "string"`,
 letting the Next # button hand the same roll number out twice.
+
+**A missing value and a malformed one are different findings.** `num()` returns `None` for both,
+so a `density: "oops"` used to produce a "no density" row *on top of* the malformed-value row the
+numeric sweep had already emitted — and because density, nozzle temp and bed temp are all
+inheritable, the template got the accurate row while every child got the misleading one. The
+missing-core checks test the underlying **field** for absence, not the parsed number.
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.
