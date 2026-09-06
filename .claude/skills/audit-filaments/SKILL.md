@@ -269,6 +269,15 @@ rows for stock that does not exist. Anything mirroring an `if (x)` in the app go
 `_js_truthy`. The same asymmetry is why `_react_child_throws` and `_js_number` exist: the whole
 file is a Python mirror of JS semantics, and every place the two disagree is a defect waiting.
 
+**Derive the field inventory from the schema; do not collect it one finding at a time.** The
+numeric tables have had a coverage script since early on (45 of 45). The STRING sweep did not, and
+it showed: `spoolType` and then `syncId` each arrived as a separate review round, which is a drip
+with no end because the schema decides how many there are.
+`case_schema_string_paths_covered` now parses `FilamentSchema` and fails when a declared
+`type: String` path is neither swept nor exempt — and an exemption has to state its reason,
+because "it has its own check" and "we forgot" look identical from here. Any future
+class-of-field finding should be closed this way rather than patched.
+
 **A negative-only assertion is not coverage.** Several cases here asserted only that a *wrong*
 sentence was absent — so deleting the entire check they guarded left the suite green. Every
 message assertion now has a positive half naming the consequence clause it expects, and the way to

@@ -98,6 +98,8 @@ def valid_res(**over):
         "settings": {"filament_abrasive": "0", "compatible_printers_condition": "",
                      "openprinttag_slug": "prusament-pla", "openprinttag_uuid": "u-1"},
         "openprinttagSnapshot": {"density": 1.24},
+        # server-owned String paths, swept for shape like any other
+        "syncId": "sync-0001", "promotedByToken": None,
         "tdsUrl": "https://example.com/pla-tds.pdf",
         "spools": [{
             "_id": "s1", "instanceId": "0011223344", "label": "12", "lotNumber": "L-42",
@@ -465,7 +467,7 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
 # coverage while staying above the stale value, which is exactly the blind spot
 # this guard exists to close. Every intentional fixture change updates this
 # number.
-FUZZ_COUNT = 16758
+FUZZ_COUNT = 17010
 
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
@@ -1812,6 +1814,66 @@ def case_js_trim_mirror():
         ok("js-trim-removes")
 
 
+# --- 14t. every String path the SCHEMA declares must be swept ----------------
+# `spoolType`, then `syncId` — each arrived as its own review round, which is a
+# drip with no end: the schema decides how many there are, so derive the list
+# from the schema and fail when one is uncovered. This is the string half of
+# what the numeric-coverage script in SKILL.md does for Number paths.
+#
+# Exemptions must state WHY, because "it has its own check" and "we forgot" look
+# identical from here.
+TEXT_SWEEP_EXEMPT = {
+    # richer check of its own (_bad_tds_url + a non-string branch); adding it to
+    # TEXT_FIELDS would coerce the value to "" before that check ran
+    "tdsUrl",
+}
+
+
+def case_schema_string_paths_covered():
+    import re as _re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "..", "..", "..", "src", "models", "Filament.ts"))
+    lines = src.read().splitlines()
+    src.close()
+    try:
+        start = next(i for i, l in enumerate(lines) if "FilamentSchema = new Schema" in l)
+        end = next(i for i in range(start, len(lines)) if "timestamps: true" in lines[i])
+    except StopIteration:
+        return ok("schema-string-paths (schema not locatable — skipped)")
+
+    entries, cur, key = {}, [], None
+    for l in lines[start:end]:
+        m = _re.match(r"^    ([A-Za-z_][A-Za-z0-9_]*):", l)
+        if m:
+            if key:
+                entries[key] = "\n".join(cur)
+            key, cur = m.group(1), [l]
+        elif key:
+            cur.append(l)
+    if key:
+        entries[key] = "\n".join(cur)
+
+    declared = set()
+    for k, v in entries.items():
+        rows = v.splitlines()
+        if _re.search(r":\s*\[", rows[0]):        # arrays / subdoc arrays
+            continue
+        if _re.search(r"type:\s*String\b", rows[0]) or (
+                len(rows) > 1 and _re.match(r"^      type: String", rows[1])):
+            declared.add(k)
+
+    missing = sorted(declared - set(A.TEXT_FIELDS) - TEXT_SWEEP_EXEMPT)
+    if missing:
+        bad("schema-string-paths",
+            "the Filament schema declares these top-level String paths that the scalar sweep "
+            "does not cover: " + ", ".join(missing) + ".\n  A non-string there fails Mongoose's "
+            "cast and POST /api/snapshot refuses the ENTIRE backup file. Add them to TEXT_FIELDS, "
+            "or to TEXT_SWEEP_EXEMPT with the reason.")
+    else:
+        ok("schema-string-paths (%d declared, %d swept, %d exempt)"
+           % (len(declared), len(declared) - len(TEXT_SWEEP_EXEMPT), len(TEXT_SWEEP_EXEMPT)))
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1901,6 +1963,7 @@ if __name__ == "__main__":
     case_unreachable_calibrations()
     case_js_truthiness_and_direction()
     case_js_trim_mirror()
+    case_schema_string_paths_covered()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

@@ -479,10 +479,16 @@ NESTED_CONTAINER_SHAPES = {
 # child (`{filament.instanceId}` beside the name), so a non-string throws on
 # open — and the cross-record identity pass indexes strings only, so without
 # this the field had no check at all.
+# EVERY top-level `type: String` path on the schema, derived rather than
+# collected one finding at a time -- `spoolType`, then `syncId`, each arrived as
+# its own review round, which is a drip with no end. selftest's
+# case_schema_string_paths_covered now fails when the schema grows a String path
+# this tuple does not carry, so the class is closed instead of patched.
+# `tdsUrl` is the one deliberate omission: it has a richer check of its own
+# (_bad_tds_url plus a non-string branch) and adding it here would coerce the
+# value to "" before that check ever ran.
 TEXT_FIELDS = ("name", "vendor", "type", "color", "colorName", "inherits", "instanceId",
-               # a declared String path with no other check: a dict here fails
-               # Mongoose's cast and takes the whole snapshot restore with it
-               "spoolType")
+               "spoolType", "syncId", "promotedByToken")
 
 # Schema-required text, with the model's own trim semantics (Filament.ts):
 # `name` is `{required, trim}` so Mongoose trims BEFORE the required check and a
@@ -1230,7 +1236,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 continue
             if not isinstance(sv, str):
                 continue
-            empty = (str(sv).strip() == "") if trims else (sv == "")
+            # `trim: true` on the schema runs String.trim(), so the emptiness
+            # test has to use the SAME set: a name of only U+FEFF survives
+            # Python's strip() but is trimmed away by Mongoose and then fails
+            # the required validator, making the whole restore fail.
+            empty = (_js_trim(str(sv)) == "") if trims else (sv == "")
             if empty:
                 how = "empty after trimming" if trims else "the empty string"
                 add_shape("physical", f"{_disp(r.get('name'))}: {rf} is {how} but the schema "
