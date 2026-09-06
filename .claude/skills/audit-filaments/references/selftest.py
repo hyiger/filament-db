@@ -449,6 +449,13 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
     "CATEGORIES", "LOW_TEMP_TYPES", "ORCA_PLATE_KEYS", "USAGE_SOURCES", "_URL_REMOVE",
 }
 
+# See the check at the end of main(): this is the guard against a SILENT loss of
+# fuzz reach, which the name-based coverage guard structurally cannot catch.
+# Set to the EXACT count the suite currently explores, not a round number: a
+# loose floor does not catch the case it exists for. Trimming ONE nested fixture
+# field cost 252 combinations and sailed past a 16,000 floor.
+FUZZ_FLOOR = 16632
+
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
     "filamentName", "filamentId", "reasons", "inheritedFrom", "softNozzles",
@@ -1318,6 +1325,129 @@ def case_shape_dedup_keeps_distinct():
             f"report; got: {rows}")
 
 
+# --- 14o. the cross-record spool-identity block ------------------------------
+# Three of its five reports never executed under this suite and the other two
+# only incidentally — mutation testing showed all five could be deleted while
+# the suite stayed green. Every one of them is about a printed QR or a written
+# NFC tag resolving to the wrong roll, so they are worth asserting by hand.
+def case_instance_id_shadows():
+    def two(a_over, b_over, topo=None):
+        a = valid_res(_id="fa", name="Alpha", **a_over)
+        b = valid_res(_id="fb", name="Beta", **b_over)
+        return run({"fa": rec(a, copy.deepcopy(a)), "fb": rec(b, copy.deepcopy(b))},
+                   topology=topo)
+
+    def spools(*ids):
+        base = valid_res()["spools"][0]
+        return [dict(base, _id=f"s{i}", instanceId=v) for i, v in enumerate(ids)]
+
+    # (a) the SAME spool id on two different filaments -> no match at all
+    f, _ = two({"instanceId": "aaaaaaaaa1", "spools": spools("dupdupdup0")},
+               {"instanceId": "aaaaaaaaa2", "spools": spools("dupdupdup0")})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "different filaments" in m]
+    ok("shadow-cross-filament") if rows else bad(
+        "shadow-cross-filament",
+        "one spool id on two filaments makes matchFilament return NO match with both as "
+        "candidates — every label holding it stops resolving")
+
+    # (b) the same id twice on ONE filament -> resolves, but to an arbitrary roll
+    f, _ = two({"instanceId": "aaaaaaaaa1", "spools": spools("twicetwice", "twicetwice")},
+               {"instanceId": "aaaaaaaaa2"})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "its own spools" in m]
+    ok("shadow-same-filament") if rows else bad(
+        "shadow-same-filament",
+        "two spools sharing an id still resolve the filament, but WHICH roll is array order — a "
+        "weight update can land on the wrong spool")
+
+    # (c) a spool id equal to ANOTHER filament's top-level id
+    f, _ = two({"instanceId": "shadowed01"},
+               {"instanceId": "bbbbbbbbb2", "spools": spools("shadowed01")})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "FILAMENT-level instanceId" in m]
+    ok("shadow-top-level") if rows else bad(
+        "shadow-top-level",
+        "the spool tier runs first, so a label carrying that filament's own id resolves to the "
+        "spool owner instead")
+
+    # (d) ...and the same, differing only by CASE — matchFilament runs its
+    #     case-insensitive SPOOL tier before the exact filament tier
+    f, _ = two({"instanceId": "SHADOWED01"},
+               {"instanceId": "bbbbbbbbb2", "spools": spools("shadowed01")})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "only by CASE" in m]
+    ok("shadow-case-twin") if rows else bad(
+        "shadow-case-twin",
+        "a case-only twin shadows a filament id just as completely as an exact duplicate")
+
+    # (e) two filaments sharing a TOP-LEVEL id -> findOne picks arbitrarily
+    f, _ = two({"instanceId": "sametopid0"}, {"instanceId": "sametopid0"})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "filament-level instanceId" in m]
+    if rows and "findOne" in rows[0]:
+        ok("shadow-duplicate-top")
+    else:
+        bad("shadow-duplicate-top",
+            f"that tier is a findOne, so the scan resolves SILENTLY to an arbitrary row and "
+            f"reports it as a confident match — 'ambiguous' would be the benign outcome: {rows}")
+
+    # NEGATIVE: a spool id equal to ITS OWN filament's is the #732 carry-over
+    f, _ = two({"instanceId": "carryover1", "spools": spools("carryover1")},
+               {"instanceId": "bbbbbbbbb2"})
+    fp = [m for rows_ in f.values() for _, m in rows_ if "carryover1" in m]
+    ok("shadow-carryover-silent") if not fp else bad(
+        "shadow-carryover-silent",
+        f"the #732 Phase 1 carry-over is legitimate — exactly what isSpoolInstanceIdTaken's "
+        f"ownFilamentId excludes: {fp}")
+
+
+# --- 14p. the heuristic checks, and their NEGATIVES --------------------------
+# Every row here is a judgement call, so each needs a paired case proving it
+# stays silent on the data it must not condemn. Table-driven so a new heuristic
+# is one line, and so the negative is impossible to forget.
+def case_heuristics_and_negatives():
+    def fire(over, needle, spool_over=None):
+        r = valid_res(**over)
+        if spool_over:
+            r["spools"][0].update(spool_over)
+        f, _ = run({"h": rec(r, copy.deepcopy(r))})
+        return [m for rows in f.values() for _, m in rows if needle in m]
+
+    POSITIVE = [
+        ("drying hours-for-minutes", {"dryingTime": 4, "dryingTemperature": 45}, "MINUTES"),
+        ("diameter off-standard",    {"diameter": 2.0}, "not a standard size"),
+        ("secondaryColors past cap", {"secondaryColors": ["#111111"] * 6}, "past the OpenPrintTag"),
+        ("bad secondary hex",        {"secondaryColors": ["nope"]}, "is not #RRGGBB"),
+        ("bedType case twin",        {"bedTypeTemps": [{"bedType": "hot plate",
+                                                        "temperature": 60,
+                                                        "firstLayerTemperature": 65}]},
+                                     "only by case/whitespace"),
+        # chamberTemp lives on the CALIBRATION, not on `temperatures` — the
+        # top-level `chamber` is bounded by NUMERIC_BOUNDS instead.
+        ("calibration chamberTemp",  {"calibrations": [dict(valid_res()["calibrations"][0],
+                                                            chamberTemp=400)]}, "chamberTemp"),
+    ]
+    for label, over, needle in POSITIVE:
+        ok(f"heuristic+{label}") if fire(over, needle) else bad(
+            f"heuristic+{label}", f"{label}: expected a row containing {needle!r}")
+
+    NEGATIVE = [
+        ("drying minutes are fine",   {"dryingTime": 240, "dryingTemperature": 45}, "MINUTES"),
+        ("drying with no temp",       {"dryingTime": 4, "dryingTemperature": None}, "MINUTES"),
+        ("1.75 / 2.85 / 3.0",         {"diameter": 2.85}, "not a standard size"),
+        ("exactly 5 secondaries",     {"secondaryColors": ["#111111"] * 5},
+                                      "past the OpenPrintTag"),
+        ("free-text bed surface",     {"bedTypeTemps": [{"bedType": "Textured PEI",
+                                                         "temperature": 60,
+                                                         "firstLayerTemperature": 65}]},
+                                      "only by case/whitespace"),
+        ("canonical plate key",       {"bedTypeTemps": [{"bedType": "Hot Plate",
+                                                         "temperature": 60,
+                                                         "firstLayerTemperature": 65}]},
+                                      "only by case/whitespace"),
+    ]
+    for label, over, needle in NEGATIVE:
+        fp = fire(over, needle)
+        ok(f"heuristic-{label}") if not fp else bad(
+            f"heuristic-{label}", f"{label}: must stay silent, got {fp}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1402,10 +1532,23 @@ if __name__ == "__main__":
     case_inh_blame_attribution()
     case_abrasive_payload()
     case_shape_dedup_keeps_distinct()
+    case_instance_id_shadows()
+    case_heuristics_and_negatives()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
     n2, ncrash2 = fuzz_cross_record()
     n += n2; ncrash += ncrash2
+    # A COMMITTED FLOOR on the combination count. The fixture-coverage guard
+    # matches key NAMES at any depth rather than paths, so it cannot see a
+    # fixture TRIM: deleting a nested field whose name also appears elsewhere
+    # leaves it green while the fuzz quietly loses that path. The count is the
+    # one number that always moves when reach is lost. Raise it deliberately
+    # when the fixture grows; never lower it to make a run pass.
+    if n < FUZZ_FLOOR:
+        bad("fuzz-reach",
+            f"the fuzz explored {n} combinations, below the committed floor of {FUZZ_FLOOR}. "
+            f"Something removed a path from valid_res() — the name-based coverage guard cannot "
+            f"see that. Restore the path, or raise the floor deliberately if the drop is real.")
     print(f"\n{passed} passed, {failed} failed   (fuzz: {n} combinations, {ncrash} distinct crash sites)")
     sys.exit(1 if failed else 0)

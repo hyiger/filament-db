@@ -242,6 +242,18 @@ finding for the whole library) or was read past in silence, and the script reads
 hundred paths. Fuzzing every path covers the next one the day it is added, with nobody writing a
 case for it.
 
+**Every heuristic needs its negative, in the same table.** The band floors, the drying-hours
+guess, the bedType twin, the colour sentinel, the below-tare and over-net tolerances are all
+judgement calls, and each is one edit away from condemning correct data. `case_heuristics_and_negatives`
+pairs every positive with the data it must stay silent on, so adding a heuristic without its
+negative is visibly incomplete rather than merely untested.
+
+**The fuzz keeps a committed floor on its combination count.** The coverage guard matches key
+NAMES at any depth, not paths, so it structurally cannot see a fixture *trim* — deleting a nested
+field whose name also appears elsewhere leaves it green while the fuzz quietly loses that path.
+The count is the one number that always moves. It is set to the exact current value, not a round
+one: a trim that cost 252 combinations sailed straight past a 16,000 floor.
+
 **A negative-only assertion is not coverage.** Several cases here asserted only that a *wrong*
 sentence was absent — so deleting the entire check they guarded left the suite green. Every
 message assertion now has a positive half naming the consequence clause it expects, and the way to
