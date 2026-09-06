@@ -964,6 +964,79 @@ def case_identifier_is_bounded():
         f"identifier is carrying itself verbatim through the report")
 
 
+# --- 14h. the density FLOOR has an exemption, like the temperature floor -----
+# The app's own bundled reference documents LW-PLA at 0.40-0.48 g/cm3 fully
+# foamed, so a flat 0.7 floor condemned a documented material — and the
+# metal-fill hint pasted onto the below-floor case told the user to add optTag
+# 20, which does not move the floor AND marks the filament abrasive.
+def case_density_floor_exempts_foaming():
+    for typ, dens in [("LW-PLA", 0.43), ("LW PLA", 0.45), ("LWPLA", 0.40),
+                      ("PLA Foaming", 0.44), ("LW-ASA", 0.48)]:
+        r = valid_res(type=typ, density=dens, optTags=[])
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        fp = [m for rows in f.values() for _, m in rows if "outside the plausible" in m]
+        if fp:
+            bad("density-floor-foaming",
+                f"{typ} at {dens} g/cm3 is what the bundled reference documents; flagged: {fp}")
+            return
+    ok("density-floor-foaming")
+    # ...and an impossible value still reports, against the foaming floor
+    r = valid_res(type="LW-PLA", density=0.05, optTags=[])
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    hit = [m for rows in f.values() for _, m in rows if "outside the plausible" in m]
+    ok("density-floor-still-bounded") if hit else bad(
+        "density-floor-still-bounded", "0.05 g/cm3 is impossible for any grade and was not reported")
+
+    # the metal-fill hint belongs to the CEILING only
+    r = valid_res(type="PLA", density=0.43, optTags=[])
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    low = [m for rows in f.values() for _, m in rows if "outside the plausible" in m]
+    if low and "add optTag 20" in low[0] and "Do NOT add optTag 20" not in low[0]:
+        bad("density-floor-hint",
+            "the below-floor row tells the user to add optTag 20 — it does not move the floor and "
+            "it puts the filament in ABRASIVE_OPT_TAGS, so the audit's own abrasive category then "
+            "fires on a soft foaming PLA")
+    else:
+        ok("density-floor-hint")
+
+
+# --- 14i. a promotion moves the #732 carry-over id WITH the roll -------------
+# The carry-over exemption keys on the spool living on the filament whose id it
+# copied. promoteParent moves spools to a new variant with `instanceId`
+# preserved while the parent keeps its own — so the audit's OWN prescribed
+# remedy ("Convert to template") used to manufacture a false shadow finding on
+# the next run, with the consequence backwards.
+def case_promotion_carryover_exempt():
+    carry = "aabbccddee"
+    for label, top in (("exact", carry), ("case twin", carry.upper())):
+        par = valid_res(_id="p", name="PLA Family", instanceId=top, spools=[], color=None,
+                        colorName=None, totalWeight=None, lowStockThreshold=None)
+        var = valid_res(_id="v", name="PLA Family — Original", parentId="p",
+                        instanceId="ffffffffff")
+        var["spools"] = [dict(var["spools"][0], instanceId=carry)]
+        f, _ = run({"p": rec(par, copy.deepcopy(par)), "v": rec(var, copy.deepcopy(var))},
+                   topology={"p": True})
+        fp = [m for rows in f.values() for _, m in rows if carry.lower() in m.lower()]
+        if fp:
+            bad(f"promotion-carryover-{label}",
+                f"a promoted carry-over id is the INTENDED state — the label resolves to the "
+                f"variant now holding the roll — but was reported: {fp}")
+        else:
+            ok(f"promotion-carryover-{label}")
+
+    # a genuinely FOREIGN family must still report, both exactly and by case
+    for label, top in (("exact", carry), ("case twin", carry.upper())):
+        oth = valid_res(_id="o", name="Unrelated", instanceId=top)
+        v2 = valid_res(_id="v2", name="Other — Blue", instanceId="gggggggggg")
+        v2["spools"] = [dict(v2["spools"][0], instanceId=carry)]
+        f, _ = run({"o": rec(oth, copy.deepcopy(oth)), "v2": rec(v2, copy.deepcopy(v2))})
+        hit = [m for rows in f.values() for _, m in rows if carry.lower() in m.lower()]
+        ok(f"foreign-shadow-{label}") if hit else bad(
+            f"foreign-shadow-{label}",
+            "the kinship exemption is over-broad — an unrelated filament's id is genuinely "
+            "shadowed and must still report")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -1041,6 +1114,8 @@ if __name__ == "__main__":
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()
+    case_density_floor_exempts_foaming()
+    case_promotion_carryover_exempt()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

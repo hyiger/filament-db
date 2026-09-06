@@ -222,6 +222,13 @@ OPT_TAG_METAL_FILL = 20
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
 DENSITY_FLOOR = 0.7
+# ...except for foaming grades, which are SUPPOSED to be down there. The app's
+# own bundled reference documents it: "colorFabb publishes 0.40-0.48 at full
+# foaming" for LW-PLA. A flat 0.7 floor condemned every one of them, so this
+# mirrors the LOW_TEMP_TYPES exemption rather than lowering the floor for
+# materials that have no business being that light.
+DENSITY_FLOOR_FOAMING = 0.3
+FOAMING_TYPE_RE = re.compile(r"(^|[^A-Z])LW[^A-Z]?|FOAM|LIGHTWEIGHT")
 
 # Bounds mirrored from the Filament schema. A value outside these cannot be
 # written through the API, so a violation means the row arrived by a path that
@@ -1588,13 +1595,30 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         dens = num(r.get("density"))
         metal_filled = OPT_TAG_METAL_FILL in (r.get("optTags") or [])
         ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
-        if dens is not None and not DENSITY_FLOOR <= dens <= ceiling:
-            kind = "metal-filled" if metal_filled else "unfilled polymer"
-            hint = ("" if metal_filled else
-                    " — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
-                    "corrects its abrasive classification")
+        _ftype = (r.get("type") or "")
+        _foaming = bool(FOAMING_TYPE_RE.search(_ftype.upper())) if isinstance(_ftype, str) else False
+        floor = DENSITY_FLOOR_FOAMING if _foaming else DENSITY_FLOOR
+        if dens is not None and not floor <= dens <= ceiling:
+            kind = ("metal-filled" if metal_filled
+                    else "foaming grade" if _foaming else "unfilled polymer")
+            # The metal-fill hint belongs to the CEILING only. Pasted onto a
+            # below-floor row it told a user with density 0.43 to add optTag 20,
+            # which does not move the floor (so the finding returns on the next
+            # run) and puts the tag in ABRASIVE_OPT_TAGS — so the audit's own
+            # highest-severity category would then report a soft foaming PLA as
+            # exporting non-abrasive. A remedy that makes things worse.
+            if dens > ceiling and not metal_filled:
+                hint = (" — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
+                        "corrects its abrasive classification")
+            elif dens < floor and not _foaming:
+                hint = (" — a foaming grade legitimately sits here (the bundled reference puts "
+                        "LW-PLA at 0.40-0.48 fully foamed); if it is one, name the type so it "
+                        "reads as LW-/foaming and this row goes away. Do NOT add optTag 20: it "
+                        "does not move the floor and it marks the filament abrasive")
+            else:
+                hint = ""
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
-                            f"({DENSITY_FLOOR}-{ceiling}){hint}{_inh_blame('density', 'optTags')}", fid)
+                            f"({floor}-{ceiling}){hint}{_inh_blame('density', 'optTags')}", fid)
         dia = num(r.get("diameter"))
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
             add("physical", f"{name}: diameter {dia}mm is not a standard size"
@@ -2050,6 +2074,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     # differing from a filament id only by case shadows it just as completely as
     # an exact duplicate, and an exact-key comparison cannot see it.
     spool_owners, top_owners, top_ci = {}, {}, {}
+    _parent_of = {_f: (str(_v["raw"]["parentId"]) if _v["raw"].get("parentId") else None)
+                  for _f, _v in records.items()}
     for _fid, _v in records.items():
         _raw = _v["raw"]
         _nm = _raw.get("name") or _v["res"].get("name") or "?"
@@ -2083,7 +2109,25 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # A spool id equal to ITS OWN filament's is the #732 Phase 1 carry-over
         # and is legitimate — exactly what `ownFilamentId` excludes in
         # isSpoolInstanceIdTaken. Only a FOREIGN filament's id is a shadow.
-        _shadowed = [(i, n) for i, n in top_owners.get(_sid, []) if i not in _fids]
+        # The #732 carry-over exemption below keys on the spool still living on
+        # the filament whose top-level id it copied — and a v1.70 promotion
+        # breaks exactly that pairing: the spools move to a NEW variant with
+        # `instanceId` preserved while the parent keeps its own top-level id. So
+        # the audit's own prescribed remedy ("Convert to template ... so printed
+        # labels and NFC tags keep resolving") manufactured this finding on the
+        # next run — and its consequence was backwards, because resolving that
+        # label to the variant now holding the roll is precisely what the
+        # promotion guarantees. Exempt the parent<->child pair; a genuinely
+        # FOREIGN family still reports.
+        def _kin_of(candidates):
+            """Filament ids in the SAME family as one of this id's spool owners."""
+            return {i for i, _ in candidates
+                    for o in _fids
+                    if _parent_of.get(o) == i or _parent_of.get(i) == o}
+
+        _kin = _kin_of(top_owners.get(_sid, []))
+        _shadowed = [(i, n) for i, n in top_owners.get(_sid, [])
+                     if i not in _fids and i not in _kin]
         if _shadowed:
             add("structure", f"spool instanceId {_sid!r} (on {_owners[0][1]}) equals the "
                              f"FILAMENT-level instanceId of {_who(_shadowed)} -> the spool tier "
@@ -2094,8 +2138,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # only THEN the filament-level exact tier -- so a spool id that
             # differs from a filament id only by case shadows it just as
             # completely, and an exact-key comparison sees nothing at all.
-            _ci = [(i, n) for i, n in top_ci.get(_sid.casefold(), [])
-                   if i not in _fids and n is not None]
+            # Same promotion exemption as the exact branch above — otherwise
+            # suppressing it there just moved the false finding into this row.
+            _ci_all = top_ci.get(_sid.casefold(), [])
+            _ci_kin = _kin_of(_ci_all)
+            _ci = [(i, n) for i, n in _ci_all
+                   if i not in _fids and i not in _ci_kin and n is not None]
             if _ci:
                 add("structure", f"spool instanceId {_sid!r} (on {_owners[0][1]}) differs only by "
                                  f"CASE from the filament-level instanceId of {_who(_ci)} -> "
