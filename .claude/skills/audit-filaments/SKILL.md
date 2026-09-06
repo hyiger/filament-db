@@ -119,7 +119,9 @@ an hours figure.
 
 **Temperatures.** The schema rejects an *inverted* range (min > max, GH #574) but nothing catches
 the everyday value falling outside its own declared range — a nozzle temp above its range max is
-common and invisible. Plus implausible absolute values, against a band that is **type-aware at the
+common and invisible. **First-layer values are checked too**: `nozzleFirstLayer` and
+`bedFirstLayer` resolve and export independently, so a malformed one reaches a print while the
+steady-state temperature beside it looks perfectly sane. Plus implausible absolute values, against a band that is **type-aware at the
 bottom**: the general floor is 150 °C, but the bundled technical reference documents PCL 100 at
 ~120 °C and the orthotic Facilan Ortho at 130–170 °C, so a flat floor would call every valid
 low-temperature grade an error. Widen `LOW_TEMP_TYPES` rather than lowering the floor for
@@ -213,6 +215,12 @@ fibre-filled or metal-filled grades".
 everything.
 
 ## False positives, learned by hitting them
+
+**Two active records can share a name.** Hybrid sync, a restore, or a legacy database whose
+unique-name index could not be built all produce it, and every finding identifies its filament by
+name. The checker therefore dedupes on `(record id, message)` and appends the id **only** when a
+message really is shared, so the count stays accurate and both records can be repaired — do not
+"tidy" that back into a text-level dedupe.
 
 **`#808080` on a filament whose colorName is "Grey" is correct**, not a sentinel — grey filament is
 that colour. The checker exempts it; do not "fix" one by hand either.

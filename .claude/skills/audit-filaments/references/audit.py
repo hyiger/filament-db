@@ -188,8 +188,12 @@ def load(base, api_key, cache_dir=None):
 def audit(records, abrasive):
     findings = {}
 
-    def add(cat, msg):
-        findings.setdefault(cat, []).append(msg)
+    def add(cat, msg, fid=None):
+        # Keyed on (record id, message), not text alone: hybrid sync, a restore or
+        # a legacy database can leave two ACTIVE records sharing a name, and every
+        # message identifies a filament by name. Deduping on text would collapse
+        # two real defects into one row and hide the second record entirely.
+        findings.setdefault(cat, []).append((fid, msg))
 
     # Filaments the authoritative audit already reported as having no nozzle
     # assignment. The generic check below must not restate the same defect.
@@ -207,12 +211,14 @@ def audit(records, abrasive):
             soft = [n.get("name") for n in (f.get("softNozzles") or [])]
             if f.get("flagMismatch"):
                 add("abrasive", f"{name}: material reads abrasive ({why}) but settings.filament_abrasive "
-                                f"is not on -> EXPORTS AS NON-ABRASIVE{src}")
+                                f"is not on -> EXPORTS AS NON-ABRASIVE{src}", str(f.get("filamentId")))
             if soft:
-                add("abrasive", f"{name}: abrasive ({why}) but permitted on unfit nozzle(s) {soft}{src}")
+                add("abrasive", f"{name}: abrasive ({why}) but permitted on unfit nozzle(s) {soft}{src}",
+                    str(f.get("filamentId")))
             if f.get("unassigned"):
                 abrasive_unassigned.add(str(f.get("filamentId")))
-                add("abrasive", f"{name}: abrasive ({why}) with no nozzle assignment at all{src}")
+                add("abrasive", f"{name}: abrasive ({why}) with no nozzle assignment at all{src}",
+                    str(f.get("filamentId")))
 
     # Template-ness is DERIVED from having variants — there is no schema flag.
     parents = {str(v["raw"]["parentId"]) for v in records.values() if v["raw"].get("parentId")}
@@ -236,7 +242,7 @@ def audit(records, abrasive):
             where = " (TEMPLATE — this spreads into every variant's effective settings " \
                     "and their slicer exports)" if is_template else ""
             add("physical", f"{name}: settings is {type(own_settings).__name__}, not an object -> "
-                            f"malformed bag{where}")
+                            f"malformed bag{where}", fid)
 
         # --- inventory: what makes the remaining bar work --------------------
         # A pre-migration record carries its stock on the TOP-LEVEL totalWeight
@@ -251,16 +257,16 @@ def audit(records, abrasive):
             net = r.get("netFilamentWeight")
             # getRemainingPct rejects a non-positive denominator, not just null.
             if net is None or net <= 0:
-                add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar")
+                add("inventory", f"{name}: {unit} but netFilamentWeight={net!r} -> no % bar", fid)
             tare = r.get("spoolWeight")
             if tare is None:
                 add("inventory", f"{name}: {unit} but no spoolWeight (tare) -> "
-                                 f"computeRemaining returns null, nothing displays")
+                                 f"computeRemaining returns null, nothing displays", fid)
 
             if legacy_roll:
                 gross = r.get("totalWeight")
                 if tare is not None and gross < tare:
-                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining")
+                    add("inventory", f"{name}: legacy gross {gross}g is below tare {tare}g -> negative remaining", fid)
             else:
                 missing_gross = 0
                 for s in live_spools:
@@ -270,12 +276,12 @@ def audit(records, abrasive):
                         # and returns null outright when none is left countable.
                         missing_gross += 1
                         add("inventory", f"{name}: live spool {s.get('instanceId') or s.get('_id')} has no "
-                                         f"totalWeight (gross) -> it contributes nothing to the bar")
+                                         f"totalWeight (gross) -> it contributes nothing to the bar", fid)
                     elif tare is not None and gross < tare:
-                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> negative remaining")
+                        add("inventory", f"{name}: spool gross {gross}g is below tare {tare}g -> negative remaining", fid)
                 if missing_gross and missing_gross == len(live_spools):
                     add("inventory", f"{name}: every live spool is missing its gross weight -> "
-                                     f"getRemainingPct returns null, no bar at all")
+                                     f"getRemainingPct returns null, no bar at all", fid)
 
         # --- drying: the field is minutes, every datasheet says hours --------
         dry_t, dry_temp = r.get("dryingTime"), r.get("dryingTemperature")
@@ -284,24 +290,36 @@ def audit(records, abrasive):
         # this is the documented heuristic.
         if isinstance(dry_t, (int, float)) and 0 < dry_t <= 24 and dry_temp is not None:
             add("drying-units", f"{name}: dryingTime={dry_t} at {dry_temp}C — the field is MINUTES; "
-                                f"{dry_t} hours would be {int(dry_t * 60)}")
+                                f"{dry_t} hours would be {int(dry_t * 60)}", fid)
 
         # --- temperatures ----------------------------------------------------
         noz, lo, hi, bed = (temps.get("nozzle"), temps.get("nozzleRangeMin"),
                             temps.get("nozzleRangeMax"), temps.get("bed"))
         if lo is not None and hi is not None and lo > hi:
-            add("temps", f"{name}: INVERTED nozzle range {lo}-{hi}")
+            add("temps", f"{name}: INVERTED nozzle range {lo}-{hi}", fid)
         if noz is not None and lo is not None and noz < lo:
-            add("temps", f"{name}: nozzle {noz} is BELOW its own range min {lo}")
+            add("temps", f"{name}: nozzle {noz} is BELOW its own range min {lo}", fid)
         if noz is not None and hi is not None and noz > hi:
-            add("temps", f"{name}: nozzle {noz} is ABOVE its own range max {hi}")
+            add("temps", f"{name}: nozzle {noz} is ABOVE its own range max {hi}", fid)
+        # First-layer values resolve and export independently of the steady-state
+        # ones, so a malformed nozzleFirstLayer reaches a print while the regular
+        # nozzle temp looks perfectly sane.
+        nfl, bfl = temps.get("nozzleFirstLayer"), temps.get("bedFirstLayer")
+        if nfl is not None and lo is not None and nfl < lo:
+            add("temps", f"{name}: nozzleFirstLayer {nfl} is BELOW the declared range min {lo}", fid)
+        if nfl is not None and hi is not None and nfl > hi:
+            add("temps", f"{name}: nozzleFirstLayer {nfl} is ABOVE the declared range max {hi}", fid)
+        if bfl is not None and not 0 <= bfl <= 200:
+            add("temps", f"{name}: bedFirstLayer {bfl}C implausible", fid)
+
         typ_upper = (r.get("type") or "").upper()
         floor = LOW_TEMP_FLOOR if any(t in typ_upper for t in LOW_TEMP_TYPES) else NOZZLE_FLOOR
-        if noz is not None and not floor <= noz <= NOZZLE_CEILING:
-            add("temps", f"{name}: nozzle {noz}C outside the plausible band for {r.get('type') or '?'} "
-                         f"({floor}-{NOZZLE_CEILING}C)")
+        for label, val in (("nozzle", noz), ("nozzleFirstLayer", nfl)):
+            if val is not None and not floor <= val <= NOZZLE_CEILING:
+                add("temps", f"{name}: {label} {val}C outside the plausible band for "
+                             f"{r.get('type') or '?'} ({floor}-{NOZZLE_CEILING}C)", fid)
         if bed is not None and not 0 <= bed <= 200:
-            add("temps", f"{name}: bed {bed}C implausible")
+            add("temps", f"{name}: bed {bed}C implausible", fid)
 
         # --- physical --------------------------------------------------------
         dens = r.get("density")
@@ -313,33 +331,33 @@ def audit(records, abrasive):
                     " — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
                     "corrects its abrasive classification")
             add("physical", f"{name}: density {dens} g/cm3 outside the plausible {kind} range "
-                            f"({DENSITY_FLOOR}-{ceiling}){hint}")
+                            f"({DENSITY_FLOOR}-{ceiling}){hint}", fid)
         dia = r.get("diameter")
         if dia is not None and not any(abs(dia - d) < 0.06 for d in (1.75, 2.85, 3.0)):
-            add("physical", f"{name}: diameter {dia}mm is not a standard size")
+            add("physical", f"{name}: diameter {dia}mm is not a standard size", fid)
         for fld in ("cost", "density", "spoolWeight", "netFilamentWeight", "dryingTime", "dryingTemperature"):
             val = r.get(fld)
             if isinstance(val, (int, float)) and val < 0:
-                add("physical", f"{name}: {fld}={val} is negative")
+                add("physical", f"{name}: {fld}={val} is negative", fid)
 
         # --- missing core spec (EFFECTIVE — a template legitimately has none) -
         if not is_template:
             if noz is None:
-                add("missing-core", f"{name}: no nozzle temperature")
+                add("missing-core", f"{name}: no nozzle temperature", fid)
             if bed is None:
-                add("missing-core", f"{name}: no bed temperature")
+                add("missing-core", f"{name}: no bed temperature", fid)
             if dens is None:
-                add("missing-core", f"{name}: no density")
+                add("missing-core", f"{name}: no density", fid)
 
         # --- colour ----------------------------------------------------------
         col = r.get("color")
         if col is not None and not HEX6.match(str(col)):
-            add("colour", f"{name}: malformed color {col!r}")
+            add("colour", f"{name}: malformed color {col!r}", fid)
         # #808080 is the legacy default the pre-v1.70 form stamped on everything,
         # but it is ALSO the correct hex for a filament that really is grey.
         cname = (r.get("colorName") or "").lower()
         if col == "#808080" and "grey" not in cname and "gray" not in cname:
-            add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})")
+            add("colour", f"{name}: colour is the legacy #808080 sentinel (colorName={r.get('colorName')!r})", fid)
 
         # --- template violations (v1.70 #605) --------------------------------
         if is_template:
@@ -365,30 +383,30 @@ def audit(records, abrasive):
                     continue
                 how = ("Convert to template — moves this onto a new variant" if promote_runs
                        else f'promote returns 400 nothing_to_convert here — PUT {{"{fld}": null}}')
-                add("template", f"{name} (TEMPLATE): still carries {fld}={val!r} [{how}]")
+                add("template", f"{name} (TEMPLATE): still carries {fld}={val!r} [{how}]", fid)
             if raw.get("spools"):
-                add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — inventory belongs on a variant")
+                add("template", f"{name} (TEMPLATE): holds {len(raw['spools'])} spool(s) — inventory belongs on a variant", fid)
 
         # --- pinned inheritance ----------------------------------------------
         pid = str(raw["parentId"]) if raw.get("parentId") else None
         parent_ok = False
         if pid:
             if pid == fid:
-                add("structure", f"{name}: parentId points at itself -> nothing can inherit")
+                add("structure", f"{name}: parentId points at itself -> nothing can inherit", fid)
             elif pid not in records:
                 # The listing only returns ACTIVE filaments, so an absent parent is
                 # missing, soft-deleted or purged. Such a row can pass every other
                 # check while the detail page and every slicer export resolve NONE
                 # of its inherited values — silently skipping it hides a breakage.
                 add("structure", f"{name}: parentId {pid} resolves to no active filament -> "
-                                 f"nothing inherits, every inherited field reads as empty")
+                                 f"nothing inherits, every inherited field reads as empty", fid)
             elif records[pid]["raw"].get("parentId"):
                 # The write API forbids nested inheritance and resolveFilament
                 # resolves exactly one immediate parent, so the grandparent's
                 # values never reach this row however complete they look.
                 add("structure", f"{name}: parent {records[pid]['res'].get('name')!r} is itself a "
                                  f"variant (nested inheritance) -> only one level resolves, so the "
-                                 f"grandparent's values never reach this row")
+                                 f"grandparent's values never reach this row", fid)
             else:
                 parent_ok = True
         if parent_ok:
@@ -403,14 +421,14 @@ def audit(records, abrasive):
                 if own == "" or own is None or inherited is None:
                     continue
                 if _json_equal(own, inherited):
-                    add("pinned", f"{name}: stores {fld}={own}, identical to template {pname!r} -> pinned copy")
+                    add("pinned", f"{name}: stores {fld}={own}, identical to template {pname!r} -> pinned copy", fid)
             own_t = raw.get("temperatures") or {}
             par_t = parent_eff.get("temperatures") or {}
             for sub in PIN_CHECK_TEMPS:
                 own, inherited = own_t.get(sub), par_t.get(sub)
                 if own is not None and inherited is not None and _json_equal(own, inherited):
                     add("pinned", f"{name}: stores temperatures.{sub}={own}, identical to template "
-                                  f"{pname!r} -> pinned copy")
+                                  f"{pname!r} -> pinned copy", fid)
             # Whole-array inheritance: a NON-EMPTY variant array overrides, so one
             # equal to the template's is a pin. An empty one correctly inherits.
             for fld in PIN_CHECK_ARRAYS:
@@ -419,11 +437,11 @@ def audit(records, abrasive):
                 if own and _json_equal(_strip_ids(own), _strip_ids(inherited)):
                     add("pinned", f"{name}: stores its own {fld} ({len(own)} entr"
                                   f"{'y' if len(own) == 1 else 'ies'}) identical to template "
-                                  f"{pname!r} -> pinned copy")
+                                  f"{pname!r} -> pinned copy", fid)
             own_nz = _nozzle_ids(raw.get("compatibleNozzles"))
             if own_nz and own_nz == _nozzle_ids(parent_eff.get("compatibleNozzles")):
                 add("pinned", f"{name}: stores its own compatibleNozzles ({len(own_nz)}) identical to "
-                              f"template {pname!r} -> pinned copy")
+                              f"template {pname!r} -> pinned copy", fid)
 
             # `settings` is SHALLOW-MERGED ({...parent, ...variant}), so a key
             # the variant stores overrides that key alone and stops tracking it.
@@ -447,7 +465,7 @@ def audit(records, abrasive):
             if dup:
                 shown = ", ".join(dup[:4]) + (f", +{len(dup) - 4} more" if len(dup) > 4 else "")
                 add("pinned", f"{name}: stores {len(dup)} of {len(own_set)} settings key(s) identical to "
-                              f"template {pname!r} ({shown}) -> pinned copies")
+                              f"template {pname!r} ({shown}) -> pinned copies", fid)
 
         # --- nozzle assignment (non-abrasive; abrasive is the app's job) ------
         # An abrasive filament with no assignment is already reported, with far
@@ -455,7 +473,7 @@ def audit(records, abrasive):
         # contradict this script's own division of labour and double-count.
         if (not is_template and not (r.get("compatibleNozzles") or [])
                 and fid not in abrasive_unassigned):
-            add("nozzles", f"{name}: no compatibleNozzles")
+            add("nozzles", f"{name}: no compatibleNozzles", fid)
 
     return findings, parents
 
@@ -474,17 +492,33 @@ def main():
     findings, parents = audit(records, abrasive)
 
     wanted = set(args.only.split(",")) if args.only else None
+
+    def render(rows):
+        """Dedupe by (record id, message), then disambiguate shared messages.
+
+        Two ACTIVE records can share a name — hybrid sync, a restore, or a legacy
+        database whose unique-name index could not be built — and every message
+        names its filament. Collapsing on text would hide the second record; so
+        the id joins the line only when a message really is shared, keeping the
+        common case clean.
+        """
+        uniq = sorted(set(rows), key=lambda t: (t[1], t[0] or ""))
+        owners = {}
+        for fid, msg in uniq:
+            owners.setdefault(msg, set()).add(fid)
+        return [f"{msg}  [{fid}]" if len(owners[msg]) > 1 and fid else msg for fid, msg in uniq]
+
     if args.json:
-        out = {k: sorted(set(v)) for k, v in findings.items() if not wanted or k in wanted}
+        out = {k: render(v) for k, v in findings.items() if not wanted or k in wanted}
         print(json.dumps({"filaments": len(records), "templates": len(parents), "findings": out}, indent=2))
         return
 
     total = 0
     for key, title in CATEGORIES:
-        rows = findings.get(key)
-        if not rows or (wanted and key not in wanted):
+        raw_rows = findings.get(key)
+        if not raw_rows or (wanted and key not in wanted):
             continue
-        rows = sorted(set(rows))
+        rows = render(raw_rows)
         total += len(rows)
         print(f"\n### {title}  ({len(rows)})")
         for row in rows:
