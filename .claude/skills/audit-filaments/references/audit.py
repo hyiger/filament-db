@@ -416,10 +416,21 @@ def _react_child_throws(v):
 def _nested_text_consequence(field, value):
     """The consequence of a non-string value, per field and per value shape."""
     if field == "instanceId":
-        return ("this is the durable per-spool identity a printed QR label and a written NFC tag "
+        # It IS rendered as a bare React child -- the SpoolCard header button
+        # renders `{spool.instanceId || t(...)}`, and /inventory and the home
+        # spool panel show it too. An earlier comment here (and SKILL.md)
+        # asserted the opposite and returned the match-tier sentence for every
+        # shape, so an OBJECT id was reported as a scan failure on a page that
+        # will not open at all.
+        _idc = ("this is the durable per-spool identity a printed QR label and a written NFC tag "
                 "carry, and BOTH match tiers are type-strict -- the Mongo `spools.instanceId` "
                 "equality and the `sp.instanceId === id` re-scan that follows it -- so scanning "
                 "this spool resolves to nothing")
+        if _react_child_throws(value):
+            return ("it renders directly as a React child (the SpoolCard header, /inventory and "
+                    "the home spool panel all show it), and React throws on an object, so the "
+                    "filament page fails to open at all -- and " + _idc)
+        return _idc
     if field == "photoDataUrl":
         return ("it goes straight to an <img src>, which COERCES rather than throwing, so the "
                 "spool shows a permanently broken image with no error to explain it")
@@ -1768,10 +1779,21 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             nz = cal.get("nozzle")
             noz_name = nz.get("name") if isinstance(nz, dict) else None
             if nz is None:
+                # "Unreachable" is only half the story, and the other half is
+                # worse. pickRepresentativeCalibration tests `printer == null &&
+                # bedType == null` and NEVER looks at the nozzle, so a row with
+                # both scopes null is still picked and baked into the
+                # single-preset Orca/Bambu export -- for every machine -- while
+                # /calibration and the Prusa fan-out drop it.
+                _scope_null = cal.get("printer") is None and cal.get("bedType") is None
+                _pc = ("so /calibration cannot diameter-match this row and the Prusa fan-out "
+                       "drops it -- but pickRepresentativeCalibration never looks at the nozzle, "
+                       "so with both scope refs null this row is still BAKED into the "
+                       "single-preset Orca/Bambu export, for every machine" if _scope_null else
+                       "so /calibration cannot diameter-match this row and the Prusa fan-out "
+                       "drops it: the tuning is genuinely unreachable")
                 add("structure", f"{name}: calibration[{idx}] references a nozzle that no longer "
-                                 f"exists -> populate() answers null for it, so /calibration cannot "
-                                 f"diameter-match this row and the Prusa fan-out drops it: the "
-                                 f"tuning is genuinely unreachable", fid)
+                                 f"exists -> populate() answers null for it, {_pc}", fid)
             elif isinstance(nz, dict) and nz.get("_deletedAt"):
                 # NOT the purged case's consequence. A soft-deleted nozzle
                 # populates as a FULL document that still carries its
@@ -2499,32 +2521,48 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # An abrasive filament with no assignment is already reported, with far
         # better remediation, by /api/abrasive-nozzles. Restating it here would
         # contradict this script's own division of labour and double-count.
-        # The no-ticks-with-calibrations case below applies to a TEMPLATE too:
-        # v1.70 keeps calibrations on the template as shared spec, and its own
-        # form grid drops every unreachable row the same way. Excluding
-        # templates wholesale left the defect unreported from BOTH sides — the
-        # template by this guard, the inheriting child by an empty stored array.
-        _ticks_eff = r.get("compatibleNozzles") or []
-        _cals_eff = [c for c in (r.get("calibrations") or []) if isinstance(c, dict)]
-        # OWNERSHIP is read from the STORED arrays, not from `_inherited`.
-        # resolveFilament pushes an array root into `_inherited` only when the
-        # PARENT's array is non-empty (resolveFilament.ts: `if
-        # (parent.compatibleNozzles?.length > 0)`) — and the whole point of this
-        # case is that the parent's tick list is EMPTY, so `compatibleNozzles`
-        # is never recorded as inherited and an `_inherited`-based test could
-        # never fire in the one situation it was written for. An empty stored
-        # array IS the inherit sentinel, so emptiness is the ownership test.
-        _owns_cals = bool(raw.get("calibrations"))
-        _owns_ticks = bool(raw.get("compatibleNozzles"))
-        _both_inherited = not _owns_cals and not _owns_ticks
-        if (is_template and fid not in abrasive_unassigned
-                and not _ticks_eff and _cals_eff):
-            add("nozzles", f"{name}: no compatibleNozzles, but {len(_cals_eff)} calibration(s) are "
-                           f"stored -> isCalibrationRowReachable requires the row's nozzle to be "
-                           f"ticked, so every one of them drops out of the FilamentForm grid into "
-                           f"the orphan list and can only be removed, not edited — here and on "
-                           f"every variant that inherits them", fid)
+        # THE ORPHAN PREDICATE IS COMPUTED ENTIRELY FROM THE STORED DOCUMENT.
+        # The edit form fetches `?raw=true` (edit/page.tsx) and seeds BOTH its
+        # calibration grid and its tick list from that response, so
+        # isCalibrationRowReachable's inputs are this row's OWN arrays — not the
+        # resolved ones. Judging the ticks on the resolved read (as an earlier
+        # version did) made a variant that INHERITS ticks but stores its own
+        # calibrations silently clean, because the inherited ticks satisfied the
+        # gate while the form never sees them.
+        #
+        # And the real predicate is PER ROW: `if
+        # (!ctx.compatibleNozzleIds.includes(nozzleId)) return false`. An empty
+        # tick list is just the degenerate case where every row fails it — a
+        # calibration on a nozzle that simply is not ticked fails it too, and
+        # that was silent. bambuStudioApply's global-catalog fallback writes
+        # exactly such rows.
+        _own_cals = [c for c in (raw.get("calibrations") or []) if isinstance(c, dict)]
+        _own_tick_ids = set(_nozzle_ids(raw.get("compatibleNozzles")))
+        if _own_cals and fid not in abrasive_unassigned:
+            if not _own_tick_ids:
+                _who_else = (" — here and on every variant that inherits them"
+                             if is_template else "")
+                add("nozzles", f"{name}: no compatibleNozzles, but {len(_own_cals)} calibration(s) "
+                               f"are stored -> isCalibrationRowReachable requires the row's nozzle "
+                               f"to be ticked, so every one of them drops out of the FilamentForm "
+                               f"grid into the orphan list and can only be removed, not "
+                               f"edited{_who_else}", fid)
+            else:
+                for _ci, _c in enumerate(_own_cals):
+                    _cn = _c.get("nozzle")
+                    _cnid = str(_cn.get("_id")) if isinstance(_cn, dict) and _cn.get("_id") else None
+                    if _cnid and _cnid not in _own_tick_ids:
+                        _cnm = _cn.get("name") or _cnid
+                        add("nozzles", f"{name}: calibration[{_ci}] is tuned for {_cnm!r}, which "
+                                       f"this row does not tick -> isCalibrationRowReachable drops "
+                                       f"it from the FilamentForm grid into the orphan list, where "
+                                       f"it can be removed but not edited; tick that nozzle to get "
+                                       f"the row back", fid)
 
+        # The soft-deleted branches below stay on the RESOLVED read on purpose:
+        # /api/abrasive-nozzles audits the resolved document, so "is this row
+        # effectively unassigned" is a resolved-read question, unlike the orphan
+        # predicate above which mirrors a form fed by `?raw=true`.
         if not is_template and fid not in abrasive_unassigned:
             compat = r.get("compatibleNozzles") or []
             # A soft-deleted nozzle still populates as a truthy object carrying
@@ -2534,32 +2572,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                      if isinstance(n, dict) and n.get("_deletedAt")]
             live = [n for n in compat if isinstance(n, dict) and not n.get("_deletedAt")]
             if not compat:
-                # An empty tick list is NORMAL, not a defect: since #1021 the
-                # export derives nothing from it (it fails open, visible on
-                # every printer), and the #859 slicer sync-back resolves a
-                # nozzle from the global catalog without ever writing ticks. The
-                # bare row condemned the app's own documented default — and was
-                # the one finding in the file carrying no consequence at all.
-                # It costs the user something ONLY when calibrations exist:
-                # isCalibrationRowReachable starts with
-                # `if (!ctx.compatibleNozzleIds.includes(nozzleId)) return false`,
-                # so with no ticks EVERY stored calibration drops out of the
-                # form's grid into the orphan list, where it can be removed but
-                # not corrected.
-                # EFFECTIVE, not stored: a variant that inherits both arrays
-                # stores an empty one, so counting the stored array reported
-                # nothing while the resolved child really does carry rows that
-                # its (empty) effective tick set makes unreachable. Suppressed
-                # only when BOTH roots are inherited — the template then owns
-                # the defect and reports it once, above.
-                _cal_n = 0 if _both_inherited else len(_cals_eff)
-                if _cal_n:
-                    add("nozzles", f"{name}: no compatibleNozzles, but {_cal_n} calibration(s) are "
-                                   f"stored -> isCalibrationRowReachable requires the row's nozzle "
-                                   f"to be ticked, so every one of them drops out of the "
-                                   f"FilamentForm grid into the orphan list and can only be "
-                                   f"removed, not edited"
-                                   f"{_inh_blame('compatibleNozzles')}", fid)
+                # The orphan consequence is handled above, from the STORED
+                # document the form actually reads. Nothing to add here: an
+                # empty EFFECTIVE tick list with no stored calibrations is the
+                # app's documented default (#1021/#859) and not a defect.
+                pass
             elif not live:
                 add("nozzles", f"{name}: every compatibleNozzles entry is soft-deleted ({stale}) -> "
                                f"effectively unassigned{_inh_blame('compatibleNozzles')}", fid)

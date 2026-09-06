@@ -1532,46 +1532,65 @@ def case_heuristics_and_negatives():
 # its STORED (empty) array. v1.70 keeps calibrations on the template as shared
 # spec, so this is the normal place for them to live.
 def case_unreachable_calibrations():
+    """isCalibrationRowReachable's inputs are BOTH stored: the edit form fetches
+    `?raw=true` and seeds its grid and its tick list from that response. So the
+    orphan predicate is a stored-document question, and it is PER ROW — an empty
+    tick list is only the degenerate case where every row fails it."""
+    nz = valid_res()["compatibleNozzles"]
     cal = valid_res()["calibrations"]
+    other = [{"_id": "n9", "name": "0.6 Hardened", "_deletedAt": None}]
 
-    def family(ticks, kid_inherits):
+    def fam(t_over, k_res, k_raw, inh):
         t = valid_res(_id="t", name="Family", parentId=None, spools=[], color=None,
-                      colorName=None, totalWeight=None, lowStockThreshold=None,
-                      compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
-        k = valid_res(_id="k", name="Family — Blue", parentId="t",
-                      compatibleNozzles=ticks, calibrations=copy.deepcopy(cal))
-        # MIRROR resolveFilament: it records `calibrations` as inherited
-        # (the parent's array is non-empty) but NOT `compatibleNozzles` when
-        # the parent's tick list is empty — which is exactly this scenario.
-        # The earlier fixture asserted both, which encoded an assumption
-        # instead of the app's behaviour and let a family-wide fan-out pass.
-        k["_inherited"] = (["calibrations"] + (["compatibleNozzles"] if ticks else [])
-                           if kid_inherits else [])
+                      colorName=None, totalWeight=None, lowStockThreshold=None, **t_over)
+        k = valid_res(_id="k", name="Family — Blue", parentId="t", **k_res)
+        k["_inherited"] = inh
         kraw = copy.deepcopy(k)
-        if kid_inherits:
-            kraw["calibrations"] = []
-            kraw["compatibleNozzles"] = []
+        kraw.update(k_raw)
         f, _ = run({"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}},
                    topology={"t": True})
-        return [m for rows in f.values() for _, m in rows if "no compatibleNozzles" in m]
+        return [m for rows in f.values() for _, m in rows
+                if "no compatibleNozzles" in m or "does not tick" in m]
 
-    got = family([], True)
-    if len(got) == 1 and got[0].startswith("Family:"):
-        ok("unreachable-cals-template")
+    # a variant that INHERITS ticks but stores its OWN calibrations: the form
+    # never sees the inherited ticks, so every stored row is orphaned
+    got = fam({"compatibleNozzles": nz, "calibrations": []},
+              {"compatibleNozzles": nz, "calibrations": copy.deepcopy(cal)},
+              {"compatibleNozzles": [], "calibrations": copy.deepcopy(cal)},
+              ["compatibleNozzles"])
+    ok("orphan-variant-owns-cals") if any(m.startswith("Family — Blue") for m in got) else bad(
+        "orphan-variant-owns-cals",
+        f"the edit form reads ?raw=true, so inherited ticks do NOT satisfy the gate: {got}")
+
+    # a calibration on a nozzle that is simply not ticked — the non-degenerate
+    # half of the predicate, which bambuStudioApply's global fallback produces
+    got = fam({"compatibleNozzles": other, "calibrations": copy.deepcopy(cal)},
+              {"compatibleNozzles": other, "calibrations": []},
+              {"calibrations": []}, ["compatibleNozzles", "calibrations"])
+    if any("does not tick" in m and "0.4 Brass" in m for m in got):
+        ok("orphan-untickled-nozzle")
     else:
-        bad("unreachable-cals-template",
-            f"a template owning calibrations with no ticks makes every row unreachable in ITS "
-            f"form and in every inheriting variant's — expected exactly one row, on the "
-            f"template; got {got}")
+        bad("orphan-untickled-nozzle",
+            f"a calibration whose nozzle is not in the tick list is orphaned even when the list "
+            f"is non-empty, and the row must name that nozzle: {got}")
 
-    ok("unreachable-cals-healthy") if not family(valid_res()["compatibleNozzles"], True) else bad(
-        "unreachable-cals-healthy", "a ticked template must stay silent")
+    # template owns them, variant inherits both -> ONE row, on the template
+    got = fam({"compatibleNozzles": [], "calibrations": copy.deepcopy(cal)},
+              {"compatibleNozzles": [], "calibrations": copy.deepcopy(cal)},
+              {"compatibleNozzles": [], "calibrations": []}, ["calibrations"])
+    if len(got) == 1 and got[0].startswith("Family:"):
+        ok("orphan-template-once")
+    else:
+        bad("orphan-template-once",
+            f"expected exactly one row, on the template that stores them; got {got}")
 
-    got = family([], False)
-    ok("unreachable-cals-variant-owned") if any(m.startswith("Family — Blue") for m in got) else bad(
-        "unreachable-cals-variant-owned",
-        f"a variant storing its OWN calibrations with no ticks must be reported on the variant: "
-        f"{got}")
+    # healthy: the ticks cover the calibration
+    got = fam({"compatibleNozzles": nz, "calibrations": copy.deepcopy(cal)},
+              {"compatibleNozzles": nz, "calibrations": []},
+              {"calibrations": [], "compatibleNozzles": []},
+              ["compatibleNozzles", "calibrations"])
+    ok("orphan-healthy-silent") if not got else bad(
+        "orphan-healthy-silent", f"a ticked calibration must stay silent: {got}")
 
 
 # --- 15. an inherited defect belongs to the template -------------------------

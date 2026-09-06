@@ -503,8 +503,12 @@ vocabulary explains that, and a rename certainly fixes it. Everything else is le
 
 **One consequence sentence does not fit four fields.** The four spool text fields are checked
 together but fail differently, and pasting one sentence across them sent the reader looking for a
-crash that cannot happen: `instanceId` is an identity key that is never a React child (a non-string
-there makes both type-strict match tiers miss, so a printed QR resolves to nothing); `photoDataUrl`
+crash that cannot happen. `instanceId` carries TWO consequences, not one: a non-string makes both
+type-strict match tiers miss, so a printed QR resolves to nothing — and it IS rendered as a bare
+React child (the SpoolCard header, `/inventory`, and the home spool panel all show it), so an
+*object* additionally throws and the page will not open. An earlier revision of this file asserted
+it is "never a React child"; that was wrong, and it made the checker report a scan failure on a
+page that cannot render. `photoDataUrl`
 goes to an `<img src>`, which **coerces** rather than throwing; and `label`/`lotNumber` throw only
 when the value is an *object* — React renders a number or a flat array child happily, so a numeric
 label breaks nothing visible but is skipped by `computeNextSpoolLabel`'s `typeof raw !== "string"`,
