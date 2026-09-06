@@ -962,6 +962,19 @@ def case_date_mirror():
                 "2020", "2020-02-30", "2019-02-29", "2020-02-29", "9999-12-31",
                 "  2026-01-05  ", "5/6/2020", "12345", "0", "2026-01-05 12:00",
                 "Mon Jan 01 2020", "1970-01-01T00:00:00.000Z"]
+    # `new Date(arr)` is exactly `new Date(String(arr))`, so an array has to be
+    # coerced and judged as a string — "a non-empty array may well parse" was
+    # only half true. Both directions pinned against node.
+    accepted_arrays = [["2020-01-01"], [2020, 1, 1], [0], [["2020-01-01"]], ["  2020-01-01  "]]
+    fp_arr = [v for v in accepted_arrays if A._bad_date(v)]
+    ok("date-mirror-arrays-accepted") if not fp_arr else bad(
+        "date-mirror-arrays-accepted", f"node accepts these arrays as dates: {fp_arr}")
+    rejected_arrays = [["not-a-date"], [{}], [None], [[]], [True], [{"a": 1}], ["2020-13-01"]]
+    fn_arr = [v for v in rejected_arrays if not A._bad_date(v)]
+    ok("date-mirror-arrays-rejected") if not fn_arr else bad(
+        "date-mirror-arrays-rejected",
+        f"these stringify to an Invalid Date, so toISOString() throws and the cast fails: {fn_arr}")
+
     rejected = ["2020-13-01", "2020-00-10", "2020-01-32", "2020-01-00", "not-a-date",
                 # a sane date prefix says NOTHING about the timestamp
                 "2020-01-01T25:00:00Z", "2020-01-01T24:00:01Z", "2020-01-01T12:61:00Z",

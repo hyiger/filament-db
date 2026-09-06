@@ -551,6 +551,27 @@ _ISO_TIME_RE = re.compile(r"^[Tt](\d{2}):(\d{2})(?::(\d{2})(?:[.,]\d+)?)?")
 _ISO_OFFSET_RE = re.compile(r"[+-](\d{2}):?(\d{2})$")
 
 
+def _js_array_string(arr):
+    """`String(array)` as JS computes it: elements joined with ",", null and
+    undefined rendering as empty, nested arrays recursing, objects becoming
+    "[object Object]"."""
+    parts = []
+    for el in arr:
+        if el is None:
+            parts.append("")
+        elif isinstance(el, list):
+            parts.append(_js_array_string(el))
+        elif isinstance(el, dict):
+            parts.append("[object Object]")
+        elif isinstance(el, bool):
+            parts.append("true" if el else "false")
+        elif isinstance(el, (int, float)):
+            parts.append(_js_number(el))
+        else:
+            parts.append(str(el))
+    return ",".join(parts)
+
+
 def _bad_date(v):
     """True ONLY when Mongoose's Date cast is certain to fail. Mongoose casts a
     string with `new Date(v)` and raises CastError on an Invalid Date, so this
@@ -572,8 +593,11 @@ def _bad_date(v):
     if isinstance(v, dict):
         return True               # new Date({}) is Invalid Date -> CastError
     if isinstance(v, list):
-        return not v              # new Date([]) is Invalid; a non-empty array
-                                  # stringifies and may well parse
+        # "stringifies and may well parse" was half an answer: `new Date(arr)`
+        # is exactly `new Date(String(arr))`, so the array has to be COERCED and
+        # then judged as a string. `["not-a-date"]` and `[{}]` are Invalid Dates;
+        # `["2020-01-01"]` and `[2020,1,1]` are not.
+        return _bad_date(_js_array_string(v))
     if not isinstance(v, str):
         return False              # None is handled by the presence checks
     t = v.strip()
