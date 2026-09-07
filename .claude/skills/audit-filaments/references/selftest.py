@@ -26,6 +26,7 @@ import itertools
 import sys
 import traceback
 
+import json
 import os
 
 import audit as A
@@ -1385,6 +1386,145 @@ def case_cast_decisions_go_through_the_mirror():
         ok("cast-resolver-agrees")
 
 
+
+# --- 14d-sexies. the mirrors, DIFFERENTIAL-TESTED against real Mongoose -----
+# Everything above pins the mirrors against tables a human wrote down, and a
+# table only covers the cases whoever wrote it thought of. That is exactly how
+# this file accumulated its false positives: `{_id: "<hex>"}` casts, an
+# uppercase ObjectId canonicalizes, `token: 42` casts, `""` is a valid Number
+# -- each one obvious in hindsight and absent from every hand-written list.
+#
+# So the mirrors are now tested against the REFERENCE IMPLEMENTATION: the
+# repo's own mongoose, driven by references/cast_oracle.mjs over a GENERATED
+# corpus. The audit itself keeps its Python mirror -- it has to run standalone
+# against a deployment with no repo and no node_modules -- but a divergence
+# between the mirror and the real thing is now a build failure rather than
+# something a reviewer has to happen to notice.
+#
+# Skips loudly (never silently) when node or mongoose is unavailable.
+_ORACLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast_oracle.mjs")
+_OID_H = "507f1f77bcf86cd799439011"
+
+
+def _cast_corpus():
+    """Shapes crossed with types, generated rather than enumerated by hand."""
+    scalars = [None, "", " ", "x", "abc", _OID_H, _OID_H.upper(), _OID_H[:23],
+               _OID_H + "a", "abcdefghijkl", "0", "1", "12345", "20000",
+               "1e5", "1_0", "0x10", "Infinity", "NaN", " 42 ", "true",
+               "false", "yes", "no", "2020-01-01", "2020-01-01T00:00:00Z",
+               "2020-01-01T00:00:00Z ", "2020-13-01", "1700000000000000000",
+               0, 1, -1, 1.5, True, False]
+    containers = []
+    for inner in (_OID_H, _OID_H.upper(), "abc", "", None, 1, True):
+        containers += [[inner], [[inner]], [inner, inner], {"_id": inner},
+                       {"_id": inner, "name": "x"}, {"a": inner}]
+    containers += [[], {}]
+    return scalars + containers
+
+
+def _ask_oracle(items):
+    import subprocess
+    try:
+        r = subprocess.run(["node", _ORACLE], input=json.dumps(items),
+                           capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        payload = json.loads(r.stdout)
+    except ValueError:
+        return None
+    if "verdicts" not in payload:
+        return None
+    return payload
+
+
+def case_cast_mirrors_match_real_mongoose():
+    if not os.path.exists(_ORACLE):
+        bad("cast-oracle-present", "references/cast_oracle.mjs is missing, so the "
+                                   "mirrors are no longer differential-tested")
+        return
+    corpus = _cast_corpus()
+    # (schema type, python predicate, values to skip and why)
+    checks = [
+        ("ObjectId", lambda v: A._castable_objectid(v), ()),
+        ("String", lambda v: A._castable_string(v), ()),
+        # `""` and None never reach _bad_date -- every call site guards
+        # `not in (None, "")` because castDate maps both to null.
+        ("Date", lambda v: not A._bad_date(v), (None, "")),
+        ("Boolean", lambda v: A._bool_castable(v), (None,)),
+    ]
+    items, meta = [], []
+    for tname, _pred, skip in checks:
+        for v in corpus:
+            if any(v is s or (type(v) is type(s) and v == s) for s in skip):
+                continue
+            items.append({"type": tname, "value": v})
+            meta.append((tname, v, _pred))
+    payload = _ask_oracle(items)
+    if payload is None:
+        # NOT a silent pass: an unchecked mirror must look unchecked.
+        bad("cast-oracle-reachable",
+            "could not run cast_oracle.mjs (node or mongoose unavailable), so "
+            "the cast mirrors went UNVERIFIED against the real implementation; "
+            "run `npm ci` in the repo root, or run the suite from a checkout")
+        return
+    ok("cast-oracle-reachable")
+    # The two directions are NOT equally bad and must not be reported together.
+    # A false positive tells the user to break working data; an under-report
+    # merely stays quiet. So every false positive is fatal, while an
+    # under-report is fatal only when it is a NEW one -- the single documented
+    # gap is pinned by RULE below, so the silent surface cannot grow unnoticed
+    # and a future narrowing of it shows up as a prompt to update this.
+    def _known_legacy_gap(tname, v):
+        """V8's legacy parser accepts "2020-01-01junk", "Jan 1 2020", "5/6/2020"
+        and "12345", so no safe rule condemns a digit-bearing NON-ISO string --
+        see `date-mirror-legacy-parser-silent`. Arrays coerce to a string and
+        land in the same gap."""
+        if tname != "Date":
+            return False
+        text = (v if isinstance(v, str)
+                else A._js_array_string(v) if isinstance(v, list) else None)
+        if text is None:
+            return False
+        t = A._js_trim(text)
+        return (bool(t) and any(c.isascii() and c.isdigit() for c in t)
+                and not A._ISO_DATE_RE.match(t))
+
+    false_pos, under, expected = [], [], 0
+    for (tname, v, pred), verdict in zip(meta, payload["verdicts"]):
+        got, want = bool(pred(v)), bool(verdict.get("ok"))
+        if got == want:
+            continue
+        if not got and want:
+            false_pos.append(f"{tname}({v!r}): the mirror REJECTS it but mongoose "
+                             f"{payload['mongoose']} casts it to "
+                             f"{verdict.get('cast')!r}")
+        elif _known_legacy_gap(tname, v):
+            expected += 1
+        else:
+            under.append(f"{tname}({v!r}): mongoose rejects it "
+                         f"({str(verdict.get('error'))[:60]}) and the mirror is silent")
+    if false_pos:
+        bad("cast-mirrors-no-false-positives",
+            f"{len(false_pos)} of {len(meta)} shapes are condemned by the mirror and "
+            f"accepted by the real cast -- each one tells the user to 'fix' data "
+            f"the app stores happily:\n      " + "\n      ".join(false_pos[:10]))
+    else:
+        ok(f"cast-mirrors-no-false-positives ({len(meta)} shapes vs mongoose "
+           f"{payload['mongoose']})")
+    if under:
+        bad("cast-mirrors-no-new-under-reports",
+            f"{len(under)} shape(s) the real cast rejects are NOT covered by the one "
+            f"documented gap (a digit-bearing non-ISO date string), so the audit "
+            f"silently passes data that breaks a restore:\n      "
+            + "\n      ".join(under[:10]))
+    else:
+        ok(f"cast-mirrors-no-new-under-reports ({expected} in the documented "
+           f"legacy-parser gap)")
+
+
 # --- 14e. per-record state must not leak between records ---------------------
 # The text sweep BUILDS `coerced_*` in one loop and the colour checks READ them
 # in a LATER one, so a bare loop-local left the FINAL record's state standing in
@@ -2577,6 +2717,7 @@ if __name__ == "__main__":
     case_mongoose_cast_mirrors()
     case_no_full_case_folding()
     case_cast_decisions_go_through_the_mirror()
+    case_cast_mirrors_match_real_mongoose()
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()
