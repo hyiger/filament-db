@@ -994,6 +994,40 @@ def _js_to_string(v):
     return "[object Object]"
 
 
+# `Number` casts a value to null rather than refusing it, and the two are not
+# the same answer: null passes the bound validators, a refusal fails the cast.
+_NUMBER_CAST_NULL = object()
+
+
+def _number_cast_value(v):
+    """The number Mongoose's Number cast PRODUCES: a float, the
+    `_NUMBER_CAST_NULL` sentinel when it casts to null, or None when the cast
+    is refused.
+
+    `_castable_number` is this function asking only whether it succeeded, so
+    the two cannot drift -- the same single-resolver shape as `_objectid_str`.
+    Having castability without the resolved VALUE was its own bug: the bounds
+    check converted strings only, so `dryingTime: {"_id": "20000"}` cast to
+    20000 and blew the max validator while the audit reported nothing but a
+    generic off-type note.
+    """
+    if v is None:
+        return _NUMBER_CAST_NULL
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v) if v == v else None      # NaN is the one number refused
+    if isinstance(v, str):
+        if v == "":
+            return _NUMBER_CAST_NULL             # castNumber maps "" to null
+        return _js_string_to_number(v)           # None when Number() is NaN
+    if isinstance(v, dict):
+        if "_id" not in v:
+            return None
+        return _number_cast_value(v["_id"])
+    return None                                  # lists always fail
+
+
 def _castable_number(v):
     """Does Mongoose's Number cast ACCEPT this value?
 
@@ -1010,15 +1044,7 @@ def _castable_number(v):
         REJECT   "NaN", "1_0", any other unparseable string, EVERY array
                  (even [5]), {} and any object without a castable `_id`.
     """
-    if v is None or isinstance(v, bool):
-        return True
-    if isinstance(v, (int, float)):
-        return v == v                     # NaN is the one number it refuses
-    if isinstance(v, str):
-        return _js_string_to_number(v) is not None
-    if isinstance(v, dict):
-        return "_id" in v and _castable_number(v["_id"])
-    return False                          # lists always fail
+    return _number_cast_value(v) is not None
 
 
 def _castable_string(v):
@@ -2526,9 +2552,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     # so `dryingTime: "20000"` fails the max bound exactly as
                     # 20000 would. Skipping it reported only "malformed" and
                     # left the reader thinking the backup still restores.
-                    _cv = (_js_string_to_number(val)
-                           if isinstance(val, str) and _castable_number(val) else None)
-                    if _cv is None or _cv != _cv or _cv in (float("inf"), float("-inf")):
+                    # EVERY castable shape, not just strings: a populated-ref
+                    # `{"_id": "20000"}` casts to 20000 and faces the validators
+                    # exactly as the bare string does.
+                    _cv = _number_cast_value(val)
+                    if (_cv is None or _cv is _NUMBER_CAST_NULL or _cv != _cv
+                            or _cv in (float("inf"), float("-inf"))):
                         continue   # reported once by the malformed_numerics sweep
                     val = _cv
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
