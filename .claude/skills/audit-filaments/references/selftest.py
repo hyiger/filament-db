@@ -1014,6 +1014,17 @@ def case_date_mirror():
                 # ISO 8601 allows a comma fraction; V8 does not, in any form
                 "2020-01-01T12:00:00,5Z", "2020-01-01T12:00:00,000Z",
                 "2020-01-01T24:00:00,0Z", "2020-01-01T12:00:00,123+02:00",
+                # once a `T` follows the ISO date V8 commits to the SPEC parser,
+                # so an unreadable time -- or a tail after it that is not `Z` or an
+                # offset -- is provably invalid. (A bare "2020-01-01junk" is NOT:
+                # the legacy parser takes that one. See the under-report note below.)
+                "2020-01-01T", "2020-01-01T12", "2020-01-01T12:", "2020-01-01T1:00:00Z",
+                "2020-01-01T:00:00Z", "2020-01-01Tnonsense", "2020-01-01TT",
+                "2020-01-01T12:00:00.", "2020-01-01T12:00:00.Z", "2020-01-01T12:00:00+",
+                "2020-01-01T12:00:00+2:00", "2020-01-01T12:00:00+02", "2020-01-01Tjunk12",
+                "2020-01-01T12junk", "2020-01-01T12:00junk", "2020-01-01T12:00:00Zjunk",
+                "2020-01-01T 12:00", "2020-01-01T12 :00",
+                "2020-01-01t", "2020-01-01t12:", "2020-01-01t1:00:00Z",
                 "", "   ", "0000-00-00", "null", "undefined", "NaN", "Invalid Date",
                 "-", "T", "Z", "true", "false", "date", {}, []]
     fp = [v for v in accepted if A._bad_date(v)]
@@ -1030,6 +1041,16 @@ def case_date_mirror():
             f"nothing: {fn}")
     else:
         ok("date-mirror-catches-the-certain")
+    # DOCUMENTED UNDER-REPORT, pinned so it is not "fixed" into a false positive:
+    # without a `T`, V8 falls back to its legacy parser, which accepts all of
+    # these. There is no safe rule that condemns "not-a-date1" while sparing
+    # them, so the audit stays silent on that whole shape.
+    legacy = [v for v in ("2020-01-01junk", "Jan 1 2020", "5/6/2020", "12345",
+                          "Mon Jan 01 2020 junk") if A._bad_date(v)]
+    ok("date-mirror-legacy-parser-silent") if not legacy else bad(
+        "date-mirror-legacy-parser-silent",
+        f"V8's legacy parser ACCEPTS these, so they are stored and cast fine: {legacy}")
+
     # numbers cast to an instant — but only INSIDE the ECMAScript time value
     # range. Both boundaries verified against node.
     live = [v for v in (0, 1, 12345, -1, 1.5, True, False,
