@@ -1041,6 +1041,66 @@ def case_date_mirror():
             f"nothing: {fn}")
     else:
         ok("date-mirror-catches-the-certain")
+    # PADDING. V8's SPEC parser does not trim, and its LEGACY parser refuses the
+    # T shape -- so a padded T-form is Invalid while a padded legacy form is
+    # fine. Measured over every trim character x every T form: 126/126.
+    NBSP, IDEO, BOM, THIN = "\u00a0", "\u3000", "\ufeff", "\u2009"
+    padded_t_invalid = ["2020-01-01T00:00:00Z ", " 2020-01-01T00:00:00Z",
+                        "2020-01-01T00:00:00Z" + NBSP, IDEO + "2020-01-01T00:00Z",
+                        "2020-01-01T00:00:00Z" + BOM, THIN + "2020-01-01t00:00:00z",
+                        "2020-01-01 T00:00:00Z", "2020-01-01T 00:00:00Z"]
+    miss = [v for v in padded_t_invalid if not A._bad_date(v)]
+    ok("date-mirror-padded-t-invalid") if not miss else bad(
+        "date-mirror-padded-t-invalid",
+        f"V8 rejects a T-shaped ISO string with ANY adjacent whitespace: {miss}")
+    padded_legacy_valid = ["  2026-01-05  ", " 2020-01-01 ", "2020-01-01" + NBSP,
+                           IDEO + "Jan 1 2020", "2020-01-01 00:00:00 ",
+                           "2020-01-01 00:00:00" + BOM]
+    wrong = [v for v in padded_legacy_valid if A._bad_date(v)]
+    ok("date-mirror-padded-legacy-valid") if not wrong else bad(
+        "date-mirror-padded-legacy-valid",
+        f"the LEGACY parser trims, so these are real dates the app stores: {wrong}")
+
+    # NON-ASCII DIGITS. V8's grammar is ASCII-only, so an ISO-SHAPED string
+    # carrying one is Invalid -- but the legacy parser swallows a junk tail, and
+    # reads an arabic-indic day in a legacy date, so neither of those may be
+    # condemned. Both directions measured.
+    AR1, FW1, DEV1 = "\u0661", "\uff11", "\u0967"
+    uni_invalid = ["2020-01-0" + AR1, "2020-01-0" + AR1 + "T00:00:00Z",
+                   "202" + FW1 + "-01-01", "2020-0" + DEV1 + "-01",
+                   "2020-01-01T00:00:00+" + FW1 + "0:00",
+                   "2020-01-01T00:00:0" + AR1 + "Z"]
+    miss = [v for v in uni_invalid if not A._bad_date(v)]
+    ok("date-mirror-nonascii-digits-invalid") if not miss else bad(
+        "date-mirror-nonascii-digits-invalid",
+        f"V8's date grammar accepts ASCII 0-9 only, so these are Invalid: {miss}")
+    uni_valid = ["2020-01-01junk" + AR1, "Jan " + AR1 + " 2020",
+                 "12345junk" + FW1, "2020/01/01junk" + DEV1]
+    wrong = [v for v in uni_valid if A._bad_date(v)]
+    ok("date-mirror-nonascii-digits-valid") if not wrong else bad(
+        "date-mirror-nonascii-digits-valid",
+        f"the legacy parser swallows a junk tail and reads a non-ASCII day, so "
+        f"node ACCEPTS these -- condemning one is a false positive: {wrong}")
+
+    # POISON. "rejected wherever it appears" was measurably wrong and cost 13
+    # false positives: the legacy parser tolerates all three, as a separator and
+    # in a trailing junk tail. Only the spec path refuses them.
+    NEL, LS, PS = "\u0085", "\u2028", "\u2029"
+    poison_valid = ["2020-01-01junk" + NEL, "2020-01-01junk" + LS + "junk",
+                    "Jan" + NEL + " 1 2020", "Jan 1 2020" + NEL,
+                    "12345junk" + PS]
+    wrong = [v for v in poison_valid if A._bad_date(v)]
+    ok("date-mirror-poison-legacy-valid") if not wrong else bad(
+        "date-mirror-poison-legacy-valid",
+        f"V8's LEGACY parser tolerates these, so the app stores them and the "
+        f"cast succeeds -- condemning one is a false positive: {wrong}")
+    poison_invalid = ["2020-01-01" + NEL, "2020-01-01T00:00:00Z" + NEL,
+                      "2020-01-01T" + NEL + "00:00:00Z", NEL + "2020-01-01"]
+    miss = [v for v in poison_invalid if not A._bad_date(v)]
+    ok("date-mirror-poison-spec-invalid") if not miss else bad(
+        "date-mirror-poison-spec-invalid",
+        f"on the SPEC path the poison is fatal: {miss}")
+
     # DOCUMENTED UNDER-REPORT, pinned so it is not "fixed" into a false positive:
     # without a `T`, V8 falls back to its legacy parser, which accepts all of
     # these. There is no safe rule that condemns "not-a-date1" while sparing
@@ -1064,6 +1124,45 @@ def case_date_mirror():
         "date-mirror-numeric-range",
         f"outside +/-8.64e15 (and NaN/Inf) `new Date` is Invalid, so toISOString() throws and the "
         f"cast fails; not reported: {dead}")
+
+
+# --- 14d-bis. a JS mirror may not use a Unicode-aware character class --------
+# Python's `\d` matches every Unicode decimal digit and `\w`/`\s` are just as
+# wide, while the ECMAScript grammars these regexes mirror are ASCII-only. A
+# `\d` in a mirror therefore reads a digit V8 cannot, and the mirror agrees with
+# a parse that never happened -- measured at 213/213 for the date grammar. This
+# is a SOURCE-LEVEL guard rather than another table of examples, because the
+# failure is silent and shapeless: it needs one exotic digit in one field to
+# appear, and no finite example list would have caught it. Exactly one regex is
+# exempt, by name, and it exists to DETECT that shape.
+_UNICODE_CLASS_EXEMPT = {"_UNI_ISO_DATE_RE"}
+
+
+def case_ascii_only_mirror_regexes():
+    import re as _re
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "audit.py"), encoding="utf-8").read()
+    offenders = []
+    for m in _re.finditer(r"^(_[A-Z0-9_]+)\s*=\s*_?re\.compile\(\s*r?(\"|')(.*?)\2",
+                          src, _re.M | _re.S):
+        name, body = m.group(1), m.group(3)
+        if name in _UNICODE_CLASS_EXEMPT:
+            continue
+        hits = sorted({c for c in ("\\d", "\\w", "\\s") if c in body})
+        if hits:
+            offenders.append(f"{name} uses {', '.join(hits)}")
+    if offenders:
+        bad("ascii-only-mirror-regexes",
+            "a Unicode-aware class in a regex that mirrors an ASCII-only "
+            "ECMAScript grammar reads digits V8 cannot: " + "; ".join(offenders))
+    else:
+        ok("ascii-only-mirror-regexes")
+    # and the exemption must still exist, or the guard is vacuous
+    if all(n not in src for n in _UNICODE_CLASS_EXEMPT):
+        bad("ascii-only-mirror-exemption-live",
+            "the exempt regex is gone, so this guard no longer proves anything")
+    else:
+        ok("ascii-only-mirror-exemption-live")
 
 
 # --- 14e. per-record state must not leak between records ---------------------
@@ -2235,6 +2334,7 @@ if __name__ == "__main__":
     case_calibration_scope_refs()
     case_ref_index_hostile_shapes()
     case_date_mirror()
+    case_ascii_only_mirror_regexes()
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()

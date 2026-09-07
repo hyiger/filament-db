@@ -155,7 +155,7 @@ RESPONSE_METADATA = {"_variants", "_parent", "_inherited", "_strippedTemplateFie
 REFERENCE_FIELDS = {"nozzle", "printer", "bedType", "compatibleNozzles", "installedNozzles"}
 
 
-_CAL_ELEMENT_RE = re.compile(r"^calibrations\[\d+\]$")
+_CAL_ELEMENT_RE = re.compile(r"^calibrations\[[0-9]+\]$")
 
 
 def malformed_numerics(node, path=""):
@@ -624,16 +624,29 @@ _URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 # ECMAScript time value range (ES2024 21.4.1.1): a Date outside +/-8.64e15 ms
 # is Invalid, so a raw numeric date past it can be neither cast nor rendered.
 JS_MAX_TIME_VALUE = 8_640_000_000_000_000
-_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})")
+# `[0-9]`, never `\d`: Python's `\d` matches EVERY Unicode decimal digit
+# (fullwidth, arabic-indic, devanagari, ...) and `int()` converts them, while
+# V8's date grammar is ASCII-only -- 213/213 probed strings carrying one
+# non-ASCII digit were an Invalid Date in node. A `\d` here reads a digit V8
+# cannot, so the mirror silently agrees with a parse that never happened.
+# The same rule binds every regex below; `case_ascii_only_mirror_regexes`
+# fails the suite if a `\d` reappears in any of them.
+_ISO_DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})")
 # Only the shapes whose components can be READ are judged; an unrecognised
 # tail is left alone rather than guessed at (see _bad_date).
 # The fraction separator is captured too: ISO 8601 allows a comma, V8 does
 # NOT -- every comma form is an Invalid Date, verified against node.
-_ISO_TIME_RE = re.compile(r"^[Tt](\d{2}):(\d{2})(?::(\d{2})(?:([.,])(\d+))?)?")
-_ISO_OFFSET_RE = re.compile(r"[+-](\d{2}):?(\d{2})$")
+_ISO_TIME_RE = re.compile(r"^[Tt]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:([.,])([0-9]+))?)?")
+_ISO_OFFSET_RE = re.compile(r"[+-]([0-9]{2}):?([0-9]{2})$")
 # What may legally FOLLOW the time in an ISO string: nothing, a zone marker,
 # or an offset. Anything else means V8 took the spec path and failed.
-_ISO_TAIL_RE = re.compile(r"^([Zz]|[+-]\d{2}:?\d{2})?$")
+_ISO_TAIL_RE = re.compile(r"^([Zz]|[+-][0-9]{2}:?[0-9]{2})?$")
+# Deliberately Unicode-TOLERANT (`\d`, not `[0-9]`) -- its whole job is to
+# recognise a string that is ISO-SHAPED while carrying a digit the ASCII
+# grammar above cannot read. The spec parser cannot read the digit and the
+# legacy parser cannot read the ISO shape, so such a string is an Invalid
+# Date: 141 measured, 0 false positives.
+_UNI_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
 
 
 def _js_array_string(arr):
@@ -701,11 +714,28 @@ def _bad_date(v):
     t = _js_trim(v)
     if not t:
         return True               # "" and whitespace-only are Invalid Date
-    if any(c in _DATE_POISON for c in t):
-        return True               # rejected wherever it appears (see _DATE_POISON)
+    # NOT "rejected wherever it appears" -- that was measurably wrong and cost 13
+    # false positives. V8's LEGACY parser tolerates all three of these, both as a
+    # separator and in a trailing junk tail ("2020-01-01junk" + U+0085 and
+    # "Jan" + U+0085 + " 1 2020" are both VALID dates); only the SPEC parser
+    # refuses them. So the poison decision is deferred to the branches below,
+    # where we know which parser V8 is on.
+    _poisoned = any(c in _DATE_POISON for c in t)
     if not any(c.isascii() and c.isdigit() for c in t):
         return True               # no ASCII digit -> no date format can match
     mo = _ISO_DATE_RE.match(t)
+    if mo is None:
+        if _poisoned:
+            # poison in FRONT of an otherwise ISO string: the spec parse fails on
+            # the character, and the legacy parser cannot read the ISO shape
+            _lead = 0
+            while _lead < len(t) and t[_lead] in _DATE_POISON:
+                _lead += 1
+            if _lead and _ISO_DATE_RE.match(t[_lead:]):
+                return True
+        if _UNI_ISO_DATE_RE.match(t) and any(
+                (not c.isascii()) and c.isdigit() for c in t[:10]):
+            return True           # ISO-shaped, non-ASCII digit (see _UNI_ISO_DATE_RE)
     if mo:
         # An ISO-SHAPED string is parsed by the spec path, which rejects an
         # out-of-range month or day outright (V8 rolls 02-30 over, so the day
@@ -729,6 +759,26 @@ def _bad_date(v):
         # T-shape ("2020-01-01T", "...T12", "...T12:", "...T1:00:00Z",
         # "...T12:00:00.", "...T12:00junk").
         _rest = t[mo.end():]
+        if _poisoned:
+            # On the spec path the poison is fatal: inside a T shape, which must
+            # be an exact spec match, or standing alone after the date, where the
+            # legacy parser has no junk tail to swallow it.
+            if _rest[:1] in ("T", "t"):
+                return True
+            if _rest and all(c in _DATE_POISON for c in _rest):
+                return True
+        # A `T` reachable only across whitespace is neither: the spec parse stops
+        # at the space and the legacy parser refuses the T shape. 6 measured.
+        if _rest[:1] not in ("", "T", "t") and _js_trim(_rest)[:1] in ("T", "t"):
+            return True
+        # And the SPEC parser does not TRIM. `_js_trim` above is right for the
+        # legacy forms -- " 2020-01-01 " and " Jan 1 2020 " are valid -- but a
+        # T-shaped string with any adjacent JS whitespace fails the spec parse,
+        # and the legacy parser refuses the T shape outright, so it is an
+        # Invalid Date. Measured across every trim character x every T form:
+        # 126/126 padded T-forms rejected by node, 0 false positives.
+        if _rest[:1] in ("T", "t") and v != t:
+            return True
         _t = _ISO_TIME_RE.match(_rest)
         if _rest[:1] in ("T", "t"):
             if _t is None:
@@ -1562,7 +1612,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # `calibrations[0].fanMinSpeed` while `_inherited` records the root as
             # `calibrations`, so a bare split on "." left every inheriting child
             # reporting a defect only its template can repair.
-            plain = re.sub(r"\[\d+\]", "", where_path)
+            plain = re.sub(r"\[[0-9]+\]", "", where_path)
             # Only the RESOLVED read can be showing a value the row does not own.
             # A defect found in the STORED read is this record's own by
             # definition — and that is exactly the `cost: ""` case, where the
