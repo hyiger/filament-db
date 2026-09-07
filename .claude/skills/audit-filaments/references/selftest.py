@@ -1435,7 +1435,7 @@ def _ask_oracle(items):
         payload = json.loads(r.stdout)
     except ValueError:
         return None
-    if "verdicts" not in payload:
+    if not isinstance(payload.get("verdicts"), list):
         return None
     return payload
 
@@ -1454,6 +1454,11 @@ def case_cast_mirrors_match_real_mongoose():
         # `not in (None, "")` because castDate maps both to null.
         ("Date", lambda v: not A._bad_date(v), (None, "")),
         ("Boolean", lambda v: A._bool_castable(v), (None,)),
+        # Number was ABSENT from this list while the oracle already implemented
+        # it, so the generated corpus was never evaluated as a Number and a
+        # divergence there could pass -- the exact truth-table gap this case
+        # exists to close, reproduced inside the closing mechanism.
+        ("Number", lambda v: A._castable_number(v), ()),
     ]
     items, meta = [], []
     for tname, _pred, skip in checks:
@@ -1463,6 +1468,15 @@ def case_cast_mirrors_match_real_mongoose():
             items.append({"type": tname, "value": v})
             meta.append((tname, v, _pred))
     payload = _ask_oracle(items)
+    if payload is not None and len(payload["verdicts"]) != len(items):
+        # `zip()` stops at the shorter side, so a truncated or empty array would
+        # mark the oracle reachable and let BOTH assertions pass having checked
+        # nothing. A guard that quietly stops guarding is worse than no guard.
+        bad("cast-oracle-complete",
+            f"the oracle returned {len(payload['verdicts'])} verdicts for "
+            f"{len(items)} shapes, so the differential check would silently skip "
+            f"the remainder; refusing to report a partial run as a pass")
+        return
     if payload is None:
         # NOT a silent pass: an unchecked mirror must look unchecked.
         bad("cast-oracle-reachable",
@@ -1471,6 +1485,7 @@ def case_cast_mirrors_match_real_mongoose():
             "run `npm ci` in the repo root, or run the suite from a checkout")
         return
     ok("cast-oracle-reachable")
+    ok(f"cast-oracle-complete ({len(items)} shapes answered)")
     # The two directions are NOT equally bad and must not be reported together.
     # A false positive tells the user to break working data; an under-report
     # merely stays quiet. So every false positive is fatal, while an

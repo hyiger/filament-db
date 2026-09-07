@@ -994,6 +994,33 @@ def _js_to_string(v):
     return "[object Object]"
 
 
+def _castable_number(v):
+    """Does Mongoose's Number cast ACCEPT this value?
+
+    The one cast the audit had NO mirror for, which meant the generated
+    differential corpus was never evaluated as a Number and a divergence there
+    could pass the suite unseen. Truth table measured against the repo's own
+    mongoose over 40 shapes:
+
+        ACCEPT   None; "" and whitespace-only (-> null); any string whose
+                 `Number()` is not NaN ("0x10" is 16, "Infinity" is fine,
+                 " 42 " is 42); every real number; booleans; and {"_id": x}
+                 when x is itself Number-castable -- INCLUDING {"_id": None},
+                 unlike the ObjectId cast, which tests `_id` for truthiness.
+        REJECT   "NaN", "1_0", any other unparseable string, EVERY array
+                 (even [5]), {} and any object without a castable `_id`.
+    """
+    if v is None or isinstance(v, bool):
+        return True
+    if isinstance(v, (int, float)):
+        return v == v                     # NaN is the one number it refuses
+    if isinstance(v, str):
+        return _js_string_to_number(v) is not None
+    if isinstance(v, dict):
+        return "_id" in v and _castable_number(v["_id"])
+    return False                          # lists always fail
+
+
 def _castable_string(v):
     """Does Mongoose's String cast ACCEPT this value?
 
@@ -2499,7 +2526,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     # so `dryingTime: "20000"` fails the max bound exactly as
                     # 20000 would. Skipping it reported only "malformed" and
                     # left the reader thinking the backup still restores.
-                    _cv = _js_string_to_number(val) if isinstance(val, str) else None
+                    _cv = (_js_string_to_number(val)
+                           if isinstance(val, str) and _castable_number(val) else None)
                     if _cv is None or _cv != _cv or _cv in (float("inf"), float("-inf")):
                         continue   # reported once by the malformed_numerics sweep
                     val = _cv
