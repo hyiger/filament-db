@@ -392,6 +392,13 @@ NESTED_DICT_ELEMENT_ARRAYS = {"spools": ("usageHistory", "dryCycles")}
 # coercing would make the audit disagree with what the app actually computes.
 NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 
+# Top-level `type: Boolean` paths. `_purged` is the whole set today, and it went
+# unchecked because the boolean sweep only ever looked inside spools — the
+# listing and detail routes both filter on `_deletedAt`, so a row with a
+# malformed `_purged` is still returned and still audited, while the Boolean
+# cast refuses it on restore.
+BOOL_FIELDS = ("_purged",)
+
 # String fields inside a spool. These four are checked together but their
 # consequences are NOT the same, so each carries its own -- see
 # _nested_text_consequence. Pasting label's React-child crash onto `instanceId`
@@ -1850,6 +1857,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # BOTH members are required by the embedded schema, so an incomplete
             # marker fails the restore just as a malformed one does — checking
             # only `at`'s castability left `{"token": "x"}` reported as clean.
+            _ptok = _pif.get("token")
+            if _ptok is not None and not isinstance(_ptok, str):
+                add("structure", f"{name}: promotionInFlight.token is {type(_ptok).__name__} "
+                                 f"({_short(repr(_ptok))}), not a string -> the embedded schema "
+                                 f"declares it a required String, so Mongoose's cast refuses it "
+                                 f"and POST /api/snapshot refuses the ENTIRE backup file", fid)
             for _pm in ("token", "at"):
                 if _pif.get(_pm) in (None, ""):
                     add("structure", f"{name}: promotionInFlight is present but has no {_pm!r} -> "
@@ -1870,6 +1883,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 add("structure", f"{name}: {_tsf}={_short(repr(_tsv))} cannot be cast to a Date "
                                  f"-> the schema declares it through `timestamps: true`, so POST "
                                  f"/api/snapshot refuses the ENTIRE backup file", fid)
+
+        for _bf in BOOL_FIELDS:
+            _bv = raw.get(_bf)
+            if _bv is not None and not isinstance(_bv, bool):
+                add("structure", f"{name}: {_bf} is {type(_bv).__name__} ({_short(repr(_bv))}), "
+                                 f"not a boolean -> Mongoose's Boolean cast refuses it, so POST "
+                                 f"/api/snapshot refuses the ENTIRE backup file. The listing and "
+                                 f"detail routes filter on `_deletedAt`, so this row is still "
+                                 f"served and still audited", fid)
 
         _tds = raw.get("tdsUrl")
         if _tds is not None and not isinstance(_tds, str):
@@ -2569,7 +2591,18 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                 f"inventory belongs on a variant [{_spool_how}]", fid)
 
         # --- pinned inheritance ----------------------------------------------
-        pid = str(raw["parentId"]) if raw.get("parentId") else None
+        # SHAPE FIRST, then absence. `if raw.get("parentId")` treats a falsey
+        # non-null (0, False, []) as absent and skipped every parent-link check,
+        # while `parentId` is an ObjectId path that Mongoose cannot cast from
+        # any of them — so the row read as a clean standalone and the backup was
+        # unrestorable.
+        _praw = raw.get("parentId")
+        if _praw is not None and not (isinstance(_praw, str) and OBJECTID_RE.match(_praw)):
+            add("structure", f"{name}: parentId={_short(repr(_praw))} is not a 24-character hex "
+                             f"ObjectId -> Mongoose cannot cast it, so POST /api/snapshot refuses "
+                             f"the ENTIRE backup file; every parent-link check is also skipped, so "
+                             f"this row reads as a standalone", fid)
+        pid = str(_praw) if isinstance(_praw, str) and _praw else None
         parent_ok = False
         if pid:
             if pid == fid:

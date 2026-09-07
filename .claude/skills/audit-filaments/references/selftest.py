@@ -173,9 +173,9 @@ def case_valid():
     # ...and again as a healthy TEMPLATE + VARIANT pair. The standalone fixture
     # can never enter the pinned / template / inheritance blocks, so a false
     # positive that only fires on a family would go unnoticed.
-    t = valid_res(_id="t", name="Family", parentId=None, spools=[], color=None, colorName=None,
+    t = valid_res(_id="6a1a7c00677d648e9ba9d001", name="Family", parentId=None, spools=[], color=None, colorName=None,
                   totalWeight=None, lowStockThreshold=None, instanceId="tttttttttt")
-    k = valid_res(_id="k", name="Family — Blue", parentId="t", instanceId="kkkkkkkkkk")
+    k = valid_res(_id="6a1a7c00677d648e9ba9d002", name="Family — Blue", parentId="6a1a7c00677d648e9ba9d001", instanceId="kkkkkkkkkk")
     # A HEALTHY variant stores none of what it inherits — that is the whole
     # point of the model, and it is what the pinned-inheritance block exists to
     # push people toward. Build it by stripping every inheritable from the raw
@@ -197,8 +197,8 @@ def case_valid():
     kraw["compatibleNozzles"] = []
     k["_inherited"].append("compatibleNozzles")
     try:
-        f2, _ = run({"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}},
-                    topology={"t": True})
+        f2, _ = run({"6a1a7c00677d648e9ba9d001": rec(t, copy.deepcopy(t)), "6a1a7c00677d648e9ba9d002": {"res": k, "raw": kraw}},
+                    topology={"6a1a7c00677d648e9ba9d001": True})
     except Exception:
         return bad("valid-family", "a VALID template/variant pair raised:\n"
                                    + traceback.format_exc())
@@ -451,7 +451,7 @@ def case_opt_tag_elements():
 # without saying which kind it is breaks the suite instead of quietly shrinking
 # the fuzz's reach again.
 FIELD_TABLES = {          # string keys/elements are record FIELD names
-    "ALWAYS_STORED_ROOTS", "CALIBRATION_BOUNDS", "PIN_EXEMPT_SETTINGS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
+    "ALWAYS_STORED_ROOTS", "BOOL_FIELDS", "CALIBRATION_BOUNDS", "PIN_EXEMPT_SETTINGS", "CONTAINER_SHAPES", "DICT_ELEMENT_ARRAYS", "DRY_CYCLE_BOUNDS",
     "LEDGER_TEXT_FIELDS", "NESTED_BOOL_FIELDS", "NESTED_CONTAINER_SHAPES",
     "NESTED_DICT_ELEMENT_ARRAYS", "NESTED_TEXT_FIELDS", "NESTED_TEXT_MAXLEN",
     "NUMERIC_BOUNDS", "NUMERIC_LEAF_NAMES", "OPAQUE_BAGS", "PIN_CHECK_ARRAYS",
@@ -678,7 +678,7 @@ def case_unreadable_parent_not_missing():
     else:
         ok("unreadable-parent")
     # A genuinely ABSENT parent must still be reported.
-    var2 = valid_res(_id="v2", name="Orphan", parentId="gone")
+    var2 = valid_res(_id="v2", name="Orphan", parentId="6a1a7c00677d648e9ba9d0ff")
     f2, _ = run({"v2": rec(var2, copy.deepcopy(var2))}, topology={"v2": False})
     if any("resolves to no active filament" in m for rows in f2.values() for _, m in rows):
         ok("absent-parent-still-reported")
@@ -1171,13 +1171,13 @@ def case_density_floor_exempts_foaming():
 def case_promotion_carryover_exempt():
     carry = "aabbccddee"
     for label, top in (("exact", carry), ("case twin", carry.upper())):
-        par = valid_res(_id="p", name="PLA Family", instanceId=top, spools=[], color=None,
+        par = valid_res(_id="6a1a7c00677d648e9ba9d003", name="PLA Family", instanceId=top, spools=[], color=None,
                         colorName=None, totalWeight=None, lowStockThreshold=None)
-        var = valid_res(_id="v", name="PLA Family — Original", parentId="p",
+        var = valid_res(_id="6a1a7c00677d648e9ba9d007", name="PLA Family — Original", parentId="6a1a7c00677d648e9ba9d003",
                         instanceId="ffffffffff")
         var["spools"] = [dict(var["spools"][0], instanceId=carry)]
-        f, _ = run({"p": rec(par, copy.deepcopy(par)), "v": rec(var, copy.deepcopy(var))},
-                   topology={"p": True})
+        f, _ = run({"6a1a7c00677d648e9ba9d003": rec(par, copy.deepcopy(par)), "6a1a7c00677d648e9ba9d007": rec(var, copy.deepcopy(var))},
+                   topology={"6a1a7c00677d648e9ba9d003": True})
         fp = [m for rows in f.values() for _, m in rows if carry.lower() in m.lower()]
         if fp:
             bad(f"promotion-carryover-{label}",
@@ -1362,19 +1362,19 @@ def case_identity_and_dates():
 # assert the text itself, on the same template/variant pair.
 def case_inh_blame_attribution():
     def family(res_over, inherited, raw_over=None):
-        t = valid_res(_id="t", name="Prusament PLA", parentId=None, spools=[], color=None,
+        t = valid_res(_id="6a1a7c00677d648e9ba9d001", name="Prusament PLA", parentId=None, spools=[], color=None,
                       colorName=None, totalWeight=None, lowStockThreshold=None)
-        k = valid_res(_id="k", name="Prusament PLA — Blue", parentId="t", **res_over)
+        k = valid_res(_id="6a1a7c00677d648e9ba9d002", name="Prusament PLA — Blue", parentId="6a1a7c00677d648e9ba9d001", **res_over)
         k["_inherited"] = inherited
         kraw = copy.deepcopy(k)
         for f2 in inherited:
             kraw.pop(f2, None)
         if raw_over:
             kraw.update(raw_over)
-        return {"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}}
+        return {"6a1a7c00677d648e9ba9d001": rec(t, copy.deepcopy(t)), "6a1a7c00677d648e9ba9d002": {"res": k, "raw": kraw}}
 
     def rows_for(recs, needle):
-        f, _ = run(recs, topology={"t": True})
+        f, _ = run(recs, topology={"6a1a7c00677d648e9ba9d001": True})
         return [m for rows in f.values() for _, m in rows if needle in m]
 
     # 1. ALL roots inherited -> the single-owner sentence. Uses the saturation
@@ -1675,14 +1675,14 @@ def case_unreachable_calibrations():
     other = [{"_id": "n9", "name": "0.6 Hardened", "_deletedAt": None}]
 
     def fam(t_over, k_res, k_raw, inh):
-        t = valid_res(_id="t", name="Family", parentId=None, spools=[], color=None,
+        t = valid_res(_id="6a1a7c00677d648e9ba9d001", name="Family", parentId=None, spools=[], color=None,
                       colorName=None, totalWeight=None, lowStockThreshold=None, **t_over)
-        k = valid_res(_id="k", name="Family — Blue", parentId="t", **k_res)
+        k = valid_res(_id="6a1a7c00677d648e9ba9d002", name="Family — Blue", parentId="6a1a7c00677d648e9ba9d001", **k_res)
         k["_inherited"] = inh
         kraw = copy.deepcopy(k)
         kraw.update(k_raw)
-        f, _ = run({"t": rec(t, copy.deepcopy(t)), "k": {"res": k, "raw": kraw}},
-                   topology={"t": True})
+        f, _ = run({"6a1a7c00677d648e9ba9d001": rec(t, copy.deepcopy(t)), "6a1a7c00677d648e9ba9d002": {"res": k, "raw": kraw}},
+                   topology={"6a1a7c00677d648e9ba9d001": True})
         return [m for rows in f.values() for _, m in rows
                 if "no compatibleNozzles" in m or "does not tick" in m]
 
@@ -1759,11 +1759,11 @@ def case_js_truthiness_and_direction():
     # its PARENT's top-level id. The reverse is a genuine shadow, and promoting
     # would not give the existing variant its identity back.
     def pair(t_over, k_over):
-        t = valid_res(_id="t", name="Tmpl", color=None, colorName=None, totalWeight=None,
+        t = valid_res(_id="6a1a7c00677d648e9ba9d001", name="Tmpl", color=None, colorName=None, totalWeight=None,
                       lowStockThreshold=None, **t_over)
-        k = valid_res(_id="k", name="Tmpl — Blue", parentId="t", **k_over)
-        f, _ = run({"t": rec(t, copy.deepcopy(t)), "k": rec(k, copy.deepcopy(k))},
-                   topology={"t": True})
+        k = valid_res(_id="6a1a7c00677d648e9ba9d002", name="Tmpl — Blue", parentId="6a1a7c00677d648e9ba9d001", **k_over)
+        f, _ = run({"6a1a7c00677d648e9ba9d001": rec(t, copy.deepcopy(t)), "6a1a7c00677d648e9ba9d002": rec(k, copy.deepcopy(k))},
+                   topology={"6a1a7c00677d648e9ba9d001": True})
         return [m for rows_ in f.values() for _, m in rows_ if "carry" in m or "FILAMENT-level" in m]
 
     base_sp = valid_res()["spools"][0]
@@ -1832,6 +1832,19 @@ def case_js_trim_mirror():
 # `usageHistory[].date`, `dryCycles[].date`, then `promotionInFlight.at` each
 # arrived as its own round. An uncastable Date fails the restore exactly like an
 # uncastable String, so the schema — not the review — decides the inventory.
+# ObjectId and Boolean complete the set. Between these and the Number script in
+# SKILL.md, EVERY declared type on the schema is now inventoried from the schema
+# rather than from whatever the last review happened to notice — which is the
+# whole point: a per-field patch guarantees the next per-field finding.
+OBJECTID_SWEEP_EXEMPT = {
+    # populated in BOTH detail reads, so their stored shape is unreachable from
+    # the two documents in hand; checked instead by the calibration-scope pass
+    # against the UNPOPULATED /api/snapshot (printer, bedType) and by the
+    # dangling-nozzle rows (nozzle).
+    "printer", "nozzle", "bedType",
+}
+BOOL_SWEEP_EXEMPT = set()
+
 DATE_SWEEP_EXEMPT = {
     # A row carrying a non-null `_deletedAt` is outside the audited set BY
     # CONSTRUCTION: the listing filters `_deletedAt: null`, and the snapshot
@@ -1900,6 +1913,69 @@ def case_schema_date_paths_covered():
             "DATE_SWEEP_EXEMPT with the reason.")
     else:
         ok("schema-date-paths (%d declared, %d exempt)" % (len(declared), len(DATE_SWEEP_EXEMPT)))
+
+
+def _covered_by_source(paths, exempt, label, why):
+    """Shared shape for the derived per-type guards: every declared path must be
+    NAMED somewhere in audit.py, or exempt with a stated reason."""
+    import re as _r
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "audit.py")).read()
+    missing = [p for p in paths
+               if p.split(".")[-1] not in exempt and p not in exempt
+               and not _r.search(r'"%s"' % _r.escape(p.split(".")[-1]), src)]
+    if missing:
+        bad(label, "the Filament schema declares these %s paths the audit never names: %s.\n  %s"
+                   % (label.split("-")[1], ", ".join(missing), why))
+    else:
+        ok("%s (%d declared, %d exempt)" % (label, len(paths), len(exempt)))
+
+
+# An explicit registry, NOT a source scan. The first version of these guards
+# asked "is this leaf named anywhere in audit.py", which is far too loose:
+# `_purged` is named by the discovery filter, so emptying BOOL_FIELDS entirely
+# left the guard green. A registry has to be updated deliberately, which is the
+# behaviour the FUZZ_COUNT guard already earns its keep with.
+OBJECTID_CHECKED = {
+    "parentId": "shape-checked before the parent-link block",
+    "compatibleNozzles": "per-element check in the nozzle-assignment block",
+    "spools.locationId": "three-tier check (shape / castable / resolves)",
+    "spools.usageHistory.jobId": "shape-checked in the usage loop",
+}
+
+
+def case_schema_objectid_paths_covered():
+    paths = _schema_paths_of_type(r"Schema\.Types\.ObjectId")
+    if paths is None:
+        return ok("schema-objectid-paths (schema not locatable — skipped)")
+    missing = [p for p in paths
+               if p not in OBJECTID_CHECKED and p.split(".")[-1] not in OBJECTID_SWEEP_EXEMPT]
+    if missing:
+        bad("schema-objectid-paths",
+            "the Filament schema declares these ObjectId paths that no registered check covers: "
+            + ", ".join(missing) + ".\n  An uncastable ObjectId makes POST /api/snapshot refuse "
+            "the ENTIRE backup file. Add a check and register it in OBJECTID_CHECKED, or exempt "
+            "it in OBJECTID_SWEEP_EXEMPT with the reason.")
+    else:
+        ok("schema-objectid-paths (%d declared, %d checked, %d exempt)"
+           % (len(paths), len(OBJECTID_CHECKED), len(OBJECTID_SWEEP_EXEMPT)))
+
+
+def case_schema_boolean_paths_covered():
+    paths = _schema_paths_of_type("Boolean")
+    if paths is None:
+        return ok("schema-boolean-paths (schema not locatable — skipped)")
+    swept = set(A.BOOL_FIELDS)
+    for parent, fields in A.NESTED_BOOL_FIELDS.items():
+        swept |= {"%s.%s" % (parent, f) for f in fields}
+    missing = [p for p in paths if p not in swept and p not in BOOL_SWEEP_EXEMPT]
+    if missing:
+        bad("schema-boolean-paths",
+            "the Filament schema declares these Boolean paths that the boolean sweep does not "
+            "carry: " + ", ".join(missing) + ".\n  Mongoose's Boolean cast refuses a non-boolean, "
+            "so the whole restore fails. Add them to BOOL_FIELDS / NESTED_BOOL_FIELDS, or to "
+            "BOOL_SWEEP_EXEMPT with the reason.")
+    else:
+        ok("schema-boolean-paths (%d declared, all swept)" % len(paths))
 
 
 def case_schema_string_paths_covered():
@@ -1980,8 +2056,37 @@ def case_objectid_contract():
     else:
         ok("objectid-subdoc-ids")
 
+    # a falsey non-null parentId is NOT absence — it is an uncastable ObjectId,
+    # and treating it as absent skipped every parent-link check as well
+    for v in (0, False, [], "t"):
+        rp = valid_res(parentId=v)
+        f, _ = run({"a": rec(rp, copy.deepcopy(rp))})
+        if not [m for rows in f.values() for _, m in rows if "parentId" in m]:
+            bad("objectid-parentid-shape",
+                f"parentId={v!r} is non-null and uncastable, so the backup is refused — and "
+                f"truthiness treated it as absent, so the row read as a clean standalone")
+            break
+    else:
+        ok("objectid-parentid-shape")
+
+    # `_purged` is a top-level Boolean the nested sweep never reached
+    for v in ({}, "yes", 1):
+        rb = valid_res(_purged=v)
+        f, _ = run({"a": rec(rb, copy.deepcopy(rb))})
+        if not [m for rows in f.values() for _, m in rows if "_purged" in m]:
+            bad("boolean-purged-shape",
+                f"_purged={v!r} fails Mongoose's Boolean cast; the listing and detail routes "
+                f"filter on `_deletedAt`, so the row is still served and still audited")
+            break
+    else:
+        ok("boolean-purged-shape")
+
     # the promotion marker requires BOTH members
-    for marker in ({"token": "x"}, {"at": "2026-01-01T00:00:00Z"}, {}, "oops"):
+    for marker in ({"token": "x"}, {"at": "2026-01-01T00:00:00Z"}, {}, "oops",
+                   # present but NOT a string — neither empty nor caught by any
+                   # nested sweep, so only an explicit shape test sees it
+                   {"token": {}, "at": "2026-01-01T00:00:00Z"},
+                   {"token": 42, "at": "2026-01-01T00:00:00Z"}):
         rr = valid_res(promotionInFlight=marker)
         f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
         if not [m for rows in f.values() for _, m in rows if "promotionInFlight" in m]:
@@ -2089,6 +2194,8 @@ if __name__ == "__main__":
     case_schema_string_paths_covered()
     case_schema_date_paths_covered()
     case_objectid_contract()
+    case_schema_objectid_paths_covered()
+    case_schema_boolean_paths_covered()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()

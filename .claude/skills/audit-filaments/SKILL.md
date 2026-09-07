@@ -269,9 +269,19 @@ rows for stock that does not exist. Anything mirroring an `if (x)` in the app go
 `_js_truthy`. The same asymmetry is why `_react_child_throws` and `_js_number` exist: the whole
 file is a Python mirror of JS semantics, and every place the two disagree is a defect waiting.
 
-**Derive the field inventory from the schema; do not collect it one finding at a time.** (Now done
-for `type: Number` — the original 45-of-45 script — `type: String`, and `type: Date`. Any future
-class of field finding should be closed the same way; a per-field patch guarantees the next one.) The
+**Derive the field inventory from the schema; do not collect it one finding at a time.** Done for
+ALL FIVE declared types now — `Number` (the original 45-of-45 script), `String`, `Date`,
+`ObjectId` and `Boolean` — each with its own guard that fails when the schema grows a path the
+audit does not cover. That was not tidiness: before the guards existed, a *single unchecked field
+per type* arrived as its own review round, over and over, because the schema decides how many
+there are and the review only surfaces them one at a time.
+
+Two things the guards must get right, both learned by getting them wrong first: a guard that asks
+"is this leaf NAMED anywhere in audit.py" is far too loose — `_purged` is named by the discovery
+filter, so emptying the boolean sweep entirely left that guard green. Check membership in the
+actual table, or in an explicit registry that has to be updated deliberately. And every exemption
+states its reason, because "it has its own check" and "we forgot" are indistinguishable from the
+guard's side. The
 numeric tables have had a coverage script since early on (45 of 45). The STRING sweep did not, and
 it showed: `spoolType` and then `syncId` each arrived as a separate review round, which is a drip
 with no end because the schema decides how many there are.
