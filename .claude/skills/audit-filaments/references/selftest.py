@@ -5112,6 +5112,37 @@ def case_oversized_numerics_never_abort():
             return
     ok("oversized-numeric-no-raise")
 
+    # THE OVERFLOW BOUNDARY IS IEEE-754's, NOT `> MAX_VALUE`. Rounding is
+    # round-to-nearest, so every integer from MAX_VALUE up to the MIDPOINT
+    # between it and 2**1024 rounds back DOWN to a finite MAX_VALUE. A `>`
+    # comparison answered Infinity across that whole band, and a bounded field
+    # holding such a value really does cast finite and reach the max validator
+    # -- so the audit skipped a real restore failure as "merely malformed".
+    # Python's float() overflows at exactly the same threshold; these six were
+    # measured against node and agree on every one.
+    _MAXD = 1.7976931348623157e308
+    _n = int(_MAXD)
+    boundary = [("MAX_VALUE", _n, _MAXD),
+                ("MAX_VALUE+1", _n + 1, _MAXD),
+                ("just under the midpoint", _n + (1 << 969), _MAXD),
+                ("MAX_VALUE+2**970", _n + (1 << 970), float("inf")),
+                ("2**1024-1", (1 << 1024) - 1, float("inf")),
+                ("2**1024", 1 << 1024, float("inf"))]
+    off = [(lbl, A._js_string_to_number("0x" + format(iv, "x")), want)
+           for lbl, iv, want in boundary
+           if A._js_string_to_number("0x" + format(iv, "x")) != want]
+    ok("oversized-numeric-ieee754-boundary") if not off else bad(
+        "oversized-numeric-ieee754-boundary",
+        f"`Number()` rounds to nearest, so the band above MAX_VALUE is FINITE and "
+        f"reaches the bound validators; answering Infinity there hides a real "
+        f"restore failure: {off}")
+    off = [(lbl, A._number_cast_value(iv), want) for lbl, iv, want in boundary
+           if A._number_cast_value(iv) != want]
+    ok("oversized-numeric-ieee754-boundary-int") if not off else bad(
+        "oversized-numeric-ieee754-boundary-int",
+        f"the integer path must use the same IEEE-754 threshold as the string "
+        f"path: {off}")
+
     # ...and JS says Infinity for all of them, so the mirror must too
     wrong = [l for l, v in shapes
              if (A._number_cast_value(v) if not isinstance(v, str)

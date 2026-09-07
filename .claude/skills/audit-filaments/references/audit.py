@@ -644,11 +644,19 @@ def _js_int_to_double(n):
     naming the bad field. `num()` has carried this guard since the beginning;
     the newer numeric mirrors did not, and inherited the crash.
     """
-    if n > _MAX_DOUBLE:
-        return float("inf")
-    if n < -_MAX_DOUBLE:
-        return float("-inf")
-    return float(n)
+    # NOT `n > _MAX_DOUBLE`. IEEE-754 rounds to nearest, so every integer from
+    # MAX_VALUE up to the MIDPOINT between it and 2**1024 rounds back DOWN to a
+    # finite MAX_VALUE -- `Number("0x...")` for MAX_VALUE+1 is finite, and a
+    # bounded field holding it really does reach the max validator. A `>`
+    # comparison answered Infinity there and the bounds check skipped it.
+    # Python's float() overflows at exactly the same threshold as JS: measured
+    # against node across the boundary band (MAX_VALUE, +1, just under the
+    # midpoint, +2**970, 2**1024-1, 2**1024) the two agree on all six. So let
+    # the conversion decide, and translate only a real overflow.
+    try:
+        return float(n)
+    except OverflowError:
+        return float("inf") if n > 0 else float("-inf")
 
 
 def _js_to_number(v):
