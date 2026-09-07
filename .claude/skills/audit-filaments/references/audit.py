@@ -399,6 +399,23 @@ NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 # cast refuses it on restore.
 BOOL_FIELDS = ("_purged",)
 
+# What Mongoose's Boolean cast actually accepts — verified against the installed
+# mongoose: true/false, 0/1, and the strings "true"/"false"/"yes"/"no"/"1"/"0".
+# It REJECTS objects, arrays and any other number (2 included). So a non-boolean
+# is not automatically a restore failure, and saying it is would be a false
+# alarm on the loudest possible consequence.
+BOOL_CASTABLE = (True, False, 0, 1, "true", "false", "yes", "no", "1", "0")
+
+
+def _bool_castable(v):
+    if isinstance(v, bool):
+        return True
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return v in (0, 1)
+    if isinstance(v, str):
+        return v in ("true", "false", "yes", "no", "1", "0")
+    return False
+
 # String fields inside a spool. These four are checked together but their
 # consequences are NOT the same, so each carries its own -- see
 # _nested_text_consequence. Pasting label's React-child crash onto `instanceId`
@@ -637,6 +654,16 @@ def _js_array_string(arr):
     return ",".join(parts)
 
 
+# Characters that make V8's date parser fail wherever they appear, verified
+# against node: U+0085 NEL and the two line separators. Trailing "junk", a
+# space, a tab, U+00A0, U+FEFF and U+001C..1F are all ACCEPTED, so this is a
+# narrow, measured set and not a guess at the legacy parser's grammar. It exists
+# because Python's `str.strip()` silently REMOVES U+0085 -- the audit used to
+# strip the one character that actually breaks the parse and then declare the
+# remainder a valid date.
+_DATE_POISON = "\u0085\u2028\u2029"
+
+
 def _bad_date(v):
     """True ONLY when Mongoose's Date cast is certain to fail. Mongoose casts a
     string with `new Date(v)` and raises CastError on an Invalid Date, so this
@@ -665,9 +692,14 @@ def _bad_date(v):
         return _bad_date(_js_array_string(v))
     if not isinstance(v, str):
         return False              # None is handled by the presence checks
-    t = v.strip()
+    # `_js_trim`, not `strip()`: V8 KEEPS U+0085 and U+001C..U+001F, so
+    # "2020-01-01" + U+0085 is an Invalid Date that Python's strip would have
+    # quietly reduced to a valid ISO date. Third site of this same mirror bug.
+    t = _js_trim(v)
     if not t:
         return True               # "" and whitespace-only are Invalid Date
+    if any(c in _DATE_POISON for c in t):
+        return True               # rejected wherever it appears (see _DATE_POISON)
     if not any(c.isascii() and c.isdigit() for c in t):
         return True               # no ASCII digit -> no date format can match
     mo = _ISO_DATE_RE.match(t)
@@ -926,17 +958,22 @@ def load(base, api_key, cache_dir=None):
                     if isinstance(snap, dict) else None) or []
             # The snapshot carries trashed and purged rows too; the listing does
             # not, and every later check assumes ACTIVE records.
+            # ACTIVE means exactly what the listing means by it: `_deletedAt`
+            # is null. A Python truthiness test on `_purged` discarded a row
+            # whose `_purged` is malformed-but-truthy -- so the degraded path
+            # dropped the very rows the boolean sweep exists to find. A genuinely purged
+            # row is a tombstone and carries `_deletedAt`, so this loses nothing.
             listing = [{"_id": str(x.get("_id")), "parentId": x.get("parentId"),
                         "hasVariants": False}
                        for x in rows if isinstance(x, dict)
-                       and x.get("_deletedAt") in (None, "") and not x.get("_purged")]
+                       and x.get("_deletedAt") in (None, "")]
             # ACTIVE children only, matching the listing's own hasVariants: a
             # parent whose sole variant is trashed is not a template, and
             # counting it as one would make the fallback disagree with the
             # normal path (13 templates against 12 on the library under test).
             parents_seen = {str(x.get("parentId")) for x in rows
                             if isinstance(x, dict) and x.get("parentId")
-                            and x.get("_deletedAt") in (None, "") and not x.get("_purged")}
+                            and x.get("_deletedAt") in (None, "")}
             for row in listing:
                 row["hasVariants"] = row["_id"] in parents_seen
             degraded = (f"the /api/filaments listing failed ({degraded}); records were discovered "
@@ -1592,8 +1629,9 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # test called the multi-printer pin healthy.
                 if isinstance(_pv, list):
                     _pv = ", ".join(str(x) for x in _pv
-                                    if not (isinstance(x, str) and not x.strip()) and x is not None)
-                if isinstance(_pv, str) and _pv.strip():
+                                    if not (isinstance(x, str) and not _js_trim(x))
+                                    and x is not None)
+                if isinstance(_pv, str) and _js_trim(_pv):
                     add("structure", f"{name}: settings.{_pk} pins {_pv!r} -> PrusaSlicer treats "
                                      f"this as a hard visibility filter, so the exported preset is "
                                      f"HIDDEN on every printer that fails it, with nothing in the "
@@ -1887,11 +1925,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         for _bf in BOOL_FIELDS:
             _bv = raw.get(_bf)
             if _bv is not None and not isinstance(_bv, bool):
+                if _bool_castable(_bv):
+                    _bc = ("Mongoose's Boolean cast ACCEPTS this value, so the restore succeeds "
+                           "and it silently becomes a real boolean on the next write — the stored "
+                           "value is simply not the type the schema declares")
+                else:
+                    _bc = ("Mongoose's Boolean cast refuses it (objects, arrays and any number "
+                           "other than 0/1), so POST /api/snapshot refuses the ENTIRE backup file")
                 add("structure", f"{name}: {_bf} is {type(_bv).__name__} ({_short(repr(_bv))}), "
-                                 f"not a boolean -> Mongoose's Boolean cast refuses it, so POST "
-                                 f"/api/snapshot refuses the ENTIRE backup file. The listing and "
-                                 f"detail routes filter on `_deletedAt`, so this row is still "
-                                 f"served and still audited", fid)
+                                 f"not a boolean -> {_bc}. The listing and detail routes filter on "
+                                 f"`_deletedAt`, so this row is still served and still audited",
+                    fid)
 
         _tds = raw.get("tdsUrl")
         if _tds is not None and not isinstance(_tds, str):
@@ -2024,7 +2068,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not isinstance(bt, dict):
                 continue
             plate_raw = bt.get("bedType")
-            if not isinstance(plate_raw, str) or not plate_raw.strip():
+            if not isinstance(plate_raw, str) or not _js_trim(plate_raw):
                 # `bedType` is schema-required, and orcaSlicerBundle indexes
                 # BED_TYPE_KEY_MAP with it — so a missing or blank key silently
                 # drops this row's temperatures from the exported preset.
@@ -2044,7 +2088,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # export DOES recognise, which no vocabulary explains and a
                 # rename certainly fixes.
                 _near = next((k for k in ORCA_PLATE_KEYS
-                              if k.strip().casefold() == plate_raw.strip().casefold()
+                              if _js_trim(k).casefold() == _js_trim(plate_raw).casefold()
                               and k != plate_raw), None)
                 if _near:
                     add("physical", f"{name}: bedTypeTemps[{idx_bt}] bedType {plate_raw!r} differs "
@@ -2052,7 +2096,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                     f"export indexes BED_TYPE_KEY_MAP by EXACT string with no "
                                     f"fallback, so these temperatures are dropped; rename it to "
                                     f"{_near!r}{_inh_blame('bedTypeTemps')}", fid)
-            plate = plate_raw if isinstance(plate_raw, str) and plate_raw.strip() else "?"
+            plate = plate_raw if isinstance(plate_raw, str) and _js_trim(plate_raw) else "?"
             bed_like += [(f"bedTypeTemps[{plate}] temperature", num(bt.get("temperature"))),
                          (f"bedTypeTemps[{plate}] firstLayerTemperature", num(bt.get("firstLayerTemperature")))]
 
@@ -2084,6 +2128,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                 f"casts it to a string on the next write, so nothing breaks — the "
                                 f"stored value simply is not the type the schema declares"
                                 f"{_inh_blame('presets')}", fid)
+            # Python's strip on purpose here, and it is the only place: the
+            # question is whether the label RENDERS as blank to a human, not
+            # what Mongoose would trim (the schema has no `trim` on label). A
+            # label of only U+0085 is non-empty to Mongoose and invisible on
+            # screen, which is exactly the row this branch describes.
             elif not _plabel.strip():
                 add("physical", f"{name}: presets[{idx}].label is {_plabel!r} — whitespace only "
                                 f"-> the schema accepts it (required, but not trimmed) and React "
@@ -2480,7 +2529,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # all, so that is the only shape reported; any non-empty colorName means
         # a human named this colour and it is theirs.
         if (col == "#808080" and not _cname_lost
-                and not (isinstance(r.get("colorName"), str) and r["colorName"].strip())):
+                and not (isinstance(r.get("colorName"), str)
+                         and _js_trim(r["colorName"]))):
             add("colour", f"{name}: colour is the legacy #808080 sentinel with no colorName -> the "
                           f"pre-v1.70 form stamped this on every filament, so it is probably not "
                           f"the real colour; a genuinely grey filament wants a colorName", fid)
@@ -2491,7 +2541,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         _colour, _cname_raw = raw.get("color"), raw.get("colorName")
         promote_runs = (
             (isinstance(_colour, str) and _colour != "")
-            or (isinstance(_cname_raw, str) and _cname_raw.strip() != "")
+            # mirrors parentPromotionState, which tests `colorName.trim() !== ""`
+            or (isinstance(_cname_raw, str) and _js_trim(_cname_raw) != "")
             or bool(raw.get("spools"))
             or raw.get("totalWeight") is not None
         )
@@ -3076,7 +3127,11 @@ def main():
     # without an id in exactly the case the reader most needs one.
     by_name = {}
     for rid in audited:
-        key = (records[rid]["res"].get("name") or "").strip()
+        # JS trimming: two names differing only by U+FEFF render identically
+        # and Mongoose's `trim: true` collapses them to the same stored key, so
+        # Python's strip left them in separate buckets and the findings named
+        # two visually indistinguishable records with no ids attached.
+        key = _js_trim(records[rid]["res"].get("name") or "")
         by_name.setdefault(key, []).append(rid)
     ambiguous = {rid for ids in by_name.values() if len(ids) > 1 for rid in ids}
 

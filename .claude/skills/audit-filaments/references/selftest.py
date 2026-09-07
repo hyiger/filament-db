@@ -463,7 +463,7 @@ PAIR_TABLES = {           # rows are (label, lowField, highField) -- skip elemen
     "ORDERED_PAIRS", "ORDERED_PAIRS_CAL", "ORDERED_PAIRS_TOP", "ORDERED_PAIRS_USAGE",
 }
 VALUE_TABLES = {          # strings are stored VALUES or output text, not field names
-    "CATEGORIES", "LOW_TEMP_TYPES", "ORCA_PLATE_KEYS", "USAGE_SOURCES", "_URL_REMOVE",
+    "BOOL_CASTABLE", "CATEGORIES", "LOW_TEMP_TYPES", "ORCA_PLATE_KEYS", "USAGE_SOURCES", "_URL_REMOVE",
 }
 
 # See the check at the end of main(): this is the guard against a SILENT loss of
@@ -2102,6 +2102,44 @@ def case_objectid_contract():
             "promotion-marker-members", f"a complete, valid marker was flagged: {fp}")
 
 
+# --- 14v. every JS-mirroring trim site, and the Boolean cast's real set ------
+# `_js_trim` has now been applied at four separate sites across three rounds,
+# each time because the previous fix covered only the site under review. These
+# pin the ones that mirror an app operation, so the next omission fails here.
+def case_js_mirror_sites():
+    NEL, ZWNBSP = chr(0x85), chr(0xFEFF)
+
+    # _bad_date: V8 KEEPS U+0085, so "2020-01-01"+NEL is an Invalid Date that
+    # Python's strip would have reduced to a valid ISO date
+    ok("mirror-date-trim") if A._bad_date("2020-01-01" + NEL) else bad(
+        "mirror-date-trim",
+        "V8 keeps U+0085, so this is an Invalid Date — Python's strip() would accept it")
+    if A._bad_date("2020-01-01"):
+        bad("mirror-date-trim-negative", "a plain ISO date must stay valid")
+    else:
+        ok("mirror-date-trim-negative")
+
+    # duplicate-name grouping (main()'s `by_name`, which the id-suffix keys off):
+    # JS trimming collapses "X" and "X"+U+FEFF into ONE bucket, which is what
+    # makes their findings carry record ids. Asserted on the property directly,
+    # because the suffixing itself lives in main()'s render(), not in audit().
+    if A._js_trim("X" + ZWNBSP) == A._js_trim("X") == "X":
+        ok("mirror-name-grouping")
+    else:
+        bad("mirror-name-grouping",
+            "two names JS trimming makes identical must land in the SAME by_name bucket, or "
+            "their findings render indistinguishably with no ids attached")
+
+    # Mongoose's Boolean cast accepts far more than `true`/`false`
+    castable = [v for v in (0, 1, "true", "false", "yes", "1", "0") if not A._bool_castable(v)]
+    ok("mirror-bool-castable") if not castable else bad(
+        "mirror-bool-castable", f"Mongoose's Boolean cast ACCEPTS these: {castable} — claiming the "
+                                f"restore fails would be a false alarm")
+    uncastable = [v for v in ({}, [], 2, "maybe") if A._bool_castable(v)]
+    ok("mirror-bool-uncastable") if not uncastable else bad(
+        "mirror-bool-uncastable", f"Mongoose REJECTS these: {uncastable}")
+
+
 # --- 15. an inherited defect belongs to the template -------------------------
 # A variant that inherits a field stores nothing for it, so telling its owner the
 # value "was written by a path that bypassed validation" is false and points the
@@ -2196,6 +2234,7 @@ if __name__ == "__main__":
     case_objectid_contract()
     case_schema_objectid_paths_covered()
     case_schema_boolean_paths_covered()
+    case_js_mirror_sites()
     case_inherited_defect_attributed()
     case_no_duplicate_shape_rows()
     n, ncrash = fuzz_shapes()
