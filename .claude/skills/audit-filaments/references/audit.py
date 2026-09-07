@@ -930,6 +930,28 @@ def _bad_tds_url(v):
 OBJECTID_RE = re.compile(r"^[0-9a-fA-F]{24}\Z")
 
 
+def _objectid_str(v):
+    """The 24-hex id this value CASTS to, or None when Mongoose's cast fails.
+
+    `_castable_objectid` is this function asking only whether it succeeded, so
+    the two can never disagree -- and every dangling-ref lookup uses the
+    RESOLVED id, which is what makes `["<hex>"]` and `{"_id": "<hex>"}` resolve
+    against the live set instead of being condemned as malformed.
+    """
+    if isinstance(v, str):
+        return v if OBJECTID_RE.match(v) else None
+    if isinstance(v, list):
+        _s = _js_array_string(v)          # `value.toString()`
+        return _s if OBJECTID_RE.match(_s) else None
+    if isinstance(v, dict):
+        _inner = v.get("_id")             # tested for TRUTHINESS, then stringified
+        if not _inner:
+            return None
+        _s = _js_to_string(_inner)
+        return _s if OBJECTID_RE.match(_s) else None
+    return None                           # numbers, booleans and None
+
+
 def _castable_objectid(v):
     """Does Mongoose's ObjectId cast ACCEPT this value?
 
@@ -948,23 +970,7 @@ def _castable_objectid(v):
 
     Nesting recurses because `String([[x]]) === String(x)` in JS.
     """
-    if v is None:
-        return True
-    if isinstance(v, str):
-        return bool(OBJECTID_RE.match(v))
-    if isinstance(v, list):
-        # `value.toString()` -- so [hex] and [[hex]] both flatten to the hex,
-        # while [] and a multi-element array do not.
-        return bool(OBJECTID_RE.match(_js_array_string(v)))
-    if isinstance(v, dict):
-        # The cast tests `value._id` for TRUTHINESS, then stringifies it, so
-        # {"_id": None} / {"_id": ""} / {"_id": 0} fall through to
-        # "[object Object]" and are rejected.
-        _inner = v.get("_id")
-        if not _inner:
-            return False
-        return bool(OBJECTID_RE.match(_js_to_string(_inner)))
-    return False                          # numbers and booleans are rejected
+    return v is None or _objectid_str(v) is not None
 
 
 def _js_to_string(v):
@@ -1611,7 +1617,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                         _lc = ("the usage disclosure renders it as a React child, "
                                                "so React throws on this object and expanding the "
                                                "history fails")
-                                    elif isinstance(lv, (dict, list)):
+                                    elif not _castable_string(lv):
                                         _lc = ("Mongoose's String cast refuses it, so POST "
                                                "/api/snapshot refuses the ENTIRE backup file")
                                     else:
@@ -2115,7 +2121,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # marker fails the restore just as a malformed one does — checking
             # only `at`'s castability left `{"token": "x"}` reported as clean.
             _ptok = _pif.get("token")
-            if _ptok is not None and not isinstance(_ptok, str):
+            if _ptok is not None and not _castable_string(_ptok):
                 add("structure", f"{name}: promotionInFlight.token is {type(_ptok).__name__} "
                                  f"({_short(repr(_ptok))}), not a string -> the embedded schema "
                                  f"declares it a required String, so Mongoose's cast refuses it "
@@ -2165,9 +2171,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # Object.prototype's, so the restore fails outright. Everything else
             # casts through its own toString and then faces the URL validator,
             # which the result will almost never satisfy.
-            _cast = ("Mongoose's String cast refuses a plain object outright, so POST "
+            # By VALUE, not container type: a list always refuses, while a
+            # populated-ref shape {"_id": "<url>"} casts to its id string and
+            # then faces the URL validator like any other string.
+            _cast = ("Mongoose's String cast refuses it outright, so POST "
                      "/api/snapshot rejects the ENTIRE backup file"
-                     if isinstance(_tds, dict) else
+                     if not _castable_string(_tds) else
                      "Mongoose casts it through its own toString and then applies the http(s) "
                      "validator to the result, so the backup is refused unless that string "
                      "happens to be a valid URL")
@@ -2337,6 +2346,11 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                 f"({_plabel!r}) -> the detail page renders it directly as a React "
                                 f"child, and React throws on an object, so opening this filament "
                                 f"fails outright{_inh_blame('presets')}", fid)
+            elif not _castable_string(_plabel):
+                add("physical", f"{name}: presets[{idx}].label is "
+                                f"{type(_plabel).__name__} ({_plabel!r}) -> Mongoose's String "
+                                f"cast refuses it, so POST /api/snapshot refuses the ENTIRE "
+                                f"backup file{_inh_blame('presets')}", fid)
             elif not isinstance(_plabel, str):
                 # A number or boolean is off-type but harmless: React renders it,
                 # and Mongoose casts it through the schema's String path, so the
@@ -2530,7 +2544,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # "cannot judge" posture as the calibration scope refs.
             _loc_live = ref_index.get("locations") if isinstance(ref_index, dict) else None
             _lid = sp.get("locationId")
-            if isinstance(_lid, str) and not OBJECTID_RE.match(_lid):
+            if isinstance(_lid, str) and _objectid_str(_lid) is None:
                 add("structure", f"{name}: spool {tag} locationId={_short(repr(_lid))} is not a "
                                  f"24-character hex ObjectId -> Mongoose's cast raises on it "
                                  f"(a 12-byte string and a bare id are BOTH rejected), so POST "
@@ -2547,7 +2561,8 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                  f"cast this to an ObjectId, so POST /api/snapshot refuses the "
                                  f"ENTIRE backup file", fid)
             elif (isinstance(_loc_live, set) and isinstance(_lid, str) and _lid
-                    and OBJECTID_RE.match(_lid) and _lid not in _loc_live):
+                    and _objectid_str(_lid) is not None
+                    and _objectid_str(_lid) not in _loc_live):
                 add("structure", f"{name}: spool {tag} locationId={_lid!r} resolves to no "
                                  f"Location row -> /inventory joins nothing for it, so the spool "
                                  f"falls into a second 'no location' bucket and drops out of every "
@@ -2628,8 +2643,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                                         f"usage and cost totals", fid)
                 if isinstance(ue, dict):
                     _jid = ue.get("jobId")
-                    if _jid is not None and not (isinstance(_jid, str)
-                                                 and OBJECTID_RE.match(_jid)):  # noqa: E501
+                    if not _castable_objectid(_jid):
                         add("structure", f"{name}: spool {tag} usage entry jobId="
                                          f"{_short(repr(_jid))} is not a 24-character hex ObjectId "
                                          f"-> the schema declares it as an ObjectId ref, so "
@@ -3257,14 +3271,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             ref = cal.get(field)
             if ref is None or ref == "":
                 return False       # unset — a genuine generic scope
-            if isinstance(ref, (dict, list)):
-                # NOT "uncheckable": this pass reads the SNAPSHOT, which is
-                # unpopulated, so a dict or array here cannot be a joined
-                # document — it is a value Mongoose cannot cast to an ObjectId,
-                # and it is invisible in both detail reads because populate()
-                # renders it null. Signalled separately from a dangling ref.
+            # A CASTABLE container is not malformed: ["<hex>"] and
+            # {"_id": "<hex>"} both cast, so they get the ordinary dangling-ref
+            # lookup on the id they RESOLVE to. Only a value the cast refuses is
+            # malformed -- it is invisible in both detail reads because
+            # populate() renders it null. Signalled separately from a dangle.
+            _rid = _objectid_str(ref)
+            if _rid is None:
                 return "malformed"
-            return str(ref) not in _live[field]
+            return _rid not in _live[field]
 
         _cal_map = ref_index.get("cals")
         for _fid, _cals in (_cal_map if isinstance(_cal_map, dict) else {}).items():
@@ -3283,7 +3298,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # export defect that is not there.
                 _both_null = all(
                     _cal.get(f) in (None, "") or _dangles(_cal, f) for f in ("printer", "bedType")
-                ) and not any(isinstance(_cal.get(f), (dict, list)) for f in ("printer", "bedType"))
+                ) and all(_castable_objectid(_cal.get(f)) for f in ("printer", "bedType"))
                 for _f in ("printer", "bedType"):
                     _d = _dangles(_cal, _f)
                     if _d == "malformed":

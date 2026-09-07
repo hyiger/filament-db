@@ -806,7 +806,16 @@ def case_calibration_ref_tombstones():
 # therefore reads the UNPOPULATED ids from /api/snapshot instead, and this case
 # exists because the record fuzz cannot reach that input at all.
 def case_calibration_scope_refs():
-    def idx(cal, printers=("p1",), bedtypes=("b1",)):
+    # REAL 24-hex ids. Toy ids like "p1" are values Mongoose cannot cast at all,
+    # so with the cast mirror wired in they classify as MALFORMED, not dangling
+    # -- a different finding with a different fix. The fixture has to carry ids
+    # the app could actually have stored, or it tests the wrong branch.
+    _P_LIVE = "507f1f77bcf86cd799439011"
+    _B_LIVE = "507f1f77bcf86cd799439012"
+    _P_GONE = "507f1f77bcf86cd799439013"
+    _B_GONE = "507f1f77bcf86cd799439014"
+
+    def idx(cal, printers=(_P_LIVE,), bedtypes=(_B_LIVE,)):
         return {"printers": set(printers), "bedTypes": set(bedtypes),
                 "cals": {"a": [cal]}}
 
@@ -814,7 +823,7 @@ def case_calibration_scope_refs():
     base = {"res": r, "raw": copy.deepcopy(r)}
 
     # a stored id that resolves to no row -> reported
-    for field, dead in (("printer", "p_gone"), ("bedType", "b_gone")):
+    for field, dead in (("printer", _P_GONE), ("bedType", _B_GONE)):
         f, _, _ = A.audit({"a": base}, (), None, None, None, idx({field: dead}))
         hit = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
         ok(f"cal-scope-dangling-{field}") if hit else bad(
@@ -823,7 +832,7 @@ def case_calibration_scope_refs():
             f"so pickRepresentativeCalibration promotes that tuning to every machine")
 
     # a LIVE id, and a genuine generic null, must both stay silent
-    for label, cal in (("live", {"printer": "p1", "bedType": "b1"}),
+    for label, cal in (("live", {"printer": _P_LIVE, "bedType": _B_LIVE}),
                        ("generic-null", {"printer": None, "bedType": None}),
                        ("absent", {})):
         f, _, _ = A.audit({"a": base}, (), None, None, None, idx(cal))
@@ -834,7 +843,7 @@ def case_calibration_scope_refs():
     # a filament the run did not audit must not be reported on
     f, _, _ = A.audit({"a": base}, (), None, None, None,
                       {"printers": set(), "bedTypes": set(),
-                       "cals": {"other": [{"printer": "p_gone"}]}})
+                       "cals": {"other": [{"printer": _P_GONE}]}})
     fp = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
     ok("cal-scope-unaudited-skipped") if not fp else bad(
         "cal-scope-unaudited-skipped", f"reported on a filament this run never audited: {fp}")
@@ -842,10 +851,10 @@ def case_calibration_scope_refs():
     # the CONSEQUENCE must follow pickRepresentativeCalibration's actual
     # predicate (printer == null && bedType == null), not be pasted on both ways
     f, _, _ = A.audit({"a": base}, (), None, None, None,
-                      idx({"printer": "p_gone", "bedType": None}))
+                      idx({"printer": _P_GONE, "bedType": None}))
     both = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
     f, _, _ = A.audit({"a": base}, (), None, None, None,
-                      idx({"printer": "p_gone", "bedType": "b1"}))
+                      idx({"printer": _P_GONE, "bedType": _B_LIVE}))
     one = [m for rows in f.values() for _, m in rows if "resolves to no" in m]
     if (both and "EVERY machine" in both[0]) and (one and "EVERY machine" not in one[0]
                                                   and "loses its printer scope" in one[0]):
@@ -860,8 +869,8 @@ def case_calibration_scope_refs():
     # an ABSENT collection is not an empty one — collapsing them would report
     # every stored reference in the library as dangling at once
     f, _, _ = A.audit({"a": base}, (), None, None, None,
-                      {"printers": None, "bedTypes": {"b1"},
-                       "cals": {"a": [{"printer": "p_whatever", "bedType": "b1"}]}})
+                      {"printers": None, "bedTypes": {_B_LIVE},
+                       "cals": {"a": [{"printer": _P_GONE, "bedType": _B_LIVE}]}})
     fp = [m for rows in f.values() for _, m in rows if "resolves to no printer" in m]
     ok("cal-scope-absent-collection") if not fp else bad(
         "cal-scope-absent-collection",
@@ -872,8 +881,8 @@ def case_calibration_scope_refs():
     # avoids a false positive, but staying silent about it makes an UNCHECKED
     # category look like a clean one, which is the worse failure
     f, _, _ = A.audit({"a": base}, (), None, None, None,
-                      {"printers": None, "bedTypes": {"b1"},
-                       "cals": {"a": [{"printer": "p1", "bedType": "b1"}]}})
+                      {"printers": None, "bedTypes": {_B_LIVE},
+                       "cals": {"a": [{"printer": _P_LIVE, "bedType": _B_LIVE}]}})
     hit = [m for rows in f.values() for _, m in rows
            if "printer references were NOT checked" in m]
     ok("cal-scope-omitted-collection-visible") if hit else bad(
@@ -884,9 +893,33 @@ def case_calibration_scope_refs():
     # a MALFORMED scope ref in the snapshot: unpopulated there, so a dict or
     # array cannot be a joined document — it is an uncastable value that both
     # detail reads render as null, so nothing else can see it
+    # a CASTABLE container is NOT malformed: ["<hex>"] and {"_id": "<hex>"} both
+    # cast, so they get the ordinary dangling lookup on the id they resolve to
+    for _ok_ref in ([_P_LIVE], {"_id": _P_LIVE}, [[_P_LIVE]]):
+        f, _, _ = A.audit({"a": base}, (), None, None, None,
+                          idx({"printer": _ok_ref, "bedType": _B_LIVE}))
+        fp = [m for rows in f.values() for _, m in rows
+              if "cannot cast" in m or "resolves to no" in m]
+        if fp:
+            bad("cal-scope-castable-container",
+                f"Mongoose casts {_ok_ref!r} to {_P_LIVE}, which is LIVE, so calling it "
+                f"malformed or dangling is a false positive: {fp}")
+            break
+    else:
+        ok("cal-scope-castable-container")
+    # ...and a non-hex string is malformed, not dangling: the cast refuses it,
+    # so the fix is to repair the value, not to restore a deleted row
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      idx({"printer": "p1", "bedType": _B_LIVE}))
+    _m = [m for rows in f.values() for _, m in rows if "cannot cast" in m]
+    ok("cal-scope-noncastable-is-malformed") if _m else bad(
+        "cal-scope-noncastable-is-malformed",
+        "a non-hex printer ref cannot be cast at all, so it must read as malformed "
+        "rather than as an id whose row was deleted")
+
     for bad_ref in ({}, [], {"_id": "x"}):
         f, _, _ = A.audit({"a": base}, (), None, None, None,
-                          {"printers": {"p1"}, "bedTypes": {"b1"}, "locations": set(),
+                          {"printers": {_P_LIVE}, "bedTypes": {_B_LIVE}, "locations": set(),
                            "cals": {"a": [{"printer": bad_ref, "bedType": None}]}})
         hit = [m for rows in f.values() for _, m in rows if "calibration[0] stores" in m]
         if not hit:
@@ -1275,6 +1308,70 @@ def case_no_full_case_folding():
         "no-full-case-folding-pairs",
         f"these are NOT case variants of each other to JS or to Mongo, so "
         f"grouping them produces a false 'differ only by CASE' row: {collide}")
+
+
+
+# --- 14d-quinquies. a cast decision must go through the ONE mirror ----------
+# The two cast mirrors were introduced and then wired into only the call sites
+# a sweep had named, which left SEVEN others still asking `isinstance(x, str)
+# and OBJECTID_RE.match(x)` or `isinstance(x, (dict, list))` and reaching the
+# opposite verdict on the same value. That is not a semantics bug -- it is a
+# WIRING bug, and it is the reliably recurring one: every partial rewiring
+# produces another round of "you missed these". So it gets a guard rather than
+# another list of sites.
+#
+#   * OBJECTID_RE.match may appear ONLY inside `_objectid_str`
+#   * `isinstance(x, (dict, list))` may not appear in code at all -- a CAST
+#     decision belongs in the mirror, and a structural test should name the one
+#     type it means
+def case_cast_decisions_go_through_the_mirror():
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "audit.py"), encoding="utf-8").read()
+    lines = src.splitlines()
+
+    start = next((i for i, ln in enumerate(lines)
+                  if ln.startswith("def _objectid_str(")), None)
+    if start is None:
+        bad("cast-mirror-resolver-exists",
+            "_objectid_str is gone, so this guard proves nothing")
+        return
+    ok("cast-mirror-resolver-exists")
+    end = next((i for i in range(start + 1, len(lines))
+                if lines[i] and not lines[i][0].isspace()), len(lines))
+
+    stray = [(i + 1, ln.strip()) for i, ln in enumerate(lines)
+             if "OBJECTID_RE.match" in ln and not (start <= i < end)
+             and not ln.lstrip().startswith("#")]
+    if stray:
+        bad("cast-objectid-single-site",
+            "an ObjectId cast decision outside _objectid_str will disagree with "
+            "the mirror on a populated ref or a single-element array: "
+            + "; ".join(f"L{n} {t[:60]}" for n, t in stray))
+    else:
+        ok("cast-objectid-single-site")
+
+    container = [(i + 1, ln.strip()) for i, ln in enumerate(lines)
+                 if "(dict, list)" in ln.replace(" ", "").replace(
+                     "(dict,list)", "(dict, list)")
+                 and "isinstance" in ln and not ln.lstrip().startswith("#")]
+    if container:
+        bad("cast-string-no-container-test",
+            "judging a String cast by container type calls a populated ref "
+            "unrestorable and lets an array through; use _castable_string: "
+            + "; ".join(f"L{n} {t[:60]}" for n, t in container))
+    else:
+        ok("cast-string-no-container-test")
+
+    # and the resolver must agree with the castability predicate, always
+    _OID2 = "507f1f77bcf86cd799439011"
+    for _v in (None, _OID2, [_OID2], [[_OID2]], {"_id": _OID2}, "", "abc", [],
+               [_OID2, _OID2], {}, {"_id": None}, 0, True, ["not-hex"]):
+        if A._castable_objectid(_v) != (_v is None or A._objectid_str(_v) is not None):
+            bad("cast-resolver-agrees",
+                f"_castable_objectid and _objectid_str disagree on {_v!r}")
+            break
+    else:
+        ok("cast-resolver-agrees")
 
 
 # --- 14e. per-record state must not leak between records ---------------------
@@ -2315,10 +2412,10 @@ def case_objectid_contract():
 
     # the promotion marker requires BOTH members
     for marker in ({"token": "x"}, {"at": "2026-01-01T00:00:00Z"}, {}, "oops",
-                   # present but NOT a string — neither empty nor caught by any
+                   # present but UNCASTABLE — neither empty nor caught by any
                    # nested sweep, so only an explicit shape test sees it
                    {"token": {}, "at": "2026-01-01T00:00:00Z"},
-                   {"token": 42, "at": "2026-01-01T00:00:00Z"}):
+                   {"token": [1, 2], "at": "2026-01-01T00:00:00Z"}):
         rr = valid_res(promotionInFlight=marker)
         f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
         if not [m for rows in f.values() for _, m in rows if "promotionInFlight" in m]:
@@ -2332,6 +2429,25 @@ def case_objectid_contract():
         fp = [m for rows in f.values() for _, m in rows if "promotionInFlight" in m]
         ok("promotion-marker-members") if not fp else bad(
             "promotion-marker-members", f"a complete, valid marker was flagged: {fp}")
+    # `token` is a String path, so Mongoose CASTS a number or a boolean onto it
+    # ("42", "true") and the marker validates. The old `isinstance(_ptok, str)`
+    # test called that unrestorable -- a false positive, measured against
+    # mongoose 9.7.4. A populated-ref shape casts through `_id` for the same
+    # reason; only a value the cast refuses is a real finding.
+    for _cast_ok in ({"token": 42, "at": "2026-01-01T00:00:00Z"},
+                     {"token": True, "at": "2026-01-01T00:00:00Z"},
+                     {"token": {"_id": "x"}, "at": "2026-01-01T00:00:00Z"}):
+        rr = valid_res(promotionInFlight=_cast_ok)
+        f, _ = run({"a": rec(rr, copy.deepcopy(rr))})
+        fp = [m for rows in f.values() for _, m in rows
+              if "promotionInFlight" in m and "not a string" in m]
+        if fp:
+            bad("promotion-marker-castable-token",
+                f"Mongoose casts {_cast_ok['token']!r} onto the String path, so the marker "
+                f"validates and the backup restores: {fp}")
+            break
+    else:
+        ok("promotion-marker-castable-token")
 
 
 # --- 14v. every JS-mirroring trim site, and the Boolean cast's real set ------
@@ -2449,6 +2565,7 @@ if __name__ == "__main__":
     case_ascii_only_mirror_regexes()
     case_mongoose_cast_mirrors()
     case_no_full_case_folding()
+    case_cast_decisions_go_through_the_mirror()
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()
