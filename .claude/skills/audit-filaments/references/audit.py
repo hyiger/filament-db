@@ -633,6 +633,32 @@ _JS_DECIMAL_RE = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9
 _JS_RADIX_RE = re.compile(r"^0([xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)$")
 
 
+def _js_int_to_double(n):
+    """A Python int, as the double JS would hold it.
+
+    Python ints are unbounded; JS numbers are doubles, so a JSON body can carry
+    an integer no double can represent and `Number(...)` gives Infinity for it.
+    `float()` RAISES OverflowError instead -- and an uncaught raise in a
+    predicate aborts the ENTIRE audit over one malformed value, which is the
+    worst failure this script has: the user gets nothing instead of a report
+    naming the bad field. `num()` has carried this guard since the beginning;
+    the newer numeric mirrors did not, and inherited the crash.
+    """
+    # NOT `n > _MAX_DOUBLE`. IEEE-754 rounds to nearest, so every integer from
+    # MAX_VALUE up to the MIDPOINT between it and 2**1024 rounds back DOWN to a
+    # finite MAX_VALUE -- `Number("0x...")` for MAX_VALUE+1 is finite, and a
+    # bounded field holding it really does reach the max validator. A `>`
+    # comparison answered Infinity there and the bounds check skipped it.
+    # Python's float() overflows at exactly the same threshold as JS: measured
+    # against node across the boundary band (MAX_VALUE, +1, just under the
+    # midpoint, +2**970, 2**1024-1, 2**1024) the two agree on all six. So let
+    # the conversion decide, and translate only a real overflow.
+    try:
+        return float(n)
+    except OverflowError:
+        return float("inf") if n > 0 else float("-inf")
+
+
 def _js_to_number(v):
     """ECMAScript ToNumber over any JSON value, or None for NaN.
 
@@ -668,7 +694,7 @@ def _js_string_to_number(text):
     if t == "":
         return 0.0                        # Number("") === 0
     if _JS_RADIX_RE.match(t):
-        return float(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
+        return _js_int_to_double(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
     body = t[1:] if t[:1] in "+-" else t
     if body == "Infinity":
         return float("-inf") if t[:1] == "-" else float("inf")
@@ -992,6 +1018,61 @@ def _js_to_string(v):
     if isinstance(v, list):
         return _js_array_string(v)
     return "[object Object]"
+
+
+# `Number` casts a value to null rather than refusing it, and the two are not
+# the same answer: null passes the bound validators, a refusal fails the cast.
+_NUMBER_CAST_NULL = object()
+
+
+def _number_cast_value(v):
+    """The number Mongoose's Number cast PRODUCES: a float, the
+    `_NUMBER_CAST_NULL` sentinel when it casts to null, or None when the cast
+    is refused.
+
+    `_castable_number` is this function asking only whether it succeeded, so
+    the two cannot drift -- the same single-resolver shape as `_objectid_str`.
+    Having castability without the resolved VALUE was its own bug: the bounds
+    check converted strings only, so `dryingTime: {"_id": "20000"}` cast to
+    20000 and blew the max validator while the audit reported nothing but a
+    generic off-type note.
+    """
+    if v is None:
+        return _NUMBER_CAST_NULL
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        if v != v:
+            return None                          # NaN is the one number refused
+        return _js_int_to_double(v) if isinstance(v, int) else float(v)
+    if isinstance(v, str):
+        if v == "":
+            return _NUMBER_CAST_NULL             # castNumber maps "" to null
+        return _js_string_to_number(v)           # None when Number() is NaN
+    if isinstance(v, dict):
+        if "_id" not in v:
+            return None
+        return _number_cast_value(v["_id"])
+    return None                                  # lists always fail
+
+
+def _castable_number(v):
+    """Does Mongoose's Number cast ACCEPT this value?
+
+    The one cast the audit had NO mirror for, which meant the generated
+    differential corpus was never evaluated as a Number and a divergence there
+    could pass the suite unseen. Truth table measured against the repo's own
+    mongoose over 40 shapes:
+
+        ACCEPT   None; "" and whitespace-only (-> null); any string whose
+                 `Number()` is not NaN ("0x10" is 16, "Infinity" is fine,
+                 " 42 " is 42); every real number; booleans; and {"_id": x}
+                 when x is itself Number-castable -- INCLUDING {"_id": None},
+                 unlike the ObjectId cast, which tests `_id` for truthiness.
+        REJECT   "NaN", "1_0", any other unparseable string, EVERY array
+                 (even [5]), {} and any object without a castable `_id`.
+    """
+    return _number_cast_value(v) is not None
 
 
 def _castable_string(v):
@@ -2499,8 +2580,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     # so `dryingTime: "20000"` fails the max bound exactly as
                     # 20000 would. Skipping it reported only "malformed" and
                     # left the reader thinking the backup still restores.
-                    _cv = _js_string_to_number(val) if isinstance(val, str) else None
-                    if _cv is None or _cv != _cv or _cv in (float("inf"), float("-inf")):
+                    # EVERY castable shape, not just strings: a populated-ref
+                    # `{"_id": "20000"}` casts to 20000 and faces the validators
+                    # exactly as the bare string does.
+                    _cv = _number_cast_value(val)
+                    if (_cv is None or _cv is _NUMBER_CAST_NULL or _cv != _cv
+                            or _cv in (float("inf"), float("-inf"))):
                         continue   # reported once by the malformed_numerics sweep
                     val = _cv
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):

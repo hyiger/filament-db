@@ -26,6 +26,7 @@ import itertools
 import sys
 import traceback
 
+import json
 import os
 
 import audit as A
@@ -1385,6 +1386,160 @@ def case_cast_decisions_go_through_the_mirror():
         ok("cast-resolver-agrees")
 
 
+
+# --- 14d-sexies. the mirrors, DIFFERENTIAL-TESTED against real Mongoose -----
+# Everything above pins the mirrors against tables a human wrote down, and a
+# table only covers the cases whoever wrote it thought of. That is exactly how
+# this file accumulated its false positives: `{_id: "<hex>"}` casts, an
+# uppercase ObjectId canonicalizes, `token: 42` casts, `""` is a valid Number
+# -- each one obvious in hindsight and absent from every hand-written list.
+#
+# So the mirrors are now tested against the REFERENCE IMPLEMENTATION: the
+# repo's own mongoose, driven by references/cast_oracle.mjs over a GENERATED
+# corpus. The audit itself keeps its Python mirror -- it has to run standalone
+# against a deployment with no repo and no node_modules -- but a divergence
+# between the mirror and the real thing is now a build failure rather than
+# something a reviewer has to happen to notice.
+#
+# Skips loudly (never silently) when node or mongoose is unavailable.
+_ORACLE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cast_oracle.mjs")
+_OID_H = "507f1f77bcf86cd799439011"
+
+
+def _cast_corpus():
+    """Shapes crossed with types, generated rather than enumerated by hand."""
+    scalars = [None, "", " ", "x", "abc", _OID_H, _OID_H.upper(), _OID_H[:23],
+               _OID_H + "a", "abcdefghijkl", "0", "1", "12345", "20000",
+               "1e5", "1_0", "0x10", "Infinity", "NaN", " 42 ", "true",
+               "false", "yes", "no", "2020-01-01", "2020-01-01T00:00:00Z",
+               "2020-01-01T00:00:00Z ", "2020-13-01", "1700000000000000000",
+               0, 1, -1, 1.5, True, False]
+    containers = []
+    for inner in (_OID_H, _OID_H.upper(), "abc", "", None, 1, True):
+        containers += [[inner], [[inner]], [inner, inner], {"_id": inner},
+                       {"_id": inner, "name": "x"}, {"a": inner}]
+    containers += [[], {}]
+    return scalars + containers
+
+
+def _ask_oracle(items):
+    import subprocess
+    try:
+        r = subprocess.run(["node", _ORACLE], input=json.dumps(items),
+                           capture_output=True, text=True, timeout=180)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        payload = json.loads(r.stdout)
+    except ValueError:
+        return None
+    if not isinstance(payload.get("verdicts"), list):
+        return None
+    return payload
+
+
+def case_cast_mirrors_match_real_mongoose():
+    if not os.path.exists(_ORACLE):
+        bad("cast-oracle-present", "references/cast_oracle.mjs is missing, so the "
+                                   "mirrors are no longer differential-tested")
+        return
+    corpus = _cast_corpus()
+    # (schema type, python predicate, values to skip and why)
+    checks = [
+        ("ObjectId", lambda v: A._castable_objectid(v), ()),
+        ("String", lambda v: A._castable_string(v), ()),
+        # `""` and None never reach _bad_date -- every call site guards
+        # `not in (None, "")` because castDate maps both to null.
+        ("Date", lambda v: not A._bad_date(v), (None, "")),
+        ("Boolean", lambda v: A._bool_castable(v), (None,)),
+        # Number was ABSENT from this list while the oracle already implemented
+        # it, so the generated corpus was never evaluated as a Number and a
+        # divergence there could pass -- the exact truth-table gap this case
+        # exists to close, reproduced inside the closing mechanism.
+        ("Number", lambda v: A._castable_number(v), ()),
+    ]
+    items, meta = [], []
+    for tname, _pred, skip in checks:
+        for v in corpus:
+            if any(v is s or (type(v) is type(s) and v == s) for s in skip):
+                continue
+            items.append({"type": tname, "value": v})
+            meta.append((tname, v, _pred))
+    payload = _ask_oracle(items)
+    if payload is not None and len(payload["verdicts"]) != len(items):
+        # `zip()` stops at the shorter side, so a truncated or empty array would
+        # mark the oracle reachable and let BOTH assertions pass having checked
+        # nothing. A guard that quietly stops guarding is worse than no guard.
+        bad("cast-oracle-complete",
+            f"the oracle returned {len(payload['verdicts'])} verdicts for "
+            f"{len(items)} shapes, so the differential check would silently skip "
+            f"the remainder; refusing to report a partial run as a pass")
+        return
+    if payload is None:
+        # NOT a silent pass: an unchecked mirror must look unchecked.
+        bad("cast-oracle-reachable",
+            "could not run cast_oracle.mjs (node or mongoose unavailable), so "
+            "the cast mirrors went UNVERIFIED against the real implementation; "
+            "run `npm ci` in the repo root, or run the suite from a checkout")
+        return
+    ok("cast-oracle-reachable")
+    ok(f"cast-oracle-complete ({len(items)} shapes answered)")
+    # The two directions are NOT equally bad and must not be reported together.
+    # A false positive tells the user to break working data; an under-report
+    # merely stays quiet. So every false positive is fatal, while an
+    # under-report is fatal only when it is a NEW one -- the single documented
+    # gap is pinned by RULE below, so the silent surface cannot grow unnoticed
+    # and a future narrowing of it shows up as a prompt to update this.
+    def _known_legacy_gap(tname, v):
+        """V8's legacy parser accepts "2020-01-01junk", "Jan 1 2020", "5/6/2020"
+        and "12345", so no safe rule condemns a digit-bearing NON-ISO string --
+        see `date-mirror-legacy-parser-silent`. Arrays coerce to a string and
+        land in the same gap."""
+        if tname != "Date":
+            return False
+        text = (v if isinstance(v, str)
+                else A._js_array_string(v) if isinstance(v, list) else None)
+        if text is None:
+            return False
+        t = A._js_trim(text)
+        return (bool(t) and any(c.isascii() and c.isdigit() for c in t)
+                and not A._ISO_DATE_RE.match(t))
+
+    false_pos, under, expected = [], [], 0
+    for (tname, v, pred), verdict in zip(meta, payload["verdicts"]):
+        got, want = bool(pred(v)), bool(verdict.get("ok"))
+        if got == want:
+            continue
+        if not got and want:
+            false_pos.append(f"{tname}({v!r}): the mirror REJECTS it but mongoose "
+                             f"{payload['mongoose']} casts it to "
+                             f"{verdict.get('cast')!r}")
+        elif _known_legacy_gap(tname, v):
+            expected += 1
+        else:
+            under.append(f"{tname}({v!r}): mongoose rejects it "
+                         f"({str(verdict.get('error'))[:60]}) and the mirror is silent")
+    if false_pos:
+        bad("cast-mirrors-no-false-positives",
+            f"{len(false_pos)} of {len(meta)} shapes are condemned by the mirror and "
+            f"accepted by the real cast -- each one tells the user to 'fix' data "
+            f"the app stores happily:\n      " + "\n      ".join(false_pos[:10]))
+    else:
+        ok(f"cast-mirrors-no-false-positives ({len(meta)} shapes vs mongoose "
+           f"{payload['mongoose']})")
+    if under:
+        bad("cast-mirrors-no-new-under-reports",
+            f"{len(under)} shape(s) the real cast rejects are NOT covered by the one "
+            f"documented gap (a digit-bearing non-ISO date string), so the audit "
+            f"silently passes data that breaks a restore:\n      "
+            + "\n      ".join(under[:10]))
+    else:
+        ok(f"cast-mirrors-no-new-under-reports ({expected} in the documented "
+           f"legacy-parser gap)")
+
+
 # --- 14e. per-record state must not leak between records ---------------------
 # The text sweep BUILDS `coerced_*` in one loop and the colour checks READ them
 # in a LATER one, so a bare loop-local left the FINAL record's state standing in
@@ -2535,6 +2690,2489 @@ def case_inherited_defect_attributed():
 # --- 16. one defect, one row ------------------------------------------------
 # For a standalone the two reads are the same document, so sweeping both emitted
 # every shape finding twice and doubled the noise in the commonest case.
+
+# --- 15. POSITIVE assertions for emit sites nothing pinned ------------------
+# A mutation sweep deleted each of the 122 emit sites in turn: 59 of them could
+# be removed with this suite still green, so nearly half the audit's output had
+# nothing proving it fires at all -- a check could rot, or be deleted outright,
+# and the only signal would be a report that quietly stopped mentioning it.
+# Each case below makes one site emit and asserts its message appears; each was
+# verified by deleting that site and confirming THIS suite goes red.
+# --- 17. the "this was NOT checked" reports ----------------------------------
+# Every report below exists for one reason: to stop an UNCHECKED audit from
+# rendering as a CLEAN one. That is the worst possible outcome for a checker --
+# the user reads a green report and ships an abrasive filament onto a brass
+# nozzle. Mutation testing showed all of them could be deleted with this suite
+# still green, because the only cases that reached them asserted "did not raise"
+# and never looked at what came back.
+def case_pin_discovery_degraded_reported():
+    fid = "6a1a7c00677d648e9ba9d001"
+    note = "listing returned 3 of 40 filaments (HTTP 502 on page 2)"
+    try:
+        f, _, _ = A.audit({fid: rec()}, (), None, None, note, None)
+    except Exception as e:
+        return bad("degraded-reported", f"audit raised: {type(e).__name__}: {e}")
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    hit = [m for m in rows if "DISCOVERY DEGRADED" in m]
+    if not hit:
+        return bad("degraded-reported",
+                   "discovery could only enumerate PART of the library and the audit said "
+                   "nothing about it -> every filament that was never fetched renders as "
+                   "clean, so the report claims a coverage it does not have.\n"
+                   f"    rows were: {rows}")
+    if note not in hit[0]:
+        return bad("degraded-reported",
+                   "the row must carry WHAT degraded, or the user cannot tell which read to "
+                   f"retry: {hit[0]!r}")
+    ok("degraded-reported")
+
+    # ...and a clean discovery must stay silent, or the banner is noise that
+    # trains the user to ignore it
+    f, _, _ = A.audit({fid: rec()}, (), None, None, None, None)
+    fp = [m for rows_ in f.values() for _, m in rows_ if "DISCOVERY DEGRADED" in m]
+    ok("degraded-clean-silent") if not fp else bad(
+        "degraded-clean-silent", f"nothing degraded, yet the banner fired: {fp}")
+
+
+def case_pin_unreadable_filament_reported():
+    fid = "6a1a7c00677d648e9ba9d001"
+    dead = "6a1a7c00677d648e9ba9d0ff"
+    try:
+        f, _, _ = A.audit({fid: rec()}, (), {dead: "HTTP 500"}, None, None, None)
+    except Exception as e:
+        return bad("unreadable-filament-reported", f"audit raised: {type(e).__name__}: {e}")
+    rows = [(rid, m) for rows_ in f.values() for rid, m in rows_]
+    hit = [(rid, m) for rid, m in rows if "could NOT be read" in m]
+    if not hit:
+        return bad("unreadable-filament-reported",
+                   "a filament whose detail read FAILED was dropped in silence -> it is "
+                   "absent from the report exactly like a filament with no problems, so a "
+                   "defect in it is indistinguishable from a clean bill of health.\n"
+                   f"    rows were: {[m for _, m in rows]}")
+    if not any(dead in m and "HTTP 500" in m for _, m in hit):
+        return bad("unreadable-filament-reported",
+                   "the row must name WHICH filament and WHY the read failed, or it is not "
+                   f"actionable: {[m for _, m in hit]}")
+    if not any(rid == dead for rid, _ in hit):
+        return bad("unreadable-filament-reported",
+                   "the finding must carry the failed filament's id so the render can link "
+                   f"to it: {hit}")
+    ok("unreadable-filament-reported")
+
+
+def case_pin_abrasive_payload_not_a_list():
+    fid = "6a1a7c00677d648e9ba9d001"
+    r = valid_res(_id=fid, name="CF PA")
+    # NOT {"error": ...} -- that shape has its own report. These two reach the
+    # "the route answered, but with something that is not a findings list"
+    # branch: an older build's body, or a proxy page served with a 200.
+    for label, payload, shown in (("string-body", "oops", "str"),
+                                  ("dict-without-error", {"nozzles": []}, "dict")):
+        try:
+            f, _ = run({fid: rec(r, copy.deepcopy(r))}, abrasive=payload)
+        except Exception as e:
+            bad(f"abrasive-not-a-list-{label}", f"audit raised: {type(e).__name__}: {e}")
+            continue
+        rows = [m for rows_ in f.values() for _, m in rows_]
+        hit = [m for m in rows if "not a list -> abrasive safety was NOT checked" in m]
+        if not hit:
+            bad(f"abrasive-not-a-list-{label}",
+                "/api/abrasive-nozzles answered with a body this script cannot read, and the "
+                "audit said nothing -> the abrasive section renders EMPTY, which reads as "
+                "'no abrasive problems' while nothing was examined at all.\n"
+                f"    rows were: {rows}")
+            continue
+        if shown not in hit[0]:
+            bad(f"abrasive-not-a-list-{label}",
+                f"the row must name what came back instead, or the user cannot diagnose the "
+                f"endpoint: {hit[0]!r}")
+            continue
+        ok(f"abrasive-not-a-list-{label}")
+
+
+def case_pin_abrasive_unassigned_suppresses_generic_nozzle_rows():
+    # /api/abrasive-nozzles is AUTHORITATIVE for abrasive filaments, and it
+    # reports "no nozzle assignment" with far better remediation than this
+    # script can. The generic nozzle-assignment checks therefore skip the ids it
+    # already named. Drop that bookkeeping and the same physical defect renders
+    # TWICE with two different fixes attached, which is exactly the contradiction
+    # the division of labour exists to prevent.
+    fid = "6a1a7c00677d648e9ba9d001"
+    noz = "6a1a7bed677d648e9ba9cc01"
+    payload = [{"filamentId": fid, "filamentName": "CF PA", "reasons": ["carbon fibre"],
+                "flagMismatch": False, "softNozzles": [], "unassigned": True}]
+
+    def build(compat):
+        r = valid_res(_id=fid, name="CF PA")
+        r["compatibleNozzles"] = compat
+        return {fid: rec(r, copy.deepcopy(r))}
+
+    for label, compat, generic in (
+        ("stale-ticks",
+         [{"_id": noz, "name": "0.4 Brass", "_deletedAt": "2026-01-01T00:00:00Z"}],
+         "effectively unassigned"),
+        ("no-ticks", [], "no compatibleNozzles, but 1 calibration(s) are stored"),
+    ):
+        # The generic check must genuinely REACH this fixture. Without this the
+        # suppression assertion below is vacuous and would pass against a
+        # fixture that could never have produced the row in the first place.
+        try:
+            f, _ = run(build(compat))
+        except Exception as e:
+            bad(f"abrasive-unassigned-{label}", f"audit raised: {type(e).__name__}: {e}")
+            continue
+        control = [m for rows_ in f.values() for _, m in rows_ if generic in m]
+        if not control:
+            bad(f"abrasive-unassigned-{label}-reachable",
+                f"the fixture never produced the generic row {generic!r} even with no "
+                f"abrasive payload, so the suppression check below proves nothing; rows "
+                f"were: {[m for rows_ in f.values() for _, m in rows_]}")
+            continue
+
+        f, _ = run(build(compat), abrasive=payload)
+        rows = [m for rows_ in f.values() for _, m in rows_]
+        if not any("no nozzle assignment at all" in m for m in rows):
+            bad(f"abrasive-unassigned-{label}",
+                f"the authoritative abrasive row vanished, so this case cannot tell "
+                f"suppression from a broken payload; rows were: {rows}")
+            continue
+        dup = [m for m in rows if generic in m]
+        if dup:
+            bad(f"abrasive-unassigned-{label}",
+                "/api/abrasive-nozzles already reported this filament as having NO nozzle "
+                "assignment, and the generic check restated it -> one physical defect "
+                "renders as two findings in two sections with two different remediations.\n"
+                f"    duplicate: {dup}")
+            continue
+        ok(f"abrasive-unassigned-{label}")
+
+
+def case_pin_unusable_pair_reported():
+    # Each record is TWO reads (resolved + ?raw=true). If either is not a
+    # document the record is dropped from the audit entirely -- so it MUST be
+    # reported, or a filament silently leaves the run and its absence from the
+    # findings reads as "this one is fine".
+    for label, pair, shown in (
+        ("res-not-a-document", {"res": "HTTP 500 body", "raw": valid_res()}, "str/dict"),
+        ("raw-missing", {"res": valid_res(), "raw": None}, "dict/NoneType"),
+    ):
+        fid = "6a1a7c00677d648e9ba9d001"
+        try:
+            f, _, _ = A.audit({fid: pair}, (), None, None, None, None)
+        except Exception as e:
+            bad(f"unusable-pair-{label}", f"audit raised: {type(e).__name__}: {e}")
+            continue
+        rows = [(rid, m) for rows_ in f.values() for rid, m in rows_]
+        hit = [(rid, m) for rid, m in rows
+               if "not two documents -> it was NOT audited" in m]
+        if not hit:
+            bad(f"unusable-pair-{label}",
+                "one of the record's two reads was not a document, so the record was "
+                "DROPPED before any check ran -- and nothing said so. An unaudited "
+                "filament is then indistinguishable from a clean one.\n"
+                f"    rows were: {[m for _, m in rows]}")
+            continue
+        if not any(shown in m for _, m in hit):
+            bad(f"unusable-pair-{label}",
+                f"the row must name which read was wrong and what it was, or the user "
+                f"cannot tell a failed HTTP read from a shape bug: {[m for _, m in hit]}")
+            continue
+        if not any(rid == fid for rid, _ in hit):
+            bad(f"unusable-pair-{label}",
+                f"the finding must carry the record id it dropped: {hit}")
+            continue
+        ok(f"unusable-pair-{label}")
+
+
+def case_pin_required_text_missing_reported():
+    # name/vendor/type are schema-REQUIRED. A stored document missing one was
+    # written by a path that bypassed Mongoose validation, and it fails the
+    # required validator on the next save -- which is what makes a whole
+    # snapshot restore refuse. Invisible on a variant, whose resolved read
+    # inherits vendor/type from the template and looks complete.
+    fid = "6a1a7c00677d648e9ba9d001"
+    for field in sorted(A.REQUIRED_TEXT):
+        for label, mutate in (("absent", "pop"), ("null", "none")):
+            r = valid_res(_id=fid)
+            if mutate == "pop":
+                r.pop(field, None)
+            else:
+                r[field] = None
+            raw = copy.deepcopy(r)
+            try:
+                f, _, _ = A.audit({fid: {"res": r, "raw": raw}}, (), None, None, None, None)
+            except Exception as e:
+                bad(f"required-text-{field}-{label}",
+                    f"audit raised: {type(e).__name__}: {e}")
+                continue
+            rows = [m for rows_ in f.values() for _, m in rows_]
+            want = f"{field} is missing but the schema requires it"
+            if any(want in m for m in rows):
+                ok(f"required-text-{field}-{label}")
+            else:
+                bad(f"required-text-{field}-{label}",
+                    f"the stored document carries no {field}, which the schema declares "
+                    f"required -> the row was written by a path that bypassed validation and "
+                    f"will fail the next save (and take a whole snapshot restore down with "
+                    f"it), and the audit did not mention it.\n    rows were: {rows}")
+
+# --- 17. schema-REQUIRED text that is PRESENT but blank ----------------------
+# The absence branch (`None`) says "is missing"; this is the other half, where
+# the field EXISTS and is empty. Both are rows Mongoose's required validator
+# would refuse, so they can only arrive by a raw-driver sync, a hybrid-sync copy
+# or a restore — and on a variant the RESOLVED read hides them completely,
+# because resolveFilament treats "" as the inherit sentinel and substitutes the
+# template's value. Judged on the STORED read for exactly that reason.
+def case_pin_required_text_present_but_empty():
+    # `vendor` is required WITHOUT trim, so only the exact empty string violates.
+    r = valid_res(vendor="")
+    try:
+        findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    except Exception as e:
+        return bad("required-text-empty-vendor", f"raised: {type(e).__name__}: {e}")
+    hit = any("vendor is the empty string but the schema requires it" in m
+              for rows in findings.values() for _, m in rows)
+    ok("required-text-empty-vendor") if hit else bad(
+        "required-text-empty-vendor",
+        'vendor="" produced no finding -> a row the required validator would refuse '
+        "audits clean, and it stays invisible until POST /api/snapshot refuses the "
+        "ENTIRE backup file")
+
+    # `name` is `{required, trim}`, so Mongoose trims BEFORE the required check.
+    # U+FEFF is the case Python's own str.strip() cannot see: the stored name
+    # looks non-empty here and is trimmed to "" by Mongoose, so the record fails
+    # its own required validator on the next write.
+    r2 = valid_res(name="﻿")
+    try:
+        f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    except Exception as e:
+        return bad("required-text-blank-name", f"raised: {type(e).__name__}: {e}")
+    hit2 = any("name is empty after trimming but the schema requires it" in m
+               for rows in f2.values() for _, m in rows)
+    ok("required-text-blank-name") if hit2 else bad(
+        "required-text-blank-name",
+        "a name of only U+FEFF produced no finding -> Mongoose trims it away and the "
+        "required validator then refuses the row, so the whole restore fails with "
+        "nothing in the report pointing at this filament")
+
+
+# --- 18. NESTED text fields on a spool --------------------------------------
+# One level below the top-level text sweep. Each of these has a real render or
+# search site, so the consequence differs per field — which is the whole reason
+# the site interpolates _nested_text_consequence instead of one fixed sentence.
+# Without a positive assertion the entire per-field table could be deleted and
+# every one of these would audit clean.
+def case_pin_nested_spool_text_shape():
+    for field, value, phrase in (
+            # /inventory's search does `(s.lotNumber || "").toLowerCase()`
+            ("lotNumber", 42, "lotNumber is int"),
+            # straight into an <img src>, which coerces rather than throwing
+            ("photoDataUrl", 7, "photoDataUrl is int"),
+            # computeNextSpoolLabel skips non-string labels, so the roll number
+            # can be handed out twice
+            ("label", 12, "label is int"),
+    ):
+        r = valid_res()
+        r["spools"][0][field] = value
+        try:
+            findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad(f"nested-spool-text-{field}", f"raised on {value!r}: {type(e).__name__}: {e}")
+            continue
+        hit = any(phrase in m and "not a string" in m
+                  for rows in findings.values() for _, m in rows)
+        ok(f"nested-spool-text-{field}") if hit else bad(
+            f"nested-spool-text-{field}",
+            f"spools[0].{field}={value!r} produced no finding -> a value the schema "
+            f"declares as a string is off-type and the record reads clean, while the "
+            f"page or search that consumes it breaks with nothing to explain why")
+
+
+# --- 19. a spool's `retired` flag that is not a boolean ----------------------
+# Read by TRUTHINESS everywhere (`if (spool.retired) continue`), so any non-empty
+# string, {} or [] removes the roll from the spool count, the gram total and the
+# % bar. The inventory checks then deliberately AGREE with the app and stay
+# silent about that spool (case_js_truthiness_and_direction pins that silence),
+# so this report is the only thing that says the stock vanished.
+def case_pin_spool_retired_not_boolean():
+    for value in ("false", {}, 1):
+        r = valid_res()
+        r["spools"][0]["retired"] = value
+        try:
+            findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad("nested-bool-retired", f"raised on {value!r}: {type(e).__name__}: {e}")
+            continue
+        hit = any("retired is" in m and "not a boolean" in m
+                  for rows in findings.values() for _, m in rows)
+        ok(f"nested-bool-retired-{value!r}") if hit else bad(
+            "nested-bool-retired",
+            f"spools[0].retired={value!r} produced no finding -> the app tests it by "
+            f"truthiness and the inventory checks stay silent to match, so a roll that "
+            f"has silently left the count, the gram total and the % bar is reported "
+            f"nowhere at all")
+
+
+# --- 20. ELEMENTS of the spool ledgers must be subdocuments -------------------
+# NESTED_CONTAINER_SHAPES only checks that `usageHistory`/`dryCycles` are lists,
+# so a list of scalars passes it, and every later pass returns quietly on a
+# non-dict — while exportSpools reads `u.grams` and `c.date` straight off these
+# entries. The top-level element check (spools/calibrations/presets/bedTypeTemps)
+# never reaches one level down, so without this the whole nested-element sweep
+# could go and the record would still audit clean.
+def case_pin_ledger_elements_are_subdocuments():
+    for sub, elem in (("usageHistory", "oops"), ("usageHistory", 7),
+                      ("dryCycles", None), ("dryCycles", ["x"])):
+        r = valid_res()
+        r["spools"][0][sub] = [elem]
+        try:
+            findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad(f"ledger-element-{sub}", f"raised on {elem!r}: {type(e).__name__}: {e}")
+            continue
+        hit = any(f"{sub}[0] is" in m and "not a subdocument" in m
+                  for rows in findings.values() for _, m in rows)
+        ok(f"ledger-element-{sub}-{elem!r}") if hit else bad(
+            f"ledger-element-{sub}",
+            f"spools[0].{sub}=[{elem!r}] produced no finding -> the entry is skipped by "
+            f"every check and the record reads clean, while the export and the analytics "
+            f"totals read fields straight off it")
+
+
+# --- 21. text INSIDE the ledger entries -------------------------------------
+# `jobLabel` and `notes` are the deepest text the audit reads, and the site
+# chooses one of three consequences by VALUE shape — React-child crash, refused
+# String cast, or merely off-type. Assert one of each, so neither the site nor
+# the branch that picks its wording can be dropped silently.
+def case_pin_ledger_text_shape():
+    for sub, field, value, phrase in (
+            # a plain object reaching React: the usage disclosure throws
+            ("usageHistory", "jobLabel", {"a": 1},
+             "the usage disclosure renders it as a React child"),
+            # a list: Mongoose's String cast always refuses it
+            ("dryCycles", "notes", ["a"],
+             "refuses the ENTIRE backup file"),
+            # a number: castable and never rendered, so merely off-type — the
+            # honest wording, which a single fixed sentence would get wrong
+            ("dryCycles", "notes", 42,
+             "the stored value simply is not the declared type"),
+    ):
+        r = valid_res()
+        r["spools"][0][sub][0][field] = value
+        try:
+            findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad(f"ledger-text-{sub}.{field}",
+                f"raised on {value!r}: {type(e).__name__}: {e}")
+            continue
+        rows = [m for rows_ in findings.values() for _, m in rows_]
+        hit = any(f"{sub}[0].{field} is" in m and "not a string" in m and phrase in m
+                  for m in rows)
+        ok(f"ledger-text-{sub}.{field}-{value!r}") if hit else bad(
+            f"ledger-text-{sub}.{field}",
+            f"spools[0].{sub}[0].{field}={value!r} produced no finding naming "
+            f"{phrase!r} -> the deepest text the audit reads is off-type and the record "
+            f"is declared clean:\n    " + "\n    ".join(rows))
+
+
+# --- 22. the listing's topology is what keeps an ONLY-CHILD template a template
+# Template-ness is DERIVED from having variants, and it is derived from the
+# records in hand — so a template whose ONLY variant failed its detail read has
+# no child to derive it from and is reclassified as a standalone. Every template
+# check is then skipped in exactly the case where the family is already half
+# unreadable. The listing carries `hasVariants` independently, so it is trusted.
+def case_pin_listing_topology_keeps_template():
+    tpl_id, var_id = "6a1a7c00677d648e9ba9d101", "6a1a7c00677d648e9ba9d102"
+
+    def records():
+        t = valid_res(_id=tpl_id, name="Prusament PLA", parentId=None,
+                      instanceId="tttttttttt")
+        return {tpl_id: rec(t, copy.deepcopy(t))}
+
+    # The listing says this row HAS variants; its only child could not be read.
+    try:
+        findings, parents = run(records(), failed_map={var_id: "HTTPError: 500"},
+                                topology={tpl_id: True, var_id: False})
+    except Exception as e:
+        return bad("topology-template", f"raised: {type(e).__name__}: {e}")
+    rows = [m for rows_ in findings.values() for _, m in rows_]
+    hit = any("(TEMPLATE): holds 1 spool(s) — inventory belongs on a variant" in m
+              for m in rows)
+    if hit:
+        ok("topology-template")
+    else:
+        bad("topology-template",
+            "a template whose only variant failed its detail read was audited as an "
+            "ordinary standalone -> every template check is skipped (the v1.70 #605 "
+            "inventory-on-a-template rows above all), and the missing-core checks it "
+            "is legitimately exempt from can fire instead:\n    " + "\n    ".join(rows))
+    if tpl_id not in parents:
+        bad("topology-template-parents",
+            "the listing flagged this row as having variants, but it is absent from the "
+            "returned parent set -> nothing downstream can treat it as a template")
+    else:
+        ok("topology-template-parents")
+
+    # …and the flag must be READ, not assumed: a listing row that has NO
+    # variants is a standalone, and inventory on it is perfectly normal.
+    try:
+        f2, _ = run(records(), topology={tpl_id: False})
+    except Exception as e:
+        return bad("topology-standalone", f"raised: {type(e).__name__}: {e}")
+    false_alarm = [m for rows_ in f2.values() for _, m in rows_ if "(TEMPLATE)" in m]
+    ok("topology-standalone") if not false_alarm else bad(
+        "topology-standalone",
+        f"a row the listing says has NO variants was reported as a template, so the "
+        f"report demands a promotion the app would refuse: {false_alarm}")
+
+# --- 17. the settings bag's SIZE limits, each pinned to its own consequence --
+# validateSettingsBag enforces a key COUNT and a per-value LENGTH, and the two
+# fail differently: an over-count bloats every detail read while an over-long
+# value is refused outright. Both were emitted with nothing asserting they fire,
+# so either could be deleted whole and the suite stayed green.
+def case_pin_settings_bag_key_count():
+    r = valid_res()
+    r["settings"] = {f"filament_key_{i}": "v" for i in range(A.MAX_SETTINGS_KEYS + 1)}
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    needle = (f"settings holds {A.MAX_SETTINGS_KEYS + 1} keys, past the "
+              f"{A.MAX_SETTINGS_KEYS}-key limit validateSettingsBag enforces")
+    if not [m for rows in f.values() for _, m in rows if needle in m]:
+        return bad("settings-key-count",
+                   f"a bag of {A.MAX_SETTINGS_KEYS + 1} keys is past the limit "
+                   f"validateSettingsBag enforces, so the row cannot be saved from the form "
+                   f"again and it bloats every detail read and export — nothing was reported")
+    # ...and a bag exactly AT the limit is legal, so it must stay silent.
+    r2 = valid_res()
+    r2["settings"] = {f"filament_key_{i}": "v" for i in range(A.MAX_SETTINGS_KEYS)}
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows in f2.values() for _, m in rows if "-key limit" in m]
+    ok("settings-key-count") if not fp else bad(
+        "settings-key-count", f"a bag AT the limit is accepted by the app: {fp}")
+
+
+def case_pin_settings_value_length_limit():
+    r = valid_res()
+    r["settings"] = {"start_filament_gcode": "G" * (A.MAX_SETTING_VALUE_LENGTH + 1)}
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    tail = f"UTF-16 units, past the {A.MAX_SETTING_VALUE_LENGTH}-character limit"
+    if not [m for rows in f.values() for _, m in rows
+            if tail in m and "settings.start_filament_gcode is" in m]:
+        return bad("settings-value-length",
+                   f"a {A.MAX_SETTING_VALUE_LENGTH + 1}-character bag value serialises past the "
+                   f"{A.MAX_SETTING_VALUE_LENGTH}-character limit, so every later save of this "
+                   f"filament is refused — nothing was reported")
+    # The limit counts UTF-16 CODE UNITS. Half as many astral characters is the
+    # same JS length and must still report; a Python len() would call it legal.
+    r2 = valid_res()
+    r2["settings"] = {"start_filament_gcode": "\U0001F600" * (A.MAX_SETTING_VALUE_LENGTH // 2)}
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    if not [m for rows in f2.values() for _, m in rows if tail in m]:
+        return bad("settings-value-length",
+                   f"{A.MAX_SETTING_VALUE_LENGTH // 2} astral characters are "
+                   f"{A.MAX_SETTING_VALUE_LENGTH} UTF-16 units to JavaScript, so the app refuses "
+                   f"the value; measuring Python characters calls it half the size and clean")
+    # a value comfortably under the limit is legal and must stay silent
+    r3 = valid_res()
+    r3["settings"] = {"start_filament_gcode": "G" * (A.MAX_SETTING_VALUE_LENGTH - 2)}
+    f3, _ = run({"a": rec(r3, copy.deepcopy(r3))})
+    fp = [m for rows in f3.values() for _, m in rows if "UTF-16 units" in m]
+    ok("settings-value-length") if not fp else bad(
+        "settings-value-length", f"a value at the limit is accepted by the app: {fp}")
+
+
+# --- 17b. a NESTED value in the flat bag ships as coerced garbage ------------
+# validateSettingsBag checks object-ness, the key count and the length -- never
+# the value's SHAPE -- so a dict or a nested list is written happily and then
+# String()-coerced by every exporter. The two shapes ship DIFFERENTLY, which is
+# why the message names which one: an object becomes the literal
+# "[object Object]" while a nested array is comma-joined, leaving nothing to grep
+# for. Both were emitted from one site nothing asserted.
+def case_pin_settings_nested_value_shapes():
+    r = valid_res()
+    r["settings"] = {"filament_custom_gcode": {"nested": 1}}
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_
+            if "settings.filament_custom_gcode is a dict, but the bag holds scalars" in m]
+    if not rows:
+        return bad("settings-nested-value",
+                   "an OBJECT in the flat settings bag exports as the literal '[object Object]' "
+                   "into both the INI bundle and the Orca JSON, silently losing the value the "
+                   "bag exists to round-trip — nothing was reported")
+    if not any("ships as the literal '[object Object]'" in m for m in rows):
+        return bad("settings-nested-value",
+                   f"the row must name the object consequence so the reader knows what to grep "
+                   f"the export for: {rows}")
+    # a nested ARRAY does NOT produce "[object Object]" -- it comma-joins, and a
+    # re-import reads the join back as one scalar containing commas
+    r2 = valid_res()
+    r2["settings"] = {"filament_retract_length": [[0.8, 0.9]]}
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    rows2 = [m for rows_ in f2.values() for _, m in rows_
+             if "settings.filament_retract_length is a list, but the bag holds scalars" in m]
+    if not rows2:
+        return bad("settings-nested-value",
+                   "a NESTED array in the settings bag is String()-coerced by every exporter "
+                   "and re-imported as one comma-bearing scalar — nothing was reported")
+    if not any("comma-JOINED" in m for m in rows2):
+        return bad("settings-nested-value",
+                   f"the nested-array row must not claim the '[object Object]' consequence, "
+                   f"which only an object produces: {rows2}")
+    # a FLAT array of scalars is the supported #678 shape and must stay silent
+    r3 = valid_res()
+    r3["settings"] = {"filament_retract_length": ["0.8", "0.9"]}
+    f3, _ = run({"a": rec(r3, copy.deepcopy(r3))})
+    fp = [m for rows_ in f3.values() for _, m in rows_ if "the bag holds scalars" in m]
+    ok("settings-nested-value") if not fp else bad(
+        "settings-nested-value",
+        f"an array of scalars is the supported shape since #678 and round-trips: {fp}")
+
+
+# --- 17c. the #1066 printer pin, in BOTH of the shapes the bag can hold ------
+# PrusaSlicer evaluates compatible_printers/_condition as a hard VISIBILITY
+# filter, so a preset duplicated from another printer's profile carries that
+# printer's pin in and the synced preset then appears on NO other machine, with
+# nothing in the slicer to say why. Nothing asserted the audit reports it.
+def case_pin_compatible_printers_pin_reported():
+    for key, value, shown in (
+            ("compatible_printers_condition", "printer_model=~/(MK4S|MK4)/",
+             "printer_model=~/(MK4S|MK4)/"),
+            # a LIST is the supported coStrings shape and imposes the same hard
+            # whitelist; a string-only test called the multi-printer pin healthy
+            ("compatible_printers", ["MK4S", "XL"], "MK4S, XL")):
+        r = valid_res()
+        r["settings"] = {key: value}
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_
+                if f"settings.{key} pins {shown!r}" in m]
+        if not rows:
+            return bad("compatible-printers-pin",
+                       f"settings.{key}={value!r} hides the exported preset on every printer "
+                       f"that fails it, with no in-app cause and no slicer error — nothing "
+                       f"was reported")
+        if not any("hard visibility filter, so the exported preset is HIDDEN" in m
+                   for m in rows):
+            return bad("compatible-printers-pin",
+                       f"the row must state the consequence, or it reads as a harmless "
+                       f"settings note: {rows}")
+    # An empty / whitespace-only pin is "no restriction" -- the app's own way of
+    # clearing it -- and a list of blanks is the same thing. Neither may report.
+    for blank in ("", "   ", ["", "  ", None]):
+        r2 = valid_res()
+        r2["settings"] = {"compatible_printers": blank}
+        f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+        fp = [m for rows_ in f2.values() for _, m in rows_ if "visibility filter" in m]
+        if fp:
+            return bad("compatible-printers-pin",
+                       f"{blank!r} is the cleared state (an explicit empty string is how the "
+                       f"form clears the pin), so reporting it sends the user to un-set "
+                       f"nothing: {fp}")
+    ok("compatible-printers-pin")
+
+
+# --- 17d. the two inventory inputs are named SEPARATELY ----------------------
+# Both rows end in "no % bar", so a test that greps that phrase is satisfied by
+# EITHER of them: the netFilamentWeight site could be deleted whole and the
+# spoolWeight row alone kept the suite green. They are different repairs -- one
+# is the bar's denominator, the other its subtrahend -- so each is pinned by the
+# field it names.
+def case_pin_net_filament_weight_missing():
+    for label, r in (("live spool", valid_res(netFilamentWeight=None)),
+                     # `<= 0` is as unusable a denominator as absent
+                     ("zero net", valid_res(netFilamentWeight=0)),
+                     # a pre-migration roll carries its stock top-level, with no
+                     # spools[] at all -- exactly the record this skill exists for
+                     ("legacy roll", valid_res(netFilamentWeight=None, spools=[],
+                                               totalWeight=800))):
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_
+                if "but netFilamentWeight=" in m and "-> no % bar" in m]
+        if not rows:
+            return bad("net-filament-weight-missing",
+                       f"[{label}] netFilamentWeight is the DENOMINATOR of getRemainingPct, so "
+                       f"without it the remaining bar can never render for stock the app is "
+                       f"tracking — nothing named the field")
+        if any("no spoolWeight (tare)" in m for m in rows):
+            return bad("net-filament-weight-missing",
+                       f"[{label}] the tare is present; naming it sends the repair at the wrong "
+                       f"field: {rows}")
+    # a record with BOTH inputs must stay silent
+    f2, _ = run({"a": rec()})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "netFilamentWeight=" in m]
+    ok("net-filament-weight-missing") if not fp else bad(
+        "net-filament-weight-missing", f"a fully weighed filament was flagged: {fp}")
+
+
+# --- 17e. one malformed number, one row -------------------------------------
+# The numeric sweep walks BOTH reads, and for a standalone the two are the same
+# document -- so without the (path, value) dedup every malformed number is
+# reported twice, once "(resolved)" and once "(stored)", doubling the noise in
+# the commonest case. The dedup must not go the other way either: two GENUINELY
+# different values at one path are two defects.
+def case_pin_numeric_sweep_dedupes_identical_reads():
+    r = valid_res(cost="oops")
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_
+            if "cost is str ('oops'), not a number" in m]
+    if len(rows) != 1:
+        return bad("numeric-sweep-dedup",
+                   f"one malformed `cost` present identically in both reads produced "
+                   f"{len(rows)} rows; a standalone's two reads are the same document, so "
+                   f"every such defect would be reported twice:\n    " + "\n    ".join(rows))
+    # ...and a variant whose reads genuinely DIFFER still reports both, because
+    # resolveFilament reads a stored "" as an inheritance sentinel and shows the
+    # template's number: only the stored read reveals it.
+    f2, _ = run({"a": {"res": valid_res(cost="oops"), "raw": valid_res(cost="bad")}})
+    rows2 = [m for rows_ in f2.values() for _, m in rows_ if "cost is str" in m]
+    if len(rows2) != 2:
+        return bad("numeric-sweep-dedup",
+                   f"two DIFFERENT malformed values at one path are two defects, and the "
+                   f"stored one is the only evidence of a variant's own bad value; got "
+                   f"{len(rows2)} row(s): {rows2}")
+    ok("numeric-sweep-dedup")
+
+# --- 14z. emit sites a mutation sweep proved nothing pinned ------------------
+# Each `add(...)` below could be DELETED from audit.py outright and this suite
+# still ran green: nothing anywhere demonstrated that the check fires at all.
+# So each case asserts the MESSAGE a reader has to act on -- a distinctive
+# substring, never a count, so an unrelated new finding cannot satisfy it -- and
+# pairs it with the negative that keeps the check from later being "fixed" into
+# firing on healthy data.
+
+
+def case_pin_legacy_roll_gross_below_tare():
+    """A pre-spools[] roll whose gross weight sits under its own tare."""
+    # An empty spools[] plus a top-level totalWeight IS the legacy shape
+    # (getRemainingPct's second branch), so such a row never enters the
+    # per-spool loop -- with this site gone the entire legacy population goes
+    # unaudited for the defect, and nothing else in the corpus notices.
+    r = valid_res(spools=[], totalWeight=100, spoolWeight=200, netFilamentWeight=1000)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    hit = [m for m in rows if "legacy gross 100g is below tare 200g" in m]
+    if not hit:
+        bad("pin-legacy-gross-below-tare",
+            "a legacy roll whose 100g gross sits under its 200g tare clamps to 0 -- it reads as "
+            "EMPTY everywhere and spool-check refuses every job, with nothing on screen to say "
+            f"why. Got: {rows}")
+    elif "spool-check refuses every job" not in hit[0]:
+        bad("pin-legacy-gross-below-tare",
+            f"the row must name the consequence the user acts on, not just the numbers: {hit[0]}")
+    else:
+        ok("pin-legacy-gross-below-tare")
+    # ...and a roll merely FINISHED -- a few grams under the tare -- is not a
+    # defect. The tolerance is the whole thing keeping this row off every
+    # used-up spool in the library.
+    r2 = valid_res(spools=[], totalWeight=190, spoolWeight=200, netFilamentWeight=1000)
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "below tare" in m]
+    ok("pin-legacy-gross-below-tare-tolerance") if not fp else bad(
+        "pin-legacy-gross-below-tare-tolerance",
+        f"a 10g shortfall is inside BELOW_TARE_TOLERANCE_G; reporting it would flag every "
+        f"nearly-empty roll and bury the real ones: {fp}")
+
+
+
+def case_pin_every_live_spool_lacks_gross():
+    """The AGGREGATE row: no live spool carries a gross, so there is no bar."""
+    # The per-spool "has no totalWeight" row says the spool contributes nothing.
+    # This one says something strictly worse and separately actionable --
+    # getRemainingPct returns null outright, so the filament has NO bar at all
+    # -- and it is emitted only when every live spool is weightless.
+    r = valid_res()
+    del r["spools"][0]["totalWeight"]
+    s2 = copy.deepcopy(r["spools"][0])
+    s2["_id"] = "6a1a7bf0677d648e9ba9cd20"
+    s2["instanceId"] = "0011223355"
+    s2["label"] = "13"
+    r["spools"].append(s2)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    hit = [m for m in rows if "every live spool is missing its gross weight" in m]
+    if not hit:
+        bad("pin-every-live-spool-lacks-gross",
+            "with no live spool carrying a gross weight getRemainingPct returns null and the "
+            f"filament shows no bar at all -- that has to be said once, for the filament: {rows}")
+    elif "no bar at all" not in hit[0]:
+        bad("pin-every-live-spool-lacks-gross",
+            f"the aggregate row must name the null bar, which is what distinguishes it from the "
+            f"per-spool rows: {hit[0]}")
+    else:
+        ok("pin-every-live-spool-lacks-gross")
+    # ...and ONE weighed sibling is enough for a bar to render, so the aggregate
+    # must stay silent there while the per-spool row still fires.
+    r2 = valid_res()
+    del r2["spools"][0]["totalWeight"]
+    s3 = copy.deepcopy(r2["spools"][0])
+    s3["_id"] = "6a1a7bf0677d648e9ba9cd20"
+    s3["instanceId"] = "0011223355"
+    s3["label"] = "13"
+    s3["totalWeight"] = 950
+    r2["spools"].append(s3)
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    rows2 = [m for rows_ in f2.values() for _, m in rows_]
+    fp = [m for m in rows2 if "every live spool is missing its gross weight" in m]
+    per_spool = [m for m in rows2 if "has no totalWeight" in m]
+    if fp:
+        bad("pin-every-live-spool-lacks-gross-scope",
+            f"a weighed sibling still renders a bar, so the filament-wide row is a false "
+            f"statement here: {fp}")
+    elif not per_spool:
+        bad("pin-every-live-spool-lacks-gross-scope",
+            "the weightless spool still contributes nothing and must keep its own row")
+    else:
+        ok("pin-every-live-spool-lacks-gross-scope")
+
+
+
+def case_pin_promotion_marker_at_uncastable():
+    """`promotionInFlight.at` is a REQUIRED Date inside the v1.70 marker."""
+    # The marker's members are reached by an explicit shape test and nothing
+    # else: the nested date sweeps walk spools, not this embedded path. An
+    # uncastable value here fails Mongoose's cast, so POST /api/snapshot refuses
+    # the whole backup -- and the existing marker cases only ever exercise a
+    # MISSING or non-string member, never a present-but-uncastable `at`.
+    for at in ("not-a-date", True, {}):
+        r = valid_res(promotionInFlight={"token": "tok-1", "at": at})
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows_ in f.values() for _, m in rows_
+               if "promotionInFlight.at=" in m and "cannot be cast to a Date" in m]
+        if not hit:
+            bad("pin-promotion-at-uncastable",
+                f"promotionInFlight.at={at!r} is a required Date that Mongoose's cast refuses, so "
+                f"POST /api/snapshot refuses the ENTIRE backup file -- and the marker also drives "
+                f"the promotion resume path")
+            break
+        if "refuses the ENTIRE backup file" not in hit[0]:
+            bad("pin-promotion-at-uncastable",
+                f"the row must name the whole-backup consequence: {hit[0]}")
+            break
+    else:
+        ok("pin-promotion-at-uncastable")
+    # ...and an epoch-millisecond number is a perfectly castable Date: reporting
+    # it would condemn a marker the app restores happily.
+    r2 = valid_res(promotionInFlight={"token": "tok-1", "at": 1738368000000})
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "promotionInFlight.at=" in m]
+    ok("pin-promotion-at-castable-number") if not fp else bad(
+        "pin-promotion-at-castable-number",
+        f"`new Date(1738368000000)` is valid and Mongoose stores it, so this is a false "
+        f"positive: {fp}")
+
+
+
+def case_pin_top_level_timestamps_uncastable():
+    """`createdAt` / `updatedAt` on the FILAMENT, not on a spool."""
+    # `timestamps: true` makes both real Date paths on the parent document. The
+    # only other date-cast rows in the corpus are the SPOOL's, which carry a
+    # "spool <tag>" prefix -- so the assertion below pins the filament-level
+    # form specifically, and the `timestamps: true` clause is what tells the
+    # reader the field is schema-declared rather than stray import junk.
+    for field in ("createdAt", "updatedAt"):
+        r = valid_res(**{field: "not-a-date"})
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows_ in f.values() for _, m in rows_
+               if f": {field}='not-a-date' cannot be cast to a Date" in m]
+        if not hit:
+            bad("pin-top-level-timestamp-uncastable",
+                f"the filament's own {field} is a declared Date path; an uncastable value there "
+                f"makes POST /api/snapshot refuse the ENTIRE backup file, and no spool-level "
+                f"check can see it")
+            break
+        if "timestamps: true" not in hit[0]:
+            bad("pin-top-level-timestamp-uncastable",
+                f"the row must say the path is schema-declared through `timestamps: true`, or the "
+                f"reader cannot tell it from a stray key: {hit[0]}")
+            break
+    else:
+        ok("pin-top-level-timestamp-uncastable")
+    # ...and real timestamps must stay silent on both.
+    r2 = valid_res(createdAt="2026-02-01T00:00:00Z", updatedAt="2026-02-02T00:00:00Z")
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "cannot be cast to a Date" in m]
+    ok("pin-top-level-timestamp-valid-silent") if not fp else bad(
+        "pin-top-level-timestamp-valid-silent",
+        f"ordinary ISO timestamps were condemned: {fp}")
+
+
+
+def case_pin_tds_url_not_a_string():
+    """tdsUrl holding a non-string at all."""
+    # `_bad_tds_url` judges URL GRAMMAR and answers False for a non-string, and
+    # tdsUrl is exempt from the text sweep (TEXT_SWEEP_EXEMPT above) precisely
+    # so this branch can run -- so with this site gone the shape has NO check
+    # anywhere and audits clean.
+    r = valid_res(tdsUrl={"a": 1})
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_]
+    hit = [m for m in rows if "tdsUrl is dict" in m and "not a string" in m]
+    if not hit:
+        bad("pin-tds-not-a-string",
+            f"a plain object in tdsUrl renders no TDS link (safeHttpUrl gets a non-string) and "
+            f"Mongoose's String cast refuses it outright, so the backup fails: {rows}")
+    elif "String cast refuses it outright" not in hit[0]:
+        bad("pin-tds-not-a-string",
+            f"a value whose only toString is Object.prototype's is the DEFINITE cast failure and "
+            f"the row must say so: {hit[0]}")
+    else:
+        ok("pin-tds-not-a-string")
+    # the other half of the same row: a value that DOES cast through its own
+    # toString still faces the http(s) validator, and the message has to make
+    # that weaker claim rather than promising an outright refusal.
+    r2 = valid_res(tdsUrl={"_id": "x"})
+    f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+    hit2 = [m for rows_ in f2.values() for _, m in rows_ if "tdsUrl is dict" in m]
+    if not hit2:
+        bad("pin-tds-not-a-string-castable",
+            "a populated-ref shape is still not a string, so the detail page renders no link")
+    elif "casts it through its own toString" not in hit2[0]:
+        bad("pin-tds-not-a-string-castable",
+            f"a populated-ref shape casts to its id string and then meets the URL validator -- "
+            f"claiming an outright cast refusal would be a false statement: {hit2[0]}")
+    else:
+        ok("pin-tds-not-a-string-castable")
+
+
+
+def case_pin_tds_url_not_http():
+    """tdsUrl that IS a string but is not an http(s) URL."""
+    # The model runs `new URL(v)` with an http(s) protocol check, so a stored
+    # value like this makes POST /api/snapshot refuse the whole backup -- and
+    # the detail page silently renders no link, which is the symptom a user
+    # actually reports.
+    for v in ("ftp://example.com/pla-tds.pdf", "example.com/pla-tds.pdf", "http://"):
+        r = valid_res(tdsUrl=v)
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows_ in f.values() for _, m in rows_
+               if "is not a valid http(s) URL" in m]
+        if not hit:
+            bad("pin-tds-not-http",
+                f"tdsUrl={v!r} fails the model's isValidTdsUrl, so POST /api/snapshot refuses the "
+                f"ENTIRE backup file and the detail page renders no link")
+            break
+        if "the model's validator rejects it" not in hit[0]:
+            bad("pin-tds-not-http", f"the row must name the validator as the cause: {hit[0]}")
+            break
+    else:
+        ok("pin-tds-not-http")
+    # ...and the shapes `new URL` accepts must stay silent: telling a user to
+    # "fix" a link that already works is worse than saying nothing.
+    for v in ("http:/example.com/x.pdf", "HTTPS://example.com/x.pdf",
+              "  https://example.com/x.pdf  ", "", None):
+        r2 = valid_res(tdsUrl=v)
+        f2, _ = run({"a": rec(r2, copy.deepcopy(r2))})
+        fp = [m for rows_ in f2.values() for _, m in rows_ if "tdsUrl" in m]
+        if fp:
+            bad("pin-tds-not-http-no-false-positive",
+                f"`new URL` accepts {v!r} (special-scheme slash framing, a case-insensitive "
+                f"scheme, C0-and-space trimming) and the schema allows null/\"\": {fp}")
+            break
+    else:
+        ok("pin-tds-not-http-no-false-positive")
+
+# --- 14aa. calibration NOZZLE ref integrity: purged, and tombstoned ---------
+# `nozzle` is the one calibration ref the schema REQUIRES, so unlike printer /
+# bedType a null there is never the supported generic state -- it is a target
+# that no longer resolves. The two dead states fail DIFFERENTLY, and the pass
+# walks the STORED array on purpose, so all three facts need pinning.
+def case_pin_calibration_nozzle_purged():
+    # A permanently deleted nozzle populates as null. /calibration cannot
+    # diameter-match the row and the Prusa fan-out drops it either way -- but
+    # pickRepresentativeCalibration never looks at the nozzle, so with BOTH
+    # scope refs null the row is still baked into the single-preset Orca/Bambu
+    # export. Same defect, opposite blast radius; the row has to say which.
+    for label, generic, phrase in (
+        ("scoped", False, "the tuning is genuinely unreachable"),
+        ("generic", True, "still BAKED into the single-preset Orca/Bambu export"),
+    ):
+        r = valid_res()
+        r["calibrations"][0]["nozzle"] = None
+        if generic:
+            r["calibrations"][0]["printer"] = None
+            r["calibrations"][0]["bedType"] = None
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_
+                if "calibration[0] references a nozzle that no longer exists" in m]
+        if not rows:
+            bad(f"cal-nozzle-purged-{label}",
+                "a calibration whose REQUIRED nozzle ref resolves to null produced no finding "
+                "-> /calibration cannot diameter-match the row and the fan-out drops it, so "
+                "tuning the user entered is silently not applied and the audit says nothing")
+        elif not any(phrase in m for m in rows):
+            bad(f"cal-nozzle-purged-{label}",
+                f"the {label} case must be described with {phrase!r} -- the two states differ in "
+                f"whether the row still reaches the Orca/Bambu export; got: {rows}")
+        else:
+            ok(f"cal-nozzle-purged-{label}")
+
+    # The ref pass reads the STORED array. A variant that inherits
+    # `calibrations` carries the template's array verbatim, so driving this off
+    # the resolved read would name one defect once per inheriting child, at an
+    # index that child does not store.
+    res = valid_res()
+    raw = copy.deepcopy(res)
+    res["calibrations"][0]["nozzle"] = None
+    f2, _ = run({"a": {"res": res, "raw": raw}})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "no longer exists" in m]
+    ok("cal-nozzle-purged-stored-keyed") if not fp else bad(
+        "cal-nozzle-purged-stored-keyed",
+        f"the ref check must be keyed to the document that STORES the array, or an inherited "
+        f"calibrations array is re-reported against every variant: {fp}")
+
+
+def case_pin_calibration_nozzle_tombstoned():
+    # NOT the purged consequence. A soft-deleted nozzle populates as a FULL
+    # document that still carries its diameter, and neither consumer filters
+    # tombstones -- so the tuning is still SERVED and still EXPORTED. What is
+    # lost is the ability to edit it: the row falls out of the FilamentForm grid
+    # into the orphan list. Saying "unreachable" here would be a false alarm.
+    r = valid_res()
+    r["calibrations"][0]["nozzle"] = {"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass",
+                                      "_deletedAt": "2026-01-01T00:00:00.000Z"}
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_
+            if "calibration[0] references soft-deleted nozzle" in m]
+    if not rows:
+        bad("cal-nozzle-tombstoned",
+            "a calibration on a soft-deleted nozzle produced no finding -> the row still ships "
+            "to every slicer while the user has no way to correct it, and the audit is silent")
+    elif not any("'0.4 Brass'" in m for m in rows):
+        bad("cal-nozzle-tombstoned",
+            f"the row must NAME the tombstoned nozzle -- it is gone from the active catalogue, "
+            f"so the name is the only handle the user has on it; got: {rows}")
+    elif not any("still serve this tuning" in m for m in rows):
+        bad("cal-nozzle-tombstoned",
+            f"a tombstoned nozzle still populates with its diameter and neither consumer filters "
+            f"it, so the row must say the tuning is still SERVED, not unreachable; got: {rows}")
+    else:
+        ok("cal-nozzle-tombstoned")
+
+    # a LIVE nozzle is the normal state and must stay silent
+    r2 = valid_res()
+    r2["calibrations"][0]["nozzle"] = {"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass",
+                                       "_deletedAt": None}
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "soft-deleted nozzle" in m]
+    ok("cal-nozzle-live-silent") if not fp else bad(
+        "cal-nozzle-live-silent", f"a live nozzle assignment was flagged as tombstoned: {fp}")
+
+
+# --- 14ab. a bedTypeTemps row with no usable plate key ----------------------
+# `bedType` is schema-required AND is the index into BED_TYPE_KEY_MAP, so a
+# missing / blank / off-type key drops that plate's BOTH temperatures out of the
+# exported preset with nothing in the UI to show for it.
+def case_pin_bed_type_temps_unusable_key():
+    for label, mutate in (
+        ("missing", lambda bt: bt.pop("bedType", None)),
+        ("blank", lambda bt: bt.__setitem__("bedType", "   ")),
+        ("non-string", lambda bt: bt.__setitem__("bedType", 5)),
+    ):
+        r = valid_res()
+        mutate(r["bedTypeTemps"][0])
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_
+                if "bedTypeTemps[0] has no usable bedType" in m]
+        if not rows:
+            bad(f"bedtypetemps-unusable-{label}",
+                f"a {label} bedType key produced no finding -> the Orca export indexes on that "
+                f"exact string, so this plate's temperature AND firstLayerTemperature are "
+                f"silently dropped from the preset")
+        elif not any("silently dropped" in m for m in rows):
+            bad(f"bedtypetemps-unusable-{label}",
+                f"the row must state that the temperatures are dropped from the export; "
+                f"got: {rows}")
+        else:
+            ok(f"bedtypetemps-unusable-{label}")
+
+    # `bedType` is deliberately FREE TEXT (it is matched against user-created
+    # BedType names), so an unrecognised but non-blank surface must stay silent
+    # -- an "expected one of [...]" row would condemn every legitimate plate.
+    r2 = valid_res()
+    r2["bedTypeTemps"][0]["bedType"] = "Smooth PEI Sheet"
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "bedTypeTemps[0]" in m]
+    ok("bedtypetemps-free-text-silent") if not fp else bad(
+        "bedtypetemps-free-text-silent",
+        f"a legitimate user-named bed surface was flagged: {fp}")
+
+
+# --- 14ac. a preset label Mongoose cannot cast ------------------------------
+# The label branches are a LADDER and each rung has a different consequence. A
+# list of STRINGS is the only shape that reaches the cast rung: React flattens
+# and renders it (so it is not the crash case), while Mongoose's String cast
+# rejects every array outright (so it is not the harmless off-type case either).
+def case_pin_preset_label_uncastable_list():
+    r = valid_res()
+    r["presets"][0]["label"] = ["draft", "fast"]
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in f.values() for _, m in rows_ if "presets[0].label" in m]
+    if not rows:
+        bad("preset-label-uncastable-list",
+            "a list label produced no finding at all -> Mongoose refuses to cast it, so POST "
+            "/api/snapshot rejects the ENTIRE backup file and the user finds out at restore time")
+    elif not any("Mongoose's String cast refuses it" in m for m in rows):
+        bad("preset-label-uncastable-list",
+            f"a list label must be described as a CAST FAILURE that refuses the whole backup, "
+            f"not as the harmless 'casts it to a string on the next write' case; got: {rows}")
+    elif not any("list" in m for m in rows):
+        bad("preset-label-uncastable-list",
+            f"the row must name the stored type so the user can find it; got: {rows}")
+    else:
+        ok("preset-label-uncastable-list")
+
+
+# --- 14ad. temperatures judged against the filament's own declared range -----
+# nozzleRangeMin / nozzleRangeMax are exported verbatim
+# (nozzle_temperature_range_low/_high), so a value outside them contradicts the
+# same preset it ships in. EVERY temperature site feeds the one comparison list,
+# which is the whole reason it is a list -- so pin all three.
+def case_pin_nozzle_temp_below_declared_min():
+    for label, mutate, want in (
+        ("top-level", lambda r: r["temperatures"].__setitem__("nozzle", 170),
+         "nozzle 170 is BELOW the declared range min 190"),
+        ("calibration", lambda r: r["calibrations"][0].__setitem__("nozzleTemp", 175),
+         "nozzleTemp 175 is BELOW the declared range min 190"),
+        ("preset", lambda r: r["presets"][0]["temperatures"].__setitem__("nozzle", 175),
+         "preset[draft] nozzle 175 is BELOW the declared range min 190"),
+    ):
+        r = valid_res()
+        mutate(r)
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_ if want in m]
+        ok(f"nozzle-below-range-{label}") if rows else bad(
+            f"nozzle-below-range-{label}",
+            f"a {label} nozzle temperature under the filament's OWN declared minimum produced no "
+            f"row saying so -> the preset exports the range beside a value that contradicts it, "
+            f"and nothing in the app compares the two. Expected {want!r}; got: "
+            + str([m for rows_ in f.values() for _, m in rows_]))
+
+    # the bound is INCLUSIVE: a value sitting exactly on the declared minimum is
+    # in range, and flagging it would fire on every correctly-entered filament
+    r2 = valid_res()
+    r2["temperatures"]["nozzle"] = r2["temperatures"]["nozzleRangeMin"]
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "BELOW the declared range" in m]
+    ok("nozzle-below-range-inclusive") if not fp else bad(
+        "nozzle-below-range-inclusive",
+        f"a temperature exactly ON the declared minimum is in range: {fp}")
+
+
+def case_pin_nozzle_temp_above_declared_max():
+    for label, mutate, want in (
+        ("top-level", lambda r: r["temperatures"].__setitem__("nozzle", 250),
+         "nozzle 250 is ABOVE the declared range max 230"),
+        ("calibration", lambda r: r["calibrations"][0].__setitem__("nozzleTemp", 245),
+         "nozzleTemp 245 is ABOVE the declared range max 230"),
+        ("preset", lambda r: r["presets"][0]["temperatures"].__setitem__("nozzle", 245),
+         "preset[draft] nozzle 245 is ABOVE the declared range max 230"),
+    ):
+        r = valid_res()
+        mutate(r)
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_ if want in m]
+        ok(f"nozzle-above-range-{label}") if rows else bad(
+            f"nozzle-above-range-{label}",
+            f"a {label} nozzle temperature over the filament's OWN declared maximum produced no "
+            f"row saying so -> the slicer is handed a temperature the same preset declares out "
+            f"of range. Expected {want!r}; got: "
+            + str([m for rows_ in f.values() for _, m in rows_]))
+
+    r2 = valid_res()
+    r2["temperatures"]["nozzle"] = r2["temperatures"]["nozzleRangeMax"]
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows_ in f2.values() for _, m in rows_ if "ABOVE the declared range" in m]
+    ok("nozzle-above-range-inclusive") if not fp else bad(
+        "nozzle-above-range-inclusive",
+        f"a temperature exactly ON the declared maximum is in range: {fp}")
+
+# --- 17. the temperature PLAUSIBILITY BANDS, positively ---------------------
+# Three sibling checks judge a temperature against nothing but itself: the
+# nozzle band, the bed band and the standby ceiling. Every existing assertion
+# about temperatures targets the DECLARED-RANGE comparison, so all three could be
+# deleted outright and the suite stayed green — and they are the only checks that
+# survive a row whose declared range is absent, or so wide it asserts nothing.
+def case_pin_nozzle_plausible_band():
+    # BOTH ends of the band, because they fail differently: a value under the
+    # floor is a unit mix-up or a stale import, a value over the ceiling is a
+    # value no hotend in the app's world reaches. The range comparison cannot
+    # substitute for either — here the range is satisfied and the value is still
+    # impossible.
+    for label, over in (("below-floor", {"nozzle": 100, "nozzleRangeMin": 60}),
+                        ("above-ceiling", {"nozzle": 520, "nozzleRangeMax": 560})):
+        r = valid_res()
+        r["temperatures"] = dict(r["temperatures"], **over)
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        band = [m for rows in f.values() for _, m in rows if "plausible band" in m]
+        want = f"nozzle {over['nozzle']}C outside the plausible band for PLA"
+        if any(want in m and "150-450C" in m for m in band):
+            ok(f"nozzle-band-{label}")
+        else:
+            bad(f"nozzle-band-{label}",
+                f"a nozzle temperature of {over['nozzle']}C satisfies its own declared range, so "
+                f"the range comparison stays silent — only the type band catches it, and it is "
+                f"what the filament exports to every slicer: {band}")
+    # The band is chosen BY TYPE, and the message must say so: the floor it
+    # reports is the reason the row fired, so a reader who disagrees with the
+    # band has to be able to see which one was applied.
+    r = valid_res()
+    r["temperatures"] = dict(r["temperatures"], nozzle=100, nozzleRangeMin=60)
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    band = [m for rows in f.values() for _, m in rows if "plausible band" in m]
+    if any("chosen from this row's own type" in m for m in band):
+        ok("nozzle-band-names-its-source")
+    else:
+        bad("nozzle-band-names-its-source",
+            f"the band is derived from `type`, which is stored on every row and can never be "
+            f"inherited — the message states it as CONTEXT so the reader can judge the bound, and "
+            f"without it the row reads as an unexplained number: {band}")
+    # ...and the low-temperature exemption really exempts: a PCL printed at 100C
+    # is correct, and a band that fired here would condemn the whole material.
+    r2 = valid_res(type="PCL", presets=[], calibrations=[])
+    r2["temperatures"] = dict(r2["temperatures"], nozzle=100, nozzleFirstLayer=100,
+                              nozzleRangeMin=60, nozzleRangeMax=120, standby=80)
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows in f2.values() for _, m in rows if "plausible band" in m]
+    ok("nozzle-band-low-temp-exempt") if not fp else bad(
+        "nozzle-band-low-temp-exempt",
+        f"LOW_TEMP_TYPES lowers the floor to {A.LOW_TEMP_FLOOR}C precisely so a PCL is not "
+        f"reported for printing at its real temperature: {fp}")
+
+
+def case_pin_bed_temperature_implausible():
+    r = valid_res()
+    r["temperatures"]["bed"] = 250
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    hit = [m for rows in f.values() for _, m in rows if "bed 250C implausible" in m]
+    ok("bed-band-base") if hit else bad(
+        "bed-band-base",
+        "a bed temperature of 250C exceeds every heated bed the app models and is exported to "
+        "the slicer verbatim; nothing else in the audit judges a bed value on its own")
+    # The same check has to reach the PER-PLATE overrides, because
+    # filamentToOrcaSlicerKeys writes those OVER the base value — an implausible
+    # plate temperature is the one that actually reaches the printer.
+    r2 = valid_res()
+    r2["bedTypeTemps"][0]["temperature"] = 300
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    hit2 = [m for rows in f2.values() for _, m in rows
+            if "bedTypeTemps" in m and "300C implausible" in m]
+    ok("bed-band-per-plate") if hit2 else bad(
+        "bed-band-per-plate",
+        "a per-plate override overrides the base bed temperature in the Orca/Bambu export, so a "
+        "band that only judges `temperatures.bed` passes the value that is actually used")
+    # ...and a hot-but-real bed (PC/PA territory) must stay silent.
+    r3 = valid_res()
+    r3["temperatures"]["bed"] = 120
+    f3, _ = run({"c": rec(r3, copy.deepcopy(r3))})
+    fp = [m for rows in f3.values() for _, m in rows if "implausible" in m]
+    ok("bed-band-no-false-positive") if not fp else bad(
+        "bed-band-no-false-positive",
+        f"120C is an ordinary engineering-polymer bed and must not be reported: {fp}")
+
+
+def case_pin_standby_ceiling():
+    for label, val in (("hot", 600), ("negative", -5)):
+        r = valid_res()
+        r["temperatures"]["standby"] = val
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows in f.values() for _, m in rows
+               if f"standby {val}C implausible" in m]
+        ok(f"standby-band-{label}") if hit else bad(
+            f"standby-band-{label}",
+            f"`temperatures.standby` is judged by nothing else — it is not in the nozzle band's "
+            f"list and has no declared range — so a stored {val} reaches the slicer unreported")
+    # Only the CEILING is meaningful: standby is an idle temperature and sits
+    # legitimately far below the print window, so a low value must stay silent
+    # or every correctly-configured filament reports.
+    r2 = valid_res()
+    r2["temperatures"]["standby"] = 40
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows in f2.values() for _, m in rows if "standby" in m]
+    ok("standby-floor-is-zero") if not fp else bad(
+        "standby-floor-is-zero",
+        f"a 40C standby is a normal idle temperature, not a defect: {fp}")
+
+
+# --- 18. per-spool identity and refs, positively ----------------------------
+def case_pin_spool_missing_instance_id():
+    # Both spellings of ABSENT, because they arrive from different paths: a raw
+    # sync copy drops the key entirely, a form/import round-trip writes "".
+    for label, over in (("null", None), ("empty", "")):
+        r = valid_res()
+        r["spools"][0]["instanceId"] = over
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows in f.values() for _, m in rows if "has no instanceId" in m]
+        if any("selectSpoolForWrite" in m for m in hit):
+            ok(f"spool-instanceid-absent-{label}")
+        else:
+            bad(f"spool-instanceid-absent-{label}",
+                f"an absent spool instanceId passes the shape sweep (it is not the wrong TYPE) "
+                f"and the cross-record identity pass (which indexes non-empty strings only), so "
+                f"with this row gone nothing reports the spool that can no longer be tagged: "
+                f"{hit}")
+        # ...and it must be ONE diagnosis: the contract checks below it judge a
+        # PRESENT id, so a row claiming the id is also malformed would contradict
+        # the row just emitted.
+        other = [m for rows in f.values() for _, m in rows
+                 if "instanceId" in m and "has no instanceId" not in m]
+        ok(f"spool-instanceid-one-diagnosis-{label}") if not other else bad(
+            f"spool-instanceid-one-diagnosis-{label}",
+            f"an ABSENT id was also reported against the present-id contract: {other}")
+
+
+def case_pin_spool_location_ref_uncastable():
+    # The shape a raw sync or an extended-JSON restore actually produces: the
+    # whole joined Location, its `_id` still wrapped. `locationId` is never
+    # populated by either detail read, so this cannot be a legitimate join.
+    r = valid_res()
+    r["spools"][0]["locationId"] = {"_id": {"$oid": "6a1a7bef677d648e9ba9cd8c"},
+                                    "name": "Dry box"}
+    f, _ = run({"a": rec(r, copy.deepcopy(r))})
+    hit = [m for rows in f.values() for _, m in rows if "never populated" in m]
+    if any("dict" in m and "refuses the ENTIRE backup file" in m for m in hit):
+        ok("spool-location-uncastable")
+    else:
+        bad("spool-location-uncastable",
+            f"a non-string `locationId` Mongoose cannot cast fails POST /api/snapshot for the "
+            f"WHOLE library, and the dangling-ref branch below cannot see it (it tests strings "
+            f"only), so with this row gone the backup simply refuses with no explanation: {hit}")
+    # A POPULATED-ref shape whose `_id` is a real id casts CLEANLY (Mongoose reads
+    # `value._id` first), so it must NOT be reported — that is the false positive
+    # this branch is bounded to avoid.
+    r2 = valid_res()
+    r2["spools"][0]["locationId"] = {"_id": "6a1a7bef677d648e9ba9cd8c", "name": "Dry box"}
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    fp = [m for rows in f2.values() for _, m in rows if "locationId" in m]
+    ok("spool-location-castable-silent") if not fp else bad(
+        "spool-location-castable-silent",
+        f"Mongoose's ObjectId cast reads `value._id` before rejecting objects, so this restores "
+        f"and must stay silent: {fp}")
+
+
+def case_pin_spool_text_maxlength():
+    for fld in A.NESTED_TEXT_MAXLEN["spools"]:
+        r = valid_res()
+        r["spools"][0][fld] = "L" * (A.MAX_SPOOL_TEXT_LENGTH + 1)
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        hit = [m for rows in f.values() for _, m in rows
+               if f"{fld} is {A.MAX_SPOOL_TEXT_LENGTH + 1} UTF-16 units" in m]
+        if any(f"{A.MAX_SPOOL_TEXT_LENGTH}-character maxlength" in m for m in hit):
+            ok(f"spool-text-maxlength-{fld}")
+        else:
+            bad(f"spool-text-maxlength-{fld}",
+                f"`spools[].{fld}` carries a schema maxlength, and POST /api/snapshot validates "
+                f"every document before writing — one over-long value 400s the ENTIRE backup, and "
+                f"nothing else in the audit measures a nested string: {hit}")
+    # `maxlength` counts UTF-16 code units, so 101 astral characters are 202 to
+    # the validator and 101 to Python's len() — measuring in Python would let a
+    # backup-breaking value through.
+    r2 = valid_res()
+    r2["spools"][0]["label"] = "\U0001F600" * 101
+    f2, _ = run({"b": rec(r2, copy.deepcopy(r2))})
+    hit2 = [m for rows in f2.values() for _, m in rows if "label is 202 UTF-16 units" in m]
+    ok("spool-text-maxlength-astral") if hit2 else bad(
+        "spool-text-maxlength-astral",
+        "101 emoji are 202 UTF-16 units to Mongoose's maxlength and 101 to Python — a len()-based "
+        "measurement declares this row clean and the backup still refuses")
+    # ...and exactly at the bound is legal, so it must stay silent.
+    r3 = valid_res()
+    r3["spools"][0]["lotNumber"] = "L" * A.MAX_SPOOL_TEXT_LENGTH
+    f3, _ = run({"c": rec(r3, copy.deepcopy(r3))})
+    fp = [m for rows in f3.values() for _, m in rows if "UTF-16 units" in m]
+    ok("spool-text-maxlength-boundary") if not fp else bad(
+        "spool-text-maxlength-boundary",
+        f"`maxlength: {A.MAX_SPOOL_TEXT_LENGTH}` ACCEPTS exactly {A.MAX_SPOOL_TEXT_LENGTH}: {fp}")
+
+# --- 17. the spool dry-cycle ledger: `date` is REQUIRED and has NO default ---
+# Every other date under a spool is optional or defaulted, so this is the one
+# nested date whose plain ABSENCE is fatal. Nothing else in the file looks at
+# it: a dry cycle renders from `tempC`/`durationMin`, so the row reads as
+# complete on the spool card and the defect only surfaces when the user takes a
+# backup -- where it refuses the WHOLE file, not this row.
+def case_pin_dry_cycle_date_required():
+    def rows_for(cycle):
+        rr = valid_res()
+        rr["spools"][0]["dryCycles"] = [cycle]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    # Absent and "" are the SAME defect and must both be reported: Mongoose's
+    # castDate maps "" to null, and null then fails the required validator.
+    for label, cycle in (
+            ("absent", {"tempC": 45, "durationMin": 240, "notes": "overnight"}),
+            ("empty-string", {"tempC": 45, "durationMin": 240, "date": "",
+                              "notes": "overnight"})):
+        hits = [m for m in rows_for(cycle) if "dryCycle has no date" in m]
+        if not hits:
+            return bad("pin-dry-cycle-date-required",
+                       f"a dry cycle with an {label} date was reported as CLEAN -- the schema "
+                       f"REQUIRES it, so POST /api/snapshot refuses the entire backup file and "
+                       f"nothing tells the user which row did it")
+        if not any("spool 0011223344" in m for m in hits):
+            return bad("pin-dry-cycle-date-required",
+                       f"the row does not name the spool it belongs to, so the user cannot find "
+                       f"the offending cycle on a filament with several spools: {hits}")
+    ok("pin-dry-cycle-date-required")
+
+
+# --- 17b. ...and a PRESENT dry-cycle date Mongoose cannot cast ---------------
+# Presence alone is not the property: a value the cast REFUSES fails the restore
+# identically, and the row looks populated to every other check in the file.
+def case_pin_dry_cycle_date_castable():
+    def rows_for(dv):
+        rr = valid_res()
+        rr["spools"][0]["dryCycles"] = [{"tempC": 45, "durationMin": 240, "date": dv,
+                                         "notes": "overnight"}]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    hits = [m for m in rows_for("not-a-date")
+            if "dryCycle date='not-a-date' cannot be cast to a Date" in m]
+    if not hits:
+        return bad("pin-dry-cycle-date-castable",
+                   "an uncastable dry-cycle date was reported as clean -- `date` is REQUIRED on "
+                   "the dry-cycle subdocument, so POST /api/snapshot refuses the whole backup "
+                   "file on it while the spool card still renders the cycle as complete")
+    if not any("refuses the ENTIRE backup file" in m for m in hits):
+        return bad("pin-dry-cycle-date-castable",
+                   f"the row does not state the consequence that makes it worth acting on: "
+                   f"{hits}")
+    # ...and it must stay SILENT on a date V8 accepts. castDate rolls
+    # "2026-02-30" over to March 2nd, so condemning it would be a false alarm on
+    # a value the app stores happily -- the one thing this script must never do.
+    fp = [m for m in rows_for("2026-02-30") if "dryCycle date=" in m]
+    if fp:
+        return bad("pin-dry-cycle-date-castable",
+                   f"`new Date('2026-02-30')` is VALID in V8 (it rolls over), so this backup "
+                   f"restores fine and the row is a false alarm: {fp}")
+    ok("pin-dry-cycle-date-castable")
+
+
+# --- 17c. a usage entry's `source` must be one of the schema's enum values ---
+# Not a cast error and not a restore failure: `source` decides whether analytics
+# counts the entry AT ALL (it filters on exact "manual"), so a typo, an omission
+# or an explicit null silently removes real usage from the manual usage and cost
+# totals while the spool's own ledger still lists it.
+def case_pin_usage_source_enum():
+    def rows_for(entry):
+        rr = valid_res()
+        rr["spools"][0]["usageHistory"] = [entry]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    base = {"grams": 30, "debitedGrams": 30, "date": "2026-02-01", "jobLabel": "bracket"}
+    for shown, entry in (
+            ("'manuel'", dict(base, source="manuel")),   # a typo casts perfectly
+            ("absent", dict(base)),                      # legacy row, predates the field
+            ("None", dict(base, source=None))):          # written past the default
+        want = f"usage source={shown} is not one of"
+        if not [m for m in rows_for(entry) if want in m]:
+            return bad("pin-usage-source-enum",
+                       f"a usage entry with source={shown} was reported as clean -- analytics "
+                       f"counts only exact 'manual', so those grams and their cost drop out of "
+                       f"the totals with the entry still visible on the spool")
+    # Every value the schema DOES declare must stay silent, or the report buries
+    # the real rows under one for every healthy entry in the library.
+    for src in sorted(A.USAGE_SOURCES):
+        fp = [m for m in rows_for(dict(base, source=src)) if "usage source=" in m]
+        if fp:
+            return bad("pin-usage-source-enum",
+                       f"source={src!r} is in the schema's own enum and must not be reported: "
+                       f"{fp}")
+    ok("pin-usage-source-enum")
+
+
+# --- 17d. a usage entry's own `date`, with the consequence that is TRUE ------
+# `date` is DEFAULTED, so a restore fills a missing one in and the loss is in
+# ANALYTICS, which builds `new Date(u.date)` and skips the entry on NaN. The
+# consequence DEPENDS on `source` -- analytics counts only "manual", so telling
+# the owner of a job entry its grams are missing from every total would send
+# them hunting a shortfall that is not there.
+def case_pin_usage_entry_date():
+    def rows_for(entry):
+        rr = valid_res()
+        rr["spools"][0]["usageHistory"] = [entry]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    base = {"grams": 30, "debitedGrams": 30, "jobLabel": "bracket"}
+    for label, entry, what, cons in (
+            ("manual/uncastable",
+             dict(base, source="manual", date="not-a-date"),
+             "usage entry date='not-a-date' cannot be cast to a Date",
+             "missing from every total"),
+            ("job/absent",
+             dict(base, source="job", jobId="6a1a7bef677d648e9ba9cd77"),
+             "usage entry has no date",
+             "through their PrintHistory row"),
+            ("nfc/uncastable",
+             dict(base, source="nfc", date={}),
+             "usage entry date={} cannot be cast to a Date",
+             "never in the totals")):
+        hits = [m for m in rows_for(entry) if what in m]
+        if not hits:
+            return bad("pin-usage-entry-date",
+                       f"[{label}] a ledger entry whose date analytics cannot read was reported "
+                       f"as clean -- the spool's own usage list still shows the grams, so the "
+                       f"mismatch against the totals has no visible cause")
+        if not any(cons in m for m in hits):
+            return bad("pin-usage-entry-date",
+                       f"[{label}] the row states the wrong consequence for source="
+                       f"{entry.get('source')!r}, which points the reader at a shortfall that "
+                       f"does not exist: {hits}")
+    ok("pin-usage-entry-date")
+
+
+# --- 17e. a usage entry with no `grams` -------------------------------------
+# `grams` is schema-REQUIRED, and the numeric bounds sweep skips a None -- so
+# nothing else in the file sees this. Export and analytics both read the missing
+# value as zero, which is exactly why it is invisible: the entry still renders,
+# it just stops contributing.
+def case_pin_usage_entry_grams_required():
+    def rows_for(entry):
+        rr = valid_res()
+        rr["spools"][0]["usageHistory"] = [entry]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    base = {"source": "manual", "date": "2026-02-01", "jobLabel": "bracket"}
+    for label, entry in (("an absent", dict(base)),
+                         ("an explicitly null", dict(base, grams=None))):
+        if not [m for m in rows_for(entry) if "usage entry has no grams" in m]:
+            return bad("pin-usage-entry-grams-required",
+                       f"a usage entry with {label} grams was reported as clean -- export and "
+                       f"analytics read it as zero, so the entry silently vanishes from the "
+                       f"usage totals while still appearing in the spool's ledger")
+    # 0 is a RECORDED value, not an absence: the check tests `is None`, and a
+    # falsy test would invent a defect on a legitimate zero-gram entry.
+    fp = [m for m in rows_for(dict(base, grams=0)) if "has no grams" in m]
+    ok("pin-usage-entry-grams-required") if not fp else bad(
+        "pin-usage-entry-grams-required",
+        f"grams=0 is a real stored value, not an absence: {fp}")
+
+
+# --- 17f. `debitedGrams` is bounded SEMANTICALLY, not by the schema ----------
+# The model declares no min/max on it, so an implausible value is NOT a schema
+# violation and the row must not claim one -- but it is still corrupt, and the
+# API would accept it, so no other surface in the app will ever show it.
+def case_pin_usage_debited_grams_semantic_bound():
+    def rows_for(entry):
+        rr = valid_res()
+        rr["spools"][0]["usageHistory"] = [entry]
+        f, _ = run({rr["_id"]: rec(rr, copy.deepcopy(rr))})
+        return [m for rows_ in f.values() for _, m in rows_]
+
+    base = {"grams": 30, "source": "manual", "date": "2026-02-01", "jobLabel": "bracket"}
+    for val in (-5, 5000000):
+        hits = [m for m in rows_for(dict(base, debitedGrams=val))
+                if f"usage debitedGrams={val} is implausible" in m]
+        if not hits:
+            return bad("pin-usage-debited-grams-semantic-bound",
+                       f"debitedGrams={val} was reported as clean -- there is no schema bound on "
+                       f"this field, so the API accepts it and nothing else in the app will ever "
+                       f"surface it")
+        if not any("no schema bound on this field" in m for m in hits):
+            return bad("pin-usage-debited-grams-semantic-bound",
+                       f"the row must say the bound is SEMANTIC, or it claims a schema violation "
+                       f"the model does not declare: {hits}")
+    # The bound is INCLUSIVE -- a value sitting exactly at the cap is not corrupt
+    # and reporting it would be a false alarm on the largest legitimate entry.
+    fp = [m for m in rows_for({"grams": 1000000, "debitedGrams": 1000000, "source": "manual",
+                               "date": "2026-02-01", "jobLabel": "bracket"})
+          if "debitedGrams" in m]
+    ok("pin-usage-debited-grams-semantic-bound") if not fp else bad(
+        "pin-usage-debited-grams-semantic-bound",
+        f"1,000,000 g is the cap itself and lies inside the bound: {fp}")
+
+# --- 30. missing core spec: the three EFFECTIVE-absence rows ----------------
+# The block guarded by `if not is_template:` emits one row per absent core
+# field, and a mutation sweep deleted each of the three add() calls with the
+# suite still green -- nothing proved any of them fires. They are pinned one
+# per function so a deletion names exactly which field stopped reporting.
+#
+# All three also carry the `_where_to_set` suffix on a VARIANT, which is the
+# only part of the row that tells the reader the repair belongs on the TEMPLATE
+# (one write for the whole colour family) rather than here. The template itself
+# is exempt -- a template legitimately declares no print temperature -- so each
+# case asserts that the TEMPLATE's own fid is NOT reported, which would fail if
+# a future edit dropped the `is_template` guard and started dumping a spurious
+# row on every product line.
+_MC_TID = "6a1a7c00677d648e9ba9d011"
+
+_MC_VID = "6a1a7c00677d648e9ba9d012"
+
+
+
+def _mc_standalone(mutate):
+    """A lone filament missing exactly one core field."""
+    r = valid_res(_id="6a1a7c00677d648e9ba9d010", instanceId="1111111111")
+    mutate(r)
+    return {"6a1a7c00677d648e9ba9d010": rec(r, copy.deepcopy(r))}
+
+
+
+def _mc_family(mutate):
+    """A template + one variant, BOTH missing the same core field.
+
+    Missing on both sides is the shape the emit site describes: nothing is
+    inherited, so `_inh_blame` cannot attribute it and the row has to say
+    where to set it outright.
+    """
+    t = valid_res(_id=_MC_TID, name="Prusament PLA", parentId=None, spools=[],
+                  color=None, colorName=None, totalWeight=None,
+                  lowStockThreshold=None, instanceId="tttttttttt")
+    mutate(t)
+    k = valid_res(_id=_MC_VID, name="Prusament PLA — Blue", parentId=_MC_TID,
+                  instanceId="kkkkkkkkkk")
+    mutate(k)
+    return {_MC_TID: rec(t, copy.deepcopy(t)), _MC_VID: rec(k, copy.deepcopy(k))}
+
+
+
+def _mc_rows(records, needle, topology=None):
+    f, _ = run(records, topology=topology)
+    return [(fid, m) for rows in f.values() for fid, m in rows if needle in m]
+
+
+
+def _drop_temp(key):
+    def mutate(doc):
+        doc["temperatures"] = {k: v for k, v in doc["temperatures"].items() if k != key}
+    return mutate
+
+
+
+def _pin_missing_core(label, needle, mutate, consequence):
+    """Shared body for the three missing-core sites."""
+    got = _mc_rows(_mc_standalone(mutate), needle)
+    if not got:
+        bad(f"missing-core-{label}", consequence)
+    else:
+        ok(f"missing-core-{label}")
+
+    # on a VARIANT the row must name the template as the place to set it
+    fam = _mc_rows(_mc_family(mutate), needle, topology={_MC_TID: True})
+    on_variant = [m for fid, m in fam if fid == _MC_VID]
+    on_template = [m for fid, m in fam if fid == _MC_TID]
+    if not on_variant:
+        bad(f"missing-core-{label}-variant",
+            f"a VARIANT whose template also lacks this field was not reported, so the gap is "
+            f"invisible on the only row that can print with it; expected {needle!r}")
+    elif "inheritable" not in on_variant[0] or "Prusament PLA" not in on_variant[0]:
+        bad(f"missing-core-{label}-variant",
+            f"the row must name the TEMPLATE as the place to set an inheritable field -- setting "
+            f"it on the variant pins the value off the template for that colour only; got: "
+            f"{on_variant}")
+    else:
+        ok(f"missing-core-{label}-variant")
+    if on_template:
+        bad(f"missing-core-{label}-template-exempt",
+            f"a TEMPLATE legitimately declares no core spec of its own, and reporting it sends "
+            f"the user to edit the one row where the field is not required; got: {on_template}")
+    else:
+        ok(f"missing-core-{label}-template-exempt")
+
+
+
+def case_pin_missing_nozzle_temperature():
+    _pin_missing_core(
+        "nozzle", "no nozzle temperature", _drop_temp("nozzle"),
+        "a filament with no effective nozzle temperature produced no finding -- it exports to "
+        "every slicer with no print temperature, and the user discovers it at the print head")
+
+
+
+def case_pin_missing_bed_temperature():
+    _pin_missing_core(
+        "bed", "no bed temperature", _drop_temp("bed"),
+        "a filament with no effective bed temperature produced no finding -- the slicer preset "
+        "carries no bed temperature and the first layer has nothing to stick to")
+
+
+
+def case_pin_missing_density():
+    def drop_density(doc):
+        doc["density"] = None
+
+    _pin_missing_core(
+        "density", "no density", drop_density,
+        "a filament with no effective density produced no finding -- every gram/length and "
+        "remaining-weight calculation that divides by it is silently wrong or absent")
+
+
+# --- 31. a carrier whose variants are ALL TRASHED ---------------------------
+# `is_template` is derived from LIVE children, so this row audits as an ordinary
+# standalone and every template check below it is skipped -- while each of its
+# trashed variants answers 409 parent_must_be_template_first on restore (#1103).
+# Nothing else in the report says the family is stuck, so if this add() goes the
+# user is left with an unrestorable family and a clean bill of health.
+
+
+
+# --- 31. a carrier whose variants are ALL TRASHED ---------------------------
+# `is_template` is derived from LIVE children, so this row audits as an ordinary
+# standalone and every template check below it is skipped -- while each of its
+# trashed variants answers 409 parent_must_be_template_first on restore (#1103).
+# Nothing else in the report says the family is stuck, so if this add() goes the
+# user is left with an unrestorable family and a clean bill of health.
+def case_pin_trashed_variant_family_is_stuck():
+    fid = "6a1a7c00677d648e9ba9d013"
+    r = valid_res(_id=fid, name="Legacy Family", instanceId="2222222222",
+                  _hasTrashedVariants=True)          # spools + colour from the fixture
+    got = _mc_rows({fid: rec(r, copy.deepcopy(r))}, "has TRASHED variants and still carries")
+    if not got:
+        return bad("trashed-variant-family-stuck",
+                   "a parent whose only variants are TRASHED, still carrying promotable state, "
+                   "produced no finding -- it is not `is_template` so every template check is "
+                   "skipped, and restore answers 409 parent_must_be_template_first for every one "
+                   "of those variants with nothing in the report explaining why")
+    msg = got[0][1]
+    if "1 spool(s)" not in msg:
+        bad("trashed-variant-family-carried",
+            f"the row must name WHAT the parent carries -- that is the list the user has to clear "
+            f"or promote -- and the spool count is the part promotion preserves; got: {msg}")
+    elif "parent_must_be_template_first" not in msg:
+        bad("trashed-variant-family-consequence",
+            f"the row must name the 409 the user will actually hit on restore, or it reads as "
+            f"cosmetic tidiness; got: {msg}")
+    else:
+        ok("trashed-variant-family-stuck")
+
+    # a LIVE parent takes the ordinary template rows instead, not this one
+    tid, vid = "6a1a7c00677d648e9ba9d014", "6a1a7c00677d648e9ba9d015"
+    t = valid_res(_id=tid, name="Live Family", instanceId="3333333333",
+                  _hasTrashedVariants=True)
+    v = valid_res(_id=vid, name="Live Family — Blue", parentId=tid, instanceId="4444444444")
+    dup = _mc_rows({tid: rec(t, copy.deepcopy(t)), vid: rec(v, copy.deepcopy(v))},
+                   "has TRASHED variants and still carries")
+    ok("trashed-variant-live-parent-exempt") if not dup else bad(
+        "trashed-variant-live-parent-exempt",
+        f"a parent with LIVE variants is already reported by the template block; adding this row "
+        f"on top double-reports the same state with a different remedy: {dup}")
+
+
+# --- 32. a row that is BOTH a variant and a parent ---------------------------
+# No API path produces this shape, so it arrives by raw sync copy / restore /
+# direct DB edit -- and it silently disables the app's own repair for every
+# other template row on the same filament (`/promote` refuses with 400
+# not_a_template). Without this add() the reader is handed remedies that cannot
+# run, with no indication why.
+
+
+
+# --- 32. a row that is BOTH a variant and a parent ---------------------------
+# No API path produces this shape, so it arrives by raw sync copy / restore /
+# direct DB edit -- and it silently disables the app's own repair for every
+# other template row on the same filament (`/promote` refuses with 400
+# not_a_template). Without this add() the reader is handed remedies that cannot
+# run, with no indication why.
+def case_pin_nested_template_shape():
+    gid, tid, vid = ("6a1a7c00677d648e9ba9d016", "6a1a7c00677d648e9ba9d017",
+                     "6a1a7c00677d648e9ba9d018")
+    g = valid_res(_id=gid, name="Grandparent", parentId=None, spools=[], color=None,
+                  colorName=None, totalWeight=None, lowStockThreshold=None,
+                  instanceId="5555555555")
+    mid = valid_res(_id=tid, name="Mid", parentId=gid, spools=[], color=None,
+                    colorName=None, totalWeight=None, lowStockThreshold=None,
+                    instanceId="6666666666")
+    leaf = valid_res(_id=vid, name="Leaf", parentId=tid, instanceId="7777777777")
+    got = _mc_rows({gid: rec(g, copy.deepcopy(g)), tid: rec(mid, copy.deepcopy(mid)),
+                    vid: rec(leaf, copy.deepcopy(leaf))},
+                   "also carries parentId")
+    if not got:
+        return bad("nested-template-shape",
+                   "a row that is BOTH a variant and a parent produced no finding -- it is a shape "
+                   "createVariantGated refuses and no API path can produce, and it makes "
+                   "/promote answer 400 not_a_template so every other remedy in this report is "
+                   "unavailable on that filament")
+    fid, msg = got[0]
+    if fid != tid:
+        bad("nested-template-attribution",
+            f"the row must be attributed to the middle row that holds the bad parentId, not to "
+            f"{fid} -- that is the document the user has to PUT; got: {msg}")
+    elif "Grandparent" not in msg:
+        bad("nested-template-names-grandparent",
+            f"the row must name the grandparent, because unlinking is the repair and the user has "
+            f"to copy down anything this row was inheriting from it first; got: {msg}")
+    elif "not_a_template" not in msg:
+        bad("nested-template-names-refusal",
+            f"the row must say /promote refuses this shape, or the reader tries the remedy the "
+            f"rows below prescribe and gets an unexplained 400; got: {msg}")
+    else:
+        ok("nested-template-shape")
+
+    # an ordinary template must NOT collect this row
+    t2, v2 = "6a1a7c00677d648e9ba9d019", "6a1a7c00677d648e9ba9d01a"
+    a = valid_res(_id=t2, name="Flat", parentId=None, spools=[], color=None, colorName=None,
+                  totalWeight=None, lowStockThreshold=None, instanceId="8888888888")
+    b = valid_res(_id=v2, name="Flat — Blue", parentId=t2, instanceId="9999999999")
+    fp = _mc_rows({t2: rec(a, copy.deepcopy(a)), v2: rec(b, copy.deepcopy(b))},
+                  "also carries parentId")
+    ok("nested-template-flat-exempt") if not fp else bad(
+        "nested-template-flat-exempt",
+        f"a normal template has no parentId and must not be accused of the nested shape -- the "
+        f"row tells the user to PUT parentId:null on a row that has none: {fp}")
+
+
+# --- 33. a template still carrying a TEMPLATE_STRIP field --------------------
+# The v1.70 model says a template holds no colour and no inventory, and this is
+# the row that reports the leftovers. Its REMEDY is chosen from the parent's
+# whole state, and getting that wrong destroys data -- prescribing a null where
+# promotion would have MOVED the value onto a variant. So both branches of the
+# choice are pinned through the one emit site.
+
+
+
+# --- 33. a template still carrying a TEMPLATE_STRIP field --------------------
+# The v1.70 model says a template holds no colour and no inventory, and this is
+# the row that reports the leftovers. Its REMEDY is chosen from the parent's
+# whole state, and getting that wrong destroys data -- prescribing a null where
+# promotion would have MOVED the value onto a variant. So both branches of the
+# choice are pinned through the one emit site.
+def case_pin_template_still_carries_field():
+    tid, vid = "6a1a7c00677d648e9ba9d01b", "6a1a7c00677d648e9ba9d01c"
+
+    def family(**over):
+        # a CLEAN template: none of TEMPLATE_STRIP, no spools. `over` then puts
+        # back exactly one leftover, so each assertion below is isolated.
+        base = {"_id": tid, "name": "Family", "parentId": None, "spools": [],
+                "color": None, "colorName": None, "totalWeight": None,
+                "lowStockThreshold": None, "instanceId": "aaaaaaaaa1"}
+        base.update(over)
+        t = valid_res(**base)
+        v = valid_res(_id=vid, name="Family — Blue", parentId=tid, instanceId="bbbbbbbbb1")
+        return {tid: rec(t, copy.deepcopy(t)), vid: rec(v, copy.deepcopy(v))}
+
+    # 1. promote_runs is TRUE (a stored colour) -> the remedy must be promotion,
+    #    which MOVES the value onto a new variant.
+    got = _mc_rows(family(color="#ff0000"), "still carries color=")
+    if not got:
+        bad("template-carries-colour",
+            "a TEMPLATE still holding its own colour produced no finding -- v1.70 says a template "
+            "is colourless, and the leftover renders as the product line's colour across the app")
+    elif "Convert to template" not in got[0][1]:
+        bad("template-carries-colour-remedy",
+            f"with promotable state present the remedy is promotion, which MOVES the value onto a "
+            f"new variant; prescribing anything else here loses it: {got[0][1]}")
+    else:
+        ok("template-carries-colour")
+
+    # 2. promote_runs is FALSE (lowStockThreshold alone is not a promotion
+    #    trigger) -> promotion would move nothing, so the null IS the remedy.
+    got = _mc_rows(family(lowStockThreshold=100), "still carries lowStockThreshold=")
+    if not got:
+        bad("template-carries-threshold",
+            "a TEMPLATE still holding a low-stock threshold produced no finding -- it alarms "
+            "forever against an empty template while the variants holding the rolls have none")
+    elif "nothing_to_convert" not in got[0][1]:
+        bad("template-carries-threshold-remedy",
+            f"a threshold alone does not satisfy parentPromotionState, so /promote answers 400 "
+            f"nothing_to_convert and the row must say so rather than sending the user in a "
+            f"circle: {got[0][1]}")
+    else:
+        ok("template-carries-threshold")
+
+    # a template carrying NOTHING must stay silent
+    fp = _mc_rows(family(), "(TEMPLATE): still carries")
+    ok("template-carries-clean-exempt") if not fp else bad(
+        "template-carries-clean-exempt",
+        f"a clean template carries none of TEMPLATE_STRIP and must produce no row: {fp}")
+
+# --- 17. the template / inheritance-shape block, pinned positively -----------
+# Every emit site below survived a delete-the-statement sweep with the suite
+# green: nothing proved they fire at all. They are the block that answers "is
+# this row still a legal member of a v1.70 family?", and each one reports a
+# state the app itself cannot repair once it is wrong, so a silent check here is
+# the worst kind — the report reads clean and the family stays broken.
+#
+# The helpers build a HEALTHY template/variant pair (the same construction
+# case_valid uses for `valid-family`, hoisted so a pin can be introduced one
+# field at a time). A healthy variant STORES nothing it inherits, so any single
+# re-added value is the only pin in the fixture and the assertion below can be
+# exact rather than a count.
+_PIN_INHERITED = (list(A.PIN_CHECK_FIELDS) + list(A.PIN_CHECK_ARRAYS)
+                  + [f"temperatures.{s}" for s in A.PIN_CHECK_TEMPS]
+                  + ["compatibleNozzles"])
+
+
+
+def _pin_strip_inheritables(raw):
+    """Turn a copy of a resolved read into the STORED read of a healthy variant.
+
+    resolveFilament's sentinel is `null`/`""` for scalars and an EMPTY array for
+    the whole-array fields, so "inherits it" means "does not store it" — which is
+    exactly what the pinned block reports the absence of.
+    """
+    for f in A.PIN_CHECK_FIELDS:
+        raw.pop(f, None)
+    for f in A.PIN_CHECK_ARRAYS:
+        raw[f] = []
+    raw["temperatures"] = {k: v for k, v in raw["temperatures"].items()
+                           if k not in A.PIN_CHECK_TEMPS}
+    raw["settings"] = {}
+    raw["tdsUrl"] = None
+    raw["inherits"] = None
+    raw["compatibleNozzles"] = []
+    return raw
+
+
+
+_PIN_TPL = "6a1a7c11677d648e9ba9e001"
+
+_PIN_VAR = "6a1a7c11677d648e9ba9e002"
+
+
+
+def _pin_family(pin=None):
+    """A clean template + fully-inheriting variant; `pin(res, raw)` adds ONE pin."""
+    tpl = valid_res(_id=_PIN_TPL, name="PLA Family", parentId=None, spools=[],
+                    color=None, colorName=None, totalWeight=None,
+                    lowStockThreshold=None, instanceId="tttttttttt")
+    var = valid_res(_id=_PIN_VAR, name="PLA Family — Blue", parentId=_PIN_TPL,
+                    instanceId="kkkkkkkkkk")
+    var["_inherited"] = list(_PIN_INHERITED)
+    vraw = _pin_strip_inheritables(copy.deepcopy(var))
+    if pin:
+        pin(var, vraw)
+    return ({_PIN_TPL: rec(tpl, copy.deepcopy(tpl)),
+             _PIN_VAR: {"res": var, "raw": vraw}},
+            {_PIN_TPL: True})
+
+
+
+def _pin_rows(records, topology=None):
+    findings, _ = run(records, topology=topology)
+    return [(fid, m) for rows_ in findings.values() for fid, m in rows_]
+
+
+# --- 17a. a TEMPLATE still holding physical rolls ---------------------------
+# The one row in the template block whose remedy cannot be guessed: POST
+# .../spools onto a template is refused (template_no_spools) and a PUT carrying
+# `spools: []` is ACCEPTED and DELETES the rolls, so the obvious "clear it" move
+# destroys inventory. Only /promote relocates them, `_id` and `instanceId`
+# intact, which is what keeps printed QR labels and written NFC tags resolving.
+
+
+
+# --- 17a. a TEMPLATE still holding physical rolls ---------------------------
+# The one row in the template block whose remedy cannot be guessed: POST
+# .../spools onto a template is refused (template_no_spools) and a PUT carrying
+# `spools: []` is ACCEPTED and DELETES the rolls, so the obvious "clear it" move
+# destroys inventory. Only /promote relocates them, `_id` and `instanceId`
+# intact, which is what keeps printed QR labels and written NFC tags resolving.
+def case_pin_template_still_holds_spools():
+    tpl_id, var_id = "6a1a7c22677d648e9ba9e101", "6a1a7c22677d648e9ba9e102"
+    tpl = valid_res(_id=tpl_id, name="PETG Family", parentId=None, color=None,
+                    colorName=None, totalWeight=None, lowStockThreshold=None,
+                    instanceId="1111111111")
+    # the legacy shape: a pre-v1.70 parent that kept its own roll
+    tpl["spools"] = [dict(copy.deepcopy(tpl["spools"][0]),
+                          _id="6a1a7c22677d648e9ba9e1a1",
+                          instanceId="2222222222", label="90")]
+    var = valid_res(_id=var_id, name="PETG Family — Green", parentId=tpl_id,
+                    instanceId="3333333333")
+    var["_inherited"] = list(_PIN_INHERITED)
+    vraw = _pin_strip_inheritables(copy.deepcopy(var))
+    vraw["spools"] = [dict(copy.deepcopy(var["spools"][0]),
+                           _id="6a1a7c22677d648e9ba9e1a2",
+                           instanceId="4444444444", label="91")]
+    var["spools"] = copy.deepcopy(vraw["spools"])
+    rows = _pin_rows({tpl_id: rec(tpl, copy.deepcopy(tpl)),
+                      var_id: {"res": var, "raw": vraw}}, {tpl_id: True})
+    hit = [m for fid, m in rows
+           if fid == tpl_id
+           and "(TEMPLATE): holds 1 spool(s) — inventory belongs on a variant" in m]
+    if not hit:
+        bad("pin-template-holds-spools",
+            "a TEMPLATE still holding a physical roll produced no finding — the rolls are "
+            "unreachable from the app (POST .../spools onto a template is refused) and the "
+            "obvious cleanup, PUT spools:[], DELETES them:\n    "
+            + "\n    ".join(m for _, m in rows))
+    elif "/promote" not in hit[0] or "deletes the rolls" not in hit[0]:
+        bad("pin-template-holds-spools",
+            f"the row was emitted without naming /promote as the ONLY move that preserves "
+            f"the rolls, so the reader is left with PUT spools:[] — which deletes them: {hit[0]}")
+    else:
+        ok("pin-template-holds-spools")
+    # ...and the VARIANT holding a roll is the INTENDED state — reporting it too
+    # would make the real finding unfindable in a real library.
+    fp = [m for fid, m in rows if fid == var_id and "inventory belongs on a variant" in m]
+    ok("pin-variant-may-hold-spools") if not fp else bad(
+        "pin-variant-may-hold-spools",
+        f"a variant holding its own roll — where inventory BELONGS — was reported: {fp}")
+
+
+# --- 17b. parentId pointing at its own row ----------------------------------
+# resolveFilament reads the parent by id; a self-link resolves to the row itself,
+# so nothing is inherited while `_inherited` and the detail page still present it
+# as a variant. It is also unproducible through the write API, so it only ever
+# arrives by sync copy / restore / direct edit — the cases nothing else catches.
+
+
+
+# --- 17b. parentId pointing at its own row ----------------------------------
+# resolveFilament reads the parent by id; a self-link resolves to the row itself,
+# so nothing is inherited while `_inherited` and the detail page still present it
+# as a variant. It is also unproducible through the write API, so it only ever
+# arrives by sync copy / restore / direct edit — the cases nothing else catches.
+def case_pin_parent_points_at_itself():
+    fid_self = "6a1a7c33677d648e9ba9e201"
+    row = valid_res(_id=fid_self, name="Loop PLA", parentId=fid_self, spools=[],
+                    color=None, colorName=None, totalWeight=None,
+                    lowStockThreshold=None, instanceId="5555555555")
+    rows = _pin_rows({fid_self: rec(row, copy.deepcopy(row))})
+    hit = [m for fid, m in rows
+           if fid == fid_self and "parentId points at itself" in m]
+    if not hit:
+        bad("pin-self-parent",
+            "a row whose parentId is its OWN _id produced no self-link finding — it reads as "
+            "a normal variant everywhere while inheriting nothing:\n    "
+            + "\n    ".join(m for _, m in rows))
+    elif "nothing can inherit" not in hit[0]:
+        bad("pin-self-parent",
+            f"the self-link row no longer states the consequence, so a reader cannot tell it "
+            f"from a cosmetic id oddity: {hit[0]}")
+    else:
+        ok("pin-self-parent")
+    # a legitimate parent link must NOT be read as a self-link
+    fp = [m for _, m in _pin_rows(*_pin_family()) if "points at itself" in m]
+    ok("pin-self-parent-negative") if not fp else bad(
+        "pin-self-parent-negative",
+        f"a healthy variant of a DIFFERENT template was reported as self-parented: {fp}")
+
+
+# --- 17c. a parent that is itself a variant (nested inheritance) -------------
+# resolveFilament walks exactly ONE level. A grandchild therefore resolves only
+# what its immediate parent STORES — every value that parent inherits from the
+# grandparent reads as empty here, while the chain looks complete in the UI.
+
+
+
+# --- 17c. a parent that is itself a variant (nested inheritance) -------------
+# resolveFilament walks exactly ONE level. A grandchild therefore resolves only
+# what its immediate parent STORES — every value that parent inherits from the
+# grandparent reads as empty here, while the chain looks complete in the UI.
+def case_pin_parent_is_itself_a_variant():
+    gp, pa, ch = ("6a1a7c44677d648e9ba9e301", "6a1a7c44677d648e9ba9e302",
+                  "6a1a7c44677d648e9ba9e303")
+    grand = valid_res(_id=gp, name="ASA Family", parentId=None, spools=[], color=None,
+                      colorName=None, totalWeight=None, lowStockThreshold=None,
+                      instanceId="6666666666")
+    mid = valid_res(_id=pa, name="ASA Family — Grey", parentId=gp, spools=[], color=None,
+                    colorName=None, totalWeight=None, lowStockThreshold=None,
+                    instanceId="7777777777")
+    mid["_inherited"] = list(_PIN_INHERITED)
+    mid_raw = _pin_strip_inheritables(copy.deepcopy(mid))
+    kid = valid_res(_id=ch, name="ASA Family — Grey Matte", parentId=pa,
+                    instanceId="8888888888")
+    kid["_inherited"] = list(_PIN_INHERITED)
+    kid_raw = _pin_strip_inheritables(copy.deepcopy(kid))
+    kid_raw["spools"] = [dict(copy.deepcopy(kid["spools"][0]),
+                              _id="6a1a7c44677d648e9ba9e3a1",
+                              instanceId="9999999999", label="77")]
+    kid["spools"] = copy.deepcopy(kid_raw["spools"])
+    rows = _pin_rows({gp: rec(grand, copy.deepcopy(grand)),
+                      pa: {"res": mid, "raw": mid_raw},
+                      ch: {"res": kid, "raw": kid_raw}}, {gp: True, pa: True})
+    hit = [m for fid, m in rows
+           if fid == ch and "is itself a variant (nested inheritance)" in m]
+    if not hit:
+        bad("pin-nested-inheritance",
+            "a two-level parent chain produced no finding against the GRANDCHILD — every value "
+            "its parent inherits reads as empty on this row and in every slicer export, while "
+            "the family looks complete:\n    " + "\n    ".join(m for _, m in rows))
+    elif "only one level resolves" not in hit[0] or "ASA Family — Grey" not in hit[0]:
+        bad("pin-nested-inheritance",
+            f"the nested-inheritance row no longer names the offending parent and what is lost, "
+            f"so it cannot be acted on: {hit[0]}")
+    else:
+        ok("pin-nested-inheritance")
+    # a ONE-level family is the supported shape and must stay silent
+    fp = [m for _, m in _pin_rows(*_pin_family()) if "nested inheritance" in m]
+    ok("pin-nested-negative") if not fp else bad(
+        "pin-nested-negative",
+        f"an ordinary template/variant pair was reported as nested inheritance: {fp}")
+
+
+# --- 17d. a scalar stored identically to the template ------------------------
+# A pin is invisible: the variant renders the right value today, and keeps
+# rendering it after the template is corrected, so a library-wide fix silently
+# skips exactly the rows that stored a copy.
+
+
+
+# --- 17d. a scalar stored identically to the template ------------------------
+# A pin is invisible: the variant renders the right value today, and keeps
+# rendering it after the template is corrected, so a library-wide fix silently
+# skips exactly the rows that stored a copy.
+def case_pin_scalar_field_pinned_to_template():
+    def pin(res, raw):
+        raw["density"] = 1.24                    # identical to the template's
+        res["_inherited"].remove("density")      # ...so it is no longer inherited
+
+    rows = _pin_rows(*_pin_family(pin))
+    hit = [m for fid, m in rows
+           if fid == _PIN_VAR
+           and "stores density=1.24, identical to template 'PLA Family' -> pinned copy" in m]
+    if not hit:
+        bad("pin-scalar-copy",
+            "a variant storing its template's own density verbatim was not reported — it stops "
+            "tracking the template silently, so correcting the template leaves this row wrong:\n    "
+            + "\n    ".join(m for _, m in rows))
+    else:
+        ok("pin-scalar-copy")
+    # the healthy variant (density absent from the stored read) must stay silent,
+    # or the check would flag the very shape it is telling people to adopt
+    fp = [m for _, m in _pin_rows(*_pin_family()) if "stores density=" in m]
+    ok("pin-scalar-copy-negative") if not fp else bad(
+        "pin-scalar-copy-negative",
+        f"a variant that stores NO density was reported as pinning it: {fp}")
+
+
+# --- 17e. a temperature subfield stored identically to the template ----------
+# `temperatures` resolves subfield by subfield, so one copied nozzle temp pins
+# that subfield alone — the rest of the block keeps tracking and the row looks
+# healthy in every summary.
+
+
+
+# --- 17e. a temperature subfield stored identically to the template ----------
+# `temperatures` resolves subfield by subfield, so one copied nozzle temp pins
+# that subfield alone — the rest of the block keeps tracking and the row looks
+# healthy in every summary.
+def case_pin_temperature_subfield_pinned():
+    def pin(res, raw):
+        raw["temperatures"]["nozzle"] = 210
+        res["_inherited"].remove("temperatures.nozzle")
+
+    rows = _pin_rows(*_pin_family(pin))
+    hit = [m for fid, m in rows
+           if fid == _PIN_VAR
+           and "stores temperatures.nozzle=210, identical to template 'PLA Family'" in m]
+    if not hit:
+        bad("pin-temperature-copy",
+            "a variant storing its template's nozzle temperature verbatim was not reported — "
+            "subfield inheritance stops for that one key and a later template retune never "
+            "reaches this row:\n    " + "\n    ".join(m for _, m in rows))
+    elif "pinned copy" not in hit[0]:
+        bad("pin-temperature-copy",
+            f"the temperature pin was emitted without naming it a pinned copy: {hit[0]}")
+    else:
+        ok("pin-temperature-copy")
+    fp = [m for _, m in _pin_rows(*_pin_family()) if "stores temperatures." in m]
+    ok("pin-temperature-copy-negative") if not fp else bad(
+        "pin-temperature-copy-negative",
+        f"a variant that stores NO temperature subfields was reported as pinning one: {fp}")
+
+
+# --- 17f. a whole inheritable ARRAY stored identically to the template -------
+# Arrays inherit WHOLE: an empty stored array is the sentinel, a non-empty one
+# overrides outright. A copy is therefore a total override that looks like an
+# inherited value — and for optTags it also freezes the abrasive/finish tags.
+
+
+
+# --- 17f. a whole inheritable ARRAY stored identically to the template -------
+# Arrays inherit WHOLE: an empty stored array is the sentinel, a non-empty one
+# overrides outright. A copy is therefore a total override that looks like an
+# inherited value — and for optTags it also freezes the abrasive/finish tags.
+def case_pin_whole_array_pinned():
+    def pin(res, raw):
+        raw["optTags"] = [4]                     # the template's array, copied
+        res["_inherited"].remove("optTags")
+
+    rows = _pin_rows(*_pin_family(pin))
+    hit = [m for fid, m in rows
+           if fid == _PIN_VAR
+           and "stores its own optTags (1 entry) identical to template 'PLA Family'" in m]
+    if not hit:
+        bad("pin-array-copy",
+            "a variant storing a copy of its template's whole optTags array was not reported — "
+            "a non-empty array overrides outright, so the template's tags never reach this row "
+            "again:\n    " + "\n    ".join(m for _, m in rows))
+    elif "pinned copy" not in hit[0]:
+        bad("pin-array-copy",
+            f"the array pin was emitted without naming it a pinned copy: {hit[0]}")
+    else:
+        ok("pin-array-copy")
+    # an EMPTY stored array is the inherit sentinel and must never be reported
+    fp = [m for _, m in _pin_rows(*_pin_family()) if "stores its own optTags" in m]
+    ok("pin-array-copy-negative") if not fp else bad(
+        "pin-array-copy-negative",
+        f"a variant whose optTags array is empty — the inherit sentinel — was reported as "
+        f"pinning it: {fp}")
+
+# --- 17. the two pinned-copy sites with their OWN comparison rules -----------
+# `compatibleNozzles` and `settings` do not go through the PIN_CHECK_ARRAYS
+# sweep -- one compares nozzle IDENTITY, the other is shallow-merged per key --
+# so each has its own emit site, and neither was pinned by anything: deleting
+# either left the whole suite green, so nothing proved a pin is ever reported.
+def case_pin_compatible_nozzles_pinned_copy():
+    """A variant storing its template's tick list is a PIN, not a coincidence.
+
+    `compatibleNozzles` is compared by nozzle IDENTITY (the _strip_ids
+    comparison used for the other arrays would make two lists pointing at
+    DIFFERENT nozzles compare equal). A variant whose stored array carries the
+    same ids as its template has stopped tracking it: ticking a nozzle on the
+    template never reaches this row again, and because the FilamentForm seeds
+    its grid from `?raw=true`, the frozen copy is what every later edit and
+    every isCalibrationRowReachable decision starts from.
+    """
+    TID, KID = "6a1a7c00677d648e9ba9d001", "6a1a7c00677d648e9ba9d002"
+    inh = list(A.PIN_CHECK_FIELDS) + list(A.PIN_CHECK_ARRAYS) + \
+        [f"temperatures.{t}" for t in A.PIN_CHECK_TEMPS]
+
+    def fam(k_raw_over, inherited):
+        # a HEALTHY family, then ONE deviation: the variant stores nothing it
+        # inherits, so any row that comes back is caused by k_raw_over alone.
+        t = valid_res(_id=TID, name="Family", parentId=None, spools=[], color=None,
+                      colorName=None, totalWeight=None, lowStockThreshold=None,
+                      instanceId="tttttttttt")
+        k = valid_res(_id=KID, name="Family — Blue", parentId=TID, instanceId="kkkkkkkkkk")
+        k["_inherited"] = list(inherited)
+        kraw = copy.deepcopy(k)
+        for f3 in A.PIN_CHECK_FIELDS:
+            kraw.pop(f3, None)
+        for f3 in A.PIN_CHECK_ARRAYS:
+            kraw[f3] = []
+        kraw["temperatures"] = {}
+        kraw["settings"] = {}
+        kraw["compatibleNozzles"] = []
+        kraw.update(k_raw_over)
+        f, _ = run({TID: rec(t, copy.deepcopy(t)), KID: {"res": k, "raw": kraw}},
+                   topology={TID: True})
+        return [m for rows in f.values() for _, m in rows]
+
+    same = copy.deepcopy(valid_res()["compatibleNozzles"])
+    got = fam({"compatibleNozzles": same}, inh)
+    hit = [m for m in got if "stores its own compatibleNozzles (1) identical to template" in m]
+    if hit and hit[0].startswith("Family — Blue"):
+        ok("pin-compatible-nozzles-reported")
+    else:
+        bad("pin-compatible-nozzles-reported",
+            f"a variant whose STORED compatibleNozzles names the same nozzle ids as its "
+            f"template has silently stopped tracking it -- a nozzle ticked on the template "
+            f"never reaches this row, and the FilamentForm seeds its grid from this frozen "
+            f"copy. Nothing reported it: {got}")
+
+    # CONTROL, the other side of the identity comparison: a list naming a
+    # DIFFERENT nozzle is a real override, and calling it a pin would prescribe
+    # clearing the array -- which switches the variant onto the template's
+    # nozzles and silently changes what it prints with.
+    other = [{"_id": "6a1a7bed677d648e9ba9cc0f", "name": "0.6 Hardened", "_deletedAt": None}]
+    got = fam({"compatibleNozzles": copy.deepcopy(other)}, inh)
+    if [m for m in got if "identical to template" in m]:
+        bad("pin-compatible-nozzles-different-silent",
+            f"a variant ticking a DIFFERENT nozzle is an override, not a pinned copy; "
+            f"reporting it prescribes clearing the array, which switches the variant onto "
+            f"the template's nozzles: {got}")
+    else:
+        ok("pin-compatible-nozzles-different-silent")
+
+
+def case_pin_settings_bag_pinned_copies():
+    """`settings` is SHALLOW-MERGED, so each key the variant stores pins THAT key.
+
+    A slicer round trip echoes the whole bag back onto the variant, so the keys
+    arrive without anyone choosing them and the variant silently stops tracking
+    every one of them. The row must name the offending keys (they are the unit
+    of repair) and must NOT count the openprinttag provenance keys, which are
+    per-row linkage and are supposed to be identical.
+    """
+    TID, KID = "6a1a7c00677d648e9ba9d001", "6a1a7c00677d648e9ba9d002"
+    inh = list(A.PIN_CHECK_FIELDS) + list(A.PIN_CHECK_ARRAYS) + \
+        [f"temperatures.{t}" for t in A.PIN_CHECK_TEMPS] + ["compatibleNozzles"]
+
+    def fam(bag):
+        t = valid_res(_id=TID, name="Family", parentId=None, spools=[], color=None,
+                      colorName=None, totalWeight=None, lowStockThreshold=None,
+                      instanceId="tttttttttt")
+        k = valid_res(_id=KID, name="Family — Blue", parentId=TID, instanceId="kkkkkkkkkk")
+        k["_inherited"] = list(inh)
+        kraw = copy.deepcopy(k)
+        for f3 in A.PIN_CHECK_FIELDS:
+            kraw.pop(f3, None)
+        for f3 in A.PIN_CHECK_ARRAYS:
+            kraw[f3] = []
+        kraw["temperatures"] = {}
+        kraw["compatibleNozzles"] = []
+        kraw["settings"] = copy.deepcopy(bag)
+        f, _ = run({TID: rec(t, copy.deepcopy(t)), KID: {"res": k, "raw": kraw}},
+                   topology={TID: True})
+        return [m for rows in f.values() for _, m in rows]
+
+    got = fam(valid_res()["settings"])          # the whole bag echoed back
+    hit = [m for m in got if "settings key(s) identical to template" in m]
+    if not hit:
+        bad("pin-settings-reported",
+            f"a variant carrying its template's settings keys has pinned every one of them "
+            f"-- the bag is shallow-merged, so each stored key overrides that key alone and "
+            f"stops tracking it. Nothing reported it: {got}")
+    elif not ("filament_abrasive" in hit[0] and "compatible_printers_condition" in hit[0]):
+        bad("pin-settings-reported",
+            f"the row must NAME the pinned keys -- the key is the unit of repair, and "
+            f"'some of your settings are pinned' is not actionable: {hit[0]}")
+    elif "openprinttag_slug" in hit[0] or "openprinttag_uuid" in hit[0]:
+        bad("pin-settings-reported",
+            f"the openprinttag provenance keys are PIN_EXEMPT: they are per-row linkage and "
+            f"are supposed to match, so counting them prescribes deleting a filament's link "
+            f"to its upstream material: {hit[0]}")
+    else:
+        ok("pin-settings-reported")
+
+    # CONTROL: a bag holding ONLY the exempt keys is the ordinary shape of a
+    # linked variant and must stay silent.
+    got = fam({"openprinttag_slug": "prusament-pla", "openprinttag_uuid": "u-1"})
+    if [m for m in got if "settings key(s) identical to template" in m]:
+        bad("pin-settings-exempt-silent",
+            f"only the exempt provenance keys are stored, so there is nothing pinned: {got}")
+    else:
+        ok("pin-settings-exempt-silent")
+
+
+# --- 18. compatibleNozzles as a REFERENCE ARRAY, not just a tick list --------
+# Three separate consequences hang off this one array and none of the three was
+# pinned: an element that cannot cast (the whole backup is refused), an array
+# whose every entry is tombstoned (effectively unassigned), and an array that
+# merely contains one (a stale reference).
+def case_pin_uncastable_nozzle_reference():
+    """An element that is not an ObjectId reference costs the ENTIRE backup.
+
+    `compatibleNozzles` is declared as an ObjectId array, so one element
+    Mongoose cannot cast makes POST /api/snapshot refuse the whole file -- not
+    the row, the file -- and the row still reads as healthy in the app because
+    the soft-delete checks below merely look for `_deletedAt` and would count
+    the junk as a live nozzle.
+    """
+    good = copy.deepcopy(valid_res()["compatibleNozzles"])
+    # Both shapes a real database produces: a legacy 12-byte ASCII id (accepted
+    # by older Mongoose, refused by 9.x) and a populated-looking ref whose _id
+    # is not hex, which is what a hand-edited or foreign-sourced document holds.
+    for label, elem in [("legacy-12-byte-id", "nozzle040brs"),
+                        ("populated-non-hex-id", {"_id": "n1", "name": "0.6 Hardened"})]:
+        r = valid_res(compatibleNozzles=good + [copy.deepcopy(elem)])
+        findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in findings.values() for _, m in rows_
+                if "compatibleNozzles[1]" in m and "is not a nozzle reference" in m]
+        if rows:
+            ok(f"uncastable-nozzle-ref-{label}")
+        else:
+            bad(f"uncastable-nozzle-ref-{label}",
+                f"compatibleNozzles[1]={elem!r} cannot be cast to an ObjectId, so POST "
+                f"/api/snapshot refuses the ENTIRE backup file while the app still serves the "
+                f"row as if it were assigned. Nothing reported it: "
+                f"{[m for rows_ in findings.values() for _, m in rows_]}")
+
+
+def case_pin_all_nozzles_soft_deleted():
+    """Every entry tombstoned is EFFECTIVELY UNASSIGNED, and looks assigned.
+
+    A soft-deleted nozzle still populates as a truthy object carrying
+    `_deletedAt`, so a non-empty array is not evidence of a usable assignment.
+    The row reads as assigned everywhere -- including to a human scanning the
+    edit form -- while no live nozzle backs it.
+    """
+    dead = [{"_id": "6a1a7bed677d648e9ba9cc01", "name": "0.4 Brass",
+             "_deletedAt": "2026-03-01T00:00:00.000Z"}]
+    r = valid_res(compatibleNozzles=copy.deepcopy(dead))
+    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in findings.values() for _, m in rows_
+            if "every compatibleNozzles entry is soft-deleted" in m]
+    if not rows:
+        bad("all-nozzles-soft-deleted-reported",
+            f"every compatibleNozzles entry is tombstoned, so the row is effectively "
+            f"unassigned while a non-empty array makes it look assigned. Nothing reported it: "
+            f"{[m for rows_ in findings.values() for _, m in rows_]}")
+    elif "0.4 Brass" not in rows[0]:
+        bad("all-nozzles-soft-deleted-reported",
+            f"the row must name the tombstoned nozzle -- it is what the user has to replace: "
+            f"{rows[0]}")
+    else:
+        ok("all-nozzles-soft-deleted-reported")
+
+    # CONTROL: a live entry means the row IS assigned, so the stronger claim
+    # must not be made -- "effectively unassigned" would send the user to
+    # re-tick a nozzle that is already there.
+    live = copy.deepcopy(valid_res()["compatibleNozzles"]) + copy.deepcopy(dead)
+    r = valid_res(compatibleNozzles=live)
+    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    if [m for rows_ in findings.values() for _, m in rows_
+            if "every compatibleNozzles entry is soft-deleted" in m]:
+        bad("all-nozzles-soft-deleted-not-overclaimed",
+            "one entry is live, so the row is assigned; claiming it is effectively "
+            "unassigned sends the user to fix an assignment that already works")
+    else:
+        ok("all-nozzles-soft-deleted-not-overclaimed")
+
+
+def case_pin_some_nozzles_soft_deleted():
+    """A tombstone ALONGSIDE a live nozzle is a stale reference, not an outage.
+
+    The assignment still works, so this is the weaker of the two claims and it
+    must be the one made: the stale entry cannot be used, and it has to name
+    which nozzle so the user can drop it.
+    """
+    stale = {"_id": "6a1a7bed677d648e9ba9cc0f", "name": "0.6 Hardened",
+             "_deletedAt": "2026-03-01T00:00:00.000Z"}
+    compat = copy.deepcopy(valid_res()["compatibleNozzles"]) + [copy.deepcopy(stale)]
+    r = valid_res(compatibleNozzles=compat)
+    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    rows = [m for rows_ in findings.values() for _, m in rows_
+            if "compatibleNozzles includes soft-deleted" in m]
+    if not rows:
+        bad("some-nozzles-soft-deleted-reported",
+            f"a tombstoned nozzle sitting beside a live one is a stale reference that cannot "
+            f"be used, and the array's length hides it. Nothing reported it: "
+            f"{[m for rows_ in findings.values() for _, m in rows_]}")
+    elif "0.6 Hardened" not in rows[0]:
+        bad("some-nozzles-soft-deleted-reported",
+            f"the row must name the stale nozzle -- with a live entry present, the name is "
+            f"the only way to tell which one to drop: {rows[0]}")
+    else:
+        ok("some-nozzles-soft-deleted-reported")
+
+    # CONTROL: an all-live array is the healthy shape and must stay silent.
+    r = valid_res()
+    findings, _ = run({"a": rec(r, copy.deepcopy(r))})
+    if [m for rows_ in findings.values() for _, m in rows_ if "soft-deleted" in m]:
+        bad("some-nozzles-soft-deleted-clean-silent",
+            "an all-live compatibleNozzles array is healthy and must produce no row")
+    else:
+        ok("some-nozzles-soft-deleted-clean-silent")
+
+
+
+# --- 14d-septies. the Number mirror must be USED on every castable shape ----
+# A correct helper exercised only in isolation proves nothing about the code
+# that calls it: `_castable_number` accepted `{"_id": "20000"}` while the
+# bounds check converted STRINGS only, so a populated-ref numeric cast to
+# 20000, blew the max validator, and the audit reported nothing but a generic
+# off-type note. The differential test passed throughout, because it never
+# looked at the call site.
+def case_bounds_check_uses_every_castable_number():
+    over = {"dryingTime": 20000}            # schema bound is 0-10080
+    for label, stored in (("bare string", "20000"),
+                          ("populated ref", {"_id": "20000"}),
+                          ("numeric ref", {"_id": 20000}),
+                          ("boolean-ish string", " 20000 ")):
+        r = valid_res()
+        r["dryingTime"] = stored
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        rows = [m for rows_ in f.values() for _, m in rows_]
+        if not [m for m in rows if "outside the" in m and "dryingTime" in m]:
+            bad("bounds-uses-castable-number",
+                f"{label} {stored!r} CASTS to 20000, so Mongoose runs the max validator "
+                f"and the restore fails on it -- the audit reported only that the value "
+                f"is off-type, which reads as 'checks skipped, nothing broken'. "
+                f"rows: {rows}")
+            return
+    ok("bounds-uses-castable-number")
+    # ...and a shape the cast REFUSES must not be bounds-checked, or the row
+    # would claim a validator failure that never runs
+    for refused in ({"_id": "abc"}, [20000], "abc", {}):
+        r = valid_res()
+        r["dryingTime"] = refused
+        f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        fp = [m for rows_ in f.values() for _, m in rows_
+              if "outside the" in m and "dryingTime" in m]
+        if fp:
+            bad("bounds-skips-uncastable-number",
+                f"{refused!r} never reaches the Number path at all, so claiming a bound "
+                f"violation invents a validator failure: {fp}")
+            return
+    ok("bounds-skips-uncastable-number")
+
+
+
+
+# --- 14d-octies. a malformed value may never ABORT the audit ----------------
+# Python ints are unbounded and `float()` RAISES on one past the double range,
+# while JS just says Infinity. Every numeric mirror that converted without the
+# guard `num()` has always carried would abort the WHOLE run over a single bad
+# field -- the user gets nothing instead of a report naming it. Codex found the
+# integer path; probing the class found three more in the radix branch that
+# nobody had reported. The point of this case is the CLASS, so it walks every
+# shape that reaches a float conversion.
+def case_oversized_numerics_never_abort():
+    huge = 10 ** 400
+    shapes = [("int", huge), ("negative int", -huge),
+              ("hex literal", "0x" + "f" * 500),
+              ("binary literal", "0b" + "1" * 2000),
+              ("octal literal", "0o" + "7" * 700),
+              ("decimal string", "1" + "0" * 400),
+              ("exponent string", "1e400"),
+              ("populated ref", {"_id": huge})]
+    for label, v in shapes:
+        try:
+            A._number_cast_value(v)
+            A._js_string_to_number(v if isinstance(v, str) else "0")
+        except Exception as e:
+            bad("oversized-numeric-no-raise",
+                f"{label} raised {type(e).__name__} in a numeric mirror -> an uncaught "
+                f"raise in a predicate aborts the ENTIRE audit, so one malformed field "
+                f"costs the user the whole report")
+            return
+    ok("oversized-numeric-no-raise")
+
+    # THE OVERFLOW BOUNDARY IS IEEE-754's, NOT `> MAX_VALUE`. Rounding is
+    # round-to-nearest, so every integer from MAX_VALUE up to the MIDPOINT
+    # between it and 2**1024 rounds back DOWN to a finite MAX_VALUE. A `>`
+    # comparison answered Infinity across that whole band, and a bounded field
+    # holding such a value really does cast finite and reach the max validator
+    # -- so the audit skipped a real restore failure as "merely malformed".
+    # Python's float() overflows at exactly the same threshold; these six were
+    # measured against node and agree on every one.
+    _MAXD = 1.7976931348623157e308
+    _n = int(_MAXD)
+    boundary = [("MAX_VALUE", _n, _MAXD),
+                ("MAX_VALUE+1", _n + 1, _MAXD),
+                ("just under the midpoint", _n + (1 << 969), _MAXD),
+                ("MAX_VALUE+2**970", _n + (1 << 970), float("inf")),
+                ("2**1024-1", (1 << 1024) - 1, float("inf")),
+                ("2**1024", 1 << 1024, float("inf"))]
+    off = [(lbl, A._js_string_to_number("0x" + format(iv, "x")), want)
+           for lbl, iv, want in boundary
+           if A._js_string_to_number("0x" + format(iv, "x")) != want]
+    ok("oversized-numeric-ieee754-boundary") if not off else bad(
+        "oversized-numeric-ieee754-boundary",
+        f"`Number()` rounds to nearest, so the band above MAX_VALUE is FINITE and "
+        f"reaches the bound validators; answering Infinity there hides a real "
+        f"restore failure: {off}")
+    off = [(lbl, A._number_cast_value(iv), want) for lbl, iv, want in boundary
+           if A._number_cast_value(iv) != want]
+    ok("oversized-numeric-ieee754-boundary-int") if not off else bad(
+        "oversized-numeric-ieee754-boundary-int",
+        f"the integer path must use the same IEEE-754 threshold as the string "
+        f"path: {off}")
+
+    # ...and JS says Infinity for all of them, so the mirror must too
+    wrong = [l for l, v in shapes
+             if (A._number_cast_value(v) if not isinstance(v, str)
+                 else A._js_string_to_number(v)) not in (float("inf"), float("-inf"))]
+    ok("oversized-numeric-is-infinity") if not wrong else bad(
+        "oversized-numeric-is-infinity",
+        f"`Number()` gives Infinity for these, so the mirror must not answer "
+        f"anything else: {wrong}")
+
+    # end to end: the audit must SURVIVE and still name the bad field
+    for label, v in (("bounded field", "dryingTime"), ("plain field", "density")):
+        r = valid_res()
+        r[v] = huge
+        try:
+            f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad("oversized-numeric-audit-survives",
+                f"{v}={huge!r} aborted the audit with {type(e).__name__} -> every OTHER "
+                f"filament in the library goes unreported because of one bad value")
+            return
+        rows = [m for rows_ in f.values() for _, m in rows_]
+        if not [m for m in rows if v in m]:
+            bad("oversized-numeric-audit-survives",
+                f"the audit survived {v}={huge!r} but never mentioned the field, so the "
+                f"value is invisible: {rows}")
+            return
+    ok("oversized-numeric-audit-survives")
+
+
+
 def case_no_duplicate_shape_rows():
     r = valid_res(type=5, spools=["oops"], settings="junk")
     findings, _ = run({"a": rec(r, copy.deepcopy(r))})
@@ -2577,6 +5215,68 @@ if __name__ == "__main__":
     case_mongoose_cast_mirrors()
     case_no_full_case_folding()
     case_cast_decisions_go_through_the_mirror()
+    case_cast_mirrors_match_real_mongoose()
+    case_oversized_numerics_never_abort()
+    case_bounds_check_uses_every_castable_number()
+    case_pin_discovery_degraded_reported()
+    case_pin_unreadable_filament_reported()
+    case_pin_abrasive_payload_not_a_list()
+    case_pin_abrasive_unassigned_suppresses_generic_nozzle_rows()
+    case_pin_unusable_pair_reported()
+    case_pin_required_text_missing_reported()
+    case_pin_required_text_present_but_empty()
+    case_pin_nested_spool_text_shape()
+    case_pin_spool_retired_not_boolean()
+    case_pin_ledger_elements_are_subdocuments()
+    case_pin_ledger_text_shape()
+    case_pin_listing_topology_keeps_template()
+    case_pin_settings_bag_key_count()
+    case_pin_settings_value_length_limit()
+    case_pin_settings_nested_value_shapes()
+    case_pin_compatible_printers_pin_reported()
+    case_pin_net_filament_weight_missing()
+    case_pin_numeric_sweep_dedupes_identical_reads()
+    case_pin_legacy_roll_gross_below_tare()
+    case_pin_every_live_spool_lacks_gross()
+    case_pin_promotion_marker_at_uncastable()
+    case_pin_top_level_timestamps_uncastable()
+    case_pin_tds_url_not_a_string()
+    case_pin_tds_url_not_http()
+    case_pin_calibration_nozzle_purged()
+    case_pin_calibration_nozzle_tombstoned()
+    case_pin_bed_type_temps_unusable_key()
+    case_pin_preset_label_uncastable_list()
+    case_pin_nozzle_temp_below_declared_min()
+    case_pin_nozzle_temp_above_declared_max()
+    case_pin_nozzle_plausible_band()
+    case_pin_bed_temperature_implausible()
+    case_pin_standby_ceiling()
+    case_pin_spool_missing_instance_id()
+    case_pin_spool_location_ref_uncastable()
+    case_pin_spool_text_maxlength()
+    case_pin_dry_cycle_date_required()
+    case_pin_dry_cycle_date_castable()
+    case_pin_usage_source_enum()
+    case_pin_usage_entry_date()
+    case_pin_usage_entry_grams_required()
+    case_pin_usage_debited_grams_semantic_bound()
+    case_pin_missing_nozzle_temperature()
+    case_pin_missing_bed_temperature()
+    case_pin_missing_density()
+    case_pin_trashed_variant_family_is_stuck()
+    case_pin_nested_template_shape()
+    case_pin_template_still_carries_field()
+    case_pin_template_still_holds_spools()
+    case_pin_parent_points_at_itself()
+    case_pin_parent_is_itself_a_variant()
+    case_pin_scalar_field_pinned_to_template()
+    case_pin_temperature_subfield_pinned()
+    case_pin_whole_array_pinned()
+    case_pin_compatible_nozzles_pinned_copy()
+    case_pin_settings_bag_pinned_copies()
+    case_pin_uncastable_nozzle_reference()
+    case_pin_all_nozzles_soft_deleted()
+    case_pin_some_nozzles_soft_deleted()
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()
