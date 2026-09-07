@@ -938,17 +938,23 @@ def _objectid_str(v):
     RESOLVED id, which is what makes `["<hex>"]` and `{"_id": "<hex>"}` resolve
     against the live set instead of being condemned as malformed.
     """
+    # LOWERCASE, because that is what the cast actually produces: BSON accepts
+    # either casing on the way in and `ObjectId.toString()` always comes back
+    # lowercase, so a raw-synced "507F..." resolves to the same row as "507f...".
+    # Returning the stored casing made every uppercase reference read as
+    # dangling against a live set of canonical ids -- a false positive that
+    # tells the user to restore a row which was never deleted.
     if isinstance(v, str):
-        return v if OBJECTID_RE.match(v) else None
+        return v.lower() if OBJECTID_RE.match(v) else None
     if isinstance(v, list):
         _s = _js_array_string(v)          # `value.toString()`
-        return _s if OBJECTID_RE.match(_s) else None
+        return _s.lower() if OBJECTID_RE.match(_s) else None
     if isinstance(v, dict):
         _inner = v.get("_id")             # tested for TRUTHINESS, then stringified
         if not _inner:
             return None
         _s = _js_to_string(_inner)
-        return _s if OBJECTID_RE.match(_s) else None
+        return _s.lower() if OBJECTID_RE.match(_s) else None
     return None                           # numbers, booleans and None
 
 
@@ -1282,9 +1288,16 @@ def load(base, api_key, cache_dir=None):
                 base = _ids(key)
                 if base is None:
                     return None
-                return {str(x.get("_id")) for x in cols.get(key)
+                # `_deletedAt` ALONE, matching the join predicate. `_purged` is a
+                # Filament-only field (it is not on the Location schema at all),
+                # and /api/spools/by-location selects locations with
+                # `_deletedAt: null` and nothing else -- so a stray truthy
+                # `_purged` from a raw sync still joins and is still visible.
+                # Excluding it here reported every spool in that location as
+                # dangling. Same lesson as the listing-topology filter above.
+                return {str(x.get("_id")).lower() for x in cols.get(key)
                         if isinstance(x, dict) and x.get("_id") is not None
-                        and x.get("_deletedAt") in (None, "") and not x.get("_purged")}
+                        and x.get("_deletedAt") in (None, "")}
 
             def _ids(key):
                 # None when the snapshot does not CARRY the collection, which is
@@ -1295,7 +1308,7 @@ def load(base, api_key, cache_dir=None):
                 rows = cols.get(key)
                 if not isinstance(rows, list):
                     return None
-                return {str(x.get("_id")) for x in rows
+                return {str(x.get("_id")).lower() for x in rows
                         if isinstance(x, dict) and x.get("_id") is not None}
             ref_index = {
                 "printers": _ids("printers"),

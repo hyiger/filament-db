@@ -893,6 +893,17 @@ def case_calibration_scope_refs():
     # a MALFORMED scope ref in the snapshot: unpopulated there, so a dict or
     # array cannot be a joined document — it is an uncastable value that both
     # detail reads render as null, so nothing else can see it
+    # CASING: BSON accepts either and ObjectId.toString() is always lowercase,
+    # so an uppercase stored ref resolves to the SAME row. Reporting it as
+    # dangling tells the user to restore a row that was never deleted.
+    f, _, _ = A.audit({"a": base}, (), None, None, None,
+                      idx({"printer": _P_LIVE.upper(), "bedType": _B_LIVE.upper()}))
+    fp = [m for rows in f.values() for _, m in rows
+          if "resolves to no" in m or "cannot cast" in m]
+    ok("cal-scope-uppercase-id-resolves") if not fp else bad(
+        "cal-scope-uppercase-id-resolves",
+        f"an uppercase 24-hex ref casts to the same canonical id, so it is LIVE: {fp}")
+
     # a CASTABLE container is NOT malformed: ["<hex>"] and {"_id": "<hex>"} both
     # cast, so they get the ordinary dangling lookup on the id they resolve to
     for _ok_ref in ([_P_LIVE], {"_id": _P_LIVE}, [[_P_LIVE]]):
