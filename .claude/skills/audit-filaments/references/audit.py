@@ -633,6 +633,24 @@ _JS_DECIMAL_RE = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9
 _JS_RADIX_RE = re.compile(r"^0([xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)$")
 
 
+def _js_int_to_double(n):
+    """A Python int, as the double JS would hold it.
+
+    Python ints are unbounded; JS numbers are doubles, so a JSON body can carry
+    an integer no double can represent and `Number(...)` gives Infinity for it.
+    `float()` RAISES OverflowError instead -- and an uncaught raise in a
+    predicate aborts the ENTIRE audit over one malformed value, which is the
+    worst failure this script has: the user gets nothing instead of a report
+    naming the bad field. `num()` has carried this guard since the beginning;
+    the newer numeric mirrors did not, and inherited the crash.
+    """
+    if n > _MAX_DOUBLE:
+        return float("inf")
+    if n < -_MAX_DOUBLE:
+        return float("-inf")
+    return float(n)
+
+
 def _js_to_number(v):
     """ECMAScript ToNumber over any JSON value, or None for NaN.
 
@@ -668,7 +686,7 @@ def _js_string_to_number(text):
     if t == "":
         return 0.0                        # Number("") === 0
     if _JS_RADIX_RE.match(t):
-        return float(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
+        return _js_int_to_double(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
     body = t[1:] if t[:1] in "+-" else t
     if body == "Infinity":
         return float("-inf") if t[:1] == "-" else float("inf")
@@ -1016,7 +1034,9 @@ def _number_cast_value(v):
     if isinstance(v, bool):
         return 1.0 if v else 0.0
     if isinstance(v, (int, float)):
-        return float(v) if v == v else None      # NaN is the one number refused
+        if v != v:
+            return None                          # NaN is the one number refused
+        return _js_int_to_double(v) if isinstance(v, int) else float(v)
     if isinstance(v, str):
         if v == "":
             return _NUMBER_CAST_NULL             # castNumber maps "" to null

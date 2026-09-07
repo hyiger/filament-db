@@ -5082,6 +5082,66 @@ def case_bounds_check_uses_every_castable_number():
 
 
 
+
+# --- 14d-octies. a malformed value may never ABORT the audit ----------------
+# Python ints are unbounded and `float()` RAISES on one past the double range,
+# while JS just says Infinity. Every numeric mirror that converted without the
+# guard `num()` has always carried would abort the WHOLE run over a single bad
+# field -- the user gets nothing instead of a report naming it. Codex found the
+# integer path; probing the class found three more in the radix branch that
+# nobody had reported. The point of this case is the CLASS, so it walks every
+# shape that reaches a float conversion.
+def case_oversized_numerics_never_abort():
+    huge = 10 ** 400
+    shapes = [("int", huge), ("negative int", -huge),
+              ("hex literal", "0x" + "f" * 500),
+              ("binary literal", "0b" + "1" * 2000),
+              ("octal literal", "0o" + "7" * 700),
+              ("decimal string", "1" + "0" * 400),
+              ("exponent string", "1e400"),
+              ("populated ref", {"_id": huge})]
+    for label, v in shapes:
+        try:
+            A._number_cast_value(v)
+            A._js_string_to_number(v if isinstance(v, str) else "0")
+        except Exception as e:
+            bad("oversized-numeric-no-raise",
+                f"{label} raised {type(e).__name__} in a numeric mirror -> an uncaught "
+                f"raise in a predicate aborts the ENTIRE audit, so one malformed field "
+                f"costs the user the whole report")
+            return
+    ok("oversized-numeric-no-raise")
+
+    # ...and JS says Infinity for all of them, so the mirror must too
+    wrong = [l for l, v in shapes
+             if (A._number_cast_value(v) if not isinstance(v, str)
+                 else A._js_string_to_number(v)) not in (float("inf"), float("-inf"))]
+    ok("oversized-numeric-is-infinity") if not wrong else bad(
+        "oversized-numeric-is-infinity",
+        f"`Number()` gives Infinity for these, so the mirror must not answer "
+        f"anything else: {wrong}")
+
+    # end to end: the audit must SURVIVE and still name the bad field
+    for label, v in (("bounded field", "dryingTime"), ("plain field", "density")):
+        r = valid_res()
+        r[v] = huge
+        try:
+            f, _ = run({"a": rec(r, copy.deepcopy(r))})
+        except Exception as e:
+            bad("oversized-numeric-audit-survives",
+                f"{v}={huge!r} aborted the audit with {type(e).__name__} -> every OTHER "
+                f"filament in the library goes unreported because of one bad value")
+            return
+        rows = [m for rows_ in f.values() for _, m in rows_]
+        if not [m for m in rows if v in m]:
+            bad("oversized-numeric-audit-survives",
+                f"the audit survived {v}={huge!r} but never mentioned the field, so the "
+                f"value is invisible: {rows}")
+            return
+    ok("oversized-numeric-audit-survives")
+
+
+
 def case_no_duplicate_shape_rows():
     r = valid_res(type=5, spools=["oops"], settings="junk")
     findings, _ = run({"a": rec(r, copy.deepcopy(r))})
@@ -5125,6 +5185,7 @@ if __name__ == "__main__":
     case_no_full_case_folding()
     case_cast_decisions_go_through_the_mirror()
     case_cast_mirrors_match_real_mongoose()
+    case_oversized_numerics_never_abort()
     case_bounds_check_uses_every_castable_number()
     case_pin_discovery_degraded_reported()
     case_pin_unreadable_filament_reported()
