@@ -1111,9 +1111,26 @@ def case_date_mirror():
         "date-mirror-legacy-parser-silent",
         f"V8's legacy parser ACCEPTS these, so they are stored and cast fine: {legacy}")
 
+    # MONGOOSE, not bare V8, is the mirror here: every call site's consequence
+    # is "cannot be cast to a Date -> POST /api/snapshot refuses the file", and
+    # castDate is STRICTER than `new Date`. A boolean is the clearest case --
+    # `new Date(true)` is a real instant, but castDate asserts on the type
+    # before it ever gets there. Measured against mongoose 9.7.4.
+    cast_rejects = [True, False, "1700000000000000000", "8640000000000001", "1e400"]
+    miss = [v for v in cast_rejects if not A._bad_date(v)]
+    ok("date-mirror-mongoose-cast-rejects") if not miss else bad(
+        "date-mirror-mongoose-cast-rejects",
+        f"Mongoose's castDate rejects these outright, so the restore fails: {miss}")
+    # ...and the numeric strings it reads as YEARS must stay silent
+    years = [v for v in ("12345", "20000", "275760", " 42 ") if A._bad_date(v)]
+    ok("date-mirror-numeric-string-years") if not years else bad(
+        "date-mirror-numeric-string-years",
+        f"castDate's milliseconds branch needs Number(v) >= 275761, so these are "
+        f"read as YEARS and cast fine -- condemning one is a false positive: {years}")
+
     # numbers cast to an instant — but only INSIDE the ECMAScript time value
     # range. Both boundaries verified against node.
-    live = [v for v in (0, 1, 12345, -1, 1.5, True, False,
+    live = [v for v in (0, 1, 12345, -1, 1.5,
                         A.JS_MAX_TIME_VALUE, -A.JS_MAX_TIME_VALUE) if A._bad_date(v)]
     ok("date-mirror-numeric-silent") if not live else bad(
         "date-mirror-numeric-silent",
@@ -1163,6 +1180,101 @@ def case_ascii_only_mirror_regexes():
             "the exempt regex is gone, so this guard no longer proves anything")
     else:
         ok("ascii-only-mirror-exemption-live")
+
+
+
+# --- 14d-ter. the Mongoose cast mirrors, pinned to a MEASURED truth table ----
+# These four helpers answer "would Mongoose accept this value on this path",
+# and every consequence the audit prints about a refused snapshot rests on
+# them. The tables below were produced by running the repo's OWN mongoose
+# (9.7.4) over each shape -- not by reading the docs, and not by reasoning
+# about it. Two of them were WRONG in the shipped script and condemned data
+# that casts perfectly: `{_id: "<hex>"}` (a populated ref) and `["<hex>"]`
+# both cast to an ObjectId, and `{_id: "<str>"}` casts to a String.
+_OID = "507f1f77bcf86cd799439011"
+
+
+def case_mongoose_cast_mirrors():
+    oid_accept = [None, _OID, _OID.upper(), [_OID], [[_OID]],
+                  {"_id": _OID}, {"_id": _OID, "name": "PLA"},
+                  {"_id": [_OID]}]
+    oid_reject = ["", "abc", "abcdefghijkl", _OID[:23], _OID + "a", 0, 1, True,
+                  [], ["not-hex"], [_OID, _OID], {}, {"_id": "abc"},
+                  {"_id": None}, {"_id": ""}, {"_id": 0}, {"_id": 1}, {"a": 1},
+                  [{"_id": _OID}], {"_id": {"_id": _OID}}]
+    wrong = [v for v in oid_accept if not A._castable_objectid(v)]
+    ok("cast-objectid-accepts") if not wrong else bad(
+        "cast-objectid-accepts",
+        f"Mongoose's ObjectId cast ACCEPTS these (a populated ref and a "
+        f"single-element array included), so condemning one is a false "
+        f"positive: {wrong}")
+    wrong = [v for v in oid_reject if A._castable_objectid(v)]
+    ok("cast-objectid-rejects") if not wrong else bad(
+        "cast-objectid-rejects",
+        f"Mongoose's ObjectId cast REJECTS these, so the restore really does "
+        f"fail and the audit must say so: {wrong}")
+
+    str_accept = [None, "", "x", 0, 1.5, True, {"_id": "L-42"}]
+    str_reject = [[], ["L-42"], [1, 2], {}, {"a": 1}, {"_id": None}, {"_id": 1}]
+    wrong = [v for v in str_accept if not A._castable_string(v)]
+    ok("cast-string-accepts") if not wrong else bad(
+        "cast-string-accepts",
+        f"castString reads `value._id` BEFORE rejecting objects, so these cast "
+        f"cleanly: {wrong}")
+    wrong = [v for v in str_reject if A._castable_string(v)]
+    ok("cast-string-rejects") if not wrong else bad(
+        "cast-string-rejects", f"castString REJECTS these: {wrong}")
+
+    # ToNumber, because getRemainingPct coerces rather than giving up
+    for _v, _want in (("", 0.0), ("210", 210.0), (True, 1.0), (False, 0.0),
+                      ([], 0.0), (["5"], 5.0), (None, 0.0), (7, 7.0)):
+        if A._js_to_number(_v) != _want:
+            bad("cast-tonumber", f"ToNumber({_v!r}) should be {_want}, got "
+                                 f"{A._js_to_number(_v)!r}")
+            break
+    else:
+        ok("cast-tonumber")
+    _nan = [v for v in ([1, 2], {}, "abc", "1_0", "NaN") if A._js_to_number(v) is not None]
+    ok("cast-tonumber-nan") if not _nan else bad(
+        "cast-tonumber-nan", f"Number() gives NaN for these: {_nan}")
+    # ...and Number() is not float(): these four are exactly where they differ
+    for _v, _want in (("0x10", 16.0), ("Infinity", float("inf")), (" 42 ", 42.0)):
+        if A._js_string_to_number(_v) != _want:
+            bad("cast-tonumber-vs-float",
+                f"Number({_v!r}) is {_want}, not float()'s answer")
+            break
+    else:
+        ok("cast-tonumber-vs-float")
+
+
+# --- 14d-quater. a case-insensitive mirror may not use FULL case folding -----
+# `str.casefold()` is full Unicode folding (multi-character: ss<->ß, ff<->ﬀ,
+# st<->ﬅ). Every case-insensitive gate it mirrors is strictly narrower -- JS
+# `toLowerCase` is 1:1, and MongoDB's `$options:"i"` is PCRE2 SIMPLE folding.
+# So casefold manufactures "differ only by CASE" collisions between ids the app
+# treats as unrelated, and tells the user a working printed label is broken.
+# Python's `.lower()` and JS `toLowerCase()` were compared over every one of the
+# 1,460 case-changing code points and agree on ALL of them, so `.lower()` is the
+# exact mirror. This is a SOURCE guard for the same reason the regex one is: the
+# failure needs one exotic character in one id to appear.
+def case_no_full_case_folding():
+    src = open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "audit.py"), encoding="utf-8").read()
+    hits = [ln for ln in src.splitlines() if ".casefold()" in ln]
+    if hits:
+        bad("no-full-case-folding",
+            "casefold() is FULL Unicode folding; every gate it mirrors (JS "
+            "toLowerCase, Mongo $options:'i') is simple folding, so it invents "
+            "collisions. Use .lower(): " + " | ".join(h.strip()[:70] for h in hits))
+    else:
+        ok("no-full-case-folding")
+    pairs = [("WEISS", "WEI\u00df"), ("ss42", "\u00df42"), ("stra\u00dfe", "strasse"),
+             ("\u03c3", "\u03c2"), ("AFFE", "A\ufb00e"), ("ROLL-FI", "ROLL-\ufb01")]
+    collide = [(a, b) for a, b in pairs if a.lower() == b.lower()]
+    ok("no-full-case-folding-pairs") if not collide else bad(
+        "no-full-case-folding-pairs",
+        f"these are NOT case variants of each other to JS or to Mongo, so "
+        f"grouping them produces a false 'differ only by CASE' row: {collide}")
 
 
 # --- 14e. per-record state must not leak between records ---------------------
@@ -2335,6 +2447,8 @@ if __name__ == "__main__":
     case_ref_index_hostile_shapes()
     case_date_mirror()
     case_ascii_only_mirror_regexes()
+    case_mongoose_cast_mirrors()
+    case_no_full_case_folding()
     case_no_cross_record_leak()
     case_preset_label_shapes()
     case_identifier_is_bounded()

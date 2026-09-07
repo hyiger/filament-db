@@ -465,9 +465,13 @@ def _nested_text_consequence(field, value):
         # called harmless when it is not -- /inventory's search does
         # `(s.lotNumber || "").toLowerCase()`, and a truthy non-string has no
         # .toLowerCase, so the page throws as soon as the user types.
-        extra = (" and, being an object, it also fails Mongoose's String cast, so POST "
-                 "/api/snapshot refuses the ENTIRE backup file"
-                 if isinstance(value, (dict, list)) else "")
+        # NOT `isinstance(value, (dict, list))`: Mongoose's String cast reads
+        # `value._id` BEFORE it rejects objects, so a POPULATED ref casts
+        # cleanly to its id string. Claiming it breaks the backup was a false
+        # positive. Measured against mongoose 9.7.4; see _castable_string.
+        extra = ("" if _castable_string(value) else
+                 " and it also fails Mongoose's String cast, so POST "
+                 "/api/snapshot refuses the ENTIRE backup file")
         return ("the Spool Inventory search does `(s.lotNumber || \"\").toLowerCase()`, and a "
                 "truthy non-string has no .toLowerCase — so /inventory throws the moment anyone "
                 "types in the search box" + extra)
@@ -624,6 +628,56 @@ _URL_SCHEME_RE = re.compile(r"[A-Za-z][A-Za-z0-9+.\-]*:")
 # ECMAScript time value range (ES2024 21.4.1.1): a Date outside +/-8.64e15 ms
 # is Invalid, so a raw numeric date past it can be neither cast nor rendered.
 JS_MAX_TIME_VALUE = 8_640_000_000_000_000
+
+_JS_DECIMAL_RE = re.compile(r"^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$")
+_JS_RADIX_RE = re.compile(r"^0([xX][0-9a-fA-F]+|[oO][0-7]+|[bB][01]+)$")
+
+
+def _js_to_number(v):
+    """ECMAScript ToNumber over any JSON value, or None for NaN.
+
+    `getRemainingPct` gates on `spool.totalWeight != null` and then does
+    `spool.totalWeight - f.spoolWeight`, so the app COERCES where `num()`
+    gives up: "" is 0, "210" is 210, true is 1, [] is 0, ["5"] is 5. Mirroring
+    it with `num()` dropped exactly the spools the app counts.
+    """
+    if v is None:
+        return 0.0                        # Number(null) === 0
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v) if abs(v) <= _MAX_DOUBLE else None
+    if isinstance(v, str):
+        return _js_string_to_number(v)
+    if isinstance(v, list):
+        return _js_string_to_number(_js_array_string(v))
+    return None                           # "[object Object]" -> NaN
+
+
+def _js_string_to_number(text):
+    """`Number(string)` as JS computes it, or None for NaN.
+
+    Needed because Mongoose's castDate routes a numeric STRING through
+    `new Date(Number(v))` (lib/cast/date.js), so the string form of an
+    out-of-range epoch has to reach the same verdict as the numeric form.
+    Python's `float()` is NOT this function: it accepts "1_0", "infinity",
+    "nan" and a bare "0x10" is rejected by it while JS reads 16. Differential
+    -tested against node.
+    """
+    t = _js_trim(text)
+    if t == "":
+        return 0.0                        # Number("") === 0
+    if _JS_RADIX_RE.match(t):
+        return float(int(t[2:], {"x": 16, "o": 8, "b": 2}[t[1].lower()]))
+    body = t[1:] if t[:1] in "+-" else t
+    if body == "Infinity":
+        return float("-inf") if t[:1] == "-" else float("inf")
+    if not _JS_DECIMAL_RE.match(t):
+        return None                       # NaN
+    try:
+        return float(t)
+    except (ValueError, OverflowError):
+        return None
 # `[0-9]`, never `\d`: Python's `\d` matches EVERY Unicode decimal digit
 # (fullwidth, arabic-indic, devanagari, ...) and `int()` converts them, while
 # V8's date grammar is ASCII-only -- 213/213 probed strings carrying one
@@ -690,7 +744,12 @@ def _bad_date(v):
     silent on the rest. Verified against node's own `new Date` over a corpus of
     real and malformed values: no value node accepts is reported."""
     if isinstance(v, bool):
-        return False              # new Date(true) is 1970-01-01T00:00:00.001Z
+        # NOT `new Date(true)`. The mirror here is MONGOOSE, not bare V8, and
+        # castDate opens with `assert.ok(typeof value !== 'boolean')` -- so a
+        # boolean never reaches `new Date` at all and is a hard CastError.
+        # Measured against mongoose 9.7.4: `{d: true}` and `{d: false}` both
+        # REJECT on a Date path.
+        return True
     if isinstance(v, (int, float)):
         # NOT "always valid": the ECMAScript time value range is +/-8.64e15 ms
         # (~+/-273,790 years), and one millisecond past it is an Invalid Date.
@@ -708,6 +767,18 @@ def _bad_date(v):
         return _bad_date(_js_array_string(v))
     if not isinstance(v, str):
         return False              # None is handled by the presence checks
+    # castDate has a MILLISECONDS branch for a numeric string: when
+    # `!isNaN(Number(v))` and the number is outside the year range V8 would read
+    # it as, Mongoose does `new Date(Number(v))` -- so a nanosecond epoch pasted
+    # into a date field is an Invalid Date, exactly as the same value would be
+    # as a raw number. The numeric branch above already applies the time-value
+    # bound; this routes the string form to the same answer instead of leaving
+    # it silent. Measured against mongoose 9.7.4: "1700000000000000000",
+    # "8640000000000001" and "1e400" all REJECT, while "12345" and "20000" are
+    # accepted as YEARS and must stay silent.
+    _n = _js_string_to_number(v)
+    if _n is not None and (_n >= 275761 or _n < -271820):
+        return abs(_n) > JS_MAX_TIME_VALUE or _n != _n
     # `_js_trim`, not `strip()`: V8 KEEPS U+0085 and U+001C..U+001F, so
     # "2020-01-01" + U+0085 is an Invalid Date that Python's strip would have
     # quietly reduced to a valid ISO date. Third site of this same mirror bug.
@@ -857,6 +928,73 @@ def _bad_tds_url(v):
 # newline, so "<24 hex>\n" passed a check whose whole contract is "exactly 24
 # characters" -- and Mongoose rejects that value.
 OBJECTID_RE = re.compile(r"^[0-9a-fA-F]{24}\Z")
+
+
+def _castable_objectid(v):
+    """Does Mongoose's ObjectId cast ACCEPT this value?
+
+    Not the same question as "is it a 24-hex string", which is what every call
+    site used to ask -- and the gap was a false positive, the one thing this
+    script must not produce. Mongoose's cast (lib/cast/objectid.js) reads
+    `value._id` first and falls back to `value.toString()`, so a POPULATED ref
+    (`{_id: "<hex>", name: ...}`, exactly what a `.populate()` on a joined read
+    returns) and a single-element array both cast CLEANLY. Truth table measured
+    against the repo's own mongoose 9.7.4 over 36 shapes:
+
+        ACCEPT   None, 24-hex (either case), [24-hex], [[24-hex]],
+                 {"_id": 24-hex, ...}
+        REJECT   "", any other string (a 12-byte ASCII id included), numbers,
+                 booleans, [], multi-element arrays, {}, {"_id": non-hex}
+
+    Nesting recurses because `String([[x]]) === String(x)` in JS.
+    """
+    if v is None:
+        return True
+    if isinstance(v, str):
+        return bool(OBJECTID_RE.match(v))
+    if isinstance(v, list):
+        # `value.toString()` -- so [hex] and [[hex]] both flatten to the hex,
+        # while [] and a multi-element array do not.
+        return bool(OBJECTID_RE.match(_js_array_string(v)))
+    if isinstance(v, dict):
+        # The cast tests `value._id` for TRUTHINESS, then stringifies it, so
+        # {"_id": None} / {"_id": ""} / {"_id": 0} fall through to
+        # "[object Object]" and are rejected.
+        _inner = v.get("_id")
+        if not _inner:
+            return False
+        return bool(OBJECTID_RE.match(_js_to_string(_inner)))
+    return False                          # numbers and booleans are rejected
+
+
+def _js_to_string(v):
+    """`String(v)` for the shapes a JSON body can carry."""
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return _js_number(v)
+    if isinstance(v, list):
+        return _js_array_string(v)
+    return "[object Object]"
+
+
+def _castable_string(v):
+    """Does Mongoose's String cast ACCEPT this value?
+
+    `lib/cast/string.js` returns `value._id` when that is a string, BEFORE the
+    object rejection -- so a populated ref casts fine and calling it "an object,
+    so the whole backup file is refused" was wrong. Arrays are always rejected.
+    Measured against mongoose 9.7.4.
+    """
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return True
+    if isinstance(v, dict):
+        return isinstance(v.get("_id"), str)
+    return False                          # lists always fail
 
 SPOOL_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 MAX_SPOOL_ID_LENGTH = 128
@@ -1767,7 +1905,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                     # contradicts it, and letting it feed missing_gross could
                     # add a second contradictory "every live spool is missing
                     # its gross weight" on top.
-                    _g_absent = s.get("totalWeight") in (None, "")
+                    # `!= null` is the app's gate, so ONLY null/absent is
+                    # absent -- "" is coerced to 0 and the spool IS counted.
+                    # Calling "" absent produced a "no totalWeight" row (and a
+                    # spurious "every live spool is missing its gross weight")
+                    # for a spool the bar renders at 0%.
+                    _g_absent = s.get("totalWeight") is None
                     if gross is None and not _g_absent:
                         continue
                     if gross is None:
@@ -1826,10 +1969,20 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 else:
                     _numer, _valid = 0.0, 0
                     for s in live_spools:
-                        _g = num(s.get("totalWeight"))
-                        if _g is not None:
-                            _numer += max(0.0, _g - tare)
-                            _valid += 1
+                        # `spool.totalWeight != null` then ARITHMETIC coercion,
+                        # exactly as getRemainingPct does it -- `num()` here
+                        # dropped every numeric-string spool from both the
+                        # numerator and the count, which invented a saturation
+                        # the app never reaches.
+                        _raw_g = s.get("totalWeight")
+                        if _raw_g is None:
+                            continue
+                        _g = _js_to_number(_raw_g)
+                        if _g is None:
+                            _valid = None       # NaN poisons the whole ratio
+                            break
+                        _numer += max(0.0, _g - tare)
+                        _valid += 1
                     _denom = net * _valid if _valid else None
                     _scope = f"{_valid} weighed spool(s) hold"
                 if _numer is not None and _denom:
@@ -1894,8 +2047,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 if not isinstance(_sd, dict):
                     continue                       # shape reported by the element sweep
                 _sid_own = _sd.get("_id")
-                if _sid_own is not None and not (isinstance(_sid_own, str)
-                                                 and OBJECTID_RE.match(_sid_own)):
+                if not _castable_objectid(_sid_own):
                     add("structure", f"{name}: {path}[{_si}]._id={_short(repr(_sid_own))} is not a "
                                      f"24-character hex ObjectId -> Mongoose gives every embedded "
                                      f"document an implicit ObjectId `_id`, so it cannot be cast "
@@ -2155,7 +2307,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 # export DOES recognise, which no vocabulary explains and a
                 # rename certainly fixes.
                 _near = next((k for k in ORCA_PLATE_KEYS
-                              if _js_trim(k).casefold() == _js_trim(plate_raw).casefold()
+                              if _js_trim(k).lower() == _js_trim(plate_raw).lower()
                               and k != plate_raw), None)
                 if _near:
                     add("physical", f"{name}: bedTypeTemps[{idx_bt}] bedType {plate_raw!r} differs "
@@ -2315,7 +2467,15 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 if val is None:
                     continue
                 if num(val) is None:
-                    continue   # reported once by the malformed_numerics sweep
+                    # A numeric STRING is not "unjudgeable": Mongoose casts it
+                    # into the Number path FIRST and then runs the validators,
+                    # so `dryingTime: "20000"` fails the max bound exactly as
+                    # 20000 would. Skipping it reported only "malformed" and
+                    # left the reader thinking the backup still restores.
+                    _cv = _js_string_to_number(val) if isinstance(val, str) else None
+                    if _cv is None or _cv != _cv or _cv in (float("inf"), float("-inf")):
+                        continue   # reported once by the malformed_numerics sweep
+                    val = _cv
                 if (bmin is not None and val < bmin) or (bmax is not None and val > bmax):
                     rng = f"{bmin}-{bmax}" if bmax is not None else f">= {bmin}"
                     add("physical", f"{name}: {where}{f2}={val} outside the {source} bound "
@@ -2370,12 +2530,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # "cannot judge" posture as the calibration scope refs.
             _loc_live = ref_index.get("locations") if isinstance(ref_index, dict) else None
             _lid = sp.get("locationId")
-            if isinstance(_lid, str) and _lid and not OBJECTID_RE.match(_lid):
+            if isinstance(_lid, str) and not OBJECTID_RE.match(_lid):
                 add("structure", f"{name}: spool {tag} locationId={_short(repr(_lid))} is not a "
                                  f"24-character hex ObjectId -> Mongoose's cast raises on it "
                                  f"(a 12-byte string and a bare id are BOTH rejected), so POST "
                                  f"/api/snapshot refuses the ENTIRE backup file", fid)
-            elif _lid is not None and _lid != "" and not isinstance(_lid, str):
+            elif not _castable_objectid(_lid):
                 # Excluding these as "uncheckable" hid a defect rather than
                 # avoiding a false one. `locationId` is a plain ObjectId ref and
                 # is NEVER populated by either detail read, so a dict or an array
@@ -2469,7 +2629,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
                 if isinstance(ue, dict):
                     _jid = ue.get("jobId")
                     if _jid is not None and not (isinstance(_jid, str)
-                                                 and OBJECTID_RE.match(_jid)):
+                                                 and OBJECTID_RE.match(_jid)):  # noqa: E501
                         add("structure", f"{name}: spool {tag} usage entry jobId="
                                          f"{_short(repr(_jid))} is not a 24-character hex ObjectId "
                                          f"-> the schema declares it as an ObjectId ref, so "
@@ -2715,7 +2875,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         # any of them — so the row read as a clean standalone and the backup was
         # unrestorable.
         _praw = raw.get("parentId")
-        if _praw is not None and not (isinstance(_praw, str) and OBJECTID_RE.match(_praw)):
+        if not _castable_objectid(_praw):
             add("structure", f"{name}: parentId={_short(repr(_praw))} is not a 24-character hex "
                              f"ObjectId -> Mongoose cannot cast it, so POST /api/snapshot refuses "
                              f"the ENTIRE backup file; every parent-link check is also skipped, so "
@@ -2870,7 +3030,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # because it merely lacks `_deletedAt`.
             for _ni, _nel in enumerate(compat):
                 _nref = _nel.get("_id") if isinstance(_nel, dict) else _nel
-                if not (isinstance(_nref, str) and OBJECTID_RE.match(_nref)):
+                if not _castable_objectid(_nref):
                     add("structure", f"{name}: compatibleNozzles[{_ni}]="
                                      f"{_short(repr(_nel))} is not a nozzle reference -> the "
                                      f"schema declares an ObjectId array, so Mongoose cannot cast "
@@ -2920,7 +3080,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         _tid = _raw.get("instanceId")
         if isinstance(_tid, str) and _tid:
             top_owners.setdefault(_tid, []).append((_fid, _nm))
-            top_ci.setdefault(_tid.casefold(), []).append((_fid, _nm))
+            top_ci.setdefault(_tid.lower(), []).append((_fid, _nm))
         # ...and the same folding for SPOOL ids. matchFilament's spool tier runs
         # exact-then-case-insensitive, so two spools whose ids differ only by
         # case collide there just as an exact duplicate does — either returning
@@ -2939,7 +3099,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
     spool_ci = {}
     for _sid_k, _rows_k in spool_owners.items():
-        spool_ci.setdefault(_sid_k.casefold(), []).extend((_sid_k, *_r) for _r in _rows_k)
+        spool_ci.setdefault(_sid_k.lower(), []).extend((_sid_k, *_r) for _r in _rows_k)
     for _fold, _rows_k in sorted(spool_ci.items()):
         _variants = {r[0] for r in _rows_k}
         if len(_variants) > 1:
@@ -3016,7 +3176,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # completely, and an exact-key comparison sees nothing at all.
             # Same promotion exemption as the exact branch above — otherwise
             # suppressing it there just moved the false finding into this row.
-            _ci_all = top_ci.get(_sid.casefold(), [])
+            _ci_all = top_ci.get(_sid.lower(), [])
             _ci_kin = _kin_of(_ci_all)
             _ci = [(i, n) for i, n in _ci_all
                    if i not in _fids and i not in _ci_kin and n is not None]
@@ -3034,7 +3194,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
     for _fold, _rows_t in sorted(top_ci.items()):
         _tvariants = {t for t, _ in ((_v["raw"].get("instanceId"), i) for i, _v in records.items()
                                      if isinstance(_v["raw"].get("instanceId"), str)
-                                     and _v["raw"]["instanceId"].casefold() == _fold)}
+                                     and _v["raw"]["instanceId"].lower() == _fold)}
         if len(_tvariants) > 1:
             add("structure", f"filament-level instanceIds {sorted(_tvariants)!r} differ only by "
                              f"CASE ({_who(_rows_t)}) -> each still resolves when scanned exactly "
