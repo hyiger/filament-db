@@ -188,16 +188,18 @@ from every total while the spool's own ledger still lists them.
 are exempt: an abstract product line legitimately carries none of it.
 
 **Physical values** — every numeric field against the **schema's own bounds**, mirrored in
-`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API,
-so a violation proves the row arrived by a path that bypassed validation (the settings bag's
-own limits — 400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored
-the same way, measured as **JavaScript would**: `JSON.stringify(value ?? null)` counted in UTF-16
-code units, so quotes, escapes and the surrogate pairs of an emoji all count exactly as they do in
-the app) — a raw-driver sync copy,
-a snapshot restore, or a legacy write — and both exporters serialise these straight into the
-preset. That covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three
-fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
-`prusaSlicerBundle` and `orcaSlicerBundle` both write as `filament_max_volumetric_speed`.
+`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A violation means the API would refuse that value today;
+it does **not** establish how the row came to hold it, and choosing a remedy from the bound alone is
+how you end up repairing valid data — the `glassTempTransition` bullet under *When the finding is
+right but the obvious fix is wrong* is the canonical rule for that and is not restated here.
+
+Report it either way, because both exporters serialise these straight into the preset. The sweep
+covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three fan speeds,
+retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which `prusaSlicerBundle` and
+`orcaSlicerBundle` both write as `filament_max_volumetric_speed`. The settings bag's own limits —
+400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored the same way,
+measured as **JavaScript would**: `JSON.stringify(value ?? null)` counted in UTF-16 code units, so
+quotes, escapes and the surrogate pairs of an emoji all count exactly as they do in the app.
 
 Density additionally gets a **material-aware** band.
 
@@ -221,12 +223,14 @@ validation is left alone. That direction is chosen on purpose — a false positi
 user to "fix" a vendor link that already works. Verified against node's own `new URL` over 6,000
 generated inputs: zero disagreements in the reporting direction.
 
-**Say which authority a finding rests on.** Most bounds mirror the schema, so a violation proves
-the row bypassed API validation — but `debitedGrams` is declared with no min/max at all, so calling
-a bad value there a "schema bound" violation would be a false claim about how it got there. It is
-reported separately, as implausible-but-acceptable-to-the-API. Keep that distinction when adding a
-check: the remedy differs, because one shape means "something wrote past validation" and the other
-means "validation would not have stopped this".
+**Say which authority a finding rests on.** Most bounds mirror the schema, so a violating value
+could not be written through the API *as the schema stands today* — but `debitedGrams` is declared
+with no min/max at all, so calling a bad value there a "schema bound" violation would be a false
+claim about how it got there. It is reported separately, as
+implausible-but-acceptable-to-the-API. Keep that distinction when adding a check: the remedy
+differs, because one shape means "the API would refuse this value now" and the other means
+"validation would not have stopped this". Neither phrasing claims a provenance — that turns on
+whether a bound exists at all, not on how the row was written.
 
 **Before changing the checker, run its suite** — from anywhere:
 
@@ -490,11 +494,32 @@ looks obvious:
   do not "correct" a valid 3.9 g/cm³ down to 2.5, which would corrupt every weight-to-length
   calculation reading it.
 - **A low nozzle temperature on PCL** — a valid low-temperature grade, not an error.
-- **`glassTempTransition` below the schema's −50 floor** — POM and other low-Tg materials are
-  commonly cited near −60 °C, so a value like that is likely *correct data against a bound that is
-  too tight*. It does prove the row was written by a path that bypassed validation, which is worth
-  knowing; it does not mean the number is wrong. Widening the schema bound is the real fix, and
-  editing the value to satisfy the audit is the one thing not to do.
+- **`glassTempTransition` below the floor** — glass transition is sub-ambient for a whole class of
+  polymers (POM/acetal ~−60 °C, PTFE ~−90, PE and silicone ~−120), so a negative value here is
+  usually *correct data against a bound that is too tight*. The floor was **−50 until PR #1202 and
+  is −150 now**, so the historical −60 case no longer trips.
+
+  **This is the canonical statement of the bound rule; other sections point here rather than
+  restate it.** A violation says the API would refuse that value *today*. It says nothing about how
+  the row came to hold it. Two situations produce an identical violation: a write path that skips
+  validation (raw-driver sync, restore, legacy write), or a bound younger than the value — `min: -50`
+  arrived in be52e860 while the rows it condemned predate it. Dates only narrow this. A `createdAt`
+  older than the bound makes the row a candidate, never a verdict, because a later restore or sync
+  can drop a corrupt value into an old row.
+
+  So judge the **value**, not its age: name the material and a source. Credible for that grade ⇒ the
+  bound is wrong. Not credible ⇒ the value is, and this is the one bullet here where the data is what
+  needs correcting. Below −150 — already under every printable polymer — corrupt is likelier than
+  exotic. Say which you established and let the owner make the write. Never edit a value only to
+  silence the audit.
+
+  **A too-tight bound freezes the row**, because validators run on the way out too: the edit form
+  resubmits every seeded field so any save 400s (and the input's own `min` can block submit first —
+  mirror the schema there, guarded by `tests/form-step-attributes.test.ts`), and `POST /api/snapshot`
+  400s the whole file, so the backup cannot be restored. Enumerate every blocker before promising a
+  fix restores it: here the widened floor cleared both −60 rows and restore was *still* blocked by
+  two `_purged` QA tombstones
+  (`QA-NegNum`, `QA-HotTemp`) failing unrelated bounds.
 
 The shared shape: the audit knows what the schema and the app accept, not what the material is.
 When those disagree, say so and let the owner decide rather than prescribing a write.
