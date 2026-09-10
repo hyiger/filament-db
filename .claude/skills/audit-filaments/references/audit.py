@@ -1194,9 +1194,18 @@ ORDERED_PAIRS_CAL = [("fan speed", "fanMinSpeed", "fanMaxSpeed")]           # pe
 # / _high), so a range of -10..700 exports while containing a valid nozzle temp.
 RANGE_BOUNDS = {"nozzleRangeMin": (0, 600), "nozzleRangeMax": (0, 600)}
 PRESET_BOUNDS = {"extrusionMultiplier": (0, None)}
-# Per-spool and ledger numerics. Not filament spec, but they are the same class
-# of "written by a path that bypassed validation" evidence and analytics reads
-# them. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
+# Per-spool and ledger numerics. Not filament spec, but the same class of
+# finding as NUMERIC_BOUNDS above — and that means the same TWO provenances,
+# not the bypass alone. These are if anything the clearer example: the FIELDS
+# arrived in 7cb4c23b (v1.11) while their BOUNDS arrived later, in be52e860 —
+# the #337 sweep, the very commit whose glassTempTransition floor PR #1202
+# widened. `tests/db-indexes-connection.test.ts` records the same fact from the
+# other side: its dryCycles fixture had to stop using -999 for tempC because
+# #337 added min 0 / max 300. So any dryCycle written between those two commits
+# can violate this table with nothing having bypassed anything.
+# Report the violation either way — analytics reads these — but check
+# `git log -S` on the bound before telling anyone their row was written by a
+# rogue path. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
 SPOOL_BOUNDS = {"totalWeight": (0, None)}
 DRY_CYCLE_BOUNDS = {"tempC": (0, 300), "durationMin": (0, None)}
 USAGE_BOUNDS = {"grams": (0, 1_000_000)}
