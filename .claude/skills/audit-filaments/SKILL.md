@@ -188,14 +188,10 @@ from every total while the spool's own ledger still lists them.
 are exempt: an abstract product line legitimately carries none of it.
 
 **Physical values** — every numeric field against the **schema's own bounds**, mirrored in
-`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API
-*as it stands today*, so a violation is always worth reporting — but it does **not** prove the row
-bypassed validation, and asserting that it does is a mistake this file made for several revisions.
-Either the row arrived by a path that bypasses validation — a raw-driver sync copy, a snapshot
-restore, or a legacy write — **or the bound is younger than the row**, in which case validation was
-never bypassed and the bound is what is wrong. Check `git log -S` on the bound against the row's
-`createdAt` before repairing anything; the `glassTempTransition` bullet under *When the finding is
-right but the obvious fix is wrong* works that case through end to end.
+`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A violation means the API would refuse that value today;
+it does **not** establish how the row came to hold it, and choosing a remedy from the bound alone is
+how you end up repairing valid data — the `glassTempTransition` bullet under *When the finding is
+right but the obvious fix is wrong* is the canonical rule for that and is not restated here.
 
 Report it either way, because both exporters serialise these straight into the preset. The sweep
 covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three fan speeds,
@@ -233,15 +229,8 @@ with no min/max at all, so calling a bad value there a "schema bound" violation 
 claim about how it got there. It is reported separately, as
 implausible-but-acceptable-to-the-API. Keep that distinction when adding a check: the remedy
 differs, because one shape means "the API would refuse this value now" and the other means
-"validation would not have stopped this".
-
-Note the careful phrasing on the first half, which is the durable claim. "The API would refuse this
-now" is **not** the same as "something bypassed validation", and the earlier revision of this
-paragraph asserted the latter: a bound younger than the row produces an identical violation with no
-bypass anywhere — see the `glassTempTransition` bullet under *When the finding is right but the
-obvious fix is wrong*. The bounded-vs-unbounded distinction this paragraph exists to draw is
-unaffected either way, because it turns on whether a bound exists at all, not on how the row got
-written.
+"validation would not have stopped this". Neither phrasing claims a provenance — that turns on
+whether a bound exists at all, not on how the row was written.
 
 **Before changing the checker, run its suite** — from anywhere:
 
@@ -510,34 +499,26 @@ looks obvious:
   usually *correct data against a bound that is too tight*. The floor was **−50 until PR #1202 and
   is −150 now**, so the historical −60 case no longer trips.
 
-  A value that trips the −150 floor is a different question, and do **not** reach for the same
-  remedy reflexively: −150 is already below every printable polymer, so the next outlier is far more
-  likely corrupt than exotic — a unit slip, a sign flip, a sensor artefact. Establish which it is
-  *first*, by naming the material and a source for the figure. Credible for that grade ⇒ the bound
-  is what is wrong; not credible ⇒ the bound did its job and the value is the defect, and this is
-  the one bullet in this section where the data may genuinely be what needs correcting. Either way
-  say which you established and let the owner make the write. What stays unconditional is only the
-  narrower rule: never edit a value *for the sole purpose of* silencing the audit, because that
-  destroys a real measurement to satisfy a bound nobody has checked.
+  **This is the canonical statement of the bound rule; other sections point here rather than
+  restate it.** A violation says the API would refuse that value *today*. It says nothing about how
+  the row came to hold it. Two situations produce an identical violation: a write path that skips
+  validation (raw-driver sync, restore, legacy write), or a bound younger than the value — `min: -50`
+  arrived in be52e860 while the rows it condemned predate it. Dates only narrow this. A `createdAt`
+  older than the bound makes the row a candidate, never a verdict, because a later restore or sync
+  can drop a corrupt value into an old row.
 
-  Two corrections that outlived that case, both worth applying to any bound finding:
+  So judge the **value**, not its age: name the material and a source. Credible for that grade ⇒ the
+  bound is wrong. Not credible ⇒ the value is, and this is the one bullet here where the data is what
+  needs correcting. Below −150 — already under every printable polymer — corrupt is likelier than
+  exotic. Say which you established and let the owner make the write. Never edit a value only to
+  silence the audit.
 
-  **"Outside the schema bound" does NOT prove the row bypassed validation** — an earlier revision of
-  this file said it did, and `audit.py`'s message now names both readings rather than asserting the
-  bypass. The bound may simply be *younger than the data*: `min: -50` arrived in be52e860 (the #337 sweep, 2026-05-22) while the two
-  offending rows were written on 2026-03-26 by the repo's own backfill. Check `git log -S` on the
-  bound against the row's `createdAt` before asserting provenance, because the two readings lead
-  opposite ways — a bypass means "something wrote past validation", a late bound means "validation
-  was wrong".
-
-  **A too-tight bound does not merely warn — it freezes the row**, because validators run on the way
-  back OUT as well as in. Both symptoms are worth checking whenever a stored value sits outside its
-  bound: the edit form resubmits every seeded field, so `PUT` 400s on a field the user never touched
-  (and the form's own `min` attribute can block submit before the request is even made — mirror the
-  schema there too, guarded by `tests/form-step-attributes.test.ts`); and `POST /api/snapshot`
-  validates every document and 400s the whole file, so the backup silently cannot be restored.
-  Enumerate ALL of them before promising a fix restores the backup: on this library the widened floor
-  cleared the two `-60` rows and the restore was *still* blocked by two `_purged` QA tombstones
+  **A too-tight bound freezes the row**, because validators run on the way out too: the edit form
+  resubmits every seeded field so any save 400s (and the input's own `min` can block submit first —
+  mirror the schema there, guarded by `tests/form-step-attributes.test.ts`), and `POST /api/snapshot`
+  400s the whole file, so the backup cannot be restored. Enumerate every blocker before promising a
+  fix restores it: here the widened floor cleared both −60 rows and restore was *still* blocked by
+  two `_purged` QA tombstones
   (`QA-NegNum`, `QA-HotTemp`) failing unrelated bounds.
 
 The shared shape: the audit knows what the schema and the app accept, not what the material is.

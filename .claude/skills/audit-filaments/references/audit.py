@@ -267,24 +267,11 @@ DENSITY_FLOOR = 0.7
 DENSITY_FLOOR_FOAMING = 0.3
 FOAMING_TYPE_RE = re.compile(r"(^|[^A-Z])LW[^A-Z]?|FOAM|LIGHTWEIGHT")
 
-# Bounds mirrored from the Filament schema. A value outside these cannot be
-# written through the API *today*, and both slicer exporters serialise these
-# straight into the preset, so a violation is always worth reporting — but do
-# not read it as proof of provenance, which is a mistake this comment itself
-# used to make. There are TWO explanations and they lead opposite ways:
-#
-#   1. the row arrived by a path that bypasses validation — a raw-driver sync
-#      copy, a snapshot restore, or a legacy write; or
-#   2. the BOUND IS YOUNGER THAN THE ROW, in which case validation was never
-#      bypassed and the bound is the thing that is wrong.
-#
-# (2) is not hypothetical: `min: -50` on glassTempTransition landed in be52e860,
-# two months after the rows it condemned, and PR #1202 widened it to -150 rather
-# than touching their data. `git log -S` on the bound against the row's
-# `createdAt` distinguishes them. `_blame()` names both readings for the same
-# reason; SKILL.md carries the full argument, including why a value below a
-# floor that is ALREADY below every printable polymer is more likely corrupt
-# than exotic.
+# Bounds mirrored from the Filament schema. A violation means the API would
+# refuse that value today, and both exporters serialise it straight into the
+# preset, so always report it — but it does NOT establish how the row got the
+# value, a mistake this comment itself used to make. SKILL.md's
+# glassTempTransition bullet is the canonical rule; do not restate it here.
 # `density` and `diameter` are deliberately absent: they have richer,
 # material-aware checks of their own and would otherwise be reported twice.
 NUMERIC_BOUNDS = {
@@ -1195,17 +1182,11 @@ ORDERED_PAIRS_CAL = [("fan speed", "fanMinSpeed", "fanMaxSpeed")]           # pe
 RANGE_BOUNDS = {"nozzleRangeMin": (0, 600), "nozzleRangeMax": (0, 600)}
 PRESET_BOUNDS = {"extrusionMultiplier": (0, None)}
 # Per-spool and ledger numerics. Not filament spec, but the same class of
-# finding as NUMERIC_BOUNDS above — and that means the same TWO provenances,
-# not the bypass alone. These are if anything the clearer example: the FIELDS
-# arrived in 7cb4c23b (v1.11) while their BOUNDS arrived later, in be52e860 —
-# the #337 sweep, the very commit whose glassTempTransition floor PR #1202
-# widened. `tests/db-indexes-connection.test.ts` records the same fact from the
-# other side: its dryCycles fixture had to stop using -999 for tempC because
-# #337 added min 0 / max 300. So any dryCycle written between those two commits
-# can violate this table with nothing having bypassed anything.
-# Report the violation either way — analytics reads these — but check
-# `git log -S` on the bound before telling anyone their row was written by a
-# rogue path. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
+# finding as NUMERIC_BOUNDS above, so the same rule applies — and these are its
+# clearest instance: the FIELDS arrived in 7cb4c23b (v1.11), their BOUNDS in
+# be52e860 (#337), so a dryCycle written between the two violates this table
+# with nothing having bypassed anything. Analytics reads these, so report
+# regardless. MAX_USAGE_GRAMS mirrors src/lib/capUsageHistory.ts.
 SPOOL_BOUNDS = {"totalWeight": (0, None)}
 DRY_CYCLE_BOUNDS = {"tempC": (0, 300), "durationMin": (0, None)}
 USAGE_BOUNDS = {"grams": (0, 1_000_000)}
@@ -2572,10 +2553,10 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
         def _blame(field, where="", inherit_root=""):
             """Whose data is this, and where should the user go?
 
-            A variant that INHERITS a field stores nothing for it, so telling its
-            owner the value "was written by a path that bypassed validation" is
-            false — the variant was never written at all — and it points the
-            repair at the wrong document. One bad value on an 8-colour template
+            A variant that INHERITS a field stores nothing for it, so pointing
+            the bounds message at its owner sends the repair to the wrong
+            document — the variant was never written at all. One bad value on an
+            8-colour template
             otherwise produces 9 identical rows, 8 of them un-actionable. The app
             already solves this: /api/abrasive-nozzles returns `inheritedFrom`
             and the UI says to change it on the template.
@@ -2586,17 +2567,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not where and field in inherited_fields:
                 return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
                         f"variant keeps it")
-            # Deliberately hedged. The obvious reading is that something wrote
-            # past validation (a raw-driver sync copy, a restore, a legacy
-            # write) — but the bound may simply be YOUNGER than the row, in
-            # which case validation was never bypassed and the BOUND is what is
-            # wrong. That is not hypothetical: `min: -50` on glassTempTransition
-            # landed in be52e860 two months after the rows it condemned, and PR
-            # #1202 widened it to -150 rather than touching their data. The two
-            # readings lead opposite ways, so name both and let the reader check
-            # `git log -S` on the bound against the row's createdAt.
-            return (" -> written by a path that bypassed validation, or the bound is newer "
-                    "than the row (check git log -S on it before repairing the value)")
+            # States what is observable and nothing more. It deliberately does
+            # NOT name a cause: an identical violation is produced by a write
+            # that skipped validation and by a bound younger than the value, and
+            # the remedies are opposites. SKILL.md's glassTempTransition bullet
+            # is the canonical rule.
+            return " -> the API would refuse this value now; check the value before assuming a bad write"
 
         def bounds_check(container, table, where="", source="schema", inherit_prefix="",
                          inherit_root=""):
