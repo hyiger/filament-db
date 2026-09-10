@@ -268,9 +268,23 @@ DENSITY_FLOOR_FOAMING = 0.3
 FOAMING_TYPE_RE = re.compile(r"(^|[^A-Z])LW[^A-Z]?|FOAM|LIGHTWEIGHT")
 
 # Bounds mirrored from the Filament schema. A value outside these cannot be
-# written through the API, so a violation means the row arrived by a path that
-# bypassed validation — a raw-driver sync copy, a snapshot restore, or a legacy
-# write — and both slicer exporters serialise these straight into the preset.
+# written through the API *today*, and both slicer exporters serialise these
+# straight into the preset, so a violation is always worth reporting — but do
+# not read it as proof of provenance, which is a mistake this comment itself
+# used to make. There are TWO explanations and they lead opposite ways:
+#
+#   1. the row arrived by a path that bypasses validation — a raw-driver sync
+#      copy, a snapshot restore, or a legacy write; or
+#   2. the BOUND IS YOUNGER THAN THE ROW, in which case validation was never
+#      bypassed and the bound is the thing that is wrong.
+#
+# (2) is not hypothetical: `min: -50` on glassTempTransition landed in be52e860,
+# two months after the rows it condemned, and PR #1202 widened it to -150 rather
+# than touching their data. `git log -S` on the bound against the row's
+# `createdAt` distinguishes them. `_blame()` names both readings for the same
+# reason; SKILL.md carries the full argument, including why a value below a
+# floor that is ALREADY below every printable polymer is more likely corrupt
+# than exotic.
 # `density` and `diameter` are deliberately absent: they have richer,
 # material-aware checks of their own and would otherwise be reported twice.
 NUMERIC_BOUNDS = {

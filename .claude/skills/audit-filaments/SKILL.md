@@ -188,16 +188,22 @@ from every total while the spool's own ledger still lists them.
 are exempt: an abstract product line legitimately carries none of it.
 
 **Physical values** — every numeric field against the **schema's own bounds**, mirrored in
-`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API,
-so a violation proves the row arrived by a path that bypassed validation (the settings bag's
-own limits — 400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored
-the same way, measured as **JavaScript would**: `JSON.stringify(value ?? null)` counted in UTF-16
-code units, so quotes, escapes and the surrogate pairs of an emoji all count exactly as they do in
-the app) — a raw-driver sync copy,
-a snapshot restore, or a legacy write — and both exporters serialise these straight into the
-preset. That covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three
-fan speeds, retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which
-`prusaSlicerBundle` and `orcaSlicerBundle` both write as `filament_max_volumetric_speed`.
+`NUMERIC_BOUNDS` and `CALIBRATION_BOUNDS`. A value outside them cannot be written through the API
+*as it stands today*, so a violation is always worth reporting — but it does **not** prove the row
+bypassed validation, and asserting that it does is a mistake this file made for several revisions.
+Either the row arrived by a path that bypasses validation — a raw-driver sync copy, a snapshot
+restore, or a legacy write — **or the bound is younger than the row**, in which case validation was
+never bypassed and the bound is what is wrong. Check `git log -S` on the bound against the row's
+`createdAt` before repairing anything; the `glassTempTransition` bullet under *When the finding is
+right but the obvious fix is wrong* works that case through end to end.
+
+Report it either way, because both exporters serialise these straight into the preset. The sweep
+covers the non-temperature calibration overrides too (`extrusionMultiplier`, the three fan speeds,
+retraction, pressure advance) and the top-level `maxVolumetricSpeed`, which `prusaSlicerBundle` and
+`orcaSlicerBundle` both write as `filament_max_volumetric_speed`. The settings bag's own limits —
+400 keys and 20,000 characters per value, from `validateSettingsBag` — are mirrored the same way,
+measured as **JavaScript would**: `JSON.stringify(value ?? null)` counted in UTF-16 code units, so
+quotes, escapes and the surrogate pairs of an emoji all count exactly as they do in the app.
 
 Density additionally gets a **material-aware** band.
 
