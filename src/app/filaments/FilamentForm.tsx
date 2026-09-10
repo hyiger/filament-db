@@ -2422,7 +2422,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>{t("form.glassTempTransition")}</label>
-          <input type="number" step="any" min="0" className={inputClass}
+          {/* min mirrors the schema floor, NOT 0: glass transition is
+              sub-ambient for a whole class of polymers (POM/acetal ~-60 °C).
+              A form min tighter than the schema's is save-blocking, not
+              cosmetic — panels stay mounted-but-hidden (#942) so the browser
+              reports rangeUnderflow on a SEEDED value and refuses to submit
+              the entire form, for a field the user never touched. Guarded by
+              tests/form-step-attributes.test.ts. */}
+          <input type="number" step="any" min="-150" className={inputClass}
             value={form.glassTempTransition}
             onChange={(e) => setForm({ ...form, glassTempTransition: e.target.value })}
             placeholder={parentPh("glassTempTransition") ?? t("form.placeholder.glassTempTransition")}
@@ -2430,7 +2437,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         </div>
         <div>
           <label className={labelClass}>{t("form.heatDeflectionTemp")}</label>
-          <input type="number" step="any" min="0" className={inputClass}
+          {/* Pre-existing instance of the same class: the schema has allowed
+              -50 since be52e860 while this input refused anything negative. */}
+          <input type="number" step="any" min="-50" className={inputClass}
             value={form.heatDeflectionTemp}
             onChange={(e) => setForm({ ...form, heatDeflectionTemp: e.target.value })}
             placeholder={parentPh("heatDeflectionTemp") ?? t("form.placeholder.heatDeflectionTemp")}

@@ -147,3 +147,78 @@ describe("form number inputs use step=\"any\" (GH #1171)", () => {
     expect(tags[0].tag).toContain('step="any"');
   });
 });
+
+/**
+ * Companion class-guard to the step sweep above, from the Codex P1 on PR #1202.
+ *
+ * Widening a schema bound is only half a fix: the form relies on native
+ * constraint validation (no `noValidate`) and its tab panels stay
+ * mounted-but-hidden (#942), so an input whose `min` is TIGHTER than the
+ * schema's reports `rangeUnderflow` on a value the record already holds and
+ * blocks submit for the whole form — the same save-blocking shape as a coarse
+ * `step`, reached from the other direction.
+ *
+ * That is not hypothetical: `glassTempTransition` shipped with `min="0"` while
+ * the schema allowed -50, so the two real POM/iglidur rows holding -60 could
+ * not be saved at all, and widening the schema floor to -150 alone would not
+ * have unblocked them. `heatDeflectionTemp` carried the identical mismatch.
+ */
+describe("form number-input min mirrors the schema floor (PR #1202)", () => {
+  const FILAMENT_FORM = "src/app/filaments/FilamentForm.tsx";
+  const FILAMENT_MODEL = "src/models/Filament.ts";
+
+  /** field → declared `min:` for every `type: Number` path in the model. */
+  function schemaMins(source: string): Map<string, number> {
+    const mins = new Map<string, number>();
+    const re = /(\w+)\s*:\s*\{\s*type:\s*Number[^}]*?min:\s*(-?\d+(?:\.\d+)?)/g;
+    for (let m = re.exec(source); m; m = re.exec(source)) {
+      mins.set(m[1], Number(m[2]));
+    }
+    return mins;
+  }
+
+  /** The `form.<field>` a number input is bound to, if any. */
+  function boundField(tag: string): string | null {
+    return /value=\{form\.(\w+)\}/.exec(tag)?.[1] ?? null;
+  }
+
+  it("no number input refuses a value the schema accepts", () => {
+    const form = readFileSync(path.join(REPO_ROOT, FILAMENT_FORM), "utf8");
+    const mins = schemaMins(readFileSync(path.join(REPO_ROOT, FILAMENT_MODEL), "utf8"));
+    const offenders: string[] = [];
+    for (const { tag, line } of numberInputs(form)) {
+      const field = boundField(tag);
+      if (!field) continue;
+      const schemaMin = mins.get(field);
+      const formMin = /min="(-?[\d.]+)"/.exec(tag)?.[1];
+      if (schemaMin === undefined || formMin === undefined) continue;
+      if (Number(formMin) > schemaMin) {
+        offenders.push(
+          `${FILAMENT_FORM}:${line} ${field} min="${formMin}" is tighter than schema min ${schemaMin}`,
+        );
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  // Without this the guard above could pass by matching nothing at all — a
+  // renamed `value={form.x}` binding or a reshaped schema declaration would
+  // silently empty it. Pins that both halves still parse and still pair up.
+  it("the guard is live — it pairs real inputs against real schema bounds", () => {
+    const form = readFileSync(path.join(REPO_ROOT, FILAMENT_FORM), "utf8");
+    const mins = schemaMins(readFileSync(path.join(REPO_ROOT, FILAMENT_MODEL), "utf8"));
+    expect(mins.get("glassTempTransition")).toBe(-150);
+    expect(mins.get("heatDeflectionTemp")).toBe(-50);
+
+    const paired = numberInputs(form).filter((t) => {
+      const f = boundField(t.tag);
+      return f !== null && mins.has(f) && /min="(-?[\d.]+)"/.test(t.tag);
+    });
+    expect(paired.length).toBeGreaterThanOrEqual(20);
+
+    // And the two fields this PR fixed are actually among the pairs.
+    const fields = new Set(paired.map((t) => boundField(t.tag)));
+    expect(fields).toContain("glassTempTransition");
+    expect(fields).toContain("heatDeflectionTemp");
+  });
+});
