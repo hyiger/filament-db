@@ -493,14 +493,23 @@ looks obvious:
 - **`glassTempTransition` below the floor** — glass transition is sub-ambient for a whole class of
   polymers (POM/acetal ~−60 °C, PTFE ~−90, PE and silicone ~−120), so a negative value here is
   usually *correct data against a bound that is too tight*. The floor was **−50 until PR #1202 and
-  is −150 now**, so the historical −60 case no longer trips; if a future value does, widening the
-  bound is still the fix and editing the value to satisfy the audit is still the one thing not to do.
+  is −150 now**, so the historical −60 case no longer trips.
+
+  A value that trips the −150 floor is a different question, and do **not** reach for the same
+  remedy reflexively: −150 is already below every printable polymer, so the next outlier is far more
+  likely corrupt than exotic — a unit slip, a sign flip, a sensor artefact. Establish which it is
+  *first*, by naming the material and a source for the figure. Credible for that grade ⇒ the bound
+  is what is wrong; not credible ⇒ the bound did its job and the value is the defect, and this is
+  the one bullet in this section where the data may genuinely be what needs correcting. Either way
+  say which you established and let the owner make the write. What stays unconditional is only the
+  narrower rule: never edit a value *for the sole purpose of* silencing the audit, because that
+  destroys a real measurement to satisfy a bound nobody has checked.
 
   Two corrections that outlived that case, both worth applying to any bound finding:
 
   **"Outside the schema bound" does NOT prove the row bypassed validation** — an earlier revision of
-  this file said it did, and the message in `audit.py` still says so. The bound may simply be
-  *younger than the data*: `min: -50` arrived in be52e860 (the #337 sweep, 2026-05-22) while the two
+  this file said it did, and `audit.py`'s message now names both readings rather than asserting the
+  bypass. The bound may simply be *younger than the data*: `min: -50` arrived in be52e860 (the #337 sweep, 2026-05-22) while the two
   offending rows were written on 2026-03-26 by the repo's own backfill. Check `git log -S` on the
   bound against the row's `createdAt` before asserting provenance, because the two readings lead
   opposite ways — a bypass means "something wrote past validation", a late bound means "validation
