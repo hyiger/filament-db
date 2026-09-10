@@ -227,12 +227,21 @@ validation is left alone. That direction is chosen on purpose — a false positi
 user to "fix" a vendor link that already works. Verified against node's own `new URL` over 6,000
 generated inputs: zero disagreements in the reporting direction.
 
-**Say which authority a finding rests on.** Most bounds mirror the schema, so a violation proves
-the row bypassed API validation — but `debitedGrams` is declared with no min/max at all, so calling
-a bad value there a "schema bound" violation would be a false claim about how it got there. It is
-reported separately, as implausible-but-acceptable-to-the-API. Keep that distinction when adding a
-check: the remedy differs, because one shape means "something wrote past validation" and the other
-means "validation would not have stopped this".
+**Say which authority a finding rests on.** Most bounds mirror the schema, so a violating value
+could not be written through the API *as the schema stands today* — but `debitedGrams` is declared
+with no min/max at all, so calling a bad value there a "schema bound" violation would be a false
+claim about how it got there. It is reported separately, as
+implausible-but-acceptable-to-the-API. Keep that distinction when adding a check: the remedy
+differs, because one shape means "the API would refuse this value now" and the other means
+"validation would not have stopped this".
+
+Note the careful phrasing on the first half, which is the durable claim. "The API would refuse this
+now" is **not** the same as "something bypassed validation", and the earlier revision of this
+paragraph asserted the latter: a bound younger than the row produces an identical violation with no
+bypass anywhere — see the `glassTempTransition` bullet under *When the finding is right but the
+obvious fix is wrong*. The bounded-vs-unbounded distinction this paragraph exists to draw is
+unaffected either way, because it turns on whether a bound exists at all, not on how the row got
+written.
 
 **Before changing the checker, run its suite** — from anywhere:
 
