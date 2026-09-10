@@ -490,11 +490,31 @@ looks obvious:
   do not "correct" a valid 3.9 g/cm³ down to 2.5, which would corrupt every weight-to-length
   calculation reading it.
 - **A low nozzle temperature on PCL** — a valid low-temperature grade, not an error.
-- **`glassTempTransition` below the schema's −50 floor** — POM and other low-Tg materials are
-  commonly cited near −60 °C, so a value like that is likely *correct data against a bound that is
-  too tight*. It does prove the row was written by a path that bypassed validation, which is worth
-  knowing; it does not mean the number is wrong. Widening the schema bound is the real fix, and
-  editing the value to satisfy the audit is the one thing not to do.
+- **`glassTempTransition` below the floor** — glass transition is sub-ambient for a whole class of
+  polymers (POM/acetal ~−60 °C, PTFE ~−90, PE and silicone ~−120), so a negative value here is
+  usually *correct data against a bound that is too tight*. The floor was **−50 until PR #1202 and
+  is −150 now**, so the historical −60 case no longer trips; if a future value does, widening the
+  bound is still the fix and editing the value to satisfy the audit is still the one thing not to do.
+
+  Two corrections that outlived that case, both worth applying to any bound finding:
+
+  **"Outside the schema bound" does NOT prove the row bypassed validation** — an earlier revision of
+  this file said it did, and the message in `audit.py` still says so. The bound may simply be
+  *younger than the data*: `min: -50` arrived in be52e860 (the #337 sweep, 2026-05-22) while the two
+  offending rows were written on 2026-03-26 by the repo's own backfill. Check `git log -S` on the
+  bound against the row's `createdAt` before asserting provenance, because the two readings lead
+  opposite ways — a bypass means "something wrote past validation", a late bound means "validation
+  was wrong".
+
+  **A too-tight bound does not merely warn — it freezes the row**, because validators run on the way
+  back OUT as well as in. Both symptoms are worth checking whenever a stored value sits outside its
+  bound: the edit form resubmits every seeded field, so `PUT` 400s on a field the user never touched
+  (and the form's own `min` attribute can block submit before the request is even made — mirror the
+  schema there too, guarded by `tests/form-step-attributes.test.ts`); and `POST /api/snapshot`
+  validates every document and 400s the whole file, so the backup silently cannot be restored.
+  Enumerate ALL of them before promising a fix restores the backup: on this library the widened floor
+  cleared the two `-60` rows and the restore was *still* blocked by two `_purged` QA tombstones
+  (`QA-NegNum`, `QA-HotTemp`) failing unrelated bounds.
 
 The shared shape: the audit knows what the schema and the app accept, not what the material is.
 When those disagree, say so and let the owner decide rather than prescribing a write.

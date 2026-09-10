@@ -2563,7 +2563,17 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             if not where and field in inherited_fields:
                 return (f" -> INHERITED from template {parent_name!r}; fix it there or every "
                         f"variant keeps it")
-            return " -> written by a path that bypassed validation"
+            # Deliberately hedged. The obvious reading is that something wrote
+            # past validation (a raw-driver sync copy, a restore, a legacy
+            # write) — but the bound may simply be YOUNGER than the row, in
+            # which case validation was never bypassed and the BOUND is what is
+            # wrong. That is not hypothetical: `min: -50` on glassTempTransition
+            # landed in be52e860 two months after the rows it condemned, and PR
+            # #1202 widened it to -150 rather than touching their data. The two
+            # readings lead opposite ways, so name both and let the reader check
+            # `git log -S` on the bound against the row's createdAt.
+            return (" -> written by a path that bypassed validation, or the bound is newer "
+                    "than the row (check git log -S on it before repairing the value)")
 
         def bounds_check(container, table, where="", source="schema", inherit_prefix="",
                          inherit_root=""):
