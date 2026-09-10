@@ -447,7 +447,19 @@ const FilamentSchema = new Schema<IFilament>(
     // this as a CBOR uint, and values ≥ 2^32 wrap in its `>>>` arithmetic.
     dryingTime: { type: Number, default: null, min: 0, max: [10080, "dryingTime must be <= 10080 minutes (7 days)"] },
     transmissionDistance: { type: Number, default: null, min: 0 },
-    glassTempTransition: { type: Number, default: null, min: -50, max: 500 },
+    // The -50 floor this carried from be52e860 (the #337 validation sweep) was
+    // ABOVE several real polymers' Tg, and it was tightened onto rows written
+    // ~2 months earlier: POM/acetal sits near -60 °C, PTFE near -90, PE and
+    // silicone near -120. So it condemned CORRECT data, and because a stored
+    // -60 fails `runValidators` on the way back out it froze those rows
+    // completely — the edit form resubmits every seeded field, so any save
+    // 400s, and `POST /api/snapshot` (which validates every document and 400s
+    // the whole file) could not restore a backup containing them. Floor is now
+    // -150, still far above absolute zero and still catching a garbage value,
+    // but below anything printable. Mirrored in the audit skill's NUMERIC_BOUNDS.
+    glassTempTransition: { type: Number, default: null, min: -150, max: 500 },
+    // Deliberately NOT widened: heat-deflection is measured under load and is
+    // above ambient for every printable polymer, so -50 is already generous.
     heatDeflectionTemp: { type: Number, default: null, min: -50, max: 500 },
     shoreHardnessA: { type: Number, default: null, min: 0, max: 100 },
     shoreHardnessD: { type: Number, default: null, min: 0, max: 100 },

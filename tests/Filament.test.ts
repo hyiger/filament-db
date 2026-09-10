@@ -1444,6 +1444,82 @@ describe("Filament Model — v1.11 spool fields", () => {
     ).rejects.toThrow();
   });
 
+  // The -50 floor added in be52e860 sat ABOVE real polymer Tg (POM/acetal
+  // ~-60 °C), so it condemned correct data that predated it by two months.
+  // Because a stored out-of-bound value fails `runValidators` on the way back
+  // OUT, it froze those rows: the edit form resubmits every seeded field, so
+  // any save 400d, and `POST /api/snapshot` — which validates every document
+  // and 400s the whole file — could not restore a backup containing them.
+  describe("glassTempTransition floor accommodates sub-ambient Tg", () => {
+    it("accepts POM's real Tg of -60 °C", async () => {
+      const f = await Filament.create({
+        name: "POM Tg",
+        vendor: "Test",
+        type: "POM",
+        glassTempTransition: -60,
+      });
+      expect(f.glassTempTransition).toBe(-60);
+    });
+
+    it("accepts a PE/silicone-class -120 °C, and -150 at the floor", async () => {
+      const pe = await Filament.create({
+        name: "PE Tg",
+        vendor: "Test",
+        type: "PE",
+        glassTempTransition: -120,
+      });
+      expect(pe.glassTempTransition).toBe(-120);
+      const floor = await Filament.create({
+        name: "Floor Tg",
+        vendor: "Test",
+        type: "PLA",
+        glassTempTransition: -150,
+      });
+      expect(floor.glassTempTransition).toBe(-150);
+    });
+
+    it("still rejects a physically impossible value below the floor", async () => {
+      await expect(
+        Filament.create({
+          name: "Impossible Tg",
+          vendor: "Test",
+          type: "PLA",
+          glassTempTransition: -300,
+        }),
+      ).rejects.toThrow(/glassTempTransition/);
+    });
+
+    // The regression itself: writing a stored value straight back must not 400.
+    // This is what the edit form does on every save.
+    it("lets an existing -60 row be saved again unchanged", async () => {
+      const f = await Filament.create({
+        name: "Resave Tg",
+        vendor: "Test",
+        type: "POM",
+        glassTempTransition: -60,
+      });
+      const again = await Filament.findOneAndUpdate(
+        { _id: f._id },
+        { $set: { glassTempTransition: -60 } },
+        { returnDocument: "after", runValidators: true },
+      );
+      expect(again.glassTempTransition).toBe(-60);
+    });
+
+    // heatDeflectionTemp is deliberately NOT widened — measured under load, it
+    // is above ambient for every printable polymer.
+    it("leaves the heatDeflectionTemp floor at -50", async () => {
+      await expect(
+        Filament.create({
+          name: "HDT Floor",
+          vendor: "Test",
+          type: "PLA",
+          heatDeflectionTemp: -60,
+        }),
+      ).rejects.toThrow(/heatDeflectionTemp/);
+    });
+  });
+
   // GH #477: multi-color filament schema. Mirrors OpenPrintTag spec
   // (primary key 19 may be null; up to 5 secondary slots in keys 20–24).
   describe("multi-color support (#477)", () => {

@@ -277,7 +277,10 @@ NUMERIC_BOUNDS = {
     "cost": (0, None), "maxVolumetricSpeed": (0, None), "lowStockThreshold": (0, None),
     "transmissionDistance": (0, None), "minPrintSpeed": (0, None), "maxPrintSpeed": (0, None),
     "spoolWeight": (0, None), "netFilamentWeight": (0, None), "totalWeight": (0, None),
-    "glassTempTransition": (-50, 500), "heatDeflectionTemp": (-50, 500),
+    # glassTempTransition's floor is -150, not -50: the old -50 was above real
+    # polymer Tg (POM ~-60, PTFE ~-90, PE/silicone ~-120) and condemned correct
+    # data. Keep in lockstep with src/models/Filament.ts.
+    "glassTempTransition": (-150, 500), "heatDeflectionTemp": (-50, 500),
     "shoreHardnessA": (0, 100), "shoreHardnessD": (0, 100),
     "shrinkageXY": (0, 100), "shrinkageZ": (0, 100),
     "dryingTemperature": (0, 300), "dryingTime": (0, 10080),
