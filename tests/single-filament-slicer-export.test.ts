@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { GET as exportPrusa } from "@/app/api/filaments/[id]/prusaslicer/route";
 import { GET as exportOrca } from "@/app/api/filaments/[id]/orcaslicer/route";
 import { GET as exportBambu } from "@/app/api/filaments/[id]/bambustudio/route";
-import { exportFilenameStem } from "@/lib/singleFilamentExport";
+import { attachmentContentDisposition, exportFilenameStem } from "@/lib/singleFilamentExport";
 
 /**
  * Per-filament slicer export — the detail-page "Export for slicer"
@@ -49,6 +49,112 @@ describe("single-filament slicer export routes", () => {
     it("falls back to 'filament' when the name reduces to nothing", () => {
       expect(exportFilenameStem("")).toBe("filament");
       expect(exportFilenameStem("///")).toBe("filament");
+    });
+    it("caps the length by code point, never splitting an emoji into a lone surrogate", () => {
+      const stem = exportFilenameStem("a".repeat(79) + "🔥🔥");
+      expect(Array.from(stem)).toHaveLength(80);
+      expect(stem.endsWith("🔥")).toBe(true);
+      expect(() => encodeURIComponent(stem)).not.toThrow();
+    });
+    it("strips control characters that are not whitespace", () => {
+      expect(exportFilenameStem("PLA\u0000\u0007\u007f Red")).toBe("PLA_Red");
+    });
+  });
+
+  // ── attachmentContentDisposition ──────────────────────────────────
+  // Header values must be ByteStrings (every UTF-16 unit <= U+00FF). A filename
+  // outside Latin-1 — every "<parent> — <colour>" variant that "Convert to
+  // template" creates — used to throw inside new NextResponse() and 500 the
+  // per-filament export.
+
+  describe("attachmentContentDisposition", () => {
+    it("keeps the exact historical header for a printable-ASCII name", () => {
+      expect(attachmentContentDisposition("Export_PLA", "ini")).toBe(
+        'attachment; filename="Export_PLA.ini"',
+      );
+    });
+    it("adds an RFC 5987 filename* beside an ASCII fallback for an em dash", () => {
+      expect(attachmentContentDisposition("Overture_PLA_—_Original", "json")).toBe(
+        "attachment; filename=\"Overture_PLA_-_Original.json\"; filename*=UTF-8''Overture_PLA_%E2%80%94_Original.json",
+      );
+    });
+    it("folds Latin-1 accents in the fallback and keeps them in filename*", () => {
+      expect(attachmentContentDisposition("PLA_Grün", "ini")).toBe(
+        "attachment; filename=\"PLA_Grun.ini\"; filename*=UTF-8''PLA_Gr%C3%BCn.ini",
+      );
+    });
+    it("falls back to 'filament' when nothing ASCII survives, as with a CJK name", () => {
+      expect(attachmentContentDisposition("聚乳酸", "json")).toBe(
+        "attachment; filename=\"filament.json\"; filename*=UTF-8''%E8%81%9A%E4%B9%B3%E9%85%B8.json",
+      );
+    });
+    it("percent-encodes the RFC 5987 attr-char exclusions ' ( ) *", () => {
+      expect(attachmentContentDisposition("PLA_(Red)*'—", "ini")).toContain(
+        "filename*=UTF-8''PLA_%28Red%29%2A%27%E2%80%94.ini",
+      );
+    });
+    it("never throws on a lone surrogate — it degrades to the ASCII fallback", () => {
+      expect(attachmentContentDisposition("PLA_\ud83d", "ini")).toBe('attachment; filename="PLA.ini"');
+    });
+    it("always yields a value the WHATWG Headers constructor accepts", () => {
+      const names = [
+        "Overture PLA — Original",
+        "聚乳酸 PLA",
+        "PLA 🔥 Hot",
+        "Grün",
+        "a".repeat(79) + "🔥🔥",
+        'q"uo\\te — x',
+        "PLA\u0000\u0007 Red",
+      ];
+      for (const name of names) {
+        const value = attachmentContentDisposition(exportFilenameStem(name), "json");
+        expect(() => new Headers({ "Content-Disposition": value }), name).not.toThrow();
+      }
+    });
+  });
+
+  // ── non-Latin-1 names reach the real routes ───────────────────────
+
+  describe("per-filament exports with a non-Latin-1 name", () => {
+    const routes = [
+      ["prusaslicer", exportPrusa, "ini"],
+      ["orcaslicer", exportOrca, "json"],
+      ["bambustudio", exportBambu, "json"],
+    ] as const;
+
+    for (const [label, handler, ext] of routes) {
+      it(`${label}: a promoted-variant em-dash name exports with an RFC 5987 filename*`, async () => {
+        const f = await Filament.create({
+          name: `PMMA ${label} — Original`,
+          vendor: "TestCo",
+          type: "PMMA",
+          temperatures: { nozzle: 260, bed: 110 },
+        });
+        const res = await handler(req(String(f._id)), {
+          params: Promise.resolve({ id: String(f._id) }),
+        });
+        expect(res.status).toBe(200);
+        expect(res.headers.get("Content-Disposition")).toBe(
+          `attachment; filename="PMMA_${label}_-_Original.${ext}"; filename*=UTF-8''PMMA_${label}_%E2%80%94_Original.${ext}`,
+        );
+      });
+    }
+
+    it("CJK and emoji names export on every route", async () => {
+      for (const name of ["聚乳酸 PLA", "PLA 🔥"]) {
+        const f = await Filament.create({
+          name,
+          vendor: "TestCo",
+          type: "PLA",
+          temperatures: { nozzle: 210, bed: 60 },
+        });
+        for (const [label, handler] of routes) {
+          const res = await handler(req(String(f._id)), {
+            params: Promise.resolve({ id: String(f._id) }),
+          });
+          expect(res.status, `${label} / ${name}`).toBe(200);
+        }
+      }
     });
   });
 

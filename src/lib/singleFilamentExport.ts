@@ -111,17 +111,63 @@ function withPopulate(query: any) {
 
 /**
  * Turn a filament name into a safe download filename stem. Strips path
- * separators and characters that browsers / OSes choke on, collapses
- * whitespace to underscores, and caps the length. Always returns a
- * non-empty string (`"filament"` when the name reduces to nothing).
+ * separators, control characters and characters that browsers / OSes choke
+ * on, collapses whitespace to underscores, and caps the length. Always
+ * returns a non-empty string (`"filament"` when the name reduces to nothing).
+ *
+ * The stem may still hold non-ASCII — an em dash, CJK, emoji — which is fine
+ * in a filename but not in an HTTP header value. Build the header with
+ * `attachmentContentDisposition`; never interpolate a stem into one directly.
  */
 export function exportFilenameStem(name: string): string {
-  const cleaned = (name || "")
-    .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
-    .replace(/\s+/g, "_")
-    .trim()
+  const cleaned = Array.from(
+    (name || "")
+      .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
+      .replace(/\s+/g, "_")
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, "") // remaining C0 / DEL / C1 controls
+      .trim(),
+  )
+    // Cap by code point, not UTF-16 unit: a unit slice can split an emoji into
+    // a lone surrogate, which encodeURIComponent then throws on.
     .slice(0, 80)
-    // slice() can leave a trailing underscore mid-collapse — tidy up.
+    .join("")
+    // The cap can leave a trailing underscore mid-collapse — tidy up.
     .replace(/^_+|_+$/g, "");
   return cleaned.length > 0 ? cleaned : "filament";
+}
+
+/**
+ * `Content-Disposition` value for downloading `<stem>.<ext>` as an attachment.
+ *
+ * Header values must be ByteStrings — every UTF-16 unit at or below U+00FF —
+ * so interpolating a name holding an em dash, CJK or emoji made
+ * `new NextResponse(...)` throw and the export route return 500. Every
+ * variant created by "Convert to template" is named `<parent> — <colour>`, so
+ * each one hit it. RFC 6266 carries such a name in `filename*` as RFC 5987
+ * UTF-8 percent-encoding, beside an ASCII `filename` for clients that ignore
+ * `filename*`. A printable-ASCII name keeps exactly the header it always had.
+ */
+export function attachmentContentDisposition(stem: string, ext: string): string {
+  const filename = `${stem}.${ext}`;
+  if (/^[\x20-\x7e]*$/.test(filename)) return `attachment; filename="${filename}"`;
+  const fallback =
+    stem
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "") // combining marks NFKD splits off (ü -> u)
+      .replace(/[\u2010-\u2015\u2212]/g, "-") // hyphens, en/em dashes, minus sign
+      .replace(/[^\x20-\x7e]|["\\]/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "") || "filament";
+  const header = `attachment; filename="${fallback}.${ext}"`;
+  try {
+    const encoded = encodeURIComponent(filename).replace(
+      /['()*]/g,
+      (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+    );
+    return `${header}; filename*=UTF-8''${encoded}`;
+  } catch {
+    // A malformed name (a lone surrogate) cannot be percent-encoded. The ASCII
+    // fallback alone is still a valid header — never let the name 500 the route.
+    return header;
+  }
 }
