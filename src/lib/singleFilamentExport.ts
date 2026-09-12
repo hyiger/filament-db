@@ -110,6 +110,19 @@ function withPopulate(query: any) {
 }
 
 /**
+ * The character rules every download filename obeys: no path separators or
+ * characters browsers / OSes reject, whitespace collapsed to underscores, no
+ * control characters. Shared by the stem and its ASCII fallback, whose NFKD can
+ * turn a compatibility form (／ ： ？) back into a character removed here.
+ */
+function sanitizeFilenameChars(s: string): string {
+  return s
+    .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
+    .replace(/\s+/g, "_")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ""); // remaining C0 / DEL / C1 controls
+}
+
+/**
  * Longest stem, in UTF-8 bytes, a download filename may carry. Filesystems
  * commonly cap one filename component at 255 bytes; this leaves room for the
  * extension and a browser's " (1)" de-duplication suffix. Every stem the old
@@ -129,11 +142,7 @@ const MAX_STEM_UTF8_BYTES = 240;
  * `attachmentContentDisposition`; never interpolate a stem into one directly.
  */
 export function exportFilenameStem(name: string): string {
-  const collapsed = (name || "")
-    .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
-    .replace(/\s+/g, "_")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "") // remaining C0 / DEL / C1 controls
-    .trim();
+  const collapsed = sanitizeFilenameChars(name || "").trim();
   // Cap on whole code points (a UTF-16 slice can split an emoji into a lone
   // surrogate, which encodeURIComponent throws on) and on UTF-8 bytes (a
   // code-point cap alone lets 80 four-byte emoji reach 320 bytes).
@@ -168,12 +177,17 @@ export function exportFilenameStem(name: string): string {
 export function attachmentContentDisposition(stem: string, ext: string): string {
   const filename = `${stem}.${ext}`;
   if (/^[\x20-\x7e]*$/.test(filename)) return `attachment; filename="${filename}"`;
+  // NFKD can turn a compatibility form back into a character the stem rules
+  // removed (／ -> /, ： -> :, a spacing diaeresis -> space), so apply the same
+  // rules again before mapping what is left to ASCII.
   const fallback =
-    stem
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "") // combining marks NFKD splits off (ü -> u)
-      .replace(/[\u2010-\u2015\u2212]/g, "-") // hyphens, en/em dashes, minus sign
-      .replace(/[^\x20-\x7e]|["\\]/g, "_")
+    sanitizeFilenameChars(
+      stem
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "") // combining marks NFKD splits off (ü -> u)
+        .replace(/[\u2010-\u2015\u2212]/g, "-"), // hyphens, en/em dashes, minus sign
+    )
+      .replace(/[^\x20-\x7e]/g, "_")
       .replace(/_+/g, "_")
       // NFKD can expand a stem that was already capped (Ⅷ -> VIII), so cap again;
       // the fallback is printable ASCII by now, so a character slice is a byte cap.

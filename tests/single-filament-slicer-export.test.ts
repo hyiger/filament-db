@@ -113,6 +113,15 @@ describe("single-filament slicer export routes", () => {
       const value = attachmentContentDisposition("Ⅷ".repeat(59) + "Ⅲ" + "€" + "Ⅷ", "json");
       expect(/filename="([^"]*)"/.exec(value)?.[1]).toBe("VIII".repeat(59) + "III.json");
     });
+    it("re-applies the illegal-character rules to what NFKD makes of fullwidth forms", () => {
+      const stem = exportFilenameStem("Ａ／Ｂ＼Ｃ？Ｄ％Ｅ＊Ｆ：Ｇ｜Ｈ＂Ｉ＜Ｊ＞");
+      const fallback = /filename="([^"]*)"/.exec(attachmentContentDisposition(stem, "json"))?.[1];
+      expect(fallback).toBe("ABCDEFGHIJ.json");
+    });
+    it("collapses whitespace NFKD produces to underscores, as the stem does", () => {
+      const value = attachmentContentDisposition(exportFilenameStem("PLA¨Red"), "ini");
+      expect(/filename="([^"]*)"/.exec(value)?.[1]).toBe("PLA_Red.ini");
+    });
     it("percent-encodes the RFC 5987 attr-char exclusions ' ( ) *", () => {
       expect(attachmentContentDisposition("PLA_(Red)*'—", "ini")).toContain(
         "filename*=UTF-8''PLA_%28Red%29%2A%27%E2%80%94.ini",
