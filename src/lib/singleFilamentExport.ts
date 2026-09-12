@@ -110,29 +110,47 @@ function withPopulate(query: any) {
 }
 
 /**
+ * Longest stem, in UTF-8 bytes, a download filename may carry. Filesystems
+ * commonly cap one filename component at 255 bytes; this leaves room for the
+ * extension and a browser's " (1)" de-duplication suffix. Every stem the old
+ * 80-UTF-16-unit cap kept still fits (at most 80 three-byte characters).
+ */
+const MAX_STEM_UTF8_BYTES = 240;
+
+/**
  * Turn a filament name into a safe download filename stem. Strips path
  * separators, control characters and characters that browsers / OSes choke
- * on, collapses whitespace to underscores, and caps the length. Always
- * returns a non-empty string (`"filament"` when the name reduces to nothing).
+ * on, collapses whitespace to underscores, and caps the length at 80 code
+ * points and MAX_STEM_UTF8_BYTES. Always returns a non-empty string
+ * (`"filament"` when the name reduces to nothing).
  *
  * The stem may still hold non-ASCII — an em dash, CJK, emoji — which is fine
  * in a filename but not in an HTTP header value. Build the header with
  * `attachmentContentDisposition`; never interpolate a stem into one directly.
  */
 export function exportFilenameStem(name: string): string {
-  const cleaned = Array.from(
-    (name || "")
-      .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
-      .replace(/\s+/g, "_")
-      .replace(/[\u0000-\u001f\u007f-\u009f]/g, "") // remaining C0 / DEL / C1 controls
-      .trim(),
-  )
-    // Cap by code point, not UTF-16 unit: a unit slice can split an emoji into
-    // a lone surrogate, which encodeURIComponent then throws on.
-    .slice(0, 80)
-    .join("")
-    // The cap can leave a trailing underscore mid-collapse — tidy up.
-    .replace(/^_+|_+$/g, "");
+  const collapsed = (name || "")
+    .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
+    .replace(/\s+/g, "_")
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "") // remaining C0 / DEL / C1 controls
+    .trim();
+  // Cap on whole code points (a UTF-16 slice can split an emoji into a lone
+  // surrogate, which encodeURIComponent throws on) and on UTF-8 bytes (a
+  // code-point cap alone lets 80 four-byte emoji reach 320 bytes).
+  let capped = "";
+  let points = 0;
+  let bytes = 0;
+  for (const ch of collapsed) {
+    // for...of yields whole, non-empty code points, so codePointAt(0) is defined.
+    const cp = ch.codePointAt(0) as number;
+    const size = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (points === 80 || bytes + size > MAX_STEM_UTF8_BYTES) break;
+    capped += ch;
+    points += 1;
+    bytes += size;
+  }
+  // The cap can leave a trailing underscore mid-collapse — tidy up.
+  const cleaned = capped.replace(/^_+|_+$/g, "");
   return cleaned.length > 0 ? cleaned : "filament";
 }
 

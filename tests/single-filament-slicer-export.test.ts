@@ -56,6 +56,20 @@ describe("single-filament slicer export routes", () => {
       expect(stem.endsWith("🔥")).toBe(true);
       expect(() => encodeURIComponent(stem)).not.toThrow();
     });
+    it("caps an emoji-heavy stem at 240 UTF-8 bytes, so stem + extension stays within 255", () => {
+      const stem = exportFilenameStem("🔥".repeat(80));
+      expect(Array.from(stem)).toHaveLength(60);
+      expect(new TextEncoder().encode(stem).length).toBe(240);
+      expect(new TextEncoder().encode(`${stem}.json`).length).toBeLessThanOrEqual(255);
+    });
+    it("drops a character whole rather than overrun the byte budget", () => {
+      const stem = exportFilenameStem("ab" + "🔥".repeat(60));
+      expect(stem).toBe("ab" + "🔥".repeat(59));
+      expect(new TextEncoder().encode(stem).length).toBe(238);
+    });
+    it("keeps an 80-character CJK name whole, the most the old cap allowed", () => {
+      expect(exportFilenameStem("聚".repeat(90))).toBe("聚".repeat(80));
+    });
     it("strips control characters that are not whitespace", () => {
       expect(exportFilenameStem("PLA\u0000\u0007\u007f Red")).toBe("PLA_Red");
     });
