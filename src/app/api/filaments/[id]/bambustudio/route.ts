@@ -8,6 +8,7 @@ import { generateOrcaSlicerProfiles } from "@/lib/orcaSlicerBundle";
 import {
   resolveFilamentForExport,
   exportFilenameStem,
+  attachmentContentDisposition,
 } from "@/lib/singleFilamentExport";
 import {
   parseBambuStudioProfile,
@@ -69,7 +70,7 @@ export async function GET(
     return new NextResponse(JSON.stringify(profile, null, 2), {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${stem}.json"`,
+        "Content-Disposition": attachmentContentDisposition(stem, "json"),
       },
     });
   } catch (err) {

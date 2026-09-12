@@ -110,18 +110,99 @@ function withPopulate(query: any) {
 }
 
 /**
- * Turn a filament name into a safe download filename stem. Strips path
- * separators and characters that browsers / OSes choke on, collapses
- * whitespace to underscores, and caps the length. Always returns a
- * non-empty string (`"filament"` when the name reduces to nothing).
+ * The character rules every download filename obeys: no path separators or
+ * characters browsers / OSes reject, whitespace collapsed to underscores, no
+ * control characters. Shared by the stem and its ASCII fallback, whose NFKD can
+ * turn a compatibility form (／ ： ？) back into a character removed here.
  */
-export function exportFilenameStem(name: string): string {
-  const cleaned = (name || "")
+function sanitizeFilenameChars(s: string): string {
+  return s
     .replace(/[/\\?%*:|"<>]/g, "") // illegal filename chars
     .replace(/\s+/g, "_")
-    .trim()
-    .slice(0, 80)
-    // slice() can leave a trailing underscore mid-collapse — tidy up.
-    .replace(/^_+|_+$/g, "");
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, ""); // remaining C0 / DEL / C1 controls
+}
+
+/**
+ * Longest stem, in UTF-8 bytes, a download filename may carry. Filesystems
+ * commonly cap one filename component at 255 bytes; this leaves room for the
+ * extension and a browser's " (1)" de-duplication suffix. Every stem the old
+ * 80-UTF-16-unit cap kept still fits (at most 80 three-byte characters).
+ */
+const MAX_STEM_UTF8_BYTES = 240;
+
+/**
+ * Turn a filament name into a safe download filename stem. Strips path
+ * separators, control characters and characters that browsers / OSes choke
+ * on, collapses whitespace to underscores, and caps the length at 80 code
+ * points and MAX_STEM_UTF8_BYTES. Always returns a non-empty string
+ * (`"filament"` when the name reduces to nothing).
+ *
+ * The stem may still hold non-ASCII — an em dash, CJK, emoji — which is fine
+ * in a filename but not in an HTTP header value. Build the header with
+ * `attachmentContentDisposition`; never interpolate a stem into one directly.
+ */
+export function exportFilenameStem(name: string): string {
+  const collapsed = sanitizeFilenameChars(name || "").trim();
+  // Cap on whole code points (a UTF-16 slice can split an emoji into a lone
+  // surrogate, which encodeURIComponent throws on) and on UTF-8 bytes (a
+  // code-point cap alone lets 80 four-byte emoji reach 320 bytes).
+  let capped = "";
+  let points = 0;
+  let bytes = 0;
+  for (const ch of collapsed) {
+    // for...of yields whole, non-empty code points, so codePointAt(0) is defined.
+    const cp = ch.codePointAt(0) as number;
+    const size = cp < 0x80 ? 1 : cp < 0x800 ? 2 : cp < 0x10000 ? 3 : 4;
+    if (points === 80 || bytes + size > MAX_STEM_UTF8_BYTES) break;
+    capped += ch;
+    points += 1;
+    bytes += size;
+  }
+  // The cap can leave a trailing underscore mid-collapse — tidy up.
+  const cleaned = capped.replace(/^_+|_+$/g, "");
   return cleaned.length > 0 ? cleaned : "filament";
+}
+
+/**
+ * `Content-Disposition` value for downloading `<stem>.<ext>` as an attachment.
+ *
+ * Header values must be ByteStrings — every UTF-16 unit at or below U+00FF —
+ * so interpolating a name holding an em dash, CJK or emoji made
+ * `new NextResponse(...)` throw and the export route return 500. Every
+ * variant created by "Convert to template" is named `<parent> — <colour>`, so
+ * each one hit it. RFC 6266 carries such a name in `filename*` as RFC 5987
+ * UTF-8 percent-encoding, beside an ASCII `filename` for clients that ignore
+ * `filename*`. A printable-ASCII name keeps exactly the header it always had.
+ */
+export function attachmentContentDisposition(stem: string, ext: string): string {
+  const filename = `${stem}.${ext}`;
+  if (/^[\x20-\x7e]*$/.test(filename)) return `attachment; filename="${filename}"`;
+  // NFKD can turn a compatibility form back into a character the stem rules
+  // removed (／ -> /, ： -> :, a spacing diaeresis -> space), so apply the same
+  // rules again before mapping what is left to ASCII.
+  const fallback =
+    sanitizeFilenameChars(
+      stem
+        .normalize("NFKD")
+        .replace(/[\u0300-\u036f]/g, "") // combining marks NFKD splits off (ü -> u)
+        .replace(/[\u2010-\u2015\u2212]/g, "-"), // hyphens, en/em dashes, minus sign
+    )
+      .replace(/[^\x20-\x7e]/g, "_")
+      .replace(/_+/g, "_")
+      // NFKD can expand a stem that was already capped (Ⅷ -> VIII), so cap again;
+      // the fallback is printable ASCII by now, so a character slice is a byte cap.
+      .slice(0, MAX_STEM_UTF8_BYTES)
+      .replace(/^_+|_+$/g, "") || "filament";
+  const header = `attachment; filename="${fallback}.${ext}"`;
+  try {
+    const encoded = encodeURIComponent(filename).replace(
+      /['()*]/g,
+      (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+    );
+    return `${header}; filename*=UTF-8''${encoded}`;
+  } catch {
+    // A malformed name (a lone surrogate) cannot be percent-encoded. The ASCII
+    // fallback alone is still a valid header — never let the name 500 the route.
+    return header;
+  }
 }
