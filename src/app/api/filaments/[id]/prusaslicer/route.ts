@@ -7,6 +7,7 @@ import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 import {
   resolveFilamentForExport,
   exportFilenameStem,
+  attachmentContentDisposition,
 } from "@/lib/singleFilamentExport";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
@@ -47,7 +48,7 @@ export async function GET(
     return new NextResponse(ini, {
       headers: {
         "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${stem}.ini"`,
+        "Content-Disposition": attachmentContentDisposition(stem, "ini"),
       },
     });
   } catch (err) {
