@@ -175,6 +175,9 @@ export function attachmentContentDisposition(stem: string, ext: string): string 
       .replace(/[\u2010-\u2015\u2212]/g, "-") // hyphens, en/em dashes, minus sign
       .replace(/[^\x20-\x7e]|["\\]/g, "_")
       .replace(/_+/g, "_")
+      // NFKD can expand a stem that was already capped (Ⅷ -> VIII), so cap again;
+      // the fallback is printable ASCII by now, so a character slice is a byte cap.
+      .slice(0, MAX_STEM_UTF8_BYTES)
       .replace(/^_+|_+$/g, "") || "filament";
   const header = `attachment; filename="${fallback}.${ext}"`;
   try {

@@ -102,6 +102,17 @@ describe("single-filament slicer export routes", () => {
         "attachment; filename=\"filament.json\"; filename*=UTF-8''%E8%81%9A%E4%B9%B3%E9%85%B8.json",
       );
     });
+    it("caps the ASCII fallback again after NFKD expands an already-capped stem", () => {
+      const stem = exportFilenameStem("Ⅷ".repeat(80));
+      expect(new TextEncoder().encode(stem).length).toBe(240);
+      const fallback = /filename="([^"]*)"/.exec(attachmentContentDisposition(stem, "json"))?.[1] ?? "";
+      expect(fallback).toBe("VIII".repeat(60) + ".json");
+      expect(new TextEncoder().encode(fallback).length).toBeLessThanOrEqual(255);
+    });
+    it("trims an underscore the fallback cap would otherwise leave at the end", () => {
+      const value = attachmentContentDisposition("Ⅷ".repeat(59) + "Ⅲ" + "€" + "Ⅷ", "json");
+      expect(/filename="([^"]*)"/.exec(value)?.[1]).toBe("VIII".repeat(59) + "III.json");
+    });
     it("percent-encodes the RFC 5987 attr-char exclusions ' ( ) *", () => {
       expect(attachmentContentDisposition("PLA_(Red)*'—", "ini")).toContain(
         "filename*=UTF-8''PLA_%28Red%29%2A%27%E2%80%94.ini",
