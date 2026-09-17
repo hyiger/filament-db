@@ -5,9 +5,21 @@ import {
   summarizeInventoryGroups,
   INVENTORY_NO_GROUP_KEY,
   INVENTORY_ALL_KEY,
+  INVENTORY_COLOR_KEY_PREFIX,
+  INVENTORY_GROUP_BYS,
+  inventoryRowColorFamily,
   type InventoryRow,
   type InventorySourceGroup,
 } from "@/lib/inventorySort";
+import { COLOR_FAMILIES } from "@/lib/colorFamily";
+import { INVENTORY_FILTER_SPEC, DEFAULT_INVENTORY_PREFS } from "@/lib/listFilterSpecs";
+import {
+  parseFilterParams,
+  seedFilterState,
+  serializeFilterParams,
+} from "@/lib/listFilterParams";
+import en from "@/i18n/locales/en.json";
+import de from "@/i18n/locales/de.json";
 
 /**
  * GH #795 — pure regroup + sort transforms for the /inventory page.
@@ -369,5 +381,162 @@ describe("summarizeInventoryGroups (#1117 f)", () => {
       locationCount: 1,
       totalGrams: 420,
     });
+  });
+});
+
+describe("groupAndSortInventory — color grouping (color facet)", () => {
+  const shelf = loc("L1", "Shelf");
+  const dry = loc("L2", "Drybox");
+
+  // Hexes chosen well inside their families so this suite pins the GROUPING,
+  // not the classifier's thresholds (tests/colorFamily.test.ts owns those).
+  const source: InventorySourceGroup<Row>[] = [
+    {
+      locationId: "L1",
+      location: shelf,
+      count: 4,
+      totalGrams: 0,
+      spools: [
+        row("blue-pla", { filamentColor: "#1E63D6", filamentType: "PLA", totalWeight: 700 }),
+        row("orange-petg", { filamentColor: "#FF7A00", filamentType: "PETG", totalWeight: 900 }),
+        // No color at all → the "unknown" family, sorted last by COLOR_FAMILIES.
+        row("nocolor", { filamentColor: null }),
+        // Coextruded: null primary, colors in secondaryColors + OPT tag 28.
+        row("coex", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [28] }),
+      ],
+    },
+    {
+      locationId: "L2",
+      location: dry,
+      count: 3,
+      totalGrams: 0,
+      spools: [
+        row("orange-pctg", { filamentColor: "#FF7A00", filamentType: "PCTG", totalWeight: 400 }),
+        // Transparent tag over a white swatch → Clear.
+        row("clear", { filamentColor: "#FFFFFF", optTags: [2] }),
+        row("black", { filamentColor: "#111111" }),
+      ],
+    },
+  ];
+
+  it("orders sections by COLOR_FAMILIES, not alphabetically or by count", () => {
+    const out = groupAndSortInventory(source, "color", "name", "asc");
+    expect(out.map((g) => g.colorFamily)).toEqual(["black", "orange", "blue", "clear", "multi", "unknown"]);
+    // Two orange spools vs one of everything else — count doesn't reorder.
+    expect(out.find((g) => g.colorFamily === "orange")!.count).toBe(2);
+  });
+
+  it("keys sections with the color prefix and leaves label/location null", () => {
+    const out = groupAndSortInventory(source, "color", "name", "asc");
+    for (const g of out) {
+      expect(g.key).toBe(`${INVENTORY_COLOR_KEY_PREFIX}${g.colorFamily}`);
+      expect(g.label).toBeNull();
+      expect(g.location).toBeNull();
+      expect(g.locationId).toBeNull();
+    }
+  });
+
+  it("puts each spool in exactly one section, regrouping across locations", () => {
+    const out = groupAndSortInventory(source, "color", "name", "asc");
+    const all = out.flatMap((g) => g.spools.map((r) => r.id)).sort();
+    expect(all).toEqual(source.flatMap((g) => g.spools.map((r) => r.id)).sort());
+    const orange = out.find((g) => g.colorFamily === "orange")!;
+    // Recomputed total across both locations: (900-200) + (400-200).
+    expect(orange.totalGrams).toBe(900);
+  });
+
+  it("applies the within-group sort inside each color section", () => {
+    const asc = groupAndSortInventory(source, "color", "type", "asc");
+    expect(asc.find((g) => g.colorFamily === "orange")!.spools.map((r) => r.id)).toEqual([
+      "orange-pctg",
+      "orange-petg",
+    ]);
+    const desc = groupAndSortInventory(source, "color", "remaining", "desc");
+    expect(desc.find((g) => g.colorFamily === "orange")!.spools.map((r) => r.id)).toEqual([
+      "orange-petg",
+      "orange-pctg",
+    ]);
+  });
+
+  it("leaves colorFamily null in every non-color mode", () => {
+    for (const mode of ["location", "type", "vendor", "none"] as const) {
+      for (const g of groupAndSortInventory(source, mode, "name", "asc")) {
+        expect(g.colorFamily).toBeNull();
+      }
+    }
+  });
+});
+
+describe("inventoryRowColorFamily (color facet adapter)", () => {
+  it("maps row fields onto the classifier's filament shape", () => {
+    expect(inventoryRowColorFamily(row("a", { filamentColor: "#1E63D6" }))).toBe("blue");
+    // A color word in the NAME is read through filamentName.
+    expect(
+      inventoryRowColorFamily(row("b", { filamentName: "Galaxy Black", filamentColor: "#3A3A3A" })),
+    ).toBe("black");
+    // Coextruded null primary → multi via secondaryColors + optTags.
+    expect(
+      inventoryRowColorFamily(
+        row("c", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [28] }),
+      ),
+    ).toBe("multi");
+    // Null primary with one secondary paints (and classifies as) that secondary.
+    expect(inventoryRowColorFamily(row("d", { filamentColor: null, secondaryColors: ["#D32F2F"] }))).toBe(
+      "red",
+    );
+    expect(inventoryRowColorFamily(row("e", { filamentColor: "#FFFFFF", optTags: [2] }))).toBe("clear");
+  });
+
+  it("classifies a legacy/stale-shape row with no color fields as unknown", () => {
+    // Pre-#1050 payloads (and legacySingleSpool rows from an old cache) carry
+    // none of the three fields.
+    expect(inventoryRowColorFamily(row("legacy"))).toBe("unknown");
+  });
+
+  it("never treats a spool row as a template, even for a variant-bearing parent's own spools", () => {
+    // hasVariants is forced false by the adapter — a spool row IS inventory.
+    expect(inventoryRowColorFamily(row("parent", { filamentColor: "#FF7A00" }))).toBe("orange");
+  });
+
+  it("memoizes per row object without leaking across different objects", () => {
+    const r = row("m", { filamentColor: "#1E63D6" });
+    expect(inventoryRowColorFamily(r)).toBe("blue");
+    expect(inventoryRowColorFamily(r)).toBe("blue");
+    // A replaced row (the refetch pattern) is classified afresh.
+    expect(inventoryRowColorFamily({ ...r, filamentColor: "#FF7A00" })).toBe("orange");
+  });
+});
+
+describe("group-by color — validation + persistence (color facet)", () => {
+  it("accepts 'color' as a group-by value", () => {
+    expect(INVENTORY_GROUP_BYS).toContain("color");
+  });
+
+  it("round-trips ?group=color through the URL spec", () => {
+    const parsed = parseFilterParams("?group=color", INVENTORY_FILTER_SPEC);
+    expect(parsed.groupBy).toBe("color");
+    const qs = serializeFilterParams("", INVENTORY_FILTER_SPEC, parsed);
+    expect(new URLSearchParams(qs).get("group")).toBe("color");
+    // An unknown value still falls back.
+    expect(parseFilterParams("?group=colour", INVENTORY_FILTER_SPEC).groupBy).toBe(
+      DEFAULT_INVENTORY_PREFS.groupBy,
+    );
+  });
+
+  it("seeds a persisted 'color' preference when the URL is silent, URL wins otherwise", () => {
+    const persisted = { ...DEFAULT_INVENTORY_PREFS, groupBy: "color" as const };
+    expect(seedFilterState("", INVENTORY_FILTER_SPEC, persisted).groupBy).toBe("color");
+    expect(seedFilterState("?group=type", INVENTORY_FILTER_SPEC, persisted).groupBy).toBe("type");
+  });
+
+  it("has a translated header for every color family in en and de", () => {
+    const enMap = en as Record<string, string>;
+    const deMap = de as Record<string, string>;
+    expect(enMap["inventory.groupBy.color"]).toBeTruthy();
+    expect(deMap["inventory.groupBy.color"]).toBeTruthy();
+    for (const f of COLOR_FAMILIES) {
+      expect(enMap[`colorFacet.family.${f}`], f).toBeTruthy();
+      expect(deMap[`colorFacet.family.${f}`], f).toBeTruthy();
+    }
   });
 });
