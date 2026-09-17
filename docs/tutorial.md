@@ -70,6 +70,7 @@ Beside the **Filament DB** title on the home page is a small **connection status
 | 🟢 **Synced 2m ago** | Last sync completed successfully (relative time updates automatically) |
 | 🔵 **Syncing...** | Sync in progress (pulsing dot) |
 | 🟡 **Offline** | No network; app is using local data and will sync when reconnected |
+| 🟠 **Sync partial** | Some collections synced and others failed; the tooltip names the failures |
 | 🔴 **Sync error** | Last sync attempt failed |
 
 **Click the pill** to open a tooltip with:
@@ -166,7 +167,7 @@ If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), t
 1. Go to **Settings → AI** (the **AI** tile on the Settings page, or navigate to `/settings/ai`).
 2. Choose a provider: **Google Gemini** (free tier), **Anthropic Claude**, or **OpenAI ChatGPT**.
 3. Click the provider link to get an API key (Gemini is free, Claude and OpenAI are pay-per-use).
-5. Paste the key and click **Save Key**. A green dot confirms it's configured.
+4. Paste the key and click **Save Key**. A green dot confirms it's configured.
 
 **Importing from TDS:**
 
@@ -223,7 +224,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 1. Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**.
 2. Select a previously exported snapshot JSON file.
-3. All current snapshot-scoped data is replaced with the snapshot contents (best-effort rollback on failure).
+3. Every collection the file carries is replaced with the snapshot contents (best-effort rollback on failure). A collection an older-format snapshot doesn't carry — e.g. locations or print history in a v2 file — is left untouched, and the success message lists it.
 
 ### Via CLI (alternative)
 
@@ -246,6 +247,7 @@ The home page shows all filaments in a sortable table.
 - **Search** -- type in the search box to filter by name
 - **Filter by Type** -- use the type dropdown to show only PLA, PETG, ASA, etc.
 - **Filter by Vendor** -- use the vendor dropdown to show only one manufacturer
+- **Filter by Color** *(v1.82)* -- click a color-family chip (Black, Gray, Orange, …, Clear, Multicolor, No color) to see just that color; families with shades add **Light / Medium / Dark** chips, and a **Types in stock** strip shows which materials you have in that color. A filament can appear under more than one family (its name says one color, its swatch reads another), and the default gray `#808080` counts as **No color**. The filter is kept in the URL (`?color=orange`, `?color=gray-dark`) so you can bookmark it
 - **Sort** -- click any column header (Name, Vendor, Type, Nozzle Temp, Bed Temp, Cost, Remaining %, Purchased, Opened) to sort ascending or descending. The active sort shows a blue arrow.
 - **Color swatches** -- each row shows the filament's color as a dot
 - **Statistics** -- click the summary line (e.g. "18 filaments · 8 types · 5 vendors") to expand bar charts by type and vendor, plus a color swatch grid
@@ -256,7 +258,7 @@ If you have color variants, parent filaments show a count badge (e.g. "5 colors"
 
 ### Hide Out-of-Stock Filaments
 
-When no filter is active, the list hides filaments that have no active spools and surfaces a **"Show out of stock (N)"** toggle above the table. Click it to reveal them; click **"Hide out of stock"** to tuck them away again. Applying a search or a type/vendor filter shows every match regardless of stock so you never lose a row you're looking for.
+When no filter is active, the list hides filaments that have no active spools and surfaces a **"Show out of stock (N)"** toggle above the table. Click it to reveal them; click **"Hide out of stock"** to tuck them away again. Applying a search or a type/vendor filter shows every match regardless of stock so you never lose a row you're looking for. A color filter on its own is the exception — "what orange do I have?" means in-stock orange, so the hide stays on and the toggle still reveals the rest.
 
 ### Quick-Change a Spool's Location
 
@@ -340,7 +342,7 @@ Afterwards, add new rolls to the color variants — a template refuses them with
 ## Step 11: Export to PrusaSlicer
 
 1. On the home page, open the **Import/Export** dropdown and, under **Export**, click **INI (PrusaSlicer)**.
-2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
+2. A `.ini` file downloads containing your filaments as `[filament:Name]` sections. Templates (filaments with color variants) are left out; their variants are exported instead.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
 For a filament with zero or one nozzle calibration, calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes. A filament calibrated for **two or more distinct nozzles** instead exports one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's filament-scoped calibration values baked in (pressure advance stays dynamic via the calibration API).
@@ -407,7 +409,7 @@ A small colored dot appears in the header:
 
 1. Plug in the ACR1552U. The status dot turns **yellow**.
 2. Place a tagged spool on the reader. The dot turns **green**.
-3. The app auto-detects the tag type (OpenPrintTag or Bambu Lab) and reads it. A dialog appears:
+3. The app auto-detects the tag type (OpenPrintTag, OpenTag3D, or Bambu Lab) and reads it. A dialog appears:
    - **Match found** -- shows the matched filament with a **View Filament** link.
    - **No match** -- shows the decoded tag data (material, brand, temps, density, etc.) with a **Create New Filament** button that pre-fills the form with everything from the tag.
    - **Similar filaments** -- if no exact match but the vendor or type is close, candidates appear. Click **+ Variant** next to one to create the tag's filament as a color variant of an existing parent.
@@ -417,7 +419,7 @@ A small colored dot appears in the header:
 ### Writing a Tag
 
 1. Navigate to any filament's detail page.
-2. Place a blank SLIX2 tag on the reader (dot turns green).
+2. Place a blank SLIX2 or NTAG213/215/216 tag on the reader (dot turns green). The app detects the chip and writes OpenPrintTag to SLIX2 or OpenTag3D to NTAG.
 3. Click **Write NFC** (purple button).
 4. Wait ~2 seconds. The button shows **Written!** on success or **Write Failed** on error.
 
@@ -426,8 +428,8 @@ A small colored dot appears in the header:
 1. Go to **Settings → Devices** (the **Devices** tile, or navigate to `/settings/devices`) — the **NFC Tools** card shows the reader/tag status.
 2. Place a tag on the reader (status turns green).
 3. Click **Erase Tag** (red button).
-5. Confirm the action. The app zeroes all memory blocks and writes a blank header.
-6. The tag is now blank and ready to be rewritten.
+4. Confirm the action. The app zeroes all memory blocks and writes a blank header.
+5. The tag is now blank and ready to be rewritten.
 
 If you remove the tag before confirming, the confirmation prompt closes automatically.
 
@@ -443,9 +445,9 @@ If you prefer using external NFC tools:
 
 If you have a Brother PT-P710BT (P-touch CUBE) connected over USB, you can print a QR label for a filament or an individual spool:
 
-1. In **Settings**, scroll to the label-printer section and pick your printer from the list (PT-Touch matches are badged). Customize the label format — QR placement, the text fields, font, orientation, invert — in the live-preview editor.
+1. In **Settings → Devices**, find the **Label printer** card and pick your printer from the list (PT-Touch matches are badged; click **Scan for USB printers** if a newly connected printer isn't listed yet). Customize the label format on the **Label format** card — QR placement, the text fields, font, orientation, invert — in the live-preview editor.
 2. On a filament's detail page, open the **Export ▾** menu and click **Print label**.
-3. Choose the QR mode — a scannable **URL** (the phone-friendly one; for a multi-spool filament you can also pick which spool to deep-link) or the filament's **instance ID** — and review the live preview at the printer's native resolution.
+3. Choose the QR mode — a scannable **URL** (the phone-friendly one) or the **instance ID** — and, for a filament with 2+ spools, which spool the QR targets (the picker drives both modes; a single-spool filament uses its only spool). Review the live preview at the printer's native resolution.
 4. Click **Print**. The app hands the label to your OS print system over USB.
 
 > The **URL** QR mode in the packaged desktop app needs a reachable address — set a **Public URL** in the label-printer settings so phones on your network can open it (the default `localhost` origin isn't reachable from another device). Pairs well with **Share on local network** (see "Share on Your Local Network" below).
@@ -637,7 +639,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 
 By default the desktop app's database is reachable only from the computer it runs on. To open it up to phones and other devices on your Wi-Fi — for the companion app (Step 27) or to scan a label's URL QR (Step 13) — turn on LAN sharing:
 
-1. In **Settings**, find **Share on local network** and toggle it on. The embedded server rebinds to your LAN address (instead of localhost), and Settings shows the URL other devices can use.
+1. In **Settings → Network Settings**, find **Share on local network** and toggle it on. The embedded server rebinds to your LAN address (instead of localhost), and Settings shows the URL other devices can use.
 2. With sharing on, the app also advertises itself over Bonjour/mDNS (`_filamentdb._tcp`), so the mobile app can find it without you typing an IP.
 
 > **Securing a shared instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every API request. Unset, a LAN-exposed instance is unauthenticated. The gate is all-or-nothing and **disables the browser web UI** (it doesn't send the key) — use it for non-browser clients (mobile app, slicers); for browser-UI access on a LAN, use loopback or an authenticating reverse proxy. See [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
@@ -680,14 +682,15 @@ A companion Expo/React Native app (in `packages/mobile`) turns your phone into a
 | Convert a parent to a template | Detail page > Spool Tracker > Convert to template |
 | Manage nozzles | Settings > Nozzles |
 | Manage printers | Settings > Printers |
-| Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
+| Browse API docs | Settings > API Docs (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
-| Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
+| Erase NFC tag | Settings > Devices > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export ▾ > Export OPT |
 | Print a spool label | Detail page > Export ▾ > Print label (desktop app + Brother PT-P710BT) |
 | Print a dry-box label | Locations > Print label, or Inventory > drybox group 🖨 (desktop app + KNAON Y813BT) |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
 | Hide/show out-of-stock | Home > Show / Hide out of stock toggle |
+| Filter by color | Home > color chips (or `/?color=<family>`) |
 | Quick-change a spool's location | Home > expand row (×N) > Location dropdown |
 | Assign spool to a location | Spool detail > Location dropdown |
 | Assign spool to a printer slot | Spool detail > Printer slot picker |
@@ -698,9 +701,9 @@ A companion Expo/React Native app (in `packages/mobile`) turns your phone into a
 | Compare filaments | Compare page > pick up to 8 (or /compare?ids=…) |
 | Publish a shared catalog | Top nav > Share > + New |
 | Import spools from CSV | Home > Import > Spools from CSV |
-| Share on local network | Settings > Share on local network (desktop app) |
+| Share on local network | Settings > Network Settings > Share on local network (desktop app) |
 | Use the mobile scanner | Mobile app > Settings > set URL or Find on your network |
-| Switch theme | Settings > Theme |
+| Switch theme | Settings > UI Settings > Theme |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |
 | Check connection status | Status pill next to "Filament DB" title |
 

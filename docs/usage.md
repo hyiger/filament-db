@@ -10,8 +10,9 @@ The home page displays all filaments in a sortable table with columns for color,
 - **Search**: Type in the search box to filter filaments by name
 - **Filter by Type**: Use the type dropdown to show only specific material types (PLA, PETG, ASA, etc.)
 - **Filter by Vendor**: Use the vendor dropdown to show only filaments from a specific manufacturer
+- **Filter by color** *(v1.82)*: A row of color-family chips (Black, Gray, White, Beige, Brown, Red, … plus Clear, Multicolor and No color; a dropdown on narrow screens) answers "what orange do I have?". Each chip shows how many matching filaments the list would show (in-stock ones, unless out-of-stock filaments are revealed). Picking a family with shades adds **Light / Medium / Dark** shade chips, and a **Types in stock** strip lists the material types in that color — click one to filter by it. The family is derived from the filament's swatch color plus color words in its name, so a filament can appear under more than one family (a "Black" whose swatch reads dark gray is listed under both) and the counts can add up to more than your total; the default gray `#808080` counts as no swatch color unless the name says gray, so such a filament lands under **No color** only when no secondary color, color word in its name, or transparent/translucent tag identifies one. Unlike search/type/vendor, the color filter on its own keeps the out-of-stock hide on. The choice is kept in the URL as `?color=<family>` or `?color=<family>-<shade>` (e.g. `?color=gray-dark`), so a filtered view can be bookmarked or shared.
 - **Sort**: Click any column header to sort ascending/descending. The active sort column is highlighted with a blue arrow
-- **Hide out of stock**: By default, filaments with no active (non-retired) spools are hidden. When any are hidden, a **Show out of stock (N)** chip appears beside the quick filters to reveal them; click again to **Hide out of stock**. (The toggle only shows on the unfiltered "all" view — an active search/type/vendor/quick filter always shows every match in or out of stock.)
+- **Hide out of stock**: By default, filaments with no active (non-retired) spools are hidden. When any are hidden, a **Show out of stock (N)** chip appears beside the quick filters to reveal them; click again to **Hide out of stock**. (The toggle only shows on the unfiltered "all" view — an active search/type/vendor/quick filter always shows every match in or out of stock. A color filter on its own is the exception: it still hides out-of-stock filaments by default.)
 - **Quick-change spool location** *(#717)*: a filament row with spools shows a **×N** toggle in the remaining-stock cell. Expand it to list each spool with its current location and a **move-to** dropdown — change a spool's location inline without opening the filament's detail page. The move is saved straight to the spool (parents with their own spools get the same panel).
 
 ## Viewing Filament Details
@@ -62,8 +63,8 @@ Parent filaments that still have color variants are blocked from deletion — re
 
 Visit `/trash` (also reachable from **Settings → Trash**). Each row shows when the filament was deleted, plus two actions:
 
-- **Restore** — un-deletes the filament and brings it back into the regular list. If you've created a new active filament with the same name in the meantime, restore is refused with a 409 explaining the conflict — rename one of them first. Restoring a *variant* whose parent picked up a color or spools while it was in the trash asks to convert that parent to a template first (see [Filament Templates](#filament-templates-v170)).
-- **Delete forever** — hard-deletes from MongoDB. Cannot be undone. The button's only available on filaments already in the trash; an active filament has to be soft-deleted first as a safety step.
+- **Restore** — un-deletes the filament and brings it back into the regular list. If you've created a new active filament with the same name in the meantime, restore is refused with a 409 explaining the conflict — rename one of them first. Restoring a *variant* whose parent picked up a color or spools while it was in the trash is refused with a message asking you to convert that parent to a template first (see [Filament Templates](#filament-templates-v170)).
+- **Delete forever** — permanently removes the filament from every view by leaving a `_purged` tombstone in its place (the tombstone is what lets the delete propagate through hybrid sync instead of the other side restoring it). Cannot be undone. The button's only available on filaments already in the trash; an active filament has to be soft-deleted first as a safety step.
 
 The trash page also has an **Empty trash** action that permanently deletes everything in one go (variants are purged before parents to satisfy the no-orphan-refs constraint).
 
@@ -177,6 +178,8 @@ Both surfaces cover:
 - **Export filaments** — PrusaSlicer INI bundle, CSV, or XLSX
 - **Export spools** — CSV inventory with location and lot number
 
+The **Bambu Studio (.json)** filament import is a tile on the Import / Export page only — the filament list dropdown doesn't offer it.
+
 A separate **Snapshot** workflow on the Settings page handles full database backup / restore (filaments + nozzles + printers + bed types + locations + print history + shared catalogs in a single JSON file).
 
 ---
@@ -221,6 +224,7 @@ A status pill appears next to the "Filament DB" title on the home page, showing 
 | 🟢 **Synced 2m ago** | Last sync completed successfully |
 | 🔵 **Syncing...** | Sync in progress (pulsing dot) |
 | 🟡 **Offline** | No network; using local data, will sync when reconnected |
+| 🟠 **Sync partial** | Some collections synced and others failed; the tooltip names the failures |
 | 🔴 **Sync error** | Last sync attempt failed |
 
 Click the pill to open a tooltip with mode, network status, last sync timestamp, error details, and a **"Sync Now"** button for manual sync. Automatic sync runs every 5 minutes when Atlas is reachable.
@@ -326,7 +330,18 @@ Printers cannot be deleted if they are referenced by any filament calibrations. 
 - **Delete** — only available when nothing references the row (a plain duplicate).
 - **Rename** — frees the canonical spelling without touching a single reference.
 
-A healthy database shows an empty list. In hybrid mode the page scans the database the app is connected to; since v1.78 (#1164) conflicts found on the **remote** database during sync also appear here in a read-only "on the remote" section, and the header's sync pill carries a conflict count linking straight to the page.
+A healthy database shows an empty list. In hybrid mode the page scans the database the app is connected to; since v1.78 (#1164) conflicts found on the **remote** database during sync also appear here in a read-only "on the remote" section, and the header sync pill's tooltip lists the first few with a link straight to the page.
+
+### Abrasive filament on unsuitable nozzles *(v1.80)*
+
+A second section on the same page flags abrasive filaments — ones marked abrasive, carrying an abrasive or filled tag, of a fibre-reinforced type, or with a filled name (each card says which) — whose records could let them wear out a soft nozzle:
+
+- **Soft nozzles allowed** — the filament is recorded as compatible with nozzles that are not hardened (the card names them).
+- **No nozzles recorded** — no compatible nozzles are set, so nothing can flag a soft-nozzle assignment.
+- **Flag mismatch** — exported slicer presets say the filament is *not* abrasive (`filament_abrasive`), so a printer that checks the flag won't warn.
+- **Inherited from a template** — when a variant's nozzles come from its template, the card says so: change them on the template, or the variant keeps inheriting them.
+
+The section is advisory only — nothing is changed for you, and whether a lightly filled filament needs a hardened nozzle is your call. Templates themselves aren't listed; their variants are.
 
 ---
 
@@ -529,7 +544,7 @@ Go to **Settings → Backup & Data** and click **"Download Snapshot"** to downlo
 
 ### Restoring a Snapshot
 
-Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
+Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**. Select a previously exported snapshot file. Every collection the file carries is replaced with the snapshot contents (a collection present as an empty list is emptied). A collection an older-format snapshot doesn't carry at all — e.g. locations or print history in a v2 file — is left untouched, and the success message lists it as left untouched. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
 
 ---
 
@@ -545,8 +560,8 @@ As of v1.48–v1.50 (#732), **each spool also has its own instance ID** — the 
 
 Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. This is the spool-label printer; 4×6 drybox labels go to a separate device with its own setting — see [Dry-Box Labels](#dry-box-labels-knaon-y813bt-v169). Two QR payload modes you can pick per print:
 
-- **Instance ID** — a 5-byte hex identifier (e.g. `2acc21072a`). As of #732 this encodes the **selected spool's** instance ID (the spool picker chooses which; it defaults to the first non-retired spool). It encodes the **filament-level** ID instead when you pick the picker's **"Filament only"** option (available even when the filament has spools, for printing a legacy filament-level QR) or when the filament has no spools. It matches what an NFC tag carries and is resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
-- **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by **any phone** it opens the page directly — no app required. This is the phone-scannable option. For a filament with **multiple spools**, a spool picker appears so the QR can target a specific spool (`…/filaments/<id>?spool=<spoolId>`); scanning it opens the filament with that spool highlighted. *(Spool targeting, v1.35.)*
+- **Instance ID** — a 5-byte hex identifier (e.g. `2acc21072a`). As of #732 this encodes the **selected spool's** instance ID (for a filament with 2+ spools the spool picker chooses which; it defaults to the first non-retired spool, and a single-spool filament uses its only spool). It encodes the **filament-level** ID instead when you pick the picker's **"No specific spool (filament only)"** option (for printing a legacy filament-level QR) or when the filament has no spools. It matches what an NFC tag carries and is resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
+- **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by **any phone** it opens the page directly — no app required. This is the phone-scannable option. The link targets the selected spool (`…/filaments/<id>?spool=<spoolId>`) — the picker's choice for a filament with 2+ spools, or the only spool of a single-spool filament; scanning it opens the filament with that spool highlighted. *(Spool targeting, v1.35.)*
 
 Your last choice is remembered as the default for the next print.
 
@@ -555,7 +570,7 @@ Your last choice is remembered as the default for the next print.
 ### One-time setup
 
 1. **Connect the printer via USB** and power it on. On macOS/Linux it's reachable through CUPS automatically; on Windows, install it as a normal printer if your OS prompts.
-2. **Open the desktop app → Settings → Devices** and find the **Label printer** card. Any printers already set up as system queues are listed automatically. If your PT-P710BT was just connected and isn't a configured queue yet, click **Scan for USB printers** (or **Refresh**) to detect it — **on macOS this may ask for your administrator password**, because listing USB print devices is an admin operation. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
+2. **Open the desktop app → Settings → Devices** and find the **Label printer** card. Any printers already set up as system queues are listed automatically. If your PT-P710BT was just connected and isn't a configured queue yet, click **Scan for USB printers** to detect it — **on macOS this may ask for your administrator password**, because listing USB print devices is an admin operation. (**Refresh** only re-lists installed queues; it never probes USB, so it won't find a printer that isn't a queue yet.) The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
 3. **(Optional) Public URL for QR-mode labels**: if you want to print labels with deep-link URLs that scan correctly from your phone, also set the **Public base URL** field. URL mode in the desktop app needs a non-localhost address because the renderer's `window.location.origin` is `http://localhost:3456` — unscannable from any other device. Examples: `https://filament-db.lan`, `https://my-instance.example.com`. Loopback addresses, query strings, and URL fragments are rejected with a descriptive error. Leave blank to disable URL mode in the desktop app — the instance-ID mode still works without it.
 4. **Test print**: click **Test print** to send a short label using your saved format. Confirm the QR scans and the text is crisp before you start printing real labels.
 
@@ -573,7 +588,7 @@ The format is **global** — it applies to every label you print (and to the web
 
 ### Printing labels
 
-From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (filament instance ID / deep link) — and, for a multi-spool filament in deep-link mode, which spool the QR points to — then click **Print**.
+From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (filament instance ID / deep link) — and, for a filament with 2+ spools, which spool the QR points to (the picker drives both modes) — then click **Print**.
 
 If you're running in the **web app instead of Electron**, the Print button downloads a `.bin` file containing the encoded byte stream — useful for inspection. Decode it locally with `npm run label:sim -- --in <file>` to see what would have printed (the `--` separator is required — without it npm eats the `--in` flag but still forwards the path, so the script sees a bare argument and dies with `Unknown arg: <path>`).
 
@@ -582,6 +597,7 @@ If you're running in the **web app instead of Electron**, the Print button downl
 - **No printer listed** in Settings → Devices: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Scan for USB printers**. On macOS the scan may prompt for your administrator password (it's the OS authorizing the device query — opening Settings itself no longer prompts, as of the #771 fix). On Linux you may need to add the printer in your system print settings first.
 - **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Devices. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
 - **Label prints mirrored** (text backwards, QR reversed): fixed in v1.34.9 — update to the latest version.
+- **Windows: labels fail and the card warns that bidirectional support is on**: some printer drivers crash the Windows Print Spooler when printing with BiDi enabled. Click **Disable bidirectional support** on the Label printer card (it asks for administrator approval), or untick **Enable bidirectional support** under Printer Properties → Ports yourself.
 - **Nothing printed even though it "succeeded"**: the PT-P710BT auto-powers-off when idle. Wake it (press its power button), confirm tape is loaded, and print again.
 
 ---
@@ -595,7 +611,7 @@ Printing is desktop-only. In the web app the Print button becomes **Download .pr
 ### One-time setup
 
 1. **Connect the Y813BT over USB** and power it on.
-2. **Settings → Devices** → the **Dry-box label printer (KNAON Y813BT)** card, below the Brother one. Printers already installed as system queues are listed when the card loads. If yours isn't there, click **Scan for USB printers** (or **Refresh**) — *"Scanning for USB printers may ask for your administrator password (macOS)."* Matching devices get a green **Y813BT** badge. Select yours.
+2. **Settings → Devices** → the **Dry-box label printer (KNAON Y813BT)** card, below the Brother one. Printers already installed as system queues are listed when the card loads. If yours isn't there, click **Scan for USB printers** (**Refresh** only re-lists installed queues and won't find a new USB device) — *"Scanning for USB printers may ask for your administrator password (macOS)."* Matching devices get a green **Y813BT** badge. Select yours.
 3. **Test print** sends a small known-good label ("FILAMENT DB" / "TSPL test print OK" plus a barcode) and confirms with *"Test label sent — check the printer."*
 4. **Set the Public base URL** on the **Brother** label-printer card just above — there's one URL and both printers share it. Without it the QR encodes `localhost`, which no phone can open; the print dialog warns about that but still prints, and reprinting later is cheap.
 
@@ -710,7 +726,7 @@ PrusaSlicer Filament Edition can check after slicing whether the selected spool 
 
 Even without the fork, you can manually sync:
 
-- **Export**: Open the **Import/Export** dropdown on the home page and click, under **Export**, **"INI (PrusaSlicer)"** to download all filaments as a PrusaSlicer-compatible config bundle
+- **Export**: Open the **Import/Export** dropdown on the home page and click, under **Export**, **"INI (PrusaSlicer)"** to download all filaments except templates (filaments with color variants — their variants are exported instead) as a PrusaSlicer-compatible config bundle
 - **Import**: In PrusaSlicer, go to **File > Import > Import Config Bundle** to load the exported file
 - **Re-import**: Open the **Import/Export** dropdown and click **"Import File (INI / CSV / XLSX)"** to import a PrusaSlicer config bundle back into Filament DB
 
@@ -718,7 +734,7 @@ Even without the fork, you can manually sync:
 
 ## API Documentation
 
-Go to **Settings** and click **"API Documentation"** to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for the documented OpenAPI surface, while [the API reference](api.md) includes additional prose for newer routes and behavior details. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).
+Go to **Settings** and click the **API Docs** tile to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for the documented OpenAPI surface, while [the API reference](api.md) includes additional prose for newer routes and behavior details. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).
 
 ---
 
@@ -728,7 +744,7 @@ The **Dashboard** page at `/dashboard` is the home of your inventory at a glance
 
 - **Totals** — filament count, spool count, grams on hand, plus printer / nozzle / bed-type counts
 - **Low-stock warnings** — any filament whose aggregate remaining is under its per-filament `lowStockThreshold`. Clicking a row jumps to the filament detail.
-- **Needs drying** — spools whose most recent dry cycle is older than 30 days (configurable in settings later), grouped by filament type
+- **Needs drying** — spools whose most recent dry cycle is older than 30 days (or that have never been dried), for filaments that have a drying temperature set
 - **Recent print history** — the most recently logged print jobs, with a **View all →** link to the [History page](#print-history-browser-v179) and a **Log print job** button *(v1.79, #1167)* that opens an in-app dialog — job label, printer, date, notes, and one or more filament/spool/grams rows — posting through the same `/api/print-history` machinery the slicer integrations use, so spool debits and validation behave identically. Templates are excluded from the filament picker, and a row whose filament has no active spool says so before you submit (the job is then recorded without debiting inventory).
 
 Low-stock thresholds are set per filament on the edit page under **Stock settings → Low-stock threshold (g)**. A filament with no threshold is never flagged.
@@ -834,8 +850,11 @@ What you see:
 
 - **Header stats** — total spool count, location count, active grams on hand
 - **Filter row** — search by filament name / label / lot number (client-side), filter by location kind (shelf, drybox, printer, …), filter by filament type or vendor, "include retired" toggle (off by default — retired spools are out of inventory)
-- **Collapsible group per location** — each group's summary chip shows spool count and total grams; a drybox group's header also carries a 🖨 button that prints a [dry-box label](#dry-box-labels-knaon-y813bt-v169). A synthetic **"No location"** group catches any spool whose `locationId` is null and is intentionally sorted to the END of the list so you spot stragglers as "needs attention" rather than mistaking them for primary inventory.
+- **Group by** — **Location** (the default), **Type**, **Vendor**, **Color**, or **None (flat list)**. **Color** groups each spool under its filament's primary color family (the same families as the home list's [color filter](#browsing-filaments)), ordered like a palette — Black, Gray, White … Clear, Multicolor, No color. Spools with no type or vendor land in a single bucket sorted last.
+- **Sort by** — remaining weight, name, type, vendor, purchase date, or opened date, with an ascending/descending toggle. Your grouping and sort choices are remembered.
+- **Collapsible groups** — each group's summary chip shows spool count and total grams; under location grouping a drybox group's header also carries a 🖨 button that prints a [dry-box label](#dry-box-labels-knaon-y813bt-v169). A synthetic **"No location"** group catches any spool whose `locationId` is null and is intentionally sorted to the END of the list so you spot stragglers as "needs attention" rather than mistaking them for primary inventory.
 - **Per-spool row** — color swatch, filament name, type, vendor, label, **inline weight editor** (click the gram value to edit, Enter to save, Esc to cancel), remaining-percent bar, last dry date, **move-to** dropdown for the spool's location, **retire/unretire** toggle (retire shows a confirm to make the inventory-removal explicit).
+- **Batch selection** — tick the checkbox on several rows (or a group's header checkbox to select all its visible spools) and a sticky action bar appears with **Move N to…**, **Retire N** (or **Unretire N** when every selected spool is already retired), and **Clear selection**. Actions apply only to selected spools that are currently visible. Legacy single-weight rolls are read-only here and can't be selected.
 
 All edits go through the same `PUT /api/filaments/{id}/spools/{spoolId}` endpoint the filament detail page uses, so semantics — retire-on-zero prompts, weight validation, sync behaviour — are identical to the SpoolCard.
 
@@ -851,7 +870,7 @@ On macOS, release builds are Developer ID-signed **and** notarized (since v1.39.
 
 ## Share on Local Network (Desktop) *(v1.45)*
 
-Settings → **Share on local network** lets other devices on your LAN reach this desktop instance's built-in server. It's **off by default** — when off, the embedded server binds to localhost only and nothing outside the machine can connect.
+**Settings → Network Settings → Share on local network** lets other devices on your LAN reach this desktop instance's built-in server. It's **off by default** — when off, the embedded server binds to localhost only and nothing outside the machine can connect.
 
 Turn it on and the server re-binds to `0.0.0.0` (all interfaces), and the settings panel shows the LAN URL to point another device at (e.g. `http://192.168.1.50:3456`). This is what the mobile scanner app connects to.
 

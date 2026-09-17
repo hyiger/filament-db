@@ -6,13 +6,15 @@
 
 ## Filamente durchsuchen
 
-Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle mit Spalten für Farbe, Name, Vendor, Typ, Düsentemperatur, Betttemperatur, Kosten und verbleibender Spulen-Prozentangabe.
+Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle mit Spalten für Farbe, Name, Vendor, Typ, Düsentemperatur, Betttemperatur, Kosten, verbleibender Spulen-Prozentangabe sowie Kauf- und Öffnungsdatum (jeweils das früheste Kauf- bzw. Öffnungsdatum über alle Spulen des Filaments).
 
 - **Statistik**: Klicke die Zusammenfassungszeile (z. B. „18 Filamente · 8 Typen · 5 Vendors"), um eine Tafel mit Balkendiagrammen nach Typ und Vendor sowie ein Farbswatch-Grid auszuklappen
 - **Suche**: Tippe in das Suchfeld, um Filamente nach Namen zu filtern
 - **Filter nach Typ**: Nutze die Typ-Dropdown-Liste, um nur bestimmte Materialtypen anzuzeigen (PLA, PETG, ASA usw.)
 - **Filter nach Vendor**: Nutze die Vendor-Dropdown-Liste, um nur Filamente eines bestimmten Herstellers anzuzeigen
+- **Filter nach Farbe** *(v1.82)*: Eine Reihe von Farbfamilien-Chips (Schwarz, Grau, Weiß, Beige, Braun, Rot, … plus Transparent, Mehrfarbig und Keine Farbe; auf schmalen Bildschirmen ein Dropdown) beantwortet „Welches Orange habe ich?". Jeder Chip zeigt, wie viele passende Filamente die Liste anzeigen würde (die vorrätigen, sofern nicht vorrätige nicht eingeblendet sind). Wählst du eine Familie mit Abstufungen, erscheinen zusätzlich die Chips **Hell / Mittel / Dunkel**, und eine Leiste **„Typen auf Lager:"** listet die Materialtypen in dieser Farbe — ein Klick filtert nach dem Typ. Die Familie wird aus der Swatch-Farbe des Filaments plus Farbwörtern im Namen abgeleitet, daher kann ein Filament unter mehreren Familien erscheinen (ein „Black", dessen Swatch dunkelgrau wirkt, steht unter beiden) und die Zähler können zusammen mehr ergeben als deine Gesamtzahl; das Standard-Grau `#808080` zählt als fehlende Swatch-Farbe, sofern der Name nicht Grau nennt — ein solches Filament landet also nur dann unter **Keine Farbe**, wenn weder eine Sekundärfarbe noch ein Farbwort im Namen noch ein Transparent-/Transluzent-Tag eine Farbe erkennen lässt. Anders als Suche/Typ/Vendor lässt der Farbfilter allein das Ausblenden nicht vorrätiger Filamente aktiv. Die Auswahl steht in der URL als `?color=<familie>` oder `?color=<familie>-<abstufung>` (z. B. `?color=gray-dark`), sodass sich eine gefilterte Ansicht als Lesezeichen speichern oder teilen lässt.
 - **Sortieren**: Klicke einen Spaltenkopf, um auf-/absteigend zu sortieren. Die aktive Sortierspalte ist mit einem blauen Pfeil hervorgehoben
+- **Nicht vorrätige ausblenden**: Standardmäßig werden Filamente ohne aktive (nicht ausgemusterte) Spulen ausgeblendet. Sind welche ausgeblendet, erscheint neben den Schnellfiltern der Chip **„Nicht vorrätige anzeigen (N)"**, der sie einblendet; ein erneuter Klick (**„Nicht vorrätige ausblenden"**) blendet sie wieder aus. (Der Schalter erscheint nur in der ungefilterten „Alle"-Ansicht — eine aktive Suche bzw. ein Typ-, Vendor- oder Schnellfilter zeigt immer jeden Treffer, ob vorrätig oder nicht. Ausnahme ist ein Farbfilter allein: Er blendet nicht vorrätige Filamente standardmäßig weiterhin aus.)
 - **Spulen-Standort direkt wechseln** *(#717)*: Eine Filamentzeile mit Spulen zeigt einen **×N**-Umschalter in der Restbestands-Zelle. Klappe ihn auf, um jede Spule mit ihrem aktuellen Standort und einem **„Verschieben nach"**-Dropdown zu sehen — so änderst du den Standort einer Spule inline, ohne die Detailseite des Filaments zu öffnen. Die Verschiebung wird direkt an der Spule gespeichert (Eltern-Filamente mit eigenen Spulen bekommen dasselbe Panel).
 
 ## Filament-Details ansehen
@@ -63,8 +65,8 @@ Eltern-Filamente, die noch Farbvarianten haben, werden vom Löschen blockiert �
 
 Gehe zu `/trash` (auch über **Einstellungen → Papierkorb** erreichbar). Jede Zeile zeigt, wann das Filament gelöscht wurde, plus zwei Aktionen:
 
-- **Wiederherstellen** — macht das Löschen rückgängig und holt das Filament zurück in die reguläre Liste. Wenn du in der Zwischenzeit ein neues aktives Filament mit demselben Namen angelegt hast, wird die Wiederherstellung mit 409 abgelehnt — benenne eins der beiden zuerst um. Stellst du eine *Variante* wieder her, deren Eltern-Filament währenddessen eine eigene Farbe oder eigene Spulen bekommen hat, fragt die App zuerst, ob dieses Eltern-Filament in eine Vorlage umgewandelt werden soll (siehe [Filament-Vorlagen](#filament-vorlagen-v170)).
-- **Endgültig löschen** — hard-Delete in MongoDB. Kann nicht rückgängig gemacht werden. Der Button ist nur bei Filamenten verfügbar, die bereits im Papierkorb sind; ein aktives Filament muss als Sicherheitsschritt erst soft-gelöscht werden.
+- **Wiederherstellen** — macht das Löschen rückgängig und holt das Filament zurück in die reguläre Liste. Wenn du in der Zwischenzeit ein neues aktives Filament mit demselben Namen angelegt hast, wird die Wiederherstellung mit 409 abgelehnt — benenne eins der beiden zuerst um. Stellst du eine *Variante* wieder her, deren Eltern-Filament währenddessen eine eigene Farbe oder eigene Spulen bekommen hat, wird die Wiederherstellung mit einem Hinweis abgelehnt, dieses Eltern-Filament zuerst in eine Vorlage umzuwandeln (siehe [Filament-Vorlagen](#filament-vorlagen-v170)).
+- **Endgültig löschen** — entfernt das Filament dauerhaft aus allen Ansichten, indem an seiner Stelle ein `_purged`-Tombstone zurückbleibt (der Tombstone sorgt dafür, dass sich das Löschen per Hybrid-Sync auf die Gegenseite überträgt, statt dass diese das Filament wiederherstellt). Kann nicht rückgängig gemacht werden. Der Button ist nur bei Filamenten verfügbar, die bereits im Papierkorb sind; ein aktives Filament muss als Sicherheitsschritt erst soft-gelöscht werden.
 
 Die Papierkorb-Seite hat zusätzlich eine **Papierkorb leeren**-Aktion, die alles auf einmal endgültig löscht (Varianten werden vor Eltern-Filamenten gepurged, damit die No-Orphan-Refs-Bedingung eingehalten wird).
 
@@ -173,10 +175,12 @@ Zwei Wege zu den Bulk-Daten-Aktionen:
 
 Beide Oberflächen decken ab:
 
-- **Filamente importieren** — Prusament-QR-Scan, Atlas-Import, OpenPrintTag-Browse, Datei-Upload (CSV / XLSX / PrusaSlicer INI). Vollständige DB-Snapshots werden unter Einstellungen → Sicherung & Wiederherstellen wiederhergestellt.
+- **Filamente importieren** — Prusament-QR-Scan, Atlas-Import, OpenPrintTag-Browse, Datei-Upload (CSV / XLSX / PrusaSlicer INI). Vollständige DB-Snapshots werden unter Einstellungen → Sicherung & Daten wiederhergestellt.
 - **Spulen importieren** — Bulk-CSV mit einer Zeile pro Spule
 - **Filamente exportieren** — PrusaSlicer-INI-Bundle, CSV oder XLSX
 - **Spulen exportieren** — CSV-Inventar mit Location und Lot-Nummer
+
+Der Filament-Import **Bambu Studio (.json)** ist nur als Kachel auf der Seite Import / Export verfügbar — das Dropdown der Filamentliste bietet ihn nicht an.
 
 Ein separater **Snapshot**-Workflow auf der Einstellungen-Seite kümmert sich um vollständige DB-Sicherung/-Wiederherstellung (Filamente + Düsen + Drucker + Druckbett-Typen + Locations + Druckverlauf + Shared Catalogs in einer JSON-Datei).
 
@@ -222,6 +226,7 @@ Eine Status-Pille erscheint neben dem „Filament DB"-Titel auf der Startseite u
 | 🟢 **Synced 2m ago** | Letzter Sync war erfolgreich |
 | 🔵 **Syncing...** | Sync läuft (pulsierender Punkt) |
 | 🟡 **Offline** | Kein Netzwerk; nutzt lokale Daten, synchronisiert bei erneuter Verbindung |
+| 🟠 **Teilsynchronisation** | Einige Sammlungen wurden synchronisiert, andere sind fehlgeschlagen; der Tooltip nennt die Fehler |
 | 🔴 **Sync error** | Letzter Sync-Versuch ist fehlgeschlagen |
 
 Klicke die Pille, um einen Tooltip mit Modus, Netzwerkstatus, Zeitstempel des letzten Syncs, Fehlerdetails und einem **„Jetzt synchronisieren"**-Button für manuellen Sync zu öffnen. Automatischer Sync läuft alle 5 Minuten, wenn Atlas erreichbar ist.
@@ -327,7 +332,18 @@ Drucker können nicht gelöscht werden, wenn Filament-Kalibrierungen sie referen
 - **Löschen** — nur verfügbar, wenn nichts auf die Zeile verweist (ein reines Duplikat).
 - **Umbenennen** — gibt die kanonische Schreibweise frei, ohne eine einzige Referenz anzufassen.
 
-Eine gesunde Datenbank zeigt eine leere Liste. Im Hybrid-Modus prüft die Seite die Datenbank, mit der die App verbunden ist; seit v1.78 (#1164) erscheinen zusätzlich Konflikte, die der Sync auf der **Remote**-Datenbank findet, in einem schreibgeschützten „auf der Gegenseite"-Abschnitt — und die Sync-Anzeige in der Kopfleiste trägt einen Konfliktzähler, der direkt auf die Seite verlinkt.
+Eine gesunde Datenbank zeigt eine leere Liste. Im Hybrid-Modus prüft die Seite die Datenbank, mit der die App verbunden ist; seit v1.78 (#1164) erscheinen zusätzlich Konflikte, die der Sync auf der **Remote**-Datenbank findet, in einem schreibgeschützten „auf der Gegenseite"-Abschnitt — und der Tooltip der Sync-Anzeige in der Kopfleiste listet die ersten davon mit einem Link direkt auf die Seite.
+
+### Abrasives Filament an ungeeigneten Düsen *(v1.80)*
+
+Ein zweiter Abschnitt auf derselben Seite markiert abrasive Filamente — als abrasiv gekennzeichnete, mit einem abrasiven oder gefüllten Tag, eines faserverstärkten Typs oder mit einem Gefüllt-Namen (jede Karte nennt den Grund) —, deren Einträge eine weiche Düse abnutzen könnten:
+
+- **Weiche Düsen zugelassen** — das Filament ist als kompatibel mit nicht gehärteten Düsen eingetragen (die Karte nennt sie).
+- **Keine Düsen eingetragen** — es sind keine kompatiblen Düsen gesetzt, daher kann keine Zuordnung zu einer weichen Düse erkannt werden.
+- **Widersprüchliches Kennzeichen** — exportierte Slicer-Presets melden das Filament als *nicht* abrasiv (`filament_abrasive`), ein Drucker, der das Kennzeichen prüft, warnt also nicht.
+- **Von einer Vorlage geerbt** — stammen die Düsen einer Variante aus ihrer Vorlage, sagt die Karte das: Ändere sie in der Vorlage, sonst erbt die Variante sie weiterhin.
+
+Der Abschnitt ist nur ein Hinweis — es wird nichts für dich geändert, und ob ein leicht gefülltes Filament eine gehärtete Düse braucht, entscheidest du. Vorlagen selbst werden nicht aufgeführt, ihre Varianten schon.
 
 ---
 
@@ -390,10 +406,11 @@ Die Desktop-App ist ein neutraler Multi-Standard-Reader: Sie liest und schreibt 
 
 ### Tags lesen
 
-Lege einen Tag auf den Reader — die App erkennt den Tag-Typ automatisch (OpenPrintTag oder Bambu Lab) und liest ihn. Ein Dialog zeigt:
+Lege einen Tag auf den Reader — die App erkennt den Tag-Typ automatisch (OpenPrintTag, OpenTag3D oder Bambu Lab) und liest ihn. Ein Dialog zeigt:
 
 - **Treffer gefunden**: zeigt das passende Filament mit Link zur Detailseite
 - **Kein Treffer**: zeigt die dekodierten Daten mit Option, ein neues Filament anzulegen (Formular mit Tag-Daten vorbefüllt)
+- **OpenTag3D-Tags**: zeigt ein OpenTag3D-Herkunfts-Badge plus die nur in OpenTag3D vorhandenen Zusatzfelder
 - **Bambu-Lab-Spulen**: zeigt ein „read-only"-Badge, da Bambu-Tags nicht beschrieben werden können; zeigt zusätzlich Produktionsdatum und Filamentlänge
 
 ### Tags schreiben
@@ -515,8 +532,11 @@ Was du siehst:
 
 - **Kopfzeilen-Statistiken** — Gesamtspulenanzahl, Standortanzahl, aktive Gramm im Bestand
 - **Filterzeile** — Suche nach Filamentname / Etikett / Lot-Nummer (clientseitig), Filter nach Standortart (Regal, Trockenbox, Drucker, …), Filter nach Filamenttyp oder Vendor, „Ausgemusterte einschließen"-Schalter (standardmäßig aus — ausgemusterte Spulen sind nicht im Bestand)
-- **Aufklappbare Gruppe pro Standort** — der Zusammenfassungs-Chip jeder Gruppe zeigt Spulenanzahl und Gesamtgramm; der Kopf einer Trockenbox-Gruppe trägt zusätzlich einen 🖨-Button, der ein [Trockenbox-Etikett](#trockenbox-etiketten-knaon-y813bt-v169) druckt. Eine synthetische **„Kein Standort"**-Gruppe fängt jede Spule mit `locationId: null` ab und wird absichtlich an das ENDE der Liste sortiert, damit man Nachzügler als „benötigen Aufmerksamkeit" erkennt statt sie mit dem Hauptbestand zu verwechseln.
+- **Gruppieren nach** — **Standort** (Standard), **Typ**, **Hersteller**, **Farbe** oder **Keine (flache Liste)**. **Farbe** ordnet jede Spule der primären Farbfamilie ihres Filaments zu (dieselben Familien wie beim [Farbfilter](#filamente-durchsuchen) der Startseite), sortiert wie eine Palette — Schwarz, Grau, Weiß … Transparent, Mehrfarbig, Keine Farbe. Spulen ohne Typ oder Hersteller landen in einer gemeinsamen Gruppe am Ende.
+- **Sortieren nach** — Restgewicht, Name, Typ, Hersteller, Kaufdatum oder Öffnungsdatum, mit Umschalter für auf-/absteigend. Gruppierung und Sortierung werden gemerkt.
+- **Aufklappbare Gruppen** — der Zusammenfassungs-Chip jeder Gruppe zeigt Spulenanzahl und Gesamtgramm; bei Gruppierung nach Standort trägt der Kopf einer Trockenbox-Gruppe zusätzlich einen 🖨-Button, der ein [Trockenbox-Etikett](#trockenbox-etiketten-knaon-y813bt-v169) druckt. Eine synthetische **„Kein Standort"**-Gruppe fängt jede Spule mit `locationId: null` ab und wird absichtlich an das ENDE der Liste sortiert, damit man Nachzügler als „benötigen Aufmerksamkeit" erkennt statt sie mit dem Hauptbestand zu verwechseln.
 - **Spulen-Zeile** — Farbtupfer, Filamentname, Typ, Vendor, Etikett, **Inline-Gewichtseditor** (klicke den Gramm-Wert zum Bearbeiten, Enter zum Speichern, Esc zum Abbrechen), Rest-Prozentbalken, letztes Trocknungsdatum, **„Verschieben nach"**-Dropdown für den Standort der Spule, **Ausmustern/Reaktivieren**-Schalter (Ausmustern zeigt eine Bestätigung, um das Entfernen aus dem Bestand explizit zu machen).
+- **Mehrfachauswahl** — hake mehrere Zeilen an (oder das Kopf-Kontrollkästchen einer Gruppe, um alle ihre sichtbaren Spulen auszuwählen), und eine mitlaufende Aktionsleiste erscheint mit **„N verschieben nach…“**, **„N stilllegen“** (bzw. **„N reaktivieren“**, wenn alle ausgewählten Spulen bereits ausgemustert sind) und **„Auswahl aufheben“**. Aktionen gelten nur für ausgewählte Spulen, die gerade sichtbar sind. Alte Einzelgewichts-Rollen sind hier schreibgeschützt und lassen sich nicht auswählen.
 
 Alle Bearbeitungen laufen über denselben `PUT /api/filaments/{id}/spools/{spoolId}`-Endpunkt wie die Filament-Detailseite, sodass die Semantik — Ausmustern-bei-Null-Prompts, Gewichtsvalidierung, Sync-Verhalten — identisch zur SpoolCard ist.
 
@@ -540,11 +560,11 @@ XLSX-Exporte enthalten gestaltete Kopfzeilen, farbcodierte Zellen, Auto-Filter u
 
 ### Snapshot exportieren
 
-Gehe zu **Einstellungen → Sicherung & Wiederherstellen** und klicke auf **„Snapshot herunterladen"**, um einen JSON-Snapshot der Kerndaten der App herunterzuladen. Der Snapshot enthält Filamente, Düsen, Drucker, Druckbett-Typen, Locations, Druckverlauf und Shared Catalogs (inklusive soft-gelöschter Dokumente und Tombstones) mit erhaltenen Referenzen und Zeitstempeln.
+Gehe zu **Einstellungen → Sicherung & Daten** und klicke auf **„Snapshot herunterladen"**, um einen JSON-Snapshot der Kerndaten der App herunterzuladen. Der Snapshot enthält Filamente, Düsen, Drucker, Druckbett-Typen, Locations, Druckverlauf und Shared Catalogs (inklusive soft-gelöschter Dokumente und Tombstones) mit erhaltenen Referenzen und Zeitstempeln.
 
 ### Snapshot wiederherstellen
 
-Gehe zu **Einstellungen → Sicherung & Wiederherstellen** und klicke auf **„Aus Snapshot wiederherstellen"**. Wähle eine zuvor exportierte Snapshot-Datei. Das ersetzt alle aktuellen Daten durch die Snapshot-Inhalte. Die Wiederherstellung nutzt Best-Effort-Rollback — schlägt ein Teil fehl, versucht der Handler, die vorherigen Daten aus einem In-Memory-Backup neu einzufügen.
+Gehe zu **Einstellungen → Sicherung & Daten** und klicke auf **„Aus Snapshot wiederherstellen"**. Wähle eine zuvor exportierte Snapshot-Datei. Jede Sammlung, die die Datei enthält, wird durch die Snapshot-Inhalte ersetzt (eine als leere Liste enthaltene Sammlung wird geleert). Eine Sammlung, die ein Snapshot in älterem Format gar nicht enthält — z. B. Locations oder Druckhistorie in einer v2-Datei —, bleibt unverändert, und die Erfolgsmeldung führt sie als unverändert geblieben auf. Die Wiederherstellung nutzt Best-Effort-Rollback — schlägt ein Teil fehl, versucht der Handler, die vorherigen Daten aus einem In-Memory-Backup neu einzufügen.
 
 ---
 
@@ -560,8 +580,8 @@ Seit v1.48–v1.50 (#732) hat **auch jede Spule ihre eigene Instance-ID** — di
 
 Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Das ist der Drucker für Spulen-Etiketten; 10×15-cm-Trockenbox-Etiketten laufen über ein separates Gerät mit eigener Einstellung — siehe [Trockenbox-Etiketten](#trockenbox-etiketten-knaon-y813bt-v169). Zwei QR-Modi, die du pro Druck wählen kannst:
 
-- **Instanz-ID** — eine 5-Byte-Hex-ID (z. B. `2acc21072a`). Seit #732 kodiert dieser Modus die Instanz-ID der **ausgewählten Spule** (die Spulenauswahl bestimmt welche; Standard ist die erste nicht ausgemusterte Spule). Die ID auf **Filament-Ebene** wird stattdessen kodiert, wenn du in der Auswahl die Option **„Nur Filament"** wählst (auch verfügbar, wenn das Filament Spulen hat — für den Druck eines Legacy-QR auf Filament-Ebene) oder wenn das Filament keine Spulen hat. Sie entspricht dem, was auf einem NFC-Tag steht, und wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
-- **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit **einem beliebigen Smartphone** öffnet sich die Seite direkt — keine App nötig. Das ist die per Handy scanbare Option. Bei einem Filament mit **mehreren Spulen** erscheint eine Spulenauswahl, sodass der QR eine bestimmte Spule ansteuern kann (`…/filaments/<id>?spool=<spoolId>`); beim Scannen öffnet sich das Filament mit hervorgehobener Spule. *(Spulen-Targeting, v1.35.)*
+- **Instanz-ID** — eine 5-Byte-Hex-ID (z. B. `2acc21072a`). Seit #732 kodiert dieser Modus die Instanz-ID der **ausgewählten Spule** (bei einem Filament mit 2+ Spulen bestimmt die Spulenauswahl welche; Standard ist die erste nicht ausgemusterte Spule, und ein Filament mit nur einer Spule nutzt diese). Die ID auf **Filament-Ebene** wird stattdessen kodiert, wenn du in der Auswahl die Option **„Keine bestimmte Spule (nur Filament)"** wählst (für den Druck eines Legacy-QR auf Filament-Ebene) oder wenn das Filament keine Spulen hat. Sie entspricht dem, was auf einem NFC-Tag steht, und wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
+- **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit **einem beliebigen Smartphone** öffnet sich die Seite direkt — keine App nötig. Das ist die per Handy scanbare Option. Der Link zielt auf die ausgewählte Spule (`…/filaments/<id>?spool=<spoolId>`) — bei einem Filament mit 2+ Spulen die in der Auswahl gewählte, bei einem Filament mit einer Spule diese eine; beim Scannen öffnet sich das Filament mit hervorgehobener Spule. *(Spulen-Targeting, v1.35.)*
 
 Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
 
@@ -570,13 +590,13 @@ Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
 ### Einmalige Einrichtung
 
 1. **Drucker per USB verbinden** und einschalten. Unter macOS/Linux ist er automatisch über CUPS erreichbar; unter Windows als normalen Drucker installieren, falls das Betriebssystem dazu auffordert.
-2. **Desktop-App öffnen → Einstellungen → Etikettendrucker**. Klicke auf **Aktualisieren**, um Drucker aufzulisten. Der PT-P710BT erscheint mit einem grünen **PT-Touch**-Badge (unter macOS/Linux als `usb://Brother/PT-P710BT…`-Gerät). Wähle ihn aus.
+2. **Desktop-App öffnen → Einstellungen → Geräte** und die Karte **Etikettendrucker** suchen. Drucker, die bereits als System-Warteschlange eingerichtet sind, werden automatisch aufgelistet. Ist dein PT-P710BT gerade erst angeschlossen und noch keine eingerichtete Warteschlange, klicke auf **„Nach USB-Druckern suchen"**, um ihn zu erkennen — **unter macOS kann dabei nach deinem Administratorpasswort gefragt werden**, weil das Auflisten von USB-Druckgeräten eine Admin-Operation ist. (**Aktualisieren** listet nur eingerichtete Warteschlangen neu auf und prüft kein USB — ein noch nicht eingerichteter Drucker taucht damit nicht auf.) Der PT-P710BT erscheint mit einem grünen **PT-Touch**-Badge (unter macOS/Linux als `usb://Brother/PT-P710BT…`-Gerät). Wähle ihn aus.
 3. **(Optional) Öffentliche URL für QR-Modus-Etiketten**: Wenn du Etiketten mit Deep-Link-URLs drucken willst, die auch vom Smartphone aus scanbar sind, setze zusätzlich das Feld **Öffentliche Basis-URL**. Der URL-Modus in der Desktop-App benötigt eine Nicht-Localhost-Adresse, weil `window.location.origin` im Renderer `http://localhost:3456` ist — von einem anderen Gerät aus nicht erreichbar. Beispiele: `https://filament-db.lan`, `https://meine-instanz.example.com`. Loopback-Adressen, Query-Strings und URL-Fragmente werden mit einer beschreibenden Fehlermeldung abgelehnt. Lass das Feld leer, um den URL-Modus in der Desktop-App zu deaktivieren — der Instanz-ID-Modus funktioniert auch ohne diese Einstellung.
 4. **Test-Druck**: Klicke auf **Test-Etikett drucken**, um ein kurzes Etikett mit deinem gespeicherten Format zu senden. Bestätige, dass der QR scanbar und der Text gestochen scharf ist, bevor du echte Etiketten druckst.
 
 ### Etikett anpassen
 
-Unter **Einstellungen → Etikettenformat** legst du fest, wie jedes Etikett aussieht — mit einer Live-Vorschau anhand eines Beispiel-Filaments:
+Die Karte **Etikettenformat** unter **Einstellungen → Geräte** legt fest, wie jedes Etikett aussieht — mit einer Live-Vorschau anhand eines Beispiel-Filaments:
 
 - **QR-Code** — **links**, **rechts** oder **aus** (für ein reines Text-Etikett).
 - **Textfelder** — wähle eine Vorlage (*Nur Name*, *Hersteller + Typ*, *Hersteller über Typ*, *Typ + Farbe*) oder schalte einzelne Felder (Name, Hersteller, Typ, Farbe) ein/aus. Mehrere Felder werden als getrennte Zeilen gestapelt (z. B. Hersteller über Typ).
@@ -588,15 +608,16 @@ Das Format ist **global** — es gilt für jedes gedruckte Etikett (und den Web-
 
 ### Etiketten drucken
 
-Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Filament-Instanz-ID / Deep-Link) — und bei einem Filament mit mehreren Spulen im Deep-Link-Modus, auf welche Spule der QR zeigt —, dann klicke auf **Drucken**.
+Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Filament-Instanz-ID / Deep-Link) — und bei einem Filament mit 2+ Spulen, auf welche Spule der QR zeigt (die Auswahl gilt für beide Modi) —, dann klicke auf **Drucken**.
 
 Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim -- --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre (das Trennzeichen `--` ist zwingend — ohne es schluckt npm das Flag `--in`, reicht den Pfad aber weiter; das Skript sieht dann ein nacktes Argument und bricht mit `Unknown arg: <Pfad>` ab).
 
 ### Fehlerbehebung
 
-- **Kein Drucker aufgelistet** in Einstellungen → Etikettendrucker: Stelle sicher, dass der Drucker mit einem USB-**Datenkabel** verbunden (reine Ladekabel versorgen den Drucker, melden ihn aber nicht an) und eingeschaltet ist, dann auf **Aktualisieren** klicken. Unter Linux musst du den Drucker eventuell zuerst in den Systemeinstellungen für Drucker hinzufügen.
-- **Upgrade von einem Build vor v1.34.9**: Wenn du zuvor ein Bluetooth-/Serial-Gerät ausgewählt hattest, wähle deinen Drucker in Einstellungen → Etikettendrucker erneut aus. Die App erkennt die alte Serial-Einstellung und bittet dich um eine neue Auswahl, statt kryptisch fehlzuschlagen.
+- **Kein Drucker aufgelistet** in Einstellungen → Geräte: Stelle sicher, dass der Drucker mit einem USB-**Datenkabel** verbunden (reine Ladekabel versorgen den Drucker, melden ihn aber nicht an) und eingeschaltet ist, dann auf **„Nach USB-Druckern suchen"** klicken. Unter macOS kann die Suche nach deinem Administratorpasswort fragen (das Betriebssystem autorisiert die Geräteabfrage — das Öffnen der Einstellungen selbst fragt seit dem #771-Fix nicht mehr). Unter Linux musst du den Drucker eventuell zuerst in den Systemeinstellungen für Drucker hinzufügen.
+- **Upgrade von einem Build vor v1.34.9**: Wenn du zuvor ein Bluetooth-/Serial-Gerät ausgewählt hattest, wähle deinen Drucker in Einstellungen → Geräte erneut aus. Die App erkennt die alte Serial-Einstellung und bittet dich um eine neue Auswahl, statt kryptisch fehlzuschlagen.
 - **Etikett wird gespiegelt gedruckt** (Text rückwärts, QR seitenverkehrt): in v1.34.9 behoben — auf die neueste Version aktualisieren.
+- **Windows: Etiketten schlagen fehl und die Karte warnt, dass die bidirektionale Unterstützung aktiv ist**: Manche Druckertreiber bringen den Windows-Druckwarteschlangendienst zum Absturz, wenn mit aktiviertem BiDi gedruckt wird. Klicke auf der Etikettendrucker-Karte auf **„Bidirektionale Unterstützung deaktivieren"** (erfordert Administrator-Freigabe) oder deaktiviere selbst **„Bidirektionale Unterstützung aktivieren"** unter Druckereigenschaften → Anschlüsse.
 - **Nichts gedruckt, obwohl es „erfolgreich" war**: Der PT-P710BT schaltet sich im Leerlauf automatisch ab. Wecke ihn (Power-Taste drücken), prüfe das Band und drucke erneut.
 
 ---
@@ -610,7 +631,7 @@ Gedruckt wird nur aus der Desktop-App. In der Web-App wird aus dem Drucken-Butto
 ### Einmalige Einrichtung
 
 1. **Y813BT per USB verbinden** und einschalten.
-2. **Einstellungen → Geräte** → die Karte **Trockenbox-Etikettendrucker (KNAON Y813BT)** unterhalb der Brother-Karte. Drucker, die bereits als System-Warteschlange eingerichtet sind, werden beim Laden der Karte aufgelistet. Fehlt deiner, klicke auf **„Nach USB-Druckern suchen"** (oder **Aktualisieren**) — *„Die Suche nach USB-Druckern kann nach Ihrem Administratorpasswort fragen (macOS)."* Passende Geräte bekommen ein grünes **Y813BT**-Badge. Wähle deines aus.
+2. **Einstellungen → Geräte** → die Karte **Trockenbox-Etikettendrucker (KNAON Y813BT)** unterhalb der Brother-Karte. Drucker, die bereits als System-Warteschlange eingerichtet sind, werden beim Laden der Karte aufgelistet. Fehlt deiner, klicke auf **„Nach USB-Druckern suchen"** (**Aktualisieren** listet nur eingerichtete Warteschlangen neu auf und findet kein neues USB-Gerät) — *„Die Suche nach USB-Druckern kann nach Ihrem Administratorpasswort fragen (macOS)."* Passende Geräte bekommen ein grünes **Y813BT**-Badge. Wähle deines aus.
 3. **Testdruck** sendet ein kleines, bekannt gutes Etikett („FILAMENT DB" / „TSPL test print OK" plus einen Barcode) und bestätigt mit *„Testetikett gesendet — prüfen Sie den Drucker."*
 4. **Öffentliche Basis-URL** auf der **Brother**-Karte direkt darüber setzen — es gibt nur eine URL, und beide Drucker teilen sie sich. Ohne sie kodiert der QR-Code `localhost`, was kein Smartphone öffnen kann; der Druckdialog warnt davor, druckt aber trotzdem, und ein späterer Nachdruck kostet wenig.
 
@@ -725,7 +746,7 @@ PrusaSlicer Filament Edition kann nach dem Slicen prüfen, ob die gewählte Spul
 
 Auch ohne den Fork kannst du manuell synchronisieren:
 
-- **Export**: Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente als PrusaSlicer-kompatibles Config-Bundle herunterzuladen
+- **Export**: Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente außer Vorlagen (Filamente mit Farbvarianten — deren Varianten werden stattdessen exportiert) als PrusaSlicer-kompatibles Config-Bundle herunterzuladen
 - **Import**: Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren**, um die exportierte Datei zu laden
 - **Re-Import**: Öffne das Dropdown **Importieren/Exportieren** und klicke auf **„Datei importieren (INI / CSV / XLSX)"**, um ein PrusaSlicer-Config-Bundle zurück in Filament DB zu importieren
 
@@ -733,7 +754,7 @@ Auch ohne den Fork kannst du manuell synchronisieren:
 
 ## API-Dokumentation
 
-Gehe zu **Einstellungen** und klicke auf **„API-Dokumentation"**, um die interaktive Swagger-UI unter `/api-docs` zu öffnen. Sie bietet eine durchsuchbare, testbare Oberfläche für die dokumentierte OpenAPI-Surface, während die [API-Referenz](api.md) zusätzliche Prosa zu neueren Routen und Verhaltens-Details enthält. Die zugrunde liegende OpenAPI-3.0-Spezifikation ist unter `/api/openapi` verfügbar (dynamisch aus `package.json` versioniert).
+Gehe zu **Einstellungen** und klicke auf die Kachel **„API-Dokumentation"**, um die interaktive Swagger-UI unter `/api-docs` zu öffnen. Sie bietet eine durchsuchbare, testbare Oberfläche für die dokumentierte OpenAPI-Surface, während die [API-Referenz](api.md) zusätzliche Prosa zu neueren Routen und Verhaltens-Details enthält. Die zugrunde liegende OpenAPI-3.0-Spezifikation ist unter `/api/openapi` verfügbar (dynamisch aus `package.json` versioniert).
 
 ---
 
@@ -743,7 +764,7 @@ Die **Dashboard**-Seite unter `/dashboard` ist die Heimat deines Inventars auf e
 
 - **Summen** — Filamentanzahl, Spulenanzahl, Gramm vorrätig sowie Drucker-/Düsen-/Betttyp-Anzahl
 - **Low-Stock-Warnungen** — jedes Filament, dessen aggregierter Rest unter seinem pro-Filament-`lowStockThreshold` liegt. Klicken einer Zeile springt zur Filament-Detailseite.
-- **Trocknen nötig** — Spulen, deren letzter Trockenzyklus älter als 30 Tage ist (später in den Einstellungen konfigurierbar), nach Filamenttyp gruppiert
+- **Trocknen nötig** — Spulen, deren letzter Trockenzyklus älter als 30 Tage ist (oder die nie getrocknet wurden), bei Filamenten mit gesetzter Trocknungstemperatur
 - **Neueste Druckhistorie** — die zuletzt protokollierten Druckaufträge, mit einem **„Alle anzeigen →"**-Link zur [Verlauf-Seite](#druckverlaufs-browser-v179) und einem **„Druckauftrag erfassen"**-Button *(v1.79, #1167)*, der einen In-App-Dialog öffnet — Auftragsbezeichnung, Drucker, Datum, Notizen und eine oder mehrere Filament-/Spulen-/Gramm-Zeilen — und über dieselbe `/api/print-history`-Maschinerie schreibt wie die Slicer-Integrationen, sodass Spulenabbuchungen und Validierung identisch funktionieren. Vorlagen sind von der Filamentauswahl ausgeschlossen, und eine Zeile, deren Filament keine aktive Spule hat, sagt das schon vor dem Absenden (der Auftrag wird dann ohne Bestandsabzug erfasst).
 
 Low-Stock-Schwellen werden pro Filament auf der Bearbeitungsseite unter **Bestandseinstellungen → Low-Stock-Schwellwert (g)** gesetzt. Ein Filament ohne Schwellwert wird nie geflaggt.
@@ -853,7 +874,7 @@ Unter macOS sind Release-Builds Developer-ID-signiert **und** notarisiert (seit 
 
 ## Im lokalen Netzwerk freigeben (Desktop) *(v1.45)*
 
-Einstellungen → **Im lokalen Netzwerk freigeben** lässt andere Geräte in deinem LAN den eingebauten Server dieser Desktop-Instanz erreichen. Standardmäßig ist die Option **aus** — dann bindet der eingebettete Server nur an localhost und nichts außerhalb dieses Rechners kann sich verbinden.
+**Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** lässt andere Geräte in deinem LAN den eingebauten Server dieser Desktop-Instanz erreichen. Standardmäßig ist die Option **aus** — dann bindet der eingebettete Server nur an localhost und nichts außerhalb dieses Rechners kann sich verbinden.
 
 Schalte sie ein, und der Server bindet neu an `0.0.0.0` (alle Schnittstellen); das Einstellungs-Panel zeigt die LAN-URL, auf die du ein anderes Gerät richten kannst (z. B. `http://192.168.1.50:3456`). Mit dieser Adresse verbindet sich die mobile Scanner-App.
 

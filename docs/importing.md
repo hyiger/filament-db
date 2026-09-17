@@ -134,7 +134,7 @@ The filament is targeted by id — renaming the preset in Bambu Studio doesn't b
 
 For the "I have a Bambu preset for a filament I don't have in the app yet" case.
 
-1. Open **Import / Export** (top-right or `/import-export`)
+1. Open **Settings → Import / Export** (`/import-export`) — the Bambu Studio import is a tile on that page only; the home-page **Import/Export** dropdown has no Bambu entry
 2. Click the **Bambu Studio (.json)** tile and select the file
 3. The route upserts by name (uses `filament_settings_id` from the file): an existing active filament is updated, a soft-deleted one with the same name is resurrected, otherwise a new filament is created
 
@@ -235,6 +235,6 @@ PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusa
 
 ## Exporting to PrusaSlicer INI
 
-Open the **Import/Export** dropdown on the home page and, under **Export**, click **"INI (PrusaSlicer)"** to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
+Open the **Import/Export** dropdown on the home page and, under **Export**, click **"INI (PrusaSlicer)"** to download all filaments except templates (filaments with color variants — export their variants instead) as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
 
 A filament with zero or one nozzle calibration produces a single `[filament:Name]` section, and calibration overrides are not included — they are applied dynamically via the calibration API. A filament calibrated for **two or more distinct nozzles** instead produces one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's filament-scoped calibration values baked in (pressure advance stays dynamic via the calibration API). Re-importing such a bundle into Filament DB collapses the suffixed sections back onto the base filament, so a round-trip updates the original record instead of creating suffixed duplicates.

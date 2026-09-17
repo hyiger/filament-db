@@ -59,7 +59,7 @@ Bei Bambu-Tags zeigt ein „Bambu-Lab-Spule (read-only)"-Badge an, dass diese Ta
 
 ### Live-Scan-Stream (Slicer-Integration)
 
-Jeder erfolgreiche Auto-Read wird zusätzlich auf einen Server-Sent-Events-Stream unter `GET /api/scan/stream` gelegt, sodass ein abonnierter Slicer sein aktives Filament-Preset bei jedem Scan umschalten kann. Der Slicer muss nicht auf derselben Maschine laufen wie Filament DB — alles, was den Server per HTTP erreicht, funktioniert (LAN, Tailscale, Reverse-Tunnel). So kann ein headless Filament DB auf einem Raspberry Pi PrusaSlicer auf einem Mac im Nebenraum steuern. Der Renderer publiziert via `POST /api/scan/publish` nach dem Match-Schritt; Konsumenten erhalten ein `scan`-Event pro Lesevorgang und beim Connect zusätzlich ein `replay`-Event mit dem letzten Scan, damit ein Slicer, der direkt nach einem Tag-Read geöffnet wurde, ihn trotzdem mitbekommt.
+Jeder erfolgreiche Auto-Read wird zusätzlich auf einen Server-Sent-Events-Stream unter `GET /api/scan/stream` gelegt, sodass ein abonnierter Slicer sein aktives Filament-Preset bei jedem Scan umschalten kann. Der Slicer muss nicht auf derselben Maschine laufen wie Filament DB — alles, was den Server per HTTP erreicht, funktioniert (LAN, Tailscale, Reverse-Tunnel). So kann die Filament-DB-Desktop-App auf einem Raspberry Pi mit angeschlossenem Reader PrusaSlicer auf einem Mac im Nebenraum steuern (die Scans veröffentlicht die Desktop-App, an der der Reader hängt — ein headless Docker-/Web-Deployment veröffentlicht nie). Der Renderer publiziert via `POST /api/scan/publish` nach dem Match-Schritt; Konsumenten erhalten ein `scan`-Event pro Lesevorgang und beim Connect zusätzlich ein `replay`-Event mit dem letzten Scan, damit ein Slicer, der direkt nach einem Tag-Read geöffnet wurde, ihn trotzdem mitbekommt.
 
 Event-Payload-Form (gleich für `scan` und `replay`):
 
@@ -148,8 +148,9 @@ Das „Loaded"-Label bleibt sichtbar, nachdem der Tag-Lese-Dialog geschlossen wu
 Die App kommuniziert mit dem ACR1552U via PC/SC und `@pokusew/pcsclite`:
 
 - **Verbindung**: Verbindet immer mit `SCARD_SHARE_SHARED`. Auf macOS registrieren sowohl Apples eingebauter `ifd-ccid`-Treiber als auch der ACS-Treiber `ifd-acsccid` je eine Instanz des ACR1552U, aber nur der ACS-Treiber beherrscht ISO 15693 — die App versucht einen SHARED-Connect auf jeder registrierten Reader-Instanz und nutzt diejenige, die funktioniert (beim Hot-Plug wartet sie zudem kurz, bis sich beide Treiber-Instanzen registriert haben)
-- **Tag-Erkennung**: Versucht zuerst MIFARE-Classic-Read (Bambu); bei Misserfolg fällt sie auf ISO 15693 (OpenPrintTag) zurück
+- **Tag-Erkennung**: Versucht zuerst MIFARE-Classic-Read (Bambu); dann NTAG / NFC-Forum Type 2 (OpenTag3D) via `FF B0` READ BINARY; bei Misserfolg fällt sie auf ISO 15693 (OpenPrintTag) zurück. Lesen UND Schreiben/Löschen erkennen den Chip auf dieselbe Weise
 - **OpenPrintTag-Befehle**: ACR1552U-Pass-Through (`FF FB`), das ISO-15693-Read/Write-Single-Block-Befehle umschließt
+- **OpenTag3D-Befehle**: NTAG-Type-2-Pseudo-APDUs — Read Binary (`FF B0`), Update Binary (`FF D6`, 4-Byte-Seiten) und `GET_VERSION` (`60h`), um die Größe eines leeren Tags zu bestimmen. Der NDEF-Record ist TNF=0x02, Type=`application/opentag3d`. Der Capability Container eines NTAG (Seite 3) ist einmalig programmierbar, weshalb für NTAG kein Schreibschutz angeboten wird (siehe oben)
 - **Bambu-Befehle**: Standard-PC/SC-Pseudo-APDUs für MIFARE Classic — Get UID (`FF CA`), Load Key (`FF 82`), Authenticate (`FF 86`), Read Binary (`FF B0`)
 
 ### Datenformat
