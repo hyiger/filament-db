@@ -14,6 +14,8 @@
  * "blanks always sink to the bottom regardless of direction" rule.
  */
 
+import { classifyFilament, COLOR_FAMILIES, type ColorFamily } from "./colorFamily";
+
 /**
  * The allowed values, as runtime arrays.
  *
@@ -23,7 +25,7 @@
  * the unions from them keeps the two in step: adding a sort key to the union
  * without adding it here is a type error, not a silently unaccepted param.
  */
-export const INVENTORY_GROUP_BYS = ["location", "type", "vendor", "none"] as const;
+export const INVENTORY_GROUP_BYS = ["location", "type", "vendor", "color", "none"] as const;
 export const INVENTORY_SORT_KEYS = [
   "remaining",
   "name",
@@ -48,6 +50,13 @@ export interface InventoryRow {
   parentSpoolWeight: number | null;
   purchaseDate: string | null;
   openedDate: string | null;
+  /** Color facet inputs — group-by-color only. The by-location aggregation
+   *  projects all three (the arrays parent-resolved, GH #1050); optional so
+   *  a stale client cache of an older payload shape just lands in "unknown"
+   *  instead of throwing. `filamentColor` stays RAW (null for coextruded). */
+  filamentColor?: string | null;
+  secondaryColors?: string[] | null;
+  optTags?: number[] | null;
 }
 
 export interface InventoryLocation {
@@ -79,6 +88,10 @@ export interface InventoryDisplayGroup<R extends InventoryRow = InventoryRow> {
    *  "ungrouped" sentinel). `null` for location grouping — the caller renders
    *  `location.name` / its own "no location" label there. */
   label: string | null;
+  /** The color family this group holds under `groupBy: "color"`; `null` in
+   *  every other mode. The page renders its swatch dot + translated name —
+   *  `label` stays null because the family id isn't display text. */
+  colorFamily: ColorFamily | null;
   location: InventoryLocation | null;
   locationId: string | null;
   spools: R[];
@@ -145,6 +158,48 @@ function sortValue(row: InventoryRow, key: InventorySortKey): number | string | 
   }
 }
 
+/** Per-row memo for the classifier adapter. `classifyFilament` caches by
+ *  object identity, so handing it a fresh adapter object on every regroup
+ *  would defeat that cache and re-run OKLCH + name tokenizing on every
+ *  sort/group toggle. Rows are replaced (never mutated) on refetch, so an
+ *  identity-keyed WeakMap can't serve a stale family. */
+const rowFamilyMemo = new WeakMap<InventoryRow, ColorFamily>();
+
+/**
+ * Color facet: the PRIMARY color family of a spool row. Group-by-color puts
+ * each spool in exactly ONE section, so the additive membership the home
+ * list's facet uses (a "Black" whose swatch reads dark gray matching both)
+ * is deliberately not consulted here — only `.primary`.
+ *
+ * Adapts the by-location row shape to `ColorClassifiable`. A spool row is
+ * always inventory, so `hasVariants: false` — a legacy parent still holding
+ * spools classifies on its own color like any filament (the template rule
+ * only fires for a variant-bearing filament with no spools, which can never
+ * produce a spool row). `classifyFilament` therefore never returns null
+ * for this input, hence the non-null assertion; an uncolored row still lands
+ * in "unknown" through the classifier itself.
+ */
+export function inventoryRowColorFamily(row: InventoryRow): ColorFamily {
+  const hit = rowFamilyMemo.get(row);
+  if (hit) return hit;
+  const family = classifyFilament({
+    name: row.filamentName,
+    vendor: row.filamentVendor,
+    type: row.filamentType,
+    color: row.filamentColor ?? null,
+    secondaryColors: row.secondaryColors ?? null,
+    optTags: row.optTags ?? null,
+    hasVariants: false,
+  })!.primary;
+  rowFamilyMemo.set(row, family);
+  return family;
+}
+
+/** Group-key prefix for color sections, so a family id can't collide with a
+ *  type/vendor bucket of the same spelling in the shared collapse set (a
+ *  vendor literally named "Orange" is not far-fetched). */
+export const INVENTORY_COLOR_KEY_PREFIX = "color:";
+
 function makeRowComparator<R extends InventoryRow>(
   key: InventorySortKey,
   dir: InventorySortDir,
@@ -172,6 +227,10 @@ function makeRowComparator<R extends InventoryRow>(
  *   {@link INVENTORY_NO_GROUP_KEY} and sorts last.
  * - `"type"` / `"vendor"` re-bucket by the row's effective field; a blank value
  *   lands in one `INVENTORY_NO_GROUP_KEY` bucket sorted last.
+ * - `"color"` buckets by the row's PRIMARY color family (color facet) — one
+ *   section per spool, never the additive membership. There's no blank
+ *   bucket: an uncolored row classifies as the "unknown" family, which
+ *   already sorts last in {@link COLOR_FAMILIES}.
  * - `"none"` collapses everything into a single {@link INVENTORY_ALL_KEY} group.
  *
  * Each group's `count` + `totalGrams` are recomputed from its rows (0g-tare
@@ -192,10 +251,11 @@ export function groupAndSortInventory<R extends InventoryRow>(
     label: string | null,
     location: InventoryLocation | null,
     locationId: string | null,
+    colorFamily: ColorFamily | null = null,
   ): InventoryDisplayGroup<R> => {
     let b = buckets.get(key);
     if (!b) {
-      b = { key, label, location, locationId, spools: [], count: 0, totalGrams: 0 };
+      b = { key, label, colorFamily, location, locationId, spools: [], count: 0, totalGrams: 0 };
       buckets.set(key, b);
     }
     return b;
@@ -211,6 +271,9 @@ export function groupAndSortInventory<R extends InventoryRow>(
         const value = isBlank(raw) ? null : raw;
         const key = value ?? INVENTORY_NO_GROUP_KEY;
         ensure(key, value, null, null).spools.push(row);
+      } else if (groupBy === "color") {
+        const family = inventoryRowColorFamily(row);
+        ensure(`${INVENTORY_COLOR_KEY_PREFIX}${family}`, null, null, null, family).spools.push(row);
       } else {
         ensure(INVENTORY_ALL_KEY, null, null, null).spools.push(row);
       }
@@ -235,6 +298,13 @@ export function groupAndSortInventory<R extends InventoryRow>(
     if (bNone && !aNone) return -1;
     if (groupBy === "location") {
       return (a.location?.name || "").localeCompare(b.location?.name || "");
+    }
+    // Color sections follow the facet's display order (Black, Gray, White …
+    // Clear, Multicolor, No color) — the spectrum reads as a palette, where
+    // alphabetical would scatter it and by-count would reshuffle it on every
+    // weight edit. Every color group carries a family, so the `!` is safe.
+    if (groupBy === "color") {
+      return COLOR_FAMILIES.indexOf(a.colorFamily!) - COLOR_FAMILIES.indexOf(b.colorFamily!);
     }
     return (a.label || "").localeCompare(b.label || "");
   });

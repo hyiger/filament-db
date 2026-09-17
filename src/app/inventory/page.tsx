@@ -37,6 +37,9 @@ import {
   INVENTORY_GROUP_BYS,
   INVENTORY_SORT_KEYS,
 } from "@/lib/inventorySort";
+// Color facet: the same family dot as the home list's color chips, so a
+// section header and a chip for the same family can't look different.
+import { ColorFamilyDot } from "@/components/ColorFacetFilter";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
 import { parseWeightInput, type WeightInputProblem } from "@/lib/parseWeightInput";
@@ -301,7 +304,7 @@ export default function InventoryPage() {
       return;
     }
     // A scanned label must not depend on the scanning browser's persisted
-    // groupBy preference: under type/vendor/none grouping the section ids
+    // groupBy preference: under type/vendor/color/none grouping the section ids
     // are bucket values, not location ids, and the target simply would not
     // exist. Forcing location grouping is what the user asked for by
     // scanning a BOX label; the touch is recorded so it persists like any
@@ -602,7 +605,7 @@ export default function InventoryPage() {
   // verbatim, so the unsearched numbers are unchanged.
   const stats = useMemo(() => summarizeInventoryGroups(filteredGroups), [filteredGroups]);
 
-  // Regroup (location / type / vendor / none) + sort within each group. Pure
+  // Regroup (location / type / vendor / color / none) + sort within each group. Pure
   // transform over the already-search-filtered rows — the payload carries
   // type/vendor/dates/weights per row, so switching grouping or sorting
   // needs no server round-trip.
@@ -836,6 +839,7 @@ export default function InventoryPage() {
             <option value="location">{t("inventory.groupBy.location")}</option>
             <option value="type">{t("inventory.groupBy.type")}</option>
             <option value="vendor">{t("inventory.groupBy.vendor")}</option>
+            <option value="color">{t("inventory.groupBy.color")}</option>
             <option value="none">{t("inventory.groupBy.none")}</option>
           </select>
         </div>
@@ -990,9 +994,11 @@ export default function InventoryPage() {
                 ? (group.location?.name ?? t("inventory.noLocation"))
                 : groupBy === "none"
                   ? t("inventory.groupAll")
-                  : group.key === INVENTORY_NO_GROUP_KEY
-                    ? t("inventory.groupNone")
-                    : (group.label ?? "");
+                  : group.colorFamily
+                    ? t(`colorFacet.family.${group.colorFamily}`)
+                    : group.key === INVENTORY_NO_GROUP_KEY
+                      ? t("inventory.groupNone")
+                      : (group.label ?? "");
             const kindLabel =
               groupBy === "location" && group.location?.kind
                 ? isKnownLocationKind(group.location.kind)
@@ -1024,6 +1030,7 @@ export default function InventoryPage() {
                     <span className="text-gray-400 text-sm" aria-hidden="true">
                       {isCollapsed ? "▶" : "▼"}
                     </span>
+                    {group.colorFamily && <ColorFamilyDot family={group.colorFamily} />}
                     <h2 className="font-semibold text-base truncate">
                       {name}
                       {kindLabel && (

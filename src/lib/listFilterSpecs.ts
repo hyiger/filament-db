@@ -32,6 +32,7 @@ import {
 } from "@/lib/inventorySort";
 import { SORT_KEYS, SORT_DIRS, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { QUICK_FILTERS, type QuickFilter } from "@/components/QuickFilterChips";
+import { COLOR_FACET_VALUES, type ColorFacet } from "@/lib/colorFamily";
 
 /**
  * Parse a stored preference blob, tolerating corruption (GH #1141).
@@ -84,6 +85,17 @@ export const HOME_FILTER_SPEC = {
   vendorFilter: { param: "vendor", fallback: "", ...exactTextParam },
   quickFilter: { param: "quick", fallback: "all" as QuickFilter, parse: oneOf(QUICK_FILTERS) },
   showOutOfStock: { param: "oos", fallback: false, ...boolParam },
+  // Color facet: `family` or `family-shade`, validated against the generated
+  // COLOR_FACET_VALUES so a stale or hand-typed `?color=white-dark` falls back
+  // to "no color" rather than leaving an invisible, unclearable filter (the
+  // same reason `kind` below is validated). Deliberately NOT sticky and NOT
+  // persisted: like type/vendor, a remembered color would land a returning
+  // user on a subset of their catalog (#831).
+  colorFacet: {
+    param: "color",
+    fallback: "" as "" | ColorFacet,
+    parse: oneOf<"" | ColorFacet>(["", ...COLOR_FACET_VALUES]),
+  },
   sortKey: {
     param: "sort",
     fallback: DEFAULT_HOME_PREFS.sortKey,
