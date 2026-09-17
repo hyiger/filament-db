@@ -136,7 +136,7 @@ Das Filament wird per ID adressiert — ein Umbenennen des Presets in Bambu Stud
 
 Für den Fall „Ich habe ein Bambu-Preset für ein Filament, das ich noch nicht in der App habe".
 
-1. Öffne **Importieren / Exportieren** (oben rechts oder `/import-export`)
+1. Öffne **Einstellungen → Import / Export** (`/import-export`) — der Bambu-Studio-Import ist nur eine Kachel auf dieser Seite; das Dropdown **Importieren/Exportieren** auf der Startseite hat keinen Bambu-Eintrag
 2. Klicke auf die Kachel **Bambu Studio (.json)** und wähle die Datei aus
 3. Die Route fügt anhand des Namens ein bzw. aktualisiert (verwendet `filament_settings_id` aus der Datei): ein bestehendes aktives Filament wird aktualisiert, ein soft-gelöschtes mit demselben Namen wird wiederhergestellt, andernfalls wird ein neues Filament angelegt
 
@@ -237,6 +237,6 @@ PrusaSlicer Filament Edition lädt die Basis-Presets beim Start aus `GET /api/fi
 
 ## Export nach PrusaSlicer INI
 
-Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente als PrusaSlicer-kompatible INI-Datei herunterzuladen. Die Datei enthält alle gespeicherten Einstellungen pro Filament und kann über **Datei > Importieren > Config Bundle importieren...** zurück in PrusaSlicer geladen werden.
+Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente außer Vorlagen (Filamente mit Farbvarianten — exportiere stattdessen deren Varianten) als PrusaSlicer-kompatible INI-Datei herunterzuladen. Die Datei enthält alle gespeicherten Einstellungen pro Filament und kann über **Datei > Importieren > Config Bundle importieren...** zurück in PrusaSlicer geladen werden.
 
 Ein Filament mit null oder einer Düsen-Kalibrierung erzeugt einen einzelnen `[filament:Name]`-Abschnitt; Kalibrierungs-Overrides sind darin nicht enthalten — sie werden dynamisch über die Kalibrierungs-API angewandt. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** erzeugt stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten filament-bezogenen Kalibrierungswerten dieser Düse (Pressure Advance bleibt dynamisch über die Kalibrierungs-API). Beim Re-Import eines solchen Bundles in Filament DB werden die Suffix-Abschnitte wieder auf das Basis-Filament zusammengeführt — ein Round-Trip aktualisiert also den Original-Datensatz, statt Suffix-Duplikate anzulegen.

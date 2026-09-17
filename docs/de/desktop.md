@@ -116,7 +116,7 @@ git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
-Das Pushen des Tags ist der einzige manuelle Schritt — der Workflow legt das GitHub-Release selbst an. Führe also **nicht** vorher `gh release create` aus: Das würde ein Release ohne Assets veröffentlichen, noch bevor die Builds laufen.
+Der Tag muss zur `version` in `package.json` passen — erhöhe die Version also vorher (`release-bump.yml` oder eine manuelle Änderung an `package.json`, `package-lock.json` und `public/openapi.json`, gemergt auf `main`), sonst lässt die Tag-Versionsprüfung des Gates das Release scheitern. Danach ist das Pushen des Tags der einzige manuelle Schritt — der Workflow legt das GitHub-Release selbst an. Führe also **nicht** vorher `gh release create` aus: Das würde ein Release ohne Assets veröffentlichen, noch bevor die Builds laufen.
 
 **Das Release ist ab dem ersten Upload öffentlich, nicht erst wenn der letzte landet.** Die Upload-Schritte nutzen `softprops/action-gh-release@v2` ohne `draft: true`, und nichts veröffentlicht es später — der zuerst fertige Matrix-Job legt das Release also an, und die Installer der übrigen Plattformen erscheinen nach und nach. In diesem Zeitfenster ist das Release mit nur einem Teil der Assets sichtbar; unter macOS trifft die Multi-Arch-`latest-mac.yml` sogar noch später ein, aus dem separaten `merge-mac-metadata`-Job. Maßgeblich für „Release fertig" ist daher der **Workflow-Lauf**, nicht die Release-Benachrichtigung. Release Notes anschließend anhängen:
 
@@ -127,11 +127,9 @@ gh release edit v1.0.0 --notes-file release-notes.md
 Der Workflow läuft parallel auf macOS-, Windows- und Ubuntu-Runnern — insgesamt sechs Jobs, da macOS (arm64 + x64), Windows (x64 + arm64) und Linux (x64 + arm64) jeweils beide Architekturen bauen (die zweite Architektur per Cross-Compilation). Die Installer jeder Plattform werden automatisch auf das GitHub-Release hochgeladen.
 
 ### Was der Workflow tut:
-1. Code auschecken
-2. Abhängigkeiten installieren
-3. Tests ausführen
-4. `npm run electron:build` ausführen (Next.js bauen, Symlinks auflösen, Electron bündeln, Installer paketieren)
-5. Installer auf GitHub Releases hochladen
+1. Führt das vollständige CI-Gate **einmal** über den wiederverwendbaren Workflow `.github/workflows/ci-gate.yml` aus — Lint, Root-Typecheck, Electron-Typecheck, Tests mit Coverage-Schwellen, das Security-Audit-Gate (`scripts/audit-gate.mjs`), den Next.js-Build, den Standalone-Smoke-Test und (bei einem Tag) die Tag-Versionsprüfung. Die Plattform-Builds hängen per `needs` vom Gate ab, ein fehlschlagender Commit erzeugt also keine Installer
+2. Führt die sechs Plattform-Build-Jobs aus, die keine Tests laufen lassen: Jeder checkt den Code aus, installiert Abhängigkeiten, baut Next.js, löst Symlinks auf, bündelt Electron, baut das native Modul neu und paketiert den Installer mit electron-builder
+3. Installer auf GitHub Releases hochladen (plus die zusammengeführte `latest-mac.yml` aus `merge-mac-metadata`)
 
 ## Architektur
 
@@ -187,7 +185,7 @@ Im **Entwicklungsmodus**: Electron lädt `http://localhost:3456` (Next.js-Dev-Se
 
 Im **Produktionsmodus**: Electron nutzt `utilityProcess.fork()`, um den Standalone-Next.js-Server auf `http://localhost:3456` zu starten, und lädt ihn dann ins BrowserWindow. Stürzt der Server unerwartet ab, versucht die App automatisch einen Neustart und lädt das Fenster neu. Schlägt der Neustart fehl, erscheint ein Fehlerdialog.
 
-IPC-Aufrufe an NFC-Operationen und Sync haben einen 15-Sekunden-Timeout, damit die UI nicht hängt, wenn eine Operation nicht antwortet.
+IPC-Aufrufe an NFC-Operationen (und andere umhüllte Handler) haben einen 15-Sekunden-Timeout, damit die UI nicht hängt, wenn eine Operation nicht antwortet. Sync ist bewusst **nicht** umhüllt (GH #279): Ein Abbruch des IPC-Rennens würde die Sync-Engine nicht stoppen, die dann weiter beide Datenbanken verändern würde, während dem Renderer ein „Timeout" gemeldet wurde — `trigger-sync` läuft daher bis zum Ende, und der Fortschritt wird stattdessen über den separaten Sync-Status-Polling-Kanal gemeldet.
 
 ## Konfiguration zurücksetzen
 

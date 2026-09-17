@@ -23,7 +23,7 @@ npm run test:coverage
 
 ## Teststruktur
 
-Tests liegen unter `tests/` und spiegeln die Struktur von `src/` und `electron/` wider. Die Dateien decken ab:
+Tests liegen in einem flachen Verzeichnis `tests/`; die Dateinamen entsprechen den abgedeckten `src/`-Modulen und -Routen (bzw. `electron/`-Modulen). Das einzige Unterverzeichnis ist `tests/fixtures/tspl/` (auf Hardware verifizierte TSPL-`.prn`-Jobs). Die Dateien decken ab:
 
 - **Domain-Decoder/Encoder** — OpenPrintTag CBOR, NDEF-Wrapping, Bambu Lab MIFARE, NFC-Roundtrip
 - **Parser und Importer** — INI, CSV/XLSX, Prusament QR, TDS (mit Mocks für KI-Anbieter), Spool-CSV-Import
@@ -60,7 +60,7 @@ Tests laufen gegen Node.js 20 und 22. Abdeckungsberichte werden im Node-22-Lauf 
 
 ### Release-Workflow (`.github/workflows/release.yml`)
 
-Läuft automatisch bei Versions-Tags (`v*`). Das vollständige CI-Gate (Lint, Root- + Electron-Typecheck, Tests mit erzwungenen Abdeckungsschwellen, `npm audit`, Build und der Standalone-Smoke-Test) läuft **einmal** über den wiederverwendbaren Workflow `ci-gate.yml` in einem einzelnen `gate`-Job (#852); die sechs Plattform-Build-Jobs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) hängen per `needs: gate` davon ab — ein fehlschlagendes Gate blockiert also das gesamte Release, statt pro Plattform erneut ausgeführt zu werden.
+Läuft automatisch bei Versions-Tags (`v*`). Das vollständige CI-Gate (Lint, Root- + Electron-Typecheck, Tests mit erzwungenen Abdeckungsschwellen, das Security-Audit-Gate `node scripts/audit-gate.mjs` (ein `npm audit`-Wrapper mit einer geprüften `.audit-allowlist.json`), Build und der Standalone-Smoke-Test) läuft **einmal** über den wiederverwendbaren Workflow `ci-gate.yml` in einem einzelnen `gate`-Job (#852); die sechs Plattform-Build-Jobs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) hängen per `needs: gate` davon ab — ein fehlschlagendes Gate blockiert also das gesamte Release, statt pro Plattform erneut ausgeführt zu werden.
 
 ## Test-Setup
 

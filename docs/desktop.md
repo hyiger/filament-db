@@ -114,7 +114,7 @@ git tag -a v1.0.0 -m "v1.0.0"
 git push origin v1.0.0
 ```
 
-Pushing the tag is the only manual step — the workflow itself creates the GitHub release, so don't run `gh release create` first: that would publish an asset-less release ahead of the builds.
+The tag must match the `version` in `package.json` — bump it first (`release-bump.yml`, or a manual edit of `package.json`, `package-lock.json` and `public/openapi.json` landed on `main`), otherwise the gate's tag-version check fails the release. After that, pushing the tag is the only manual step — the workflow itself creates the GitHub release, so don't run `gh release create` first: that would publish an asset-less release ahead of the builds.
 
 **The release is public from the first upload, not when the last one lands.** The upload steps use `softprops/action-gh-release@v2` without `draft: true` and nothing publishes it later, so whichever matrix job finishes first creates the release and the remaining platforms' installers appear as their jobs complete. During that window the release is visible with only some assets — and on macOS the multi-arch `latest-mac.yml` arrives later still, from the separate `merge-mac-metadata` job. So treat the **workflow run**, not the release-created notification, as the signal that a release is done. To attach release notes afterwards:
 
@@ -125,11 +125,9 @@ gh release edit v1.0.0 --notes-file release-notes.md
 The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel — six jobs in total, since macOS (arm64 + x64), Windows (x64 + arm64), and Linux (x64 + arm64) each build both architectures (the second arch cross-compiled). Each platform's installers are uploaded to the GitHub Release automatically.
 
 ### What the workflow does:
-1. Checks out the code
-2. Installs dependencies
-3. Runs tests
-4. Runs `npm run electron:build` (builds Next.js, resolves symlinks, bundles Electron, packages installer)
-5. Uploads installers to GitHub Releases
+1. Runs the full CI gate **once** via the reusable `.github/workflows/ci-gate.yml` — lint, root typecheck, Electron typecheck, coverage-enforced tests, the security audit gate (`scripts/audit-gate.mjs`), the Next.js build, the standalone smoke test, and (on a tag) the tag-version check. The platform builds `need` the gate, so a failing commit never produces installers
+2. Runs the six platform build legs, which run no tests: each checks out the code, installs dependencies, builds Next.js, resolves symlinks, bundles Electron, rebuilds the native module and packages the installer with electron-builder
+3. Uploads installers to GitHub Releases (plus the merged `latest-mac.yml` from `merge-mac-metadata`)
 
 ## Architecture
 

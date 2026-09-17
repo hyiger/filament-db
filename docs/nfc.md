@@ -57,7 +57,7 @@ For Bambu tags, a "Bambu Lab spool (read-only)" badge is shown since these tags 
 
 ### Live scan stream (slicer integration)
 
-Every successful auto-read is also pushed onto a Server-Sent Events stream at `GET /api/scan/stream`, so a subscribed slicer can switch its active filament preset to match each scan. The slicer doesn't have to live on the same machine as Filament DB — anything that can reach the server over HTTP works (LAN, Tailscale, reverse tunnel), so a headless Filament DB on a Raspberry Pi can drive PrusaSlicer on a Mac across the room. The renderer publishes via `POST /api/scan/publish` after the match step; consumers receive a `scan` event per read, plus an initial `replay` event carrying the most recent scan so a slicer opened just after a tag read still picks it up.
+Every successful auto-read is also pushed onto a Server-Sent Events stream at `GET /api/scan/stream`, so a subscribed slicer can switch its active filament preset to match each scan. The slicer doesn't have to live on the same machine as Filament DB — anything that can reach the server over HTTP works (LAN, Tailscale, reverse tunnel), so the Filament DB desktop app running on a Raspberry Pi with the reader attached can drive PrusaSlicer on a Mac across the room (scans are published by the desktop app the reader is plugged into — a headless Docker / web-only deploy never publishes). The renderer publishes via `POST /api/scan/publish` after the match step; consumers receive a `scan` event per read, plus an initial `replay` event carrying the most recent scan so a slicer opened just after a tag read still picks it up.
 
 Event payload shape (same for `scan` and `replay`):
 

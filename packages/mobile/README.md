@@ -10,14 +10,18 @@ idempotent offline write queue). See
 
 Built with Expo (SDK 56) + expo-router + TypeScript.
 
-## Phase 1 scope (this MVP)
+## Current scope
 
 - **Connect** to a Filament DB server (base URL + optional API key), stored in
   the device keychain (`expo-secure-store`).
 - **Scan a QR code** (`expo-camera`) — a Filament DB label deep-link or a bare
   `instanceId` — and open the matched filament.
-- **Scan an OpenPrintTag** NFC tag (`react-native-nfc-manager`) — the raw bytes
-  are sent to `POST /api/nfc/decode`, which decodes + matches server-side.
+- **Scan an OpenPrintTag or OpenTag3D** NFC tag (`react-native-nfc-manager`) —
+  the NDEF record payload (base64, with a `tagType` of `openprinttag` or
+  `opentag3d`) is sent to `POST /api/nfc/decode`, which decodes + matches
+  server-side. OpenPrintTag is preferred when both records share a tag. On
+  Android OpenTag3D reads on both NTAG and SLIX2; on iOS only SLIX2 (NTAG on iOS
+  would need an NDEF tag session).
 - **Create a filament from a scan**: when a decoded tag doesn't match anything in
   the DB, confirm a name/vendor/type and `POST /api/filaments` to create it (the
   server maps the tag's fields — the phone does no mapping). See
@@ -176,7 +180,7 @@ src/lib/
   types.ts             REST DTOs (can later be generated from public/openapi.json)
   api.ts               typed fetch client (bearer key aware)
   serverConfig.tsx     base URL + API key in expo-secure-store
-  nfc.ts               OpenPrintTag NDEF read → base64 payload for /api/nfc/decode
+  nfc.ts               OpenPrintTag / OpenTag3D NDEF read → base64 record payload + tagType for /api/nfc/decode
   base64.ts            dependency-free byte helpers
   features.ts          build-time feature flags (EXPO_PUBLIC_ENABLE_NFC gate)
   pendingScan.ts       scan → create-from-tag hand-off (module ref, not URL params)

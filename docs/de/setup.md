@@ -100,6 +100,7 @@ volumes:
 | `MONGODB_URI` | Ja | MongoDB-Verbindungszeichenfolge |
 | `PORT` | Nein | Serverport im Container (Standard: `3000`) |
 | `HOSTNAME` | Nein | Schnittstelle, an die der Server im Container bindet (Standard: `0.0.0.0`). Die Erreichbarkeit steuert das `docker run -p`-Mapping, nicht diese Variable. |
+| `TZ` | Nein | IANA-Zeitzone für die Container-Uhr, z. B. `Europe/Berlin` (Standard: UTC). Das Image enthält `tzdata`, sodass ein Zonenname korrekt aufgelöst wird. |
 | `FILAMENTDB_API_KEY` | Nein | Bearer-Token-Gate für **jede** `/api/*`-Anfrage. Siehe [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern). **Hinweis:** deaktiviert die Browser-Web-UI — nur für Nicht-Browser-Clients (Mobile-App, Slicer, Skripte) verwenden. |
 | `GEMINI_API_KEY` | Nein | Google-Gemini-API-Key für TDS-Extraktion |
 | `ANTHROPIC_API_KEY` | Nein | Anthropic-Claude-API-Key für TDS-Extraktion |
@@ -293,6 +294,8 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 > **Sicherheit:** Das Binden an `0.0.0.0` gibt die **nicht authentifizierte** `/api`-Oberfläche für alle im Netz frei. Lies vorher [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern) — setze `FILAMENTDB_API_KEY`, wenn nur Nicht-Browser-Clients (Mobile-App, Slicer) Zugriff brauchen, oder stelle den Dienst hinter einen authentifizierenden Reverse-Proxy, wenn du die Browser-UI im LAN willst (der Schlüssel deaktiviert die Web-UI). Beim Reverse-Proxy-Weg setze hier `HOSTNAME=127.0.0.1` (nicht `0.0.0.0`) — oder sperre Port 3456 per Firewall — damit die App nur über den Proxy erreichbar ist; sonst können Browser-Nutzer `http://<host>:3456` direkt aufrufen und ihn umgehen.
 
+> **Hinweis:** Wenn du statt eines headless Dienstes die Desktop-App verwendest, musst du `HOSTNAME` nicht von Hand setzen — aktiviere in den Einstellungen den Schalter **„Im lokalen Netzwerk freigeben"** (electron-store-Schlüssel `exposeToLan`, standardmäßig aus), dann bindet der eingebettete Server für dich an `0.0.0.0`. Er arbeitet mit mDNS-Auto-Discovery zusammen, sodass die Mobile-Begleit-App deine Instanz im Netzwerk findet, ohne dass du eine URL eintippen musst.
+
 ### 2. Dienst anlegen
 
 ```bash
@@ -395,7 +398,7 @@ Die Desktop-App unterstützt drei Verbindungsmodi:
 
 - Alle Daten lokal gespeichert, keine Cloud-Verbindung
 - Kein MongoDB-Atlas-Konto nötig
-- Kann später durch Zurücksetzen der Konfiguration in den Hybrid-Modus umgestellt werden (siehe [Fehlerbehebung](troubleshooting.md#desktop-app-verbindungsmodus-wechseln))
+- Kann später unter **Einstellungen → Netzwerkeinstellungen → Verbindungsmodus** in den Hybrid- oder Atlas-Modus umgestellt werden, ohne Zurücksetzen (siehe [Fehlerbehebung](troubleshooting.md#desktop-app-verbindungsmodus-wechseln))
 
 ---
 

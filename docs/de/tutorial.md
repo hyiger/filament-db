@@ -4,7 +4,7 @@
 
 [< Zurück zur README](../../README.md)
 
-Schritt-für-Schritt-Anleitung durch jede Funktion der App — vom ersten Start bis zum NFC-Tag-Beschreiben.
+Schritt-für-Schritt-Anleitung durch die zentralen Abläufe der App — vom ersten Start bis zum NFC-Tag-Beschreiben. Sie ist eine geführte Tour durch die alltäglichen Funktionen, keine vollständige Referenz für jede Einstellung und jeden Sonderfall.
 
 ---
 
@@ -47,7 +47,7 @@ npm run dev                   # öffnet http://localhost:3456
 
 ## Schritt 2: Die App-Shell verstehen
 
-Eine permanente obere Leiste begleitet jede Seite, links mit dem App-Namen und Schnellzugriff auf **Filamente**, **Dashboard**, **Bestand**, **Vergleich**, **Analyse**, **Teilen** und **Einstellungen**. Auf schmalen Bildschirmen (Mobil) klappen die Links zu einem Hamburger-Menü zusammen. Die aktive Seite ist hervorgehoben.
+Eine permanente obere Leiste begleitet jede Seite, links mit dem App-Namen und Schnellzugriff auf **Filamente**, **Dashboard**, **Bestand**, **Vergleich**, **Analyse**, **Verlauf**, **Teilen** und **Einstellungen**. Auf schmalen Bildschirmen (Mobil) klappen die Links zu einem Hamburger-Menü zusammen. Die aktive Seite ist hervorgehoben.
 
 Neben dem **Filament DB**-Titel auf der Startseite befindet sich eine kleine **Verbindungsstatus-Pille**, die deinen aktuellen Verbindungszustand auf einen Blick zeigt:
 
@@ -72,6 +72,7 @@ Neben dem **Filament DB**-Titel auf der Startseite befindet sich eine kleine **V
 | 🟢 **Synced 2m ago** | Letzte Synchronisation war erfolgreich (Relativzeit aktualisiert sich automatisch) |
 | 🔵 **Syncing...** | Sync läuft (pulsierender Punkt) |
 | 🟡 **Offline** | Kein Netzwerk; App nutzt lokale Daten und synchronisiert bei erneuter Verbindung |
+| 🟠 **Teilsynchronisation** | Einige Sammlungen wurden synchronisiert, andere sind fehlgeschlagen; der Tooltip nennt die Fehler |
 | 🔴 **Sync error** | Letzter Sync-Versuch ist fehlgeschlagen |
 
 **Klick auf die Pille** öffnet einen Tooltip mit:
@@ -223,9 +224,9 @@ Du kannst auch **„+ Prusament QR"** auf der Detailseite eines Filaments (im Sp
 
 ### Aus einer Snapshot-Sicherung
 
-1. Gehe zu **Einstellungen → Sicherung & Wiederherstellen** und klicke auf **„Aus Snapshot wiederherstellen"**.
+1. Gehe zu **Einstellungen → Sicherung & Daten** und klicke auf **„Aus Snapshot wiederherstellen"**.
 2. Wähle eine zuvor exportierte Snapshot-JSON-Datei.
-3. Alle aktuellen snapshot-relevanten Daten werden durch die Snapshot-Inhalte ersetzt (Best-Effort-Rollback bei Fehler).
+3. Jede Sammlung, die die Datei enthält, wird durch die Snapshot-Inhalte ersetzt (Best-Effort-Rollback bei Fehler). Eine Sammlung, die ein Snapshot in älterem Format nicht enthält — z. B. Locations oder Druckhistorie in einer v2-Datei —, bleibt unverändert, und die Erfolgsmeldung führt sie auf.
 
 ### Via CLI (alternativ)
 
@@ -248,7 +249,8 @@ Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle.
 - **Suche** — tippe in das Suchfeld, um nach Namen zu filtern
 - **Filter nach Typ** — nutze die Typ-Dropdown-Liste, um nur PLA, PETG, ASA usw. anzuzeigen
 - **Filter nach Vendor** — nutze die Vendor-Dropdown-Liste, um nur einen Hersteller anzuzeigen
-- **Sortieren** — klicke einen Spaltenkopf (Name, Vendor, Typ, Düsen-Temp, Bett-Temp, Kosten), um auf- oder absteigend zu sortieren. Die aktive Sortierung zeigt einen blauen Pfeil.
+- **Filter nach Farbe** *(v1.82)* — klicke einen Farbfamilien-Chip (Schwarz, Grau, Orange, …, Transparent, Mehrfarbig, Keine Farbe), um nur diese Farbe zu sehen; Familien mit Abstufungen bieten zusätzlich die Chips **Hell / Mittel / Dunkel**, und eine Leiste **„Typen auf Lager:"** zeigt, welche Materialien du in dieser Farbe hast. Ein Filament kann unter mehreren Familien erscheinen (der Name nennt eine Farbe, der Swatch wirkt wie eine andere), und das Standard-Grau `#808080` zählt als **Keine Farbe**. Der Filter steht in der URL (`?color=orange`, `?color=gray-dark`), sodass du ihn als Lesezeichen speichern kannst
+- **Sortieren** — klicke einen Spaltenkopf (Name, Vendor, Typ, Düsen-Temp, Bett-Temp, Kosten, Rest %, Gekauft, Geöffnet), um auf- oder absteigend zu sortieren. Die aktive Sortierung zeigt einen blauen Pfeil.
 - **Farbswatches** — jede Zeile zeigt die Farbe des Filaments als Punkt
 - **Statistik** — klicke auf die Zusammenfassungszeile (z. B. „18 Filamente · 8 Typen · 5 Vendors"), um Balkendiagramme nach Typ und Vendor sowie ein Farbswatch-Grid einzublenden
 
@@ -258,7 +260,7 @@ Wenn du Farbvarianten hast, zeigen Elternfilamente ein Count-Badge (z. B. „5 F
 
 ### Nicht vorrätige Filamente ausblenden
 
-Wenn kein Filter aktiv ist, blendet die Liste Filamente ohne aktive Spulen aus und zeigt über der Tabelle einen Umschalter **„Nicht vorrätige anzeigen (N)"**. Klicke ihn, um sie einzublenden; **„Nicht vorrätige ausblenden"** versteckt sie wieder. Sobald eine Suche oder ein Typ-/Vendor-Filter aktiv ist, werden alle Treffer unabhängig vom Bestand angezeigt, damit dir keine gesuchte Zeile verloren geht.
+Wenn kein Filter aktiv ist, blendet die Liste Filamente ohne aktive Spulen aus und zeigt über der Tabelle einen Umschalter **„Nicht vorrätige anzeigen (N)"**. Klicke ihn, um sie einzublenden; **„Nicht vorrätige ausblenden"** versteckt sie wieder. Sobald eine Suche oder ein Typ-/Vendor-Filter aktiv ist, werden alle Treffer unabhängig vom Bestand angezeigt, damit dir keine gesuchte Zeile verloren geht. Ausnahme ist ein Farbfilter allein — „Welches Orange habe ich?" meint vorrätiges Orange, daher bleibt das Ausblenden aktiv und der Umschalter blendet den Rest weiterhin ein.
 
 ### Standort einer Spule schnell wechseln
 
@@ -342,7 +344,7 @@ Danach legst du neue Rollen bei den Farbvarianten an: Auf einer Vorlage ersetzt 
 ## Schritt 11: Nach PrusaSlicer exportieren
 
 1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **INI (PrusaSlicer)**.
-2. Eine `.ini`-Datei wird heruntergeladen, die alle Filamente als `[filament:Name]`-Abschnitte enthält.
+2. Eine `.ini`-Datei wird heruntergeladen, die deine Filamente als `[filament:Name]`-Abschnitte enthält. Vorlagen (Filamente mit Farbvarianten) werden ausgelassen; stattdessen werden ihre Varianten exportiert.
 3. Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren** und wähle die Datei.
 
 Bei einem Filament mit null oder einer Düsen-Kalibrierung sind Kalibrierungs-Overrides (Extrusion Multiplier, Pressure Advance, Retraction, Max Volumetric Speed) in der exportierten INI **nicht** enthalten — sie werden dynamisch von PrusaSlicer Filament Edition über die Kalibrierungs-API angewandt, wenn sich der Drucker-/Düsen-Kontext ändert. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** exportiert stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten filament-bezogenen Kalibrierungswerten dieser Düse (Pressure Advance bleibt dynamisch über die Kalibrierungs-API).
@@ -409,7 +411,7 @@ Ein kleiner farbiger Punkt im Header:
 
 1. Schließe den ACR1552U an. Der Statuspunkt wird **gelb**.
 2. Lege eine Spule mit Tag auf den Reader. Der Punkt wird **grün**.
-3. Die App erkennt den Tag-Typ automatisch (OpenPrintTag oder Bambu Lab) und liest ihn. Ein Dialog erscheint:
+3. Die App erkennt den Tag-Typ automatisch (OpenPrintTag, OpenTag3D oder Bambu Lab) und liest ihn. Ein Dialog erscheint:
    - **Treffer gefunden** — zeigt das gematchte Filament mit einem **Filament öffnen**-Link.
    - **Kein Treffer** — zeigt die dekodierten Tag-Daten (Material, Marke, Temperaturen, Dichte usw.) mit einem **Neues Filament erstellen**-Button, der das Formular mit allen Tag-Daten vorbefüllt.
    - **Ähnliche Filamente** — gibt es keinen exakten Treffer, aber Hersteller oder Typ passen, werden Kandidaten angezeigt. Klicke **+ Variante** neben einem, um das Tag-Filament als Farbvariante eines bestehenden Eltern-Filaments anzulegen.
@@ -419,7 +421,7 @@ Ein kleiner farbiger Punkt im Header:
 ### Tag schreiben
 
 1. Navigiere zur Detailseite eines beliebigen Filaments.
-2. Lege einen leeren SLIX2-Tag auf den Reader (Punkt wird grün).
+2. Lege einen leeren SLIX2- oder NTAG213/215/216-Tag auf den Reader (Punkt wird grün). Die App erkennt den Chip und schreibt OpenPrintTag auf SLIX2 bzw. OpenTag3D auf NTAG.
 3. Klicke auf **NFC schreiben** (lila Button).
 4. Warte ~2 Sekunden. Der Button zeigt **Geschrieben!** bei Erfolg oder **Schreiben fehlgeschlagen** bei Fehler.
 
@@ -445,9 +447,9 @@ Falls du externe NFC-Tools bevorzugst:
 
 Wenn ein Brother PT-P710BT (P-touch CUBE) per USB angeschlossen ist, kannst du ein QR-Etikett für ein Filament oder eine einzelne Spule drucken:
 
-1. Wähle unter **Einstellungen → Geräte** in der Etikettendrucker-Karte deinen Drucker aus der Liste (PT-Touch-Treffer sind mit Badge markiert). Passe das Etikettformat — QR-Platzierung, Textfelder, Schriftart, Ausrichtung, Invertierung — im Editor mit Live-Vorschau an.
+1. Wähle unter **Einstellungen → Geräte** in der Etikettendrucker-Karte deinen Drucker aus der Liste (PT-Touch-Treffer sind mit Badge markiert; klicke auf **„Nach USB-Druckern suchen"**, falls ein frisch angeschlossener Drucker noch nicht aufgelistet ist). Passe das Etikettformat — QR-Platzierung, Textfelder, Schriftart, Ausrichtung, Invertierung — im Editor mit Live-Vorschau an.
 2. Öffne auf der Detailseite eines Filaments das Menü **Export ▾** und klicke auf **Etikett drucken**.
-3. Wähle den QR-Modus — eine scanbare **URL** (die Smartphone-freundliche Variante) oder die **Instanz-ID**. Beide Modi sind spulenbewusst: Über die Spulen-Auswahl im Dialog bestimmst du, auf welche Spule der URL-Deep-Link zeigt bzw. wessen Instanz-ID kodiert wird — die ID der ausgewählten Spule; nur bei der expliziten Auswahl **„Nur Filament"** (oder wenn das Filament keine Spulen hat) wird die Filament-ID kodiert. Prüfe die Live-Vorschau in der nativen Auflösung des Druckers.
+3. Wähle den QR-Modus — eine scanbare **URL** (die Smartphone-freundliche Variante) oder die **Instanz-ID**. Beide Modi sind spulenbewusst: Bei einem Filament mit 2+ Spulen bestimmst du über die Spulen-Auswahl im Dialog, auf welche Spule der URL-Deep-Link zeigt bzw. wessen Instanz-ID kodiert wird (ein Filament mit nur einer Spule nutzt diese, ohne Auswahl); nur bei der expliziten Auswahl **„Keine bestimmte Spule (nur Filament)"** (oder wenn das Filament keine Spulen hat) wird die Filament-ID kodiert. Prüfe die Live-Vorschau in der nativen Auflösung des Druckers.
 4. Klicke auf **Drucken**. Die App übergibt das Etikett per USB an das Drucksystem deines Betriebssystems.
 
 > Der **URL**-QR-Modus braucht in der paketierten Desktop-App eine erreichbare Adresse — setze eine **öffentliche URL** in den Etikettendrucker-Einstellungen, damit Smartphones in deinem Netzwerk sie öffnen können (der Standard-`localhost`-Origin ist von anderen Geräten aus nicht erreichbar). Passt gut zu **Im lokalen Netzwerk freigeben** (siehe „Im lokalen Netzwerk freigeben", Schritt 26).
@@ -589,7 +591,7 @@ Das Dashboard zeigt jedes Filament unter seinem Schwellwert in der **Niedriger B
 
 ## Schritt 21: Druckaufträge protokollieren, Analysen beobachten *(v1.11)*
 
-Jedes Mal, wenn du einen Druck startest, logge ihn entweder aus deinem Slicer (via `/api/print-history`) oder manuell auf der Spulen-Detailseite (**Verbrauch loggen** → Gramm eintragen). Die App:
+Jedes Mal, wenn du einen Druck startest, logge ihn aus deinem Slicer (via `/api/print-history`), mit dem Dialog **„Druckauftrag erfassen"** auf dem Dashboard *(v1.79 — Auftragsbezeichnung, Drucker, Datum und eine oder mehrere Filament-/Spulen-/Gramm-Zeilen)* oder manuell auf der Spulen-Detailseite (**Verbrauch loggen** → Gramm eintragen). Die App:
 
 - Verringert das Gewicht der Spule
 - Hängt einen `usageHistory`-Eintrag an
@@ -639,7 +641,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 
 Standardmäßig ist die Datenbank der Desktop-App nur von dem Computer aus erreichbar, auf dem sie läuft. Um sie für Smartphones und andere Geräte in deinem WLAN zu öffnen — für die Begleit-App (Schritt 27) oder zum Scannen des URL-QR-Codes eines Etiketts (Schritt 13) — aktiviere die LAN-Freigabe:
 
-1. Suche in den **Einstellungen** die Option **Im lokalen Netzwerk freigeben** und schalte sie ein. Der eingebettete Server bindet neu an deine LAN-Adresse (statt localhost), und die Einstellungen zeigen die URL, die andere Geräte verwenden können.
+1. Suche unter **Einstellungen → Netzwerkeinstellungen** die Option **Im lokalen Netzwerk freigeben** und schalte sie ein. Der eingebettete Server bindet neu an deine LAN-Adresse (statt localhost), und die Einstellungen zeigen die URL, die andere Geräte verwenden können.
 2. Bei aktivierter Freigabe kündigt sich die App außerdem per Bonjour/mDNS an (`_filamentdb._tcp`), sodass die Mobile-App sie findet, ohne dass du eine IP eintippen musst.
 
 > **Eine freigegebene Instanz absichern:** Setze die Umgebungsvariable `FILAMENTDB_API_KEY`, um bei jeder API-Anfrage ein Bearer-Token zu verlangen. Ungesetzt ist eine ins LAN exponierte Instanz nicht authentifiziert. Das Gate ist Alles-oder-Nichts und **deaktiviert die Browser-Web-UI** (sie sendet den Key nicht) — nutze es für Nicht-Browser-Clients (Mobile-App, Slicer); für Browser-UI-Zugriff im LAN nutze Loopback oder einen authentifizierenden Reverse-Proxy. Siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
@@ -672,10 +674,10 @@ Eine Begleit-App auf Expo/React-Native-Basis (in `packages/mobile`) macht dein S
 | Prusament-Spule importieren | Startseite > Importieren/Exportieren > Prusament QR |
 | Aus Atlas importieren | Startseite > Importieren/Exportieren > Aus Atlas importieren |
 | OpenPrintTag-DB durchsuchen | Startseite > Importieren/Exportieren > OpenPrintTag-DB durchsuchen |
-| Aus Snapshot wiederherstellen | Einstellungen > Sicherung & Wiederherstellen > Aus Snapshot wiederherstellen |
+| Aus Snapshot wiederherstellen | Einstellungen > Sicherung & Daten > Aus Snapshot wiederherstellen |
 | Nach PrusaSlicer exportieren | Startseite > Importieren/Exportieren > Export ▸ INI (PrusaSlicer) |
 | Nach CSV/XLSX exportieren | Startseite > Importieren/Exportieren > Export ▸ CSV / Excel (XLSX) |
-| Datenbank sichern | Einstellungen > Sicherung & Wiederherstellen > Snapshot herunterladen |
+| Datenbank sichern | Einstellungen > Sicherung & Daten > Snapshot herunterladen |
 | Filament-Details ansehen | Startseite > Filament-Namen klicken |
 | Filament bearbeiten | Detailseite > Bearbeiten |
 | Farbvariante hinzufügen | Detailseite > Variante erstellen |
@@ -690,6 +692,7 @@ Eine Begleit-App auf Expo/React-Native-Basis (in `packages/mobile`) macht dein S
 | Trockenbox-Etikett drucken | Standorte > Etikett drucken, oder Bestand > 🖨 in der Trockenbox-Gruppe (Desktop-App + KNAON Y813BT) |
 | Spulen verfolgen | Detailseite > Spulen-Tracker > + Spule hinzufügen |
 | Nicht vorrätige ein-/ausblenden | Startseite > Umschalter „Nicht vorrätige anzeigen/ausblenden" |
+| Nach Farbe filtern | Startseite > Farb-Chips (oder `/?color=<familie>`) |
 | Standort einer Spule schnell wechseln | Startseite > Zeile aufklappen (×N) > Standort-Dropdown |
 | Spule einer Location zuweisen | Spulen-Detail > Location-Dropdown |
 | Spule einem Drucker-Slot zuweisen | Spulen-Detail > Drucker-Slot-Auswahl |
@@ -700,9 +703,9 @@ Eine Begleit-App auf Expo/React-Native-Basis (in `packages/mobile`) macht dein S
 | Filamente vergleichen | Vergleich-Seite > bis zu 8 auswählen (oder /compare?ids=…) |
 | Shared Catalog veröffentlichen | Obere Nav > Teilen > + Neu |
 | Spulen aus CSV importieren | Startseite > Importieren > Spulen aus CSV |
-| Im lokalen Netzwerk freigeben | Einstellungen > Im lokalen Netzwerk freigeben (Desktop-App) |
+| Im lokalen Netzwerk freigeben | Einstellungen > Netzwerkeinstellungen > Im lokalen Netzwerk freigeben (Desktop-App) |
 | Mobile Scanner-App nutzen | Mobile-App > Einstellungen > URL setzen oder „Im Netzwerk suchen" |
-| Theme wechseln | Einstellungen > Theme |
+| Theme wechseln | Einstellungen > UI-Einstellungen > Design |
 | Manueller Sync | Status-Pille klicken > Jetzt synchronisieren (Desktop Hybrid-Modus) |
 | Verbindungsstatus prüfen | Status-Pille neben „Filament DB"-Titel |
 
