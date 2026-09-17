@@ -18,7 +18,7 @@
 | `GET` | `/api/filaments/trash` | Listet soft-gelöschte Filamente auf (versorgt die `/trash`-Oberfläche) |
 | `POST` | `/api/filaments/:id/restore` | Stellt ein soft-gelöschtes Filament aus dem Papierkorb wieder her (liefert 409 bei Namenskonflikt) |
 | `POST` | `/api/filaments/:id/promote` | Wandelt ein Filament, das bereits Varianten hat, in eine Vorlage um — verschiebt dessen eigene Farbe/Spulen auf eine neue Variante |
-| `GET` | `/api/filaments/export` | Lädt alle Filamente als PrusaSlicer-INI-Datei herunter |
+| `GET` | `/api/filaments/export` | Lädt alle Filamente (ohne Vorlagen) als PrusaSlicer-INI-Datei herunter. Query-Parameter: `type`, `vendor`, `ids`, `printer` |
 | `GET` | `/api/filaments/export-csv` | Lädt alle Filamente als CSV-Datei herunter |
 | `GET` | `/api/filaments/export-xlsx` | Lädt alle Filamente als XLSX-Tabelle herunter |
 | `POST` | `/api/filaments/import` | Lädt eine INI-Datei hoch, um Filamentprofile zu importieren |
@@ -39,15 +39,15 @@
 | `GET` | `/api/filaments/:id/calibration` | Liefert Kalibrierungsdaten für ein Filament und einen Düsendurchmesser |
 | `GET` | `/api/filaments/:id/spool-check` | Prüft, ob eine Spule genug Filament für einen Druckauftrag hat |
 | `POST` | `/api/filaments/:id` | Synchronisiert ein Filament-Preset zurück aus PrusaSlicer |
-| `GET` | `/api/filaments/:id/prusaslicer` | Lädt ein einzelnes Filament als PrusaSlicer-Preset (`.ini`) herunter |
-| `GET` | `/api/filaments/:id/orcaslicer` | Lädt ein einzelnes Filament als OrcaSlicer-Preset (`.json`) herunter |
+| `GET` | `/api/filaments/:id/prusaslicer` | Lädt ein einzelnes Filament als PrusaSlicer-Preset (`.ini`) herunter; `400 template_not_exportable` bei einer Vorlage |
+| `GET` | `/api/filaments/:id/orcaslicer` | Lädt ein einzelnes Filament als OrcaSlicer-Preset (`.json`) herunter; `400 template_not_exportable` bei einer Vorlage |
 
 ### Spulen
 
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
-| `POST` | `/api/filaments/:id/spools` | Fügt einem Filament eine Spule hinzu |
-| `PUT` | `/api/filaments/:id/spools/:spoolId` | Aktualisiert Gewicht oder Bezeichnung einer Spule |
+| `POST` | `/api/filaments/:id/spools` | Fügt einem Filament eine Spule hinzu (optional mit expliziter `instanceId`) |
+| `PUT` | `/api/filaments/:id/spools/:spoolId` | Aktualisiert Gewicht/Bezeichnung/Lagerort einer Spule oder ihre `instanceId` (`{ regenerate: true }` erzeugt eine neue) — #732 |
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Entfernt eine Spule aus einem Filament |
 | `GET` | `/api/spools/:spoolId` | Löst eine Spulen-Subdokument-ID zu ihrem (vererbungsaufgelösten) Eigentümer-Filament plus der Spule auf — versorgt die `?spool=<id>`-Deep-Links des Mobile-Scanners (v1.43) |
 | `GET` | `/api/spools/next-label` | Schlägt die nächste numerische Rollennummer für ein Spulen-Label vor (`{ next, max }`) |
@@ -114,6 +114,7 @@ Jede Route, die eine Spule anhängt, lehnt ab, wenn das Ziel eine Vorlage ist:
 - `POST /api/filaments/:id/spools` — liefert den obigen Body mit `400`
 - `POST /api/prusament/import` — dasselbe `400` für die Aktion `add-spool` und für den „ein Filament mit diesem Namen existiert bereits"-Fallback der Aktion `create`
 - `POST /api/spools/import` — pro Zeile: dieselbe `message` wird zum `error` dieser Zeile, der Rest des Batches läuft weiter
+- `POST /api/print-history` — `400` mit derselben `message` als `error`, wenn ein Nutzungseintrag eine Legacy-Rolle auf einer Vorlage migrieren müsste (der Fehlercode selbst ist nicht enthalten)
 
 Spulen, die ein Alt-Elternfilament bereits trägt, bleiben liegen, werden weiterhin gezählt und bleiben bearbeitbar. Der CSV-Spulen-Import trennt entsprechend: Eine Zeile, die auf einer Vorlage eine Spule **anlegen** würde, scheitert, während eine Zeile, deren `spoolId` ein vorhandenes Subdokument trifft (also eine Aktualisierung), weiterhin angewendet wird.
 
@@ -162,13 +163,16 @@ Liefert ein Array projizierter Filament-Zusammenfassungen (nicht die vollständi
   "tdsUrl": "https://example.com/tds.pdf",
   "temperatures": { "nozzle": 215, "bed": 60 },
   "hasCalibrations": true,
+  "hasVariants": false,
+  "optTags": [],
   "spools": [
-    { "_id": "…", "label": "AMS slot 1", "totalWeight": 800, "retired": false }
+    { "_id": "…", "instanceId": "2acc21072a", "label": "AMS slot 1", "totalWeight": 800, "retired": false, "locationId": "…" }
   ]
 }
 ```
 
 - `hasCalibrations` ist `true`, wenn das Filament mindestens eine Kalibrierung besitzt, **oder** wenn es eine Variante ist, deren Elternfilament mindestens eine hat (per Aggregation `$lookup`). Der Schnellfilter „Fehlende Kalibrierung" auf der Listenseite liest dieses Feld — Varianten, die vom Elternfilament erben, werden korrekt als kalibriert gezählt.
+- `hasVariants` ist `true`, wenn das Filament mindestens eine nicht gelöschte Variante hat (steuert das schraffierte/zusammengesetzte Eltern-Farbfeld); `optTags` (effektiv, vom Elternfilament geerbt) steuert die Oberflächen-Anzeige; `spools[].instanceId` ist die spulenbezogene ID (#732), und `spools[].locationId` versorgt das Inline-Verschieben-Dropdown in der Hauptliste.
 - `tdsUrl` ist enthalten, damit die vendor-gestützten TDS-Vorschläge im `FilamentForm` weiterhin funktionieren.
 - `spools[].label` ist enthalten, damit der AMS-Slot-Picker im `PrinterForm` `s.label || s._id.slice(-4)` rendern kann.
 - `color` ist **nullable** — coextrudierte mehrfarbige Filamente lassen es null und tragen ihre Farben in `secondaryColors`. `secondaryColors` ist ein geordnetes Array von bis zu 5 `#RRGGBB`-Hex-Codes, das die `secondary_color_0..4`-Schlüssel der OpenPrintTag-Spezifikation (Spec-Schlüssel 20–24) spiegelt. Varianten erben `secondaryColors` nach dem Array-Fallback-Schema: Eine Variante deklariert entweder ihr eigenes nicht-leeres Array oder erbt das vollständige Array des Eltern-Filaments (dasselbe Muster wie `optTags` / `bedTypeTemps`). Slicer-Exporte (PrusaSlicer / OrcaSlicer / Bambu Studio) verwerfen Sekundärfarben stillschweigend — Slicer-Voreinstellungen sind einfarbige Formate.
@@ -205,8 +209,13 @@ Der zusammengeführte Body durchläuft anschließend den normalen Create-Pfad (d
 
 Liefert ein einzelnes Filament mit `compatibleNozzles`, `calibrations.nozzle` und `calibrations.printer` als vollständige Dokumente populiert. Enthält außerdem:
 
-- `_variants` -- Array untergeordneter Varianten-Filamente (`_id`, `name`, `color`, `cost`)
+- `_variants` -- Array lebender untergeordneter Varianten-Filamente (`_id`, `name`, `color`, `cost` sowie die effektiven `secondaryColors` und `optTags` — eine Variante mit leerem Array fällt auf die dieses Filaments zurück)
+- `_hasOwnOptLink` -- `true`, wenn diese Zeile selbst eine OpenPrintTag-Verknüpfung (`settings.openprinttag_slug`) trägt; vor der Vererbung berechnet, damit eine Variante nicht die Verknüpfung ihres Elternfilaments meldet
+- `_hasTrashedVariants` -- `true`, wenn nicht gepurgte Varianten dieses Filaments im Papierkorb liegen (GH #1103); `_variants` enthält nur lebende Varianten, daher zeigt erst dieses Flag „In Vorlage umwandeln" bei einem Elternfilament an, dessen Varianten alle im Papierkorb liegen
 - Auflösung geerbter Felder, wenn das Filament eine `parentId` hat -- Felder, die in der Variante nicht gesetzt sind, werden vom Elternfilament geerbt, und ein `_inherited`-Array listet auf, welche Felder geerbt wurden
+
+Query-Parameter:
+- `raw=true` -- überspringt die Vererbungsauflösung und liefert die **eigenen gespeicherten Werte** der Variante: Felder, die sie nicht überschreibt, kommen als `null` (bzw. leer) zurück, ergänzt um eine schlanke `_parent`-Zusammenfassung für Platzhalter-Hinweise. Das nutzt das Bearbeitungsformular — würde es mit aufgelösten Werten vorbelegt und gespeichert, kopierte es die Felder des Elternfilaments auf die Variante und trennte stillschweigend die Vererbung (GH #106). Bei einer Nicht-Variante bleibt die Antwortform unverändert.
 
 ### PUT /api/filaments/:id
 
@@ -233,7 +242,7 @@ Ablehnungsgründe:
 
 ### GET /api/filaments/trash
 
-Liefert soft-gelöschte Filamente, sortiert nach Neuesten zuerst, mit einer leichten Projektion: `_id`, `name`, `vendor`, `type`, `color`, `cost`, `parentId`, `_deletedAt`. Versorgt die `/trash`-UI. **Schließt** `_purged: true`-Tombstones **aus** — die werden nur für die Sync-Propagation auf Platte gehalten und tauchen auf keiner Benutzeroberfläche wieder auf.
+Liefert soft-gelöschte Filamente, sortiert nach Neuesten zuerst, mit einer leichten Projektion: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` und `optTags` sind die effektiven Arrays (das leere Array einer Variante fällt auf das des Elternfilaments zurück), damit das Farbfeld im Papierkorb Mehrfarbigkeit und Oberfläche korrekt darstellt. Versorgt die `/trash`-UI. **Schließt** `_purged: true`-Tombstones **aus** — die werden nur für die Sync-Propagation auf Platte gehalten und tauchen auf keiner Benutzeroberfläche wieder auf.
 
 ```json
 [
@@ -243,6 +252,8 @@ Liefert soft-gelöschte Filamente, sortiert nach Neuesten zuerst, mit einer leic
     "vendor": "Prusa",
     "type": "PLA",
     "color": "#1a1a1a",
+    "secondaryColors": [],
+    "optTags": [],
     "cost": 31.99,
     "parentId": null,
     "_deletedAt": "2026-05-09T18:24:11.123Z"
@@ -303,7 +314,7 @@ Ablehnungsgründe:
 
 ### GET /api/filaments/export
 
-Lädt alle Filamente als PrusaSlicer-kompatible INI-Datei herunter. Verwendet denselben Generator wie `GET /api/filaments/prusaslicer` — strukturierte DB-Felder werden auf PrusaSlicer-INI-Schlüssel gemappt und mit dem Settings-Passthrough-Bag zusammengeführt; ein Filament mit Kalibrierungen für ≥ 2 unterschiedliche Düsen exportiert einen namenssuffigierten Abschnitt pro Düse (Details beim genannten Endpunkt).
+Lädt alle Filamente als PrusaSlicer-kompatible INI-Datei herunter. Dies ist ein schlanker Alias von `GET /api/filaments/prusaslicer` — er delegiert an diese Route und unterscheidet sich nur im Download-Dateinamen (`filament_profiles.ini`) —, nimmt also dieselben Query-Parameter `type`, `vendor`, `ids` und `printer` entgegen, schließt Vorlagen auf dieselbe Weise aus und liefert dieselben Fehler. Strukturierte DB-Felder werden auf PrusaSlicer-INI-Schlüssel gemappt und mit dem Settings-Passthrough-Bag zusammengeführt; ein Filament mit Kalibrierungen für ≥ 2 unterschiedliche Düsen exportiert einen namenssuffigierten Abschnitt pro Düse (Details beim genannten Endpunkt).
 
 ### POST /api/filaments/import
 
@@ -323,17 +334,18 @@ Liefert:
 
 Gleicht die dekodierten Daten eines NFC-Tags oder einen gescannten Brother-Etikettendrucker-QR-Code mit vorhandenen Filamenten ab. Intern vom NFC-Lese-Workflow genutzt und überall dort, wo ein Instanz-ID-QR zurück in die App gescannt wird.
 
-- `instanceId` -- exakte Instanz-ID-Übereinstimmung (höchste Konfidenz; zuerst geprüft). Derselbe Wert, der auf NFC-Tags getragen und vom Instanz-ID-QR-Modus des Etikettendruckers gedruckt wird. Exakte Groß-/Kleinschreibung bevorzugt; fällt auf case-insensitive zurück, wenn keine exakte Übereinstimmung gefunden wird. Eine Kollision nur durch Groß-/Kleinschreibung (Legacy-Daten mit gespeichertem `ABC` und `abc`) liefert beide als `candidates` statt willkürlicher Auswahl. Max. Länge 128; der Wert wird vor dem case-insensitive Regex escaped, sodass Regex-Sonderzeichen in gespeicherten IDs wörtlich übereinstimmen.
+- `instanceId` -- exakte Instanz-ID-Übereinstimmung (höchste Konfidenz; zuerst geprüft). Seit #732 wird zuerst gegen die **spulenbezogene** `spools[].instanceId` aufgelöst (exakte Groß-/Kleinschreibung, dann case-insensitive) und die getroffene Spule in `matchedSpool` geliefert; danach folgt als Übergangs-Fallback die `instanceId` auf **Filament-Ebene**. Derselbe Wert, der auf NFC-Tags getragen und vom Instanz-ID-QR-Modus des Etikettendruckers gedruckt wird. Eine Kollision nur durch Groß-/Kleinschreibung (Legacy-Daten mit gespeichertem `ABC` und `abc`) liefert beide als `candidates` statt willkürlicher Auswahl. Max. Länge 128; der Wert wird vor dem case-insensitive Regex escaped, sodass Regex-Sonderzeichen in gespeicherten IDs wörtlich übereinstimmen.
 - `name` -- Materialname (exakte Übereinstimmung, case-insensitive)
-- `vendor` -- Markenname (Teilstring-Übereinstimmung, case-insensitive)
+- `vendor` -- Markenname, case-insensitive: in Kombination mit `type` eine **exakte** Übereinstimmung des gesamten Strings (die Stufe, die einen sicheren Match liefern kann, GH #896); eine Teilstring-Übereinstimmung nur im reinen Vendor-Fallback, der ausschließlich `candidates` und nie einen `match` liefert
 - `type` -- Materialtyp (exakte Übereinstimmung, case-insensitive)
 
-Die vier Parameter werden in Prioritätsreihenfolge geprüft: `instanceId` → `name` → `vendor`+`type` → nur `vendor`. Wenn `instanceId` nicht trifft, fällt die Route auf den nächsten Zweig zurück, wenn die entsprechenden Parameter ebenfalls angegeben sind — so kann ein Etiketten-Scan gegen ein inzwischen gelöschtes Filament noch Vorschläge liefern statt 404 zu liefern.
+Die Parameter werden in Prioritätsreihenfolge geprüft: spulenbezogene `instanceId` → `instanceId` auf Filament-Ebene → `name` → `vendor`+`type` → nur `vendor`. Wenn `instanceId` nicht trifft, fällt die Route auf den nächsten Zweig zurück, wenn die entsprechenden Parameter ebenfalls angegeben sind — so kann ein Etiketten-Scan gegen ein inzwischen gelöschtes Filament noch Vorschläge liefern statt 404 zu liefern.
 
-Liefert:
+Liefert (`matchedSpool` ist die Spule, deren `instanceId` getroffen wurde, oder `null`, wenn der Treffer auf Filament-Ebene oder heuristisch war):
 ```json
 {
   "match": { "_id": "...", "name": "...", "vendor": "...", "type": "...", "color": "..." },
+  "matchedSpool": { "_id": "...", "instanceId": "...", "label": "..." },
   "candidates": []
 }
 ```
@@ -355,7 +367,7 @@ Liefert Filamente, die als Eltern für Farbvarianten dienen können, sortiert na
 - `search` -- Filter nach Name (case-insensitive Regex)
 - `exclude` -- Filament-ID, die aus den Ergebnissen ausgeschlossen werden soll (z. B. das aktuell bearbeitete Filament)
 
-Liefert ein Array aus `{ _id, name, vendor, type, color }`-Objekten.
+Liefert ein Array aus `{ _id, name, vendor, type, color, hasVariants }`-Objekten — `hasVariants` ist `true`, wenn das Filament aktuell mindestens eine nicht gelöschte Variante hat (steuert das Eltern-Farbfeld im Picker).
 
 ### POST /api/filaments/parse-ini
 
@@ -431,7 +443,12 @@ Wird von PrusaSlicer Filament Edition genutzt, um Filament-Settings automatisch 
 
 ### POST /api/filaments/:id
 
-Synchronisiert ein Filament-Preset zurück aus PrusaSlicer. Der `{id}`-Parameter kann ein URL-kodierter Preset-Name oder eine MongoDB-ObjectId sein.
+Synchronisiert ein Filament-Preset zurück aus PrusaSlicer. Der `{id}`-Parameter kann ein URL-kodierter Preset-Name oder eine MongoDB-ObjectId sein — die beiden Formen haben unterschiedliche Adressierungssemantik (#867):
+
+- **ObjectId-URL** (`POST /api/filaments/{ObjectId}`) ist **maßgeblich** — das Update zielt auf diese `_id`; eine in der Config mitgeführte `filamentdb_id` überstimmt sie nie. Dieser Pfad wendet außerdem den `name` des Bodys als **Umbenennung** an, wenn er vom gespeicherten Namen abweicht (dadurch bleibt das „Update anyway" des Forks nach einem `name_id_mismatch` bestehen). Kollidiert die Umbenennung mit einem anderen aktiven Filament, kommt `409 name_taken` zurück (siehe unten). Trifft die 24-stellige Hex-URL keine `_id` (ein Preset, das legitim *mit* 24 Hex-Zeichen benannt ist), fällt die Route auf die Namensauflösung zurück, statt 404 zu liefern.
+- **Namens-URL** (der normale Sync des Forks) löst **`filamentdb_id` → Name** auf: Ein in der Config mitgeführter `filamentdb_id`-Schlüssel wird zuerst versucht; fehlt er oder ist er veraltet (er ist spezifisch für eine DB-Instanz), wird sauber auf den Preset-Namen zurückgefallen. Der namensadressierte Pfad **benennt nie um** — der Name ist sein Adressierungsschlüssel, ein `body.name` wird dort ignoriert.
+
+Das exportierte Bundle stempelt jedes Preset mit einem `filamentdb_id`-Config-Schlüssel (der stabilen `_id` des Filaments); der Sync nutzt ihn nur zum Routing — er wird nie im `settings`-Bag gespeichert. Per-Düsen-suffigierte Presets aus einem Mehr-Düsen-Export (#876) tragen zusätzlich einen `filamentdb_nozzle`-Hinweis, der ihre Kalibrierungsschlüssel zum passenden Per-Düsen-Kalibrierungseintrag leitet (und verhindert, dass der suffigierte Name als Umbenennung gelesen wird).
 
 Query-Parameter:
 - `nozzle_diameter` (optional) -- Düsendurchmesser in mm (z. B. `0.4`). Wenn angegeben, werden kalibrierungsbezogene Schlüssel (`extrusion_multiplier`, `pressure_advance`, `filament_retract_length`, `filament_retract_speed`, `filament_retract_lift`) in den passenden Per-Düse-Kalibrierungseintrag geschrieben statt in den Settings-Bag.
@@ -442,15 +459,24 @@ Sende einen JSON-Body:
 { "config": { "temperature": "215", "filament_density": "1.24", "my_custom_key": "value" } }
 ```
 
-Erkannte PrusaSlicer-INI-Schlüssel (`filament_type`, `filament_vendor`, `filament_colour`, `filament_diameter`, `filament_density`, `filament_cost`, `filament_spool_weight`, `filament_max_volumetric_speed`, `temperature`, `first_layer_temperature`, `bed_temperature`, `first_layer_bed_temperature`, `filament_shrinkage_compensation_xy`, `filament_shrinkage_compensation_z`, `filament_soluble`, `filament_abrasive`) werden umgekehrt auf strukturierte DB-Felder gemappt. Alle übrigen Schlüssel werden in den `settings`-Passthrough-Bag des Filaments zusammengeführt.
+Erkannte PrusaSlicer-INI-Schlüssel (`filament_type`, `filament_vendor`, `filament_colour`, `filament_diameter`, `filament_density`, `filament_cost`, `filament_spool_weight`, `filament_max_volumetric_speed`, `temperature`, `first_layer_temperature`, `bed_temperature`, `first_layer_bed_temperature`, `filament_shrinkage_compensation_xy`, `filament_shrinkage_compensation_z`) werden umgekehrt auf strukturierte DB-Felder gemappt. Alle übrigen Schlüssel werden in den `settings`-Passthrough-Bag des Filaments zusammengeführt — auch `filament_soluble` und `filament_abrasive`, die im Settings-Bag erhalten bleiben, statt auf strukturierte Felder gemappt zu werden (das Filament-Schema hat keine solchen Spalten; die Slicer-Exporte und der OpenPrintTag-Encoder lesen sie aus dem Bag — #950).
 
-Liefert:
+Liefert `200` — ein 200 bedeutet immer, dass das Update **angewendet wurde**:
 ```json
 {
   "message": "Synced 12 settings for \"Prusament PETG Prusa Galaxy Black\"",
-  "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1"
+  "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1",
+  "matchedBy": "id",
+  "matchedName": "Prusament PETG Prusa Galaxy Black"
 }
 ```
+
+`matchedBy` gibt an, wie das Filament aufgelöst wurde — `"id"` (ObjectId in der URL oder `filamentdb_id` in der Config), `"name"` oder `null` —, und `matchedName` ist der kanonische gespeicherte Name des Filaments, damit der Fork die ID in ein Preset zurückstempeln kann, das nur über den Namen getroffen wurde.
+
+Konfliktantworten — ein **409 garantiert, dass nichts angewendet wurde**:
+
+- `409 name_id_mismatch` — die `filamentdb_id` eines namensadressierten Syncs wurde zu einem Filament aufgelöst, dessen gespeicherter Name vom Preset-Namen abweicht. Serverseitig ist das mehrdeutig: ein *umbenanntes Preset* (ID korrekt) oder eine *kopierte/geklonte ID* (die ID zeigt auf das falsche Filament, z. B. ein „Speichern unter", das die ID der Quelle behielt). Die Route verändert nichts und liefert `{ "error": "name_id_mismatch", "message": "…", "matchedBy": "id", "filamentId": "…", "matchedName": "…", "sentName": "…" }`. Um das aufgelöste Filament trotzdem zu aktualisieren, synchronisiere erneut über seine ObjectId-URL (die maßgebliche Form).
+- `409 name_taken` — eine ObjectId-adressierte Umbenennung kollidiert mit dem Namen eines anderen aktiven Filaments. Liefert `{ "error": "name_taken", "message": "…", "conflictId": "…" }`, wobei `conflictId` das Filament benennt, das den Namen bereits trägt.
 
 ### GET /api/filaments/:id/spool-check
 
@@ -485,6 +511,16 @@ Liefert 400, wenn `weight` fehlt oder ungültig ist. Liefert 404, wenn das Filam
 ### GET /api/filaments/:id/openprinttag
 
 Lädt das Filament als OpenPrintTag-CBOR-Binary (`.bin`-Datei) herunter. Das Binary kann auf ein NFC-V-Tag (ISO 15693) geschrieben oder mit anderen OpenPrintTag-kompatiblen Tools verwendet werden.
+
+Die `spool_uid` des Tags trägt eine **spulenbezogene** `instanceId` (#732), und das kodierte Restgewicht stammt von derselben Spule, von der die ID genommen wurde.
+
+Query-Parameter:
+- `spool` (optional) -- eine Spulen-Subdokument-`_id`, die auswählt, wessen `instanceId` und Restgewicht kodiert werden. Standard: die erste nicht ausgemusterte Spule (danach die erste überhaupt), mit Rückfall auf die `instanceId` auf Filament-Ebene bei einem Filament ohne Spulen — oder wenn die standardmäßig gewählte Spule keine `instanceId` hat (Legacy-Daten). Eine **explizit angeforderte** Spule ohne `instanceId` fällt nicht stillschweigend zurück; das ist ein 422.
+
+Ablehnungsgründe:
+- `400` — die `{id}` ist keine gültige ObjectId, oder die `spool`-ID gehört nicht zu diesem Filament (`"Spool not found on this filament"` — die Route kodiert nicht stillschweigend die falsche Spule).
+- `404` — Filament nicht gefunden.
+- `422` — es steht keine `instanceId` zum Kodieren zur Verfügung (weder die gewählte Spule noch das Filament trägt eine).
 
 ### GET /api/filaments/:id/openprinttag/check
 
@@ -631,7 +667,7 @@ Soft-gelöschte Filamente sind ausgeschlossen, und die Projektion der Aggregatio
 
 ### GET /api/filaments/prusaslicer
 
-Exportiert alle Filamente als PrusaSlicer-kompatibles INI-Config-Bundle. Strukturierte DB-Felder (Temperaturen, Dichte, Kosten, max. volumetrische Geschwindigkeit, Schrumpfung) werden auf ihre PrusaSlicer-INI-Äquivalente gemappt und mit dem `settings`-Passthrough-Bag zusammengeführt. Wie ein Filament in Abschnitte zerlegt wird, hängt davon ab, für wie viele **unterschiedliche Düsen** es Kalibrierungen hat (#876):
+Exportiert alle Filamente als PrusaSlicer-kompatibles INI-Config-Bundle. **Vorlagen werden ausgeschlossen** (#605): Ein Filament mit lebenden Varianten ist eine abstrakte Produktlinie, kein druckbarer Bestand, und wird daher nie als Preset ausgegeben — seine Varianten werden weiterhin über es aufgelöst und exportiert. Strukturierte DB-Felder (Temperaturen, Dichte, Kosten, max. volumetrische Geschwindigkeit, Schrumpfung) werden auf ihre PrusaSlicer-INI-Äquivalente gemappt und mit dem `settings`-Passthrough-Bag zusammengeführt. Wie ein Filament in Abschnitte zerlegt wird, hängt davon ab, für wie viele **unterschiedliche Düsen** es Kalibrierungen hat (#876):
 
 - **0 oder 1 Düse** — ein einzelner `[filament:Name]`-Abschnitt ohne eingebackene Kalibrierung. Kalibrierungs-Overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) werden dynamisch von PrusaSlicer Filament Edition über `GET /api/filaments/:name/calibration` angewendet, wenn sich der Drucker-/Düsenkontext ändert.
 - **≥ 2 unterschiedliche Düsen** — ein flacher, namenssuffigierter Abschnitt pro Düse (z. B. `[filament:PLA 0.4 Brass]`), jeweils mit den **filament-bezogenen** Kalibrierungswerten dieser Düse **eingebacken** — extrusion multiplier, retraction, max volumetric speed und Pro-Kalibrierung-Temperaturen; **pressure advance wird bewusst NICHT eingebacken** und bleibt dynamisch über `GET /api/filaments/:id/calibration` (PrusaSlicer kennt kein Eltern-/Kind-Modell für User-Filament-Presets). Alle Geschwister-Abschnitte teilen sich eine `filamentdb_id` und tragen je einen `filamentdb_nozzle`-Routing-Hinweis, damit die Rück-Synchronisation (`POST /api/filaments/:id`) Updates dem richtigen Per-Düsen-Kalibrierungseintrag zuordnet.
@@ -646,6 +682,7 @@ Query-Parameter:
 - `type` -- Filter nach Filamenttyp (z. B. `PLA`, `PETG`)
 - `vendor` -- Filter nach Herstellername
 - `ids` -- kommagetrennte Liste von Filament-IDs
+- `printer` -- optional: eine Drucker-ID oder ein Druckername (IDs sind maßgeblich; Namen werden wörtlich, dann getrimmt, dann ohne Beachtung der Groß-/Kleinschreibung verglichen; nur lebende Drucker). Behält nur Filamente, deren effektive `compatibleNozzles` mindestens eine Düse mit den installierten Düsen dieses Druckers teilen. Ein Filament **ohne** angehakte kompatible Düsen bleibt enthalten (unbekannte Kompatibilität gilt nicht als Inkompatibilität). Ein unbekannter Drucker liefert `400` mit `{ "error": "printer_not_found", "message": "No live printer matches \"…\". …" }` statt eines leeren Bundles.
 
 Liefert `text/plain`-INI-Inhalt.
 
@@ -672,24 +709,25 @@ Liefert:
 
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
-| `GET` | `/api/filaments/orcaslicer` | Exportiert alle Filamente als OrcaSlicer-kompatible JSON-Profile (Bundle) |
-| `GET` | `/api/filaments/:id/orcaslicer` | Exportiert ein einzelnes Filament als OrcaSlicer-Preset (`.json`) |
+| `GET` | `/api/filaments/orcaslicer` | Exportiert alle Filamente (ohne Vorlagen) als OrcaSlicer-kompatible JSON-Profile (Bundle) |
+| `GET` | `/api/filaments/:id/orcaslicer` | Exportiert ein einzelnes Filament als OrcaSlicer-Preset (`.json`); `400 template_not_exportable` bei einer Vorlage |
 | `POST` | `/api/filaments/:name-or-id/orcaslicer` | Synchronisiert Filament-Settings zurück aus OrcaSlicer |
 
 ### GET /api/filaments/orcaslicer
 
-Exportiert Filamente als Array OrcaSlicer-kompatibler JSON-Profile. Strukturierte DB-Felder werden auf OrcaSlicer-Schlüssel gemappt (z. B. `nozzle_temperature`, `hot_plate_temp`, `filament_flow_ratio`), wobei die Werte gemäß OrcaSlicers Mehr-Extruder-Konvention in einelementige Arrays gepackt werden. Eltern-/Varianten-Vererbung wird vor dem Export aufgelöst.
+Exportiert Filamente als Array OrcaSlicer-kompatibler JSON-Profile. Strukturierte DB-Felder werden auf OrcaSlicer-Schlüssel gemappt (z. B. `nozzle_temperature`, `hot_plate_temp`, `filament_flow_ratio`), wobei die Werte gemäß OrcaSlicers Mehr-Extruder-Konvention in einelementige Arrays gepackt werden. Eltern-/Varianten-Vererbung wird vor dem Export aufgelöst. **Vorlagen werden ausgeschlossen** (#605): Ein Filament mit lebenden Varianten ist eine abstrakte Produktlinie, kein druckbarer Bestand, und wird daher nie als Preset ausgegeben — seine Varianten werden weiterhin über es aufgelöst und exportiert.
 
 Query-Parameter:
 - `type` -- Filter nach Filamenttyp (z. B. `PLA`, `PETG`)
 - `vendor` -- Filter nach Herstellername
 - `ids` -- kommagetrennte Liste von Filament-IDs
+- `printer` -- optional: eine Drucker-ID oder ein Druckername (IDs sind maßgeblich; Namen werden wörtlich, dann getrimmt, dann ohne Beachtung der Groß-/Kleinschreibung verglichen; nur lebende Drucker). Behält nur Filamente, deren effektive `compatibleNozzles` mindestens eine Düse mit den installierten Düsen dieses Druckers teilen. Ein Filament **ohne** angehakte kompatible Düsen bleibt enthalten (unbekannte Kompatibilität gilt nicht als Inkompatibilität). Ein unbekannter Drucker liefert `400` mit `{ "error": "printer_not_found", "message": "No live printer matches \"…\". …" }` statt eines leeren Bundles.
 
 Liefert `application/json`: ein Array von OrcaSlicer-Profil-Objekten.
 
 ### POST /api/filaments/:name-or-id/orcaslicer
 
-Synchronisiert Filament-Settings zurück aus OrcaSlicer. Das Pfadsegment ist der URL-kodierte Filamentname ODER eine 24-stellige Hex-ObjectId; die Route versucht zuerst den Namen und fällt dann auf die ID zurück.
+Synchronisiert Filament-Settings zurück aus OrcaSlicer. Das Pfadsegment ist der URL-kodierte Filamentname ODER eine 24-stellige Hex-ObjectId; eine 24-stellige Hex-ObjectId ist **maßgeblich** und wird ZUERST aufgelöst — auf eine Namenssuche wird nur zurückgefallen, wenn diese `_id` kein Filament trifft (z. B. ein Preset, das legitim mit 24 Hex-Zeichen benannt ist). Das entspricht den ID-adressierten Kalibrierungs- und Spool-Check-Routen (GH #950/#867).
 
 Der Request-Body ist ein JSON-Objekt mit beliebiger Kombination von OrcaSlicer-Schlüsseln. Erkannte strukturierte Schlüssel (`type`, `vendor`, `color`, `density`, `cost`, `diameter`, `maxVolumetricSpeed`, `temperatures`) werden in die entsprechenden DB-Felder geschrieben; alle übrigen Top-Level-Schlüssel werden in den `settings`-Passthrough-Bag zusammengeführt, sodass sie beim nächsten Export sauber zurückkommen.
 
@@ -716,13 +754,22 @@ Bambu Studio ist ein OrcaSlicer-Fork und teilt das `.json`-Filament-Preset-Schem
 
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
-| `GET`  | `/api/filaments/:id/bambustudio` | Lädt ein einzelnes Filament als Bambu-Studio-Preset (`.json`) herunter |
+| `GET`  | `/api/filaments/:id/bambustudio` | Lädt ein einzelnes Filament als Bambu-Studio-Preset (`.json`) herunter; `400 template_not_exportable` bei einer Vorlage |
 | `POST` | `/api/filaments/:id/bambustudio` | Synchronisiert ein Bambu-Studio-Preset IN dieses spezifische Filament (per ID gepinnt — der geparste Name wird ignoriert) |
 | `POST` | `/api/filaments/bambustudio`     | Importiert ein Bambu-Studio-Preset per Name (Upsert; bei vorhandenem Trash-Eintrag mit gleichem Namen wird dieser wiederbelebt statt eines Duplikats) |
 
 ### GET /api/filaments/:id/bambustudio
 
 Identisches Datenmodell wie der OrcaSlicer-Export, mit `from: "User"` gestempelt, damit Bambu Studio das Preset als benutzerdefiniert klassifiziert. Variant-Filamente werden gegen ihren Parent aufgelöst, sodass das exportierte Preset die vollständigen wirksamen Werte trägt. Setzt `Content-Disposition: attachment` mit einem aus dem Filament-Namen abgeleiteten Dateinamen.
+
+Alle drei Einzel-Filament-Exporte (`GET /api/filaments/:id/prusaslicer`, `/orcaslicer`, `/bambustudio`) lehnen eine **Vorlage** ab — ein Filament mit lebenden Varianten hat keine Spule, die man laden könnte — und liefern `400`:
+
+```json
+{
+  "error": "template_not_exportable",
+  "message": "This filament is a template — an abstract product line with no colour or inventory. Export one of its colour variants instead."
+}
+```
 
 ### POST /api/filaments/:id/bambustudio
 
@@ -742,6 +789,10 @@ Antwort:
   "settingsAdded": ["filament_unique_key", "…"]
 }
 ```
+
+- `created` / `updated` -- Booleans, immer gegensätzlich: `created: true`, wenn die Bulk-Route ein neues Filament angelegt hat, `updated: true`, wenn eine aktive Zeile aktualisiert oder eine Zeile aus dem Papierkorb wiederbelebt wurde. Der Per-ID-Sync liefert immer `created: false, updated: true`.
+- `calibrationUnresolved` -- `true`, wenn ein Kalibrierungshinweis vorhanden war, aber kein eindeutiges `(printer, nozzle)`-Paar aufgelöst werden konnte (sonst weggelassen).
+- `_strippedTemplateFields` -- nur vorhanden, wenn das Ziel eine Vorlage ist und variantenspezifische Felder verworfen wurden (siehe **Filament-Vorlagen**).
 
 ### POST /api/filaments/bambustudio
 
@@ -785,6 +836,7 @@ Jede `data:`-Payload hat dieselbe JSON-Form:
     "color": "#000000"
   },
   "candidates": [],
+  "matchedSpool": { "_id": "65f00000000000000000ef01", "instanceId": "2acc21072a", "label": "AMS slot 1" },
   "decoded": {
     "materialName": "Prusament PLA Galaxy Black",
     "brandName": "Prusament",
@@ -799,6 +851,7 @@ Jede `data:`-Payload hat dieselbe JSON-Form:
 Feldhinweise:
 - `filament` ist die gematchte DB-Zeile oder `null`, wenn keine Zeile passt. Slicer schlüsseln Presets per Name und sollten bei `filament.name` umschalten, wenn nicht-null.
 - `candidates` ist eine kurze Liste plausibler Alternativen (Vendor + Type, dann nur Vendor), wenn kein exakter Match vorliegt; sonst leer.
+- `matchedSpool` ist die konkrete Spule, zu der die `spoolUid` des Tags aufgelöst wurde (`{ _id, instanceId, label }`, #732), oder `null` bei einem Treffer auf Filament-Ebene bzw. einem heuristischen Treffer.
 - `decoded` trägt eine Teilmenge der Tag-Felder, die für Konsumenten nützlich sind; `tagSource` ist `"openprinttag"`, `"opentag3d"` oder `"bambu"`.
 
 Response-Header:
@@ -810,7 +863,7 @@ Der Stream sendet ein `retry: 5000`-Prelude (EventSource-Clients verbinden sich 
 
 Der Bus ist in-process (Node `EventEmitter` auf `globalThis`). „In-process" bedeutet hier **eine Filament-DB-Instanz, nicht eine physische Maschine** — Abonnenten können überall sitzen, wo sie per HTTP erreichbar sind (ein Pi, der Filament DB ausführt, kann PrusaSlicer auf einem Mac über das LAN ansteuern; der Slicer verbindet sich einfach mit `http://<filament-db-host>:3456/api/scan/stream`). Was auf eine einzelne Maschine festgenagelt ist, ist der Publisher: NFC-Lesungen kommen aus dem `NfcProvider` des Electron-Renderers, also muss der Reader an die Box angeschlossen sein, die die Electron-App ausführt — ein Headless-Docker-/Web-Only-Deploy hat keinen `NfcProvider` und veröffentlicht nichts. Ein horizontal skaliertes Multi-Prozess-Deployment bräuchte einen externen Broker hinter dem Bus.
 
-Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Die API ist standardmäßig nicht authentifiziert (Single-User-Vertrauensmodell — siehe README-Warnung), also überlege bewusst, auf welchem Netzwerk Port 3456 freigegeben ist. Für freigegebene Deployments kannst du `FILAMENTDB_API_KEY` setzen; danach muss jede `/api`-Anfrage — einschließlich dieses SSE-Streams und der Slicer-Integrationen — den Header `Authorization: Bearer <key>` senden; bei nicht gesetztem Schlüssel ist es ein No-op. Das Electron-gebündelte Next.js bindet sich anhand der `HOSTNAME`-Umgebungsvariable; wenn cross-machine-Abonnenten sich nicht verbinden können, versuche `HOSTNAME=0.0.0.0`. Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
+Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Die API ist standardmäßig nicht authentifiziert (Single-User-Vertrauensmodell — siehe README-Warnung), also überlege bewusst, auf welchem Netzwerk Port 3456 freigegeben ist. Für freigegebene Deployments kannst du `FILAMENTDB_API_KEY` setzen; danach muss jede `/api`-Anfrage — einschließlich dieses SSE-Streams und der Slicer-Integrationen — den Header `Authorization: Bearer <key>` senden; bei nicht gesetztem Schlüssel ist es ein No-op. Der eingebettete Server der Desktop-App bindet sich standardmäßig nur an `localhost` und ignoriert eine selbst gesetzte `HOSTNAME`-Variable; wenn cross-machine-Abonnenten sich nicht verbinden können, aktiviere **Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** (electron-store-Schlüssel `exposeToLan`), wodurch er an `0.0.0.0` gebunden wird. Die Umgebungsvariable `HOSTNAME` spielt nur bei einem selbst gestarteten Standalone-Deployment eine Rolle (das Docker-Image setzt bereits `HOSTNAME=0.0.0.0`). Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
 
 ### POST /api/scan/publish
 
@@ -828,6 +881,7 @@ Request-Body:
     "color": "#000000"
   },
   "candidates": [],
+  "matchedSpool": { "_id": "65f00000000000000000ef01", "instanceId": "2acc21072a", "label": "AMS slot 1" },
   "decoded": {
     "materialName": "Prusament PLA Galaxy Black",
     "brandName": "Prusament",
@@ -841,6 +895,7 @@ Request-Body:
 
 - `filament` -- die gematchte DB-Zeile oder `null`, wenn keine Zeile passte.
 - `candidates` -- optionales Array plausibler Alternativen in derselben Form wie `filament`.
+- `matchedSpool` -- optionales `{ _id, instanceId, label }` der Spule, deren `instanceId` getroffen wurde (#732), oder `null`. `_id` und `instanceId` müssen beide Strings sein, sonst wird das Feld als `null` veröffentlicht.
 - `decoded` -- Teilmenge der dekodierten Tag-Felder. Unbekannte `tagSource`-Werte werden verworfen.
 
 Der Body wird gegen eine Allow-List validiert — unbekannte Felder werden entfernt, bevor das Event veröffentlicht wird, sodass ein fehlerhafter POST den Replay-Cache nicht verschmutzen kann.
@@ -1103,7 +1158,7 @@ Klont eine bestehende Düse in eine neue Zeile. Der Klon kopiert jedes Spec-Feld
 
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
-| `GET` | `/api/printers` | Listet alle Drucker auf. Query-Parameter: `manufacturer` |
+| `GET` | `/api/printers` | Listet alle Drucker auf. Query-Parameter: `manufacturer`, `includeTrashed` |
 | `POST` | `/api/printers` | Legt einen neuen Drucker an |
 | `GET` | `/api/printers/:id` | Ruft einen einzelnen Drucker per ID ab (populiert installierte Düsen) |
 | `PUT` | `/api/printers/:id` | Aktualisiert einen Drucker per ID |
@@ -1114,6 +1169,7 @@ Klont eine bestehende Düse in eine neue Zeile. Der Klon kopiert jedes Spec-Feld
 Liefert ein Array von Drucker-Dokumenten, sortiert nach Hersteller und dann nach Name, mit populierten `installedNozzles`. Unterstützt optionale Query-Parameter:
 
 - `manufacturer` -- Filter nach Herstellername
+- `includeTrashed` -- auf `1` setzen, um auch soft-gelöschte Drucker zu liefern (sie tragen `_deletedAt`, damit Aufrufer sie kennzeichnen können). Der Druckerfilter der `/history`-Seite nutzt das, weil die Druckverlaufszeilen eines gelöschten Druckers abfragbar bleiben (#1168).
 
 ### POST /api/printers
 
@@ -1436,11 +1492,17 @@ Per-Job-Ledger der Druckläufe. Reduziert Spulengewichte, hängt Spulen-Level-`u
 
 Validierungen:
 - `jobLabel` ist erforderlich, max. 200 Zeichen.
-- `usage` muss 1–100 Einträge haben, jeweils mit gültiger `filamentId` und nicht-negativem `grams`-Wert.
+- `usage` muss 1–100 Einträge haben, jeweils mit gültiger `filamentId` und nicht-negativem `grams`-Wert von höchstens `1000000` (`MAX_USAGE_GRAMS`, v1.68.1, #1030 — ein größerer Wert ergibt `400`).
 - `notes` wird auf 2000 Zeichen gekürzt.
 - `source` muss einer von `manual | prusaslicer | orcaslicer | bambu | other` sein; unbekannte Werte fallen auf `manual` zurück.
 
-Jedes referenzierte Filament wird **vor** jeder Mutation geholt und validiert. Fehlt eines, wird die gesamte Anfrage mit 404 abgebrochen, und keine Spulengewichte werden angefasst. Die Schreibvorgänge laufen innerhalb einer MongoDB-Transaktion, wenn das Deployment dies unterstützt (Atlas immer), und fallen auf sequentielle Saves auf standalone mongod zurück.
+Jedes referenzierte Filament wird **vor** jeder Mutation geholt und validiert. Fehlt eines, wird die gesamte Anfrage mit 404 abgebrochen, und keine Spulengewichte werden angefasst. Die Schreibvorgänge eines Jobs mit nur einem Filament laufen innerhalb einer MongoDB-Transaktion, wenn das Deployment dies unterstützt (Atlas immer), und fallen auf standalone mongod auf sequentielle Saves zurück; ein Job über mehrere Filamente nutzt immer sequentielle Saves pro Filament.
+
+**Legacy-Filamente mit nur einer Rolle werden zuerst migriert** (#1121). Ein Filament, dessen Bestand im Top-Level-`totalWeight` liegt und dessen `spools[]` leer ist, hat keine Spule zum Abbuchen. Vor der Abbuchung wandelt die Route diese Rolle deshalb in ein echtes Spulen-Subdokument um — und überträgt dabei die `instanceId` des Filaments darauf, damit gedruckte Etiketten und NFC-Tags weiter auflösen — und setzt das Top-Level-`totalWeight` des Filaments auf `null`, genau wie `POST /api/filaments`. Abbuchung und spätere Erstattung laufen dann über diese Spule. Das ist eine dauerhafte Änderung am Filament-Dokument, die beim POST passiert, obwohl der Body nur das Filament nennt. Ein Filament, dessen Spulen alle ausgemustert sind, wird **nicht** migriert: Es zeichnet die Nutzung weiterhin mit `spoolId: null` und ohne Abbuchung auf.
+
+Ablehnungen zusätzlich zu den Validierungs-`400`ern:
+- `400` — ein Nutzungseintrag zielt auf eine Legacy-**Vorlage** (ein Filament mit lebenden Varianten, das seine Rolle noch in `totalWeight` hält). Bestand gehört auf die Varianten, daher lehnt die Route mit der `template_no_spools`-Nachricht (siehe **Filament-Vorlagen**) als `error` ab. Bei einem Job über mehrere Filamente wird jedes Ziel geprüft, bevor irgendeines migriert wird.
+- `409` — `"Filament was modified by another request during this job. Please retry."` Ein gleichzeitiger Schreibvorgang hat ein Ziel-Filament zwischen Lesen und Speichern verändert; lade neu und wiederhole die Anfrage.
 
 Jeder vom POST geschriebene Spulen-`usageHistory`-Eintrag wird mit `jobId` versehen, das auf die neue PrintHistory-`_id` gesetzt ist, sodass ein späteres `DELETE` die exakten zu erstattenden Einträge matchen kann.
 
@@ -1479,12 +1541,14 @@ Aggregiert PrintHistory-Zeilen plus alle manuellen Per-Spulen-`usageHistory`-Ein
   "since": "2026-03-23T00:00:00Z",
   "days": 30,
   "totals": { "grams": 3240, "cost": 82.50, "jobs": 17, "manualEntries": 2 },
-  "usageByDay": [{ "date": "2026-03-23", "grams": 0 }, …],
+  "usageByDay": [{ "date": "2026-03-23", "grams": 0, "byFilament": [{ "id": "…", "name": "PLA Black", "color": "#000000", "grams": 0 }] }, …],
   "byFilament":  [{ "_id": "…", "name": "PLA Black", "vendor": "Vendor A", "cost": 25, "grams": 1200 }, …],
   "byVendor":    [{ "vendor": "Vendor A", "grams": 2100 }, …],
   "byPrinter":   [{ "_id": "…", "name": "Core One", "grams": 1900 }, …]
 }
 ```
+
+Jedes `usageByDay[i]` trägt eine Aufschlüsselung pro Tag in `byFilament` (`{ id, name, color, grams }`, absteigend nach Gramm sortiert) für das gestapelte „Detailliert"-Diagramm (v1.60.1, #934/#936). Die Segmente eines Tages summieren sich exakt zu `day.grams` (Hamilton-/Largest-Remainder-Verteilung) und können daher leicht von der Top-Level-Rangliste `byFilament` über das gesamte Zeitfenster abweichen. Die Tage werden aufsteigend als `YYYY-MM-DD` (UTC) ausgegeben.
 
 `usageHistory`-Einträge werden nur dann mitgezogen, wenn `source === "manual"`. Einträge mit `source: "job"` oder `"slicer"` gehören zu einer PrintHistory-Zeile und sind bereits in der primären Aggregation gezählt — würde man sie hier einbeziehen, würden dieselben Gramm doppelt gezählt.
 
@@ -1560,7 +1624,7 @@ Per-Spulen-Ledger-Endpunkte. Werden von der Spulen-Detail-UI genutzt, um direkte
 { "grams": 120, "jobLabel": "optional", "date": "optional ISO string" }
 ```
 
-`grams` muss > 0 sein. `jobLabel` max. 200 Zeichen.
+`grams` muss > 0 und höchstens `1000000` sein (`MAX_USAGE_GRAMS`, dieselbe Obergrenze wie bei `POST /api/print-history`). `jobLabel` max. 200 Zeichen.
 
 ### POST .../dry-cycles
 
@@ -1593,15 +1657,19 @@ Akzeptiert eines von:
 ### Optionale Spalten
 
 - `vendor`, `label`, `lotNumber`, `purchaseDate` (ISO), `openedDate`, `location` (Name — automatisch angelegt, wenn nicht vorhanden)
+- `spoolId` — trifft sie die Subdokument-`_id` einer vorhandenen Spule, wird diese Spule **an Ort und Stelle aktualisiert**, statt eine neue anzuhängen; ein Export → Re-Import-Round-Trip ist damit idempotent (GH #159).
+- `instanceId` — die spulenbezogene Instanz-ID (#732). Wird **nur beim Anlegen** berücksichtigt (auf Zeichensatz/Länge validiert und auf Eindeutigkeit gegen andere Spulen, die Top-Level-IDs anderer Filamente und andere Zeilen derselben CSV geprüft; fehlt sie, wird sie automatisch erzeugt). Auf dem Aktualisierungspfad (passende `spoolId`) ist die Spalte nur informativ, und die Spule behält ihre ID.
 
-Jede Zeile wird unabhängig verarbeitet; Per-Zeilen-Fehler werden in der Antwort gemeldet, ohne den Batch abzubrechen:
+Jede Zeile wird unabhängig verarbeitet; Per-Zeilen-Fehler werden in der Antwort gemeldet, ohne den Batch abzubrechen. `created`/`updated` schlüsseln die Erfolge auf (`imported` = ihre Summe), und jede erfolgreiche Zeile trägt ihre `action`:
 
 ```json
 {
   "imported": 12,
+  "created": 9,
+  "updated": 3,
   "failed": 2,
   "results": [
-    { "row": 2, "ok": true, "filament": "PLA Black" },
+    { "row": 2, "ok": true, "action": "created", "filament": "PLA Black" },
     { "row": 3, "ok": false, "error": "No filament named \"Unknown\"" }
   ]
 }
@@ -1610,6 +1678,8 @@ Jede Zeile wird unabhängig verarbeitet; Per-Zeilen-Fehler werden in der Antwort
 Eine Zeile, deren Ziel-Filament eine **Vorlage** ist (es hat Farbvarianten), scheitert mit `"This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."` — allerdings nur, wenn die Zeile eine Spule ANLEGEN würde. Eine Zeile, deren `spoolId` ein vorhandenes Subdokument trifft, ist eine Aktualisierung, und die eigenen Spulen einer Alt-Vorlage bleiben bearbeitbar. Siehe Abschnitt **Filament-Vorlagen** im Filaments-Kapitel.
 
 Eine einzelne Anfrage ist von `parseCsv` auf 10.000 Zeilen gedeckelt; darüber wird die Anfrage mit 400 abgelehnt.
+
+Anfragen über **10 MB** werden vor jedem CSV-Parsing mit `413` abgelehnt (v1.66.1, #991). Alle drei Content-Types durchlaufen eine `Content-Length`-Vorabprüfung (Multipart mit einem kleinen 64-KB-Zuschlag für das MIME-Framing); die rohen `text/csv`- und JSON-Pfade prüfen zusätzlich die gepufferte Bytelänge nach (fängt ein fehlendes oder falsches `Content-Length` ab), während der Multipart-Pfad die exakten 10 MB nach dem Parsen auf dem hochgeladenen Datei-Teil durchsetzt. Entspricht der 10-MB-Obergrenze der benachbarten Import-Endpunkte.
 
 ### GET /api/spools/export-csv
 
@@ -1662,6 +1732,67 @@ Entfernt die Spule aus dem Slot, in dem sie sich befindet. Idempotent — liefer
 
 ---
 
+## Etikettendruck
+
+| Methode | Endpunkt | Beschreibung |
+|--------|----------|-------------|
+| `POST` | `/api/labels/print` | Rendert ein 24-mm-Etikett für den Brother PT-P710BT für eine Spule oder einen Lagerort und sendet es an einen lokalen Drucker (v1.81, #1195) |
+
+### POST /api/labels/print
+
+Rendert das Etikett serverseitig und übergibt die Raster-Bytes an das Drucksystem des Betriebssystems — derselbe Transport, den der Dialog „Etikett drucken" der Desktop-App nutzt, hier aber für ein Skript oder einen Agenten erreichbar. Das 100 × 150 mm große Drybox-Etikett (TSPL) ist ein eigener Pfad und wird hier nicht gedruckt.
+
+**Authentifizierung — ein lokales Druck-Token, nicht der Same-Origin-Guard.** Jede Anfrage muss den Header `x-filamentdb-print-token` senden. Die paketierte Desktop-App erzeugt bei jedem Start ein neues Token, übergibt es ihrem eingebetteten Server als `FILAMENTDB_LOCAL_PRINT_TOKEN` und schreibt es in eine Datei namens `local-print-token` im User-Data-Verzeichnis der App mit Modus `0600`, sodass nur ein Prozess auf demselben Rechner es lesen kann. Eine Loopback-Prüfung wird nicht verwendet, weil Next keine Socket-Peer-Adresse bereitstellt und der `Host`-Header vom Client stammt.
+
+- `404` — auf diesem Server ist kein Token konfiguriert. Das ist die Antwort bei Docker- und Web-Deployments sowie unter `npm run electron:dev` (der Dev-Server erhält das Token nicht, außer du setzt `FILAMENTDB_LOCAL_PRINT_TOKEN` selbst).
+- `403` — der Header fehlt oder stimmt nicht überein.
+- `401` — der Server setzt `FILAMENTDB_API_KEY`; sende zusätzlich zum Druck-Token `Authorization: Bearer <key>`.
+
+Request-Body — ein JSON-Objekt. **Unbekannte Top-Level-Schlüssel werden mit `400` abgelehnt**, damit ein Tippfehler wie `dryrun` nicht stillschweigend zu einem echten Druck führt:
+
+```json
+{
+  "instanceId": "2acc21072a",
+  "printer": "FilamentDB_Label",
+  "preset": "vendorOverType",
+  "qrMode": "instanceId",
+  "dryRun": true
+}
+```
+
+- `instanceId` / `locationId` — das Objekt des Etiketts; gib **genau eines** an. `instanceId` ist eine Spulen-Identität (#732, max. 128 Zeichen), die wie bei `GET /api/filaments/match` aufgelöst wird; `locationId` muss eine gültige ObjectId eines lebenden Lagerorts sein, und ein Lagerort-Etikett erhält immer das reine Namens-Layout.
+- `printer` — ein installierter CUPS-Warteschlangenname (z. B. `FilamentDB_Label`) bzw. unter Windows der Druckername. **Pflicht, außer `dryRun` ist `true`.** Eine rohe `usb://`-Geräte-URI wird **mit `400` abgelehnt**: Die verwaltete Warteschlange wird pro Druck neu gebunden und CUPS liefert asynchron aus, sodass gleichzeitige Anfragen mit unterschiedlichen Geräten einen Auftrag an den falschen Drucker schicken könnten — gib stattdessen die installierte Warteschlange an.
+- `preset` — ein benanntes Layout (`nameOnly`, `vendorType`, `vendorOverType`, `typeColor`), das über das Standardformat gelegt wird. Ein unbekannter Name ergibt `400`.
+- `format` — eine partielle Etikettenformat-Überschreibung (`qr`, `lines`, `font`, `orientation`, `invert`, `maxLinesPerField`), die über das Preset gelegt und streng validiert wird: unbekannte Schlüssel, falsche Typen, ungültige Enum-Werte und eine leere `lines`-Liste ergeben `400`. `orientation: "vertical"` liefert `501` — der Server-Renderer unterstützt es nicht.
+- `qrMode` — nur für Spulen-Etiketten: `"instanceId"` (Standard, die bloße ID) oder `"url"` (ein Deep Link auf die Filamentseite, mit `?spool=<id>`, wenn die ID eine Spule getroffen hat).
+- `baseUrl` — Origin für QR-Payloads im URL-Modus (und für Lagerort-Etiketten); fällt auf den `Host` der Anfrage zurück.
+- `dryRun` — ein striktes Boolean (Standard `false`): rendern und berichten, aber nichts an den Drucker senden.
+
+String-Felder müssen Strings sein, dürfen nicht leer sein und keine Steuerzeichen enthalten.
+
+Liefert `200`:
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "printer": null,
+  "lines": ["Prusament", "PETG"],
+  "qrPayload": "2acc21072a",
+  "rasterLines": 312,
+  "bytes": 5123
+}
+```
+
+`printer` ist bei einem Probelauf `null`. Ein `warning`-String kommt hinzu, wenn der QR-Code auf einen Loopback-Host zeigt (er wird trotzdem gedruckt, löst aber von einem anderen Gerät aus nicht auf).
+
+Weitere Ablehnungen:
+- `400` — Body ist kein JSON-Objekt; kein oder beide Etikettenobjekte; ein fehlerhaftes Feld; ein unbrauchbares Druckziel; eine nicht auflösbare Basis-URL; oder Inhalt, der nicht auf 24-mm-Band passt.
+- `404` — auch, wenn der Lagerort oder die Spulen-`instanceId` nicht gefunden wird.
+- `501` — eine nicht unterstützte Plattform oder ein fehlendes natives Bild-Backend.
+
+---
+
 ## Interne Hilfs-Endpunkte
 
 Diese Endpunkte versorgen spezifische Seiten in der First-Party-UI. Die Formen sind auf diese Seiten zugeschnitten und können sich über Minor Releases hinweg ohne Vorankündigung ändern — externe Konsumenten sollten stattdessen die oben dokumentierten öffentlichen APIs verwenden.
@@ -1675,11 +1806,13 @@ Liefert:
 {
   "counts": {
     "filaments": 48,
+    "filamentTemplates": 6,
     "nozzles": 3,
     "printers": 2,
     "bedTypes": 4,
     "spools": 62,
-    "retiredSpools": 5
+    "retiredSpools": 5,
+    "totalSpools": 67
   },
   "totalGrams": 38250,
   "lowStock": [
@@ -1688,13 +1821,14 @@ Liefert:
   "dryDue": [
     { "filamentId": "…", "filamentName": "Nylon X", "spoolId": "…", "spoolLabel": "Spool #2", "lastDried": "2025-12-01T…" }
   ],
+  "dryDueTotal": 1,
   "recentPrintHistory": [
     { "_id": "…", "jobLabel": "Benchy", "printerName": "MK4", "startedAt": "…", "source": "manual", "totalGrams": 12.4 }
   ]
 }
 ```
 
-`dryDue` ist auf 20 Einträge gedeckelt und enthält nur Spulen, bei denen das Filament eine `dryingTemperature` gesetzt hat UND in den letzten 30 Tagen keinen Trocknungszyklus hatte.
+`dryDue` ist auf 20 Einträge gedeckelt und enthält nur Spulen, bei denen das Filament eine `dryingTemperature` gesetzt hat UND in den letzten 30 Tagen keinen Trocknungszyklus hatte; `dryDueTotal` ist die tatsächliche, ungedeckelte Anzahl (#1117). `counts.filamentTemplates` ist die Zahl der Filamente, die Vorlagen sind (mindestens eine lebende Variante haben) — die Filamentliste rendert diese nicht als Zeilen, das erklärt die Differenz zwischen `counts.filaments` und der Zählung der Liste (#1113). `counts.totalSpools` ist `spools + retiredSpools`.
 
 ### GET /api/filaments/compare?ids=a,b,c (v1.11)
 
@@ -1771,6 +1905,20 @@ Liefert `{ "conflicts": [...] }`, jeder Eintrag `{ collection, id, name, trimsTo
 - `dependents` trägt `{ total, breakdown }`, gezählt nach denselben Prädikaten, mit denen die Entity-DELETE-Sperren ablehnen — `total === 0` heißt, die Zeile ist ein reines Duplikat und kann sicher gelöscht werden; mit Abhängigen gibt ein Umbenennen die kanonische Schreibweise frei, ohne eine Referenz anzufassen.
 
 In Hybrid-Deployments deckt das nur die Datenbank ab, mit der dieser Server spricht; Konflikte auf der Gegenseite sind nur für den Desktop-Sync-Dienst sichtbar.
+
+### GET /api/abrasive-nozzles (v1.80)
+
+Versorgt den Abschnitt zu abrasiven Filamenten und Düsen unter **Einstellungen → Datenzustand** (#1191). Nur lesender, beratender Scan (keine Schreibvorgänge): Er meldet Filamente, die als abrasiv gelten — `settings.filament_abrasive` gesetzt (eingeschaltet oder mit einem Wert, den nachgelagert nichts als eingeschaltet liest), ein Abrasivität implizierender OPT-Tag, ein faserverstärkter Typ oder Name (CF/GF) oder ein gefüllter Typ oder Produktname — und die entweder eine nicht gehärtete Düse zulassen, überhaupt keine kompatiblen Düsen führen oder einen `filament_abrasive`-Wert tragen, der dem Material widerspricht. Die Abrasivität wird abgeleitet, daher wird nichts repariert.
+
+Der Scan läuft auf **aufgelösten** Dokumenten, sodass eine Variante, die den Düsensatz ihrer Vorlage erbt, am effektiven Satz gemessen wird. **Vorlagen werden ausgeschlossen** — ein Filament mit lebenden Varianten ist kein druckbarer Bestand (derselbe Filter wie bei den Slicer-Exporten).
+
+Liefert `{ "findings": [...] }`, schwerste zuerst (weiche Düse, dann ohne Zuordnung, dann nur Flag), leer, wenn alles in Ordnung ist. Jeder Eintrag hat die Form `{ filamentId, filamentName, filamentType, reasons, softNozzles, unassigned, flagMismatch, inheritedFrom }`:
+
+- `reasons` — warum der Datensatz als abrasiv gilt: beliebige von `"flagged"`, `"tagged"`, `"fibre"`, `"filled"`.
+- `softNozzles` — `{ id, name }` der kompatiblen Düsen, die nicht gehärtet sind (ein Verweis auf eine Düse, die im lebenden Katalog fehlt, wird als unbekannt mitgezählt).
+- `unassigned` — `true`, wenn keine kompatiblen Düsen hinterlegt sind.
+- `flagMismatch` — `true`, wenn das Material als abrasiv gilt, `filament_abrasive` aber nicht eingeschaltet ist, sodass exportierte Presets das Filament als unbedenklich ausweisen.
+- `inheritedFrom` — der Name der Vorlage, wenn es um einen Düsensatz geht, den die Variante erbt (dort gehört die Korrektur hin); sonst `null`, auch bei reinen Flag-Befunden.
 
 ### GET /api/embed-check?url=…
 
