@@ -7,7 +7,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ## Features
 
 ### Filament Management
-- **Browse and search** -- filterable, sortable table with color swatches and collapsible statistics (by type, vendor, color). A row of color chips (v1.82) filters by color family, each showing its count; picking a color adds Light / Medium / Dark shade chips and a **Types in stock** strip, and the choice is kept in a shareable `?color=` URL parameter
+- **Browse and search** -- filterable, sortable table with color swatches and collapsible statistics (by type, vendor, color). A row of color chips (v1.82) filters by color family, each showing its count; picking a color adds a **Types in stock** strip, plus Light / Medium / Dark shade chips for the families that have shades, and the choice is kept in a shareable `?color=` URL parameter
 - **Full CRUD** -- create, view, edit, and delete filament profiles with temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, and notes
 - **Material properties** -- glass transition temperature (Tg), heat deflection temperature (HDT), shore hardness (A/D), nozzle temp ranges, print speed ranges, per-bed-type temperatures
 - **Slicer parity** -- OrcaSlicer/BambuStudio/PrusaSlicer settings: overhang fan, aux fan, layer time thresholds, MMU/AMS params, start/end G-code, z-offset, air filtration
