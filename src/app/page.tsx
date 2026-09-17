@@ -48,15 +48,27 @@ import {
 } from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
+import ColorFacetFilter, { colorFacetLabel } from "@/components/ColorFacetFilter";
+import {
+  classifyFilament,
+  matchReason,
+  matchesColorFacet,
+  relaxColorQuery,
+  scopeByColorFacet,
+  typeBreakdown,
+  type ColorFacet,
+} from "@/lib/colorFamily";
+import {
+  colorFacetCounts,
+  colorRowVisible,
+  computeVisibleFilaments,
+  countBlankDefaultColor,
+  countOutOfStockHidden,
+  inStockPredicate,
+  isLowStock,
+} from "@/lib/homeListVisibility";
 
 type Filament = FilamentSummary;
-
-function isLowStock(f: Filament): boolean {
-  const threshold = f.lowStockThreshold;
-  if (!threshold || threshold <= 0) return false;
-  const remaining = getRemainingGrams(f);
-  return remaining !== null && remaining < threshold;
-}
 
 function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) {
   const isActive = column === sortKey;
@@ -249,13 +261,20 @@ export default function Home() {
       ),
     [],
   );
-  const [filaments, setFilaments] = useState<Filament[]>([]);
+  // The list exactly as fetched (server-side search/type/vendor applied).
+  // Everything downstream reads `filaments` below — the color-scoped view —
+  // and only a few places that need the whole fetch read this directly.
+  const [fetchedFilaments, setFetchedFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [typeFilter, setTypeFilter] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
+  // Color facet: "" (none), a family, or `family-shade`. Client-side only —
+  // never sent to the server and never part of `filterActive` (see
+  // `computeVisibleFilaments` for why it keeps the out-of-stock hide on).
+  const [colorFacet, setColorFacet] = useState<"" | ColorFacet>("");
   const [types, setTypes] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showStats, setShowStats] = useState(false);
@@ -339,6 +358,7 @@ export default function Home() {
     setTypeFilter(url.typeFilter);
     setVendorFilter(url.vendorFilter);
     setQuickFilter(url.quickFilter);
+    setColorFacet(url.colorFacet);
     setShowOutOfStock(url.showOutOfStock);
     setSortKey(url.sortKey);
     setSortDir(url.sortDir);
@@ -365,6 +385,7 @@ export default function Home() {
         typeFilter,
         vendorFilter,
         quickFilter,
+        colorFacet,
         showOutOfStock,
         sortKey,
         sortDir,
@@ -399,6 +420,7 @@ export default function Home() {
     typeFilter,
     vendorFilter,
     quickFilter,
+    colorFacet,
     showOutOfStock,
     sortKey,
     sortDir,
@@ -430,6 +452,7 @@ export default function Home() {
     setTypeFilter(url.typeFilter);
     setVendorFilter(url.vendorFilter);
     setQuickFilter(url.quickFilter);
+    setColorFacet(url.colorFacet);
     setShowOutOfStock(url.showOutOfStock);
     // Sort is PERSISTED, so an absent param means "unchanged", not "default".
     // Resetting to the fallback on a bare `/` would have the persist effect
@@ -538,7 +561,7 @@ export default function Home() {
         return;
       }
       const data = await res.json();
-      setFilaments(data);
+      setFetchedFilaments(data);
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -612,6 +635,17 @@ export default function Home() {
       fetchFilaments();
     });
   }, [fetchFilaments]);
+
+  // Color facet scoping, applied BEFORE every memo below so they all see the
+  // color-filtered list without further edits. `scopeByColorFacet` returns
+  // the SAME array when no color is picked, so with `?color` absent nothing
+  // downstream changes — not even memo identity.
+  const filaments = useMemo(
+    () => scopeByColorFacet(fetchedFilaments, colorFacet),
+    [fetchedFilaments, colorFacet],
+  );
+  const colorActive = colorFacet !== "";
+  const serverFilterActive = !!debouncedSearch || !!typeFilter || !!vendorFilter;
 
   // Inventory aggregates exclude parent filaments — a parent is a template,
   // not a physical roll, and counting it double-counts what the user has.
@@ -696,76 +730,72 @@ export default function Home() {
     return counts;
   }, [filaments, inventoryFilaments]);
 
-  // "Out of stock" = no active (non-retired) spools. Parents own no spools, so
-  // a parent counts as in-stock when any of its variants is — otherwise hiding
-  // out-of-stock would drop a parent whose variants are fully stocked.
-  const parentsWithStock = useMemo(() => {
-    const s = new Set<string>();
-    for (const f of filaments) {
-      if (f.parentId && getSpoolCount(f) > 0) s.add(f.parentId);
-    }
-    return s;
-  }, [filaments]);
-  const inStock = useCallback(
-    (f: Filament) => getSpoolCount(f) > 0 || parentsWithStock.has(f._id),
-    [parentsWithStock],
+  // Per-facet chip counts over the WHOLE fetch, under the current quick
+  // filter / out-of-stock toggle — computed by the same visibility function
+  // the list uses, so a chip's number is exactly the rows it shows.
+  const colorCounts = useMemo(
+    () =>
+      colorFacetCounts(fetchedFilaments, { quickFilter, showOutOfStock, serverFilterActive }),
+    [fetchedFilaments, quickFilter, showOutOfStock, serverFilterActive],
   );
-  // Count of hidden inventory rows — drives the toggle's badge. Parents are
-  // grouping headers (not stock). A variant of a STOCKED family is always
-  // rendered under its parent (#786), so it isn't "hidden" even with no spool
-  // of its own — only standalone rows and variants of a fully-out-of-stock
-  // family are actually hidden by the default filter.
-  const outOfStockCount = useMemo(() => {
-    const shownParents = new Set(
-      filaments.filter((f) => f.hasVariants && inStock(f)).map((f) => f._id),
-    );
-    return filaments.filter((f) => {
-      if (f.hasVariants) return false;
-      if (getSpoolCount(f) > 0) return false;
-      if (f.parentId && shownParents.has(f.parentId)) return false;
-      return true;
-    }).length;
-  }, [filaments, inStock]);
+
+  // Count of hidden inventory rows — drives the toggle's badge. See
+  // `countOutOfStockHidden` for the #786 rule. Under a color the groups carry
+  // only visible variants, so every hidden MATCH counts instead.
+  const outOfStockCount = useMemo(
+    () =>
+      colorFacet ? colorCounts[colorFacet].hidden : countOutOfStockHidden(filaments),
+    [colorFacet, colorCounts, filaments],
+  );
 
   // #847: when NOTHING is in stock (e.g. a catalog with 0 spools), the "all"
   // view falls back to showing every filament, so the "Show out of stock"
   // toggle would be a no-op — suppress it unless at least one filament is
-  // actually in stock (i.e. the hide is genuinely hiding something).
-  const hasAnyInStock = useMemo(() => filaments.some(inStock), [filaments, inStock]);
+  // actually in stock (i.e. the hide is genuinely hiding something). A color
+  // skips that fallback, so its toggle is never a no-op.
+  const hasAnyInStock = useMemo(() => filaments.some(inStockPredicate(filaments)), [filaments]);
 
-  const visibleFilaments = useMemo(() => {
-    // The "all" view keeps parents in the dataset so the list renders them as
-    // grouping headers above their color variants. By default it hides
-    // out-of-stock filaments; the toggle reveals them. The hide runs ONLY on
-    // the UNFILTERED view: search/type/vendor are applied server-side, so a
-    // filtered response can return a parent WITHOUT its (stocked) variants —
-    // parentsWithStock would then miss it and wrongly hide the family. While
-    // a filter is active, show every match in or out of stock (#712).
-    if (quickFilter === "all") {
-      const filterActive = !!debouncedSearch || !!typeFilter || !!vendorFilter;
-      if (showOutOfStock || filterActive) return filaments;
-      const inStockList = filaments.filter(inStock);
-      // #847: don't let the default out-of-stock hide empty the unfiltered
-      // "All" view — a catalog with nothing in stock would otherwise render
-      // "No filaments match" under "All (N)".
-      return inStockList.length === 0 ? filaments : inStockList;
-    }
-    // "Has spools" resolves against the full list (parents included) and
-    // MUST use the same predicate as the badge above, or the two disagree by
-    // construction (see quickFilterCounts).
-    if (quickFilter === "hasSpools") {
-      return filaments.filter((f) => getSpoolCount(f) > 0);
-    }
-    // Every other filter resolves against `inventoryFilaments` instead —
-    // otherwise the chip badge (derived from `inventoryFilaments`) disagrees
-    // with the rendered row count whenever a parent happens to match the
-    // filter criterion.
-    return inventoryFilaments.filter((f) => {
-      if (quickFilter === "lowStock") return isLowStock(f);
-      if (quickFilter === "noCalibration") return !f.hasCalibrations;
-      return true;
-    });
-  }, [filaments, inventoryFilaments, quickFilter, showOutOfStock, inStock, debouncedSearch, typeFilter, vendorFilter]);
+  // The decision itself lives in `src/lib/homeListVisibility.ts` (#712, #847,
+  // #552/#1107) so the chip counts above and these rows cannot drift.
+  const visibleFilaments = useMemo(
+    () =>
+      computeVisibleFilaments(filaments, {
+        quickFilter,
+        showOutOfStock,
+        serverFilterActive,
+        colorActive,
+      }),
+    [filaments, quickFilter, showOutOfStock, serverFilterActive, colorActive],
+  );
+
+  // Color facet: the answer to "what types of <color> do I have?", and the
+  // next step when a color query comes back empty.
+  const colorBreakdown = useMemo(
+    () => (colorFacet ? typeBreakdown(fetchedFilaments, colorFacet) : []),
+    [fetchedFilaments, colorFacet],
+  );
+  const colorBlankDefaultCount = useMemo(
+    // Matching rows only: a template riding along as a group header may still
+    // carry the legacy #808080 default, but it isn't one of the listed rows.
+    () =>
+      colorFacet === "unknown"
+        ? countBlankDefaultColor(visibleFilaments.filter((f) => matchesColorFacet(f, colorFacet)))
+        : 0,
+    [colorFacet, visibleFilaments],
+  );
+  const colorRelaxations = useMemo(
+    () =>
+      colorFacet
+        ? relaxColorQuery(fetchedFilaments, colorFacet, {
+            typeFilter,
+            // Suggestion counts follow the list's own visibility rule, so a
+            // "try" button never promises rows it won't show.
+            countRow: (f) =>
+              colorRowVisible(f as Filament, { quickFilter, showOutOfStock, serverFilterActive }),
+          })
+        : [],
+    [fetchedFilaments, colorFacet, typeFilter, quickFilter, showOutOfStock, serverFilterActive],
+  );
 
   // Parent lookup built from the *full* filament list so variant enrichment
   // works even when the parent has been filtered out of `visibleFilaments` —
@@ -773,11 +803,13 @@ export default function Home() {
   // should inherit.
   const parentLookup = useMemo(() => {
     const map = new Map<string, Filament>();
-    for (const f of filaments) {
+    // Fetched, not color-scoped: a matching variant's template must resolve
+    // for inheritance even when a color facet scoped the list.
+    for (const f of fetchedFilaments) {
       if (!f.parentId) map.set(f._id, f);
     }
     return map;
-  }, [filaments]);
+  }, [fetchedFilaments]);
 
   const groupedFilaments = useMemo(() => {
     // Apply parent-field fallbacks to a variant so inherited nozzle/bed/cost/
@@ -806,7 +838,11 @@ export default function Home() {
     // expand → select-all would then include them. When a server-side
     // search/type/vendor filter is active, `quickFilter` is "all" but
     // `filaments` is already that filtered set.
-    const variantSource = quickFilter === "all" ? filaments : visibleFilaments;
+    //
+    // A color facet is a CONTENT filter too: a group carries only its visible
+    // matching variants, so out-of-stock matches don't tag along and a black
+    // sibling never renders under "Orange".
+    const variantSource = quickFilter === "all" && !colorFacet ? filaments : visibleFilaments;
     const { groups, standalone } = buildFilamentGroups(variantSource, visibleFilaments, {
       enrichVariant,
       parentLookup,
@@ -821,9 +857,35 @@ export default function Home() {
     });
 
     return all;
-  }, [filaments, visibleFilaments, parentLookup, quickFilter, sortKey, sortDir]);
+  }, [filaments, visibleFilaments, parentLookup, quickFilter, colorFacet, sortKey, sortDir]);
+
+  // While a color is active, parent groups render EXPANDED unless the user
+  // collapsed them — the matching variants are the answer, and a collapsed
+  // "Pro PCTG · 1 color" hides it. Collapses are remembered per facet, so
+  // picking another color starts expanded again. ONE predicate drives the
+  // row render, Expand all and `visibleFilamentIds` (#500): if they
+  // disagreed, select-all could tick variants with no visible checkbox.
+  const [colorCollapsed, setColorCollapsed] = useState<{ facet: string; ids: Set<string> }>(
+    () => ({ facet: "", ids: new Set() }),
+  );
+  const isParentExpanded = useCallback(
+    (parentId: string) =>
+      colorFacet
+        ? !(colorCollapsed.facet === colorFacet && colorCollapsed.ids.has(parentId))
+        : expandedParents.has(parentId),
+    [colorFacet, colorCollapsed, expandedParents],
+  );
 
   const toggleExpanded = (parentId: string) => {
+    if (colorFacet) {
+      setColorCollapsed((prev) => {
+        const ids = new Set(prev.facet === colorFacet ? prev.ids : []);
+        if (ids.has(parentId)) ids.delete(parentId);
+        else ids.add(parentId);
+        return { facet: colorFacet, ids };
+      });
+      return;
+    }
     setExpandedParents((prev) => {
       const next = new Set(prev);
       if (next.has(parentId)) next.delete(parentId);
@@ -863,7 +925,7 @@ export default function Home() {
           toast(t("filaments.spools.moveError"), "error");
           return;
         }
-        setFilaments((prev) =>
+        setFetchedFilaments((prev) =>
           prev.map((f) =>
             f._id === filamentId
               ? {
@@ -915,7 +977,7 @@ export default function Home() {
         // tick + bulk-delete hidden variants with no UI cue — the exact bug
         // #500 was about. Only count variant ids as visible when the parent
         // is actually expanded.
-        if (expandedParents.has(item.parent._id)) {
+        if (isParentExpanded(item.parent._id)) {
           for (const v of item.variants) ids.push(v._id);
         }
       } else {
@@ -923,7 +985,7 @@ export default function Home() {
       }
     }
     return ids;
-  }, [groupedFilaments, expandedParents]);
+  }, [groupedFilaments, isParentExpanded]);
 
   // Derive select-all state by MEMBERSHIP, not a count comparison.
   // `selected.size === visible.length` is wrong when the user has N hidden
@@ -995,11 +1057,11 @@ export default function Home() {
             succeeded.add(id);
           } else {
             const body = await res.json().catch(() => null);
-            const name = filaments.find((f) => f._id === id)?.name ?? id;
+            const name = fetchedFilaments.find((f) => f._id === id)?.name ?? id;
             errors.push(body?.error || t("filaments.deleteError", { name }));
           }
         } catch {
-          const name = filaments.find((f) => f._id === id)?.name ?? id;
+          const name = fetchedFilaments.find((f) => f._id === id)?.name ?? id;
           errors.push(t("filaments.deleteError", { name }));
         }
         setBulkProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
@@ -1290,6 +1352,20 @@ export default function Home() {
           const finish = deriveFinish(f.optTags);
           return finish ? <FinishChip finish={finish} className="ml-1.5" /> : null;
         })()}
+        {/* Color facet: this row is listed under the active color through its
+            swatch, not its own family (e.g. named Black, reads dark gray) —
+            say so rather than leave "why is Black under Gray?" unanswered. */}
+        {colorFacet && matchReason(f, colorFacet) === "swatch" && (
+          <span
+            className="ml-1.5 text-[10px] text-gray-500 dark:text-gray-400 border border-gray-300 dark:border-gray-600 px-1 py-0.5 rounded"
+            title={t("colorFacet.matchedBySwatchTitle", {
+              primary: t(`colorFacet.family.${classifyFilament(f)?.primary ?? "unknown"}`),
+              facet: colorFacetLabel(t, colorFacet),
+            })}
+          >
+            {t("colorFacet.matchedBySwatch")}
+          </span>
+        )}
         {isLowStock(f) && (
           <span
             className="ml-1.5 text-[10px] text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 px-1.5 py-0.5 rounded"
@@ -1386,7 +1462,7 @@ export default function Home() {
 
   const renderParentRow = (group: GroupedFilament) => {
     const f = group.parent;
-    const isExpanded = expandedParents.has(f._id);
+    const isExpanded = isParentExpanded(f._id);
     return (
       <>
         <tr
@@ -1568,7 +1644,9 @@ export default function Home() {
         />
       )}
       <div ref={stickyHeaderRef} className="sticky top-[var(--app-header-h)] z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
-      {filaments.length > 0 && (
+      {/* Gated on the FETCH so a color with no matches doesn't also remove
+          the stats line and shift the header. */}
+      {fetchedFilaments.length > 0 && (
         <button
           onClick={() => setShowStats((s) => !s)}
           className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-3"
@@ -1629,7 +1707,10 @@ export default function Home() {
           onChange={setQuickFilter}
           counts={quickFilterCounts}
           trailing={
-            quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && hasAnyInStock ? (
+            // Under a color the #847 fallback is skipped, so the toggle is
+            // never a no-op there — offered even when that color has nothing
+            // in stock (it's then the only way to see the used-up rolls).
+            quickFilter === "all" && !serverFilterActive && outOfStockCount > 0 && (hasAnyInStock || colorActive) ? (
               <button
                 onClick={() => setShowOutOfStock((s) => !s)}
                 aria-pressed={showOutOfStock}
@@ -1756,6 +1837,18 @@ export default function Home() {
         </div>
       </div>
 
+      {(fetchedFilaments.length > 0 || colorActive) && (
+        <ColorFacetFilter
+          facet={colorFacet}
+          onFacetChange={(next) => setColorFacet(next as "" | ColorFacet)}
+          counts={colorCounts}
+          breakdown={colorBreakdown}
+          typeFilter={typeFilter}
+          onTypeSelect={setTypeFilter}
+          blankDefaultCount={colorBlankDefaultCount}
+        />
+      )}
+
       <div className="flex gap-3 mb-4 flex-wrap">
         <input
           type="search"
@@ -1852,8 +1945,53 @@ export default function Home() {
             </div>
           ))}
         </SkeletonRegion>
-      ) : filaments.length === 0 ? (
+      ) : fetchedFilaments.length === 0 ? (
+        // The FETCH decides "no filaments at all" — a color facet that
+        // matches nothing is a no-match, not an empty library.
         <p className="text-gray-500">{t("filaments.noResults")}</p>
+      ) : groupedFilaments.length === 0 && colorFacet ? (
+        // Color facet empty state: suggest the next step (show out of stock,
+        // drop the shade, all materials, a neighboring family) instead of a
+        // bare "nothing matches".
+        <div className="space-y-2">
+          <p className="text-gray-500">
+            {t("colorFacet.empty.noMatch", { facet: colorFacetLabel(t, colorFacet) })}
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {quickFilter === "all" && !showOutOfStock && colorCounts[colorFacet].hidden > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowOutOfStock(true)}
+                className="px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                {t("colorFacet.empty.noneInStock", { count: colorCounts[colorFacet].hidden })}
+              </button>
+            )}
+            {colorRelaxations.map((r) => (
+              <button
+                key={r.kind}
+                type="button"
+                onClick={() => {
+                  if (r.kind === "allMaterials") setTypeFilter("");
+                  else setColorFacet(r.facet);
+                }}
+                className="px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                {r.kind === "dropShade"
+                  ? t("colorFacet.empty.otherShades", {
+                      count: r.count,
+                      facet: colorFacetLabel(t, r.facet),
+                    })
+                  : r.kind === "allMaterials"
+                    ? t("colorFacet.empty.allMaterials")
+                    : t("colorFacet.empty.adjacent", {
+                        count: r.count,
+                        facet: colorFacetLabel(t, r.facet),
+                      })}
+              </button>
+            ))}
+          </div>
+        </div>
       ) : groupedFilaments.length === 0 ? (
         // A client-side quick filter can empty the grouped list even though
         // the fetch returned rows — show a message, not a header-only table.
@@ -1867,13 +2005,18 @@ export default function Home() {
               .filter((g): g is GroupedFilament => "parent" in g)
               .map((g) => g.parent._id);
             if (parentIds.length === 0) return null;
-            const allExpanded = parentIds.every((id) => expandedParents.has(id));
+            const allExpanded = parentIds.every(isParentExpanded);
             return (
               <div className="flex justify-end mb-2">
                 <button
                   type="button"
                   onClick={() =>
-                    setExpandedParents(allExpanded ? new Set() : new Set(parentIds))
+                    colorFacet
+                      ? setColorCollapsed({
+                          facet: colorFacet,
+                          ids: allExpanded ? new Set(parentIds) : new Set(),
+                        })
+                      : setExpandedParents(allExpanded ? new Set() : new Set(parentIds))
                   }
                   className="text-xs text-blue-600 hover:underline"
                 >

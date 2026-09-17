@@ -8,7 +8,12 @@ import {
   INVENTORY_FILTER_SPEC,
   INVENTORY_PERSISTED_KEYS,
 } from "@/lib/listFilterSpecs";
-import { serializeFilterParams, type FilterSpec } from "@/lib/listFilterParams";
+import {
+  parseFilterParams,
+  serializeFilterParams,
+  type FilterSpec,
+} from "@/lib/listFilterParams";
+import { COLOR_FACET_VALUES } from "@/lib/colorFamily";
 
 /**
  * GH #1141. The two invariants that keep the sticky design honest, and that
@@ -81,6 +86,50 @@ describe("list filter specs", () => {
       expect(serializeFilterParams("", spec, state as never)).toBe("");
     });
   }
+});
+
+/**
+ * Color facet: `?color=` carries one generated facet value. It is a filter,
+ * not a preference — the sticky/persisted invariants above already assert it
+ * is neither — so a bare URL means "no color" and an unknown value must fall
+ * back rather than leave a filter the chip row cannot show or clear.
+ */
+describe("home color facet param", () => {
+  const spec = HOME_FILTER_SPEC as FilterSpec;
+  const defaults = () =>
+    Object.fromEntries(Object.keys(spec).map((k) => [k, spec[k].fallback])) as Record<
+      string,
+      unknown
+    >;
+
+  it("round-trips every facet value", () => {
+    for (const facet of COLOR_FACET_VALUES) {
+      const state = { ...defaults(), colorFacet: facet };
+      const qs = serializeFilterParams("", spec, state as never);
+      expect(new URLSearchParams(qs).get("color"), facet).toBe(facet);
+      expect(parseFilterParams(qs, HOME_FILTER_SPEC).colorFacet, facet).toBe(facet);
+    }
+  });
+
+  it("rides `?color=` and is not itself sticky", () => {
+    // Not sticky: absent means "no color", never "use a stored color".
+    const qs = serializeFilterParams("", spec, { ...defaults(), colorFacet: "gray-dark" } as never);
+    expect(new URLSearchParams(qs).get("color")).toBe("gray-dark");
+    expect(spec.colorFacet.sticky).toBeUndefined();
+  });
+
+  it("falls back to no color for an invalid or empty value", () => {
+    for (const raw of ["white-dark", "blue-", "Gray", "grey", "gray-dark ", "purple-medium"]) {
+      const qs = `color=${encodeURIComponent(raw)}`;
+      expect(parseFilterParams(qs, HOME_FILTER_SPEC).colorFacet, raw).toBe("");
+    }
+    expect(parseFilterParams("color=", HOME_FILTER_SPEC).colorFacet).toBe("");
+    expect(parseFilterParams("", HOME_FILTER_SPEC).colorFacet).toBe("");
+  });
+
+  it("an all-default color serializes bare", () => {
+    expect(serializeFilterParams("", spec, defaults() as never)).toBe("");
+  });
 });
 
 /**
