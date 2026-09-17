@@ -596,6 +596,15 @@ describe("matchesColorFacet / matchReason", () => {
     const multi = fil({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [28] });
     expect(matchReason(multi, "multi")).toBe("primary");
     expect(matchReason(multi, "gray-dark")).toBe("swatch");
+    // Clear membership comes only from the see-through optTag, never a
+    // swatch hex — so a tinted transparent is "tag", not "swatch".
+    const transparentRed = fil({ name: "Transparent Red PETG", color: "#D32F2F", optTags: [2] });
+    expect(matchReason(transparentRed, "red")).toBe("primary");
+    expect(matchReason(transparentRed, "clear")).toBe("tag");
+    const clearMulti = fil({ color: "#000000", secondaryColors: ["#FFFFFF"], optTags: [28, 3] });
+    expect(matchReason(clearMulti, "clear")).toBe("tag");
+    expect(matchReason(clearMulti, "black")).toBe("swatch");
+    expect(matchReason(fil({ name: "Clear PETG", color: null, optTags: [2] }), "clear")).toBe("primary");
     const legacy = fil({ name: "Acme Grey", color: "#B37B46" });
     expect(matchReason(legacy, { family: "gray", shade: "mid" })).toBe("primary");
     expect(matchReason(legacy, "brown-mid")).toBe("swatch");

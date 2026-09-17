@@ -18,6 +18,7 @@ import { BLANK_COLOR_HEX } from "./cssNamedColors";
 import {
   COLOR_FACET_VALUES,
   matchesColorFacet,
+  type ColorFacetInput,
   scopeByColorFacet,
   type ColorClassifiable,
   type ColorFacet,
@@ -43,6 +44,27 @@ export interface HomeVisibilityOptions {
   serverFilterActive: boolean;
   /** A color facet scoped the list (client-side, over the full fetch). */
   colorActive: boolean;
+  /** The active facet. When given with `colorActive`, a row that doesn't
+   *  match it (a parent riding along as a group header) is kept only while
+   *  it heads a visible matching row — see `dropOrphanedColorRiders`. */
+  colorFacet?: ColorFacetInput;
+}
+
+/**
+ * Under a color facet, `scopeByColorFacet` keeps a non-matching parent only
+ * as the header of its matching variants. The stock/quick filters can then
+ * drop every such variant while keeping the parent — a pre-#605 legacy parent
+ * holding its OWN spools is in stock on its own — and the list would render
+ * it as a standalone, non-matching row under a chip that counts 0 (and
+ * suppress the color empty state). Drop such orphaned riders.
+ */
+function dropOrphanedColorRiders<F extends HomeListRow>(
+  rows: F[],
+  facet: ColorFacetInput,
+): F[] {
+  const headed = new Set<string>();
+  for (const f of rows) if (f.parentId) headed.add(f.parentId);
+  return rows.filter((f) => headed.has(f._id) || matchesColorFacet(f, facet));
 }
 
 /** Remaining grams below the row's own threshold. Unset/zero threshold, or a
@@ -77,6 +99,19 @@ export function inStockPredicate<F extends HomeListRow>(list: readonly F[]): (f:
  * fetched list — already color-scoped by the caller when a color is active.
  */
 export function computeVisibleFilaments<F extends HomeListRow>(
+  filaments: F[],
+  opts: HomeVisibilityOptions,
+): F[] {
+  const visible = computeVisibleUnpruned(filaments, opts);
+  // An unfiltered pass-through (same reference) keeps every matching row, so
+  // no rider can be orphaned — skip the pass and keep the identity.
+  if (!opts.colorActive || opts.colorFacet == null || opts.colorFacet === "" || visible === filaments) {
+    return visible;
+  }
+  return dropOrphanedColorRiders(visible, opts.colorFacet);
+}
+
+function computeVisibleUnpruned<F extends HomeListRow>(
   filaments: F[],
   opts: HomeVisibilityOptions,
 ): F[] {
@@ -178,7 +213,12 @@ export function colorFacetCounts<F extends HomeListRow & { _id: string }>(
       continue;
     }
     const matching = (showOutOfStock: boolean) =>
-      computeVisibleFilaments(scoped, { ...opts, showOutOfStock, colorActive: true }).filter((f) =>
+      computeVisibleFilaments(scoped, {
+        ...opts,
+        showOutOfStock,
+        colorActive: true,
+        colorFacet: facet,
+      }).filter((f) =>
         matchesColorFacet(f, facet),
       ).length;
     const withHide = matching(false);

@@ -205,6 +205,7 @@
   "colorFacet.overlapHint": "A filament can be listed under more than one color when its name and swatch disagree, so color counts can add up to more than your total.",
   "colorFacet.sentinelHint": "{count} of these use(s) the default gray #808080, which counts as no color.",
   "colorFacet.empty.noMatch": "No {facet} filaments match.",
+  "colorFacet.empty.noMatchUnknown": "No filaments without a color match.",
   "colorFacet.empty.noneInStock": "Show {count} out of stock",
   "colorFacet.empty.otherShades": "{count} in {facet}, any shade",
   "colorFacet.empty.allMaterials": "Look in all materials",

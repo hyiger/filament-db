@@ -497,18 +497,22 @@ export function matchesColorFacet(f: ColorClassifiable, facet: ColorFacetInput):
 
 /** Why `f` matches `facet`: "primary" when it's the filament's own family
  *  (and shade, if one is asked for); "swatch" when it matched only through
- *  additive membership — e.g. named Black, swatch dark gray, under Gray ·
- *  Dark — so the UI can say so; null when it doesn't match. */
+ *  a swatch color's additive membership — e.g. named Black, swatch dark gray,
+ *  under Gray · Dark — so the UI can say so; "tag" when it matched Clear only
+ *  through its transparent/translucent optTag (Clear membership never comes
+ *  from a swatch hex, so "its swatch also reads Clear" would be false); null
+ *  when it doesn't match. */
 export function matchReason(
   f: ColorClassifiable,
   facet: ColorFacetInput,
-): "primary" | "swatch" | null {
+): "primary" | "swatch" | "tag" | null {
   const parsed = toFacet(facet);
   if (!parsed || !matchesColorFacet(f, parsed)) return null;
   const c = classifyFilament(f)!;
   const isPrimary =
     c.primary === parsed.family && (parsed.shade === null || c.primaryShade === parsed.shade);
-  return isPrimary ? "primary" : "swatch";
+  if (isPrimary) return "primary";
+  return parsed.family === "clear" ? "tag" : "swatch";
 }
 
 /** Narrow a list to `facet`: matching rows, plus the templates that head at

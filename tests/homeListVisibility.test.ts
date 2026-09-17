@@ -279,6 +279,36 @@ describe("computeVisibleFilaments — color active", () => {
     expect(computeVisibleFilaments(scoped, { ...opts, colorActive: false })).toBe(scoped);
   });
 
+  it("drops a non-matching legacy parent once its matching variants are hidden", () => {
+    // Pre-#605 legacy parent: black, holds its OWN in-stock spool, so it is
+    // not a template and is in stock by itself. Its only orange variant has
+    // no spool. Scoping keeps the parent as the variant's header; the stock
+    // hide then drops the variant — the parent must not render alone.
+    const p = row({ _id: "lp", name: "Legacy PETG", color: "#000000", hasVariants: true, spoolsSpec: "A" });
+    const v = row({ name: "Legacy PETG Orange", parentId: "lp", color: "#F57C00", spoolsSpec: "" });
+    const lib = [p, v];
+    const scoped = scopeByColorFacet(lib, "orange");
+    expect(scoped).toEqual([p, v]);
+    for (const quickFilter of ["all", "hasSpools"] as const) {
+      expect(
+        computeVisibleFilaments(scoped, { ...opts, quickFilter, colorActive: true, colorFacet: "orange" }),
+      ).toEqual([]);
+    }
+    // Revealed: the variant is back, so its header stays.
+    expect(
+      computeVisibleFilaments(scoped, { ...opts, showOutOfStock: true, colorActive: true, colorFacet: "orange" }),
+    ).toEqual([p, v]);
+    // A legacy parent that MATCHES the facet itself stays without a visible variant.
+    const orangeParent = row({ _id: "op", name: "Legacy Orange", hasVariants: true, spoolsSpec: "A" });
+    const blackVariant = row({ name: "Legacy Orange Black", parentId: "op", color: "#000000", spoolsSpec: "" });
+    const scoped2 = scopeByColorFacet([orangeParent, blackVariant], "orange");
+    expect(
+      computeVisibleFilaments(scoped2, { ...opts, colorActive: true, colorFacet: "orange" }),
+    ).toEqual([orangeParent]);
+    expect(colorFacetCounts(lib, { quickFilter: "all", showOutOfStock: false, serverFilterActive: false }).orange)
+      .toEqual({ shown: 0, hidden: 1 });
+  });
+
   it("a server filter still shows every match (#712)", () => {
     const scoped = scopeByColorFacet(library(), "orange");
     expect(
@@ -318,6 +348,7 @@ describe("colorFacetCounts", () => {
           const rendered = computeVisibleFilaments(scopeByColorFacet(lib, facet), {
             ...o,
             colorActive: true,
+            colorFacet: facet,
           });
           const nonTemplate = rendered.filter((f) => matchesColorFacet(f, facet));
           expect(counts[facet].shown, `${facet} ${JSON.stringify(o)}`).toBe(nonTemplate.length);

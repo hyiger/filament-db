@@ -205,6 +205,7 @@
   "colorFacet.overlapHint": "Ein Filament kann unter mehreren Farben erscheinen, wenn Name und Farbfeld voneinander abweichen – die Farbzählungen können daher die Gesamtzahl übersteigen.",
   "colorFacet.sentinelHint": "Davon {count} mit dem Standardgrau #808080 – zählt als keine Farbe.",
   "colorFacet.empty.noMatch": "Keine Filamente in {facet}.",
+  "colorFacet.empty.noMatchUnknown": "Keine Filamente ohne Farbe gefunden.",
   "colorFacet.empty.noneInStock": "{count} nicht auf Lager anzeigen",
   "colorFacet.empty.otherShades": "{count} in {facet}, beliebiger Farbton",
   "colorFacet.empty.allMaterials": "In allen Materialien suchen",

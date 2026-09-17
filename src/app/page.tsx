@@ -764,8 +764,9 @@ export default function Home() {
         showOutOfStock,
         serverFilterActive,
         colorActive,
+        colorFacet,
       }),
-    [filaments, quickFilter, showOutOfStock, serverFilterActive, colorActive],
+    [filaments, quickFilter, showOutOfStock, serverFilterActive, colorActive, colorFacet],
   );
 
   // Color facet: the answer to "what types of <color> do I have?", and the
@@ -1955,7 +1956,9 @@ export default function Home() {
         // bare "nothing matches".
         <div className="space-y-2">
           <p className="text-gray-500">
-            {t("colorFacet.empty.noMatch", { facet: colorFacetLabel(t, colorFacet) })}
+            {colorFacet === "unknown"
+              ? t("colorFacet.empty.noMatchUnknown")
+              : t("colorFacet.empty.noMatch", { facet: colorFacetLabel(t, colorFacet) })}
           </p>
           <div className="flex flex-wrap gap-2">
             {quickFilter === "all" && !showOutOfStock && colorCounts[colorFacet].hidden > 0 && (
