@@ -3909,7 +3909,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Location"
+                    "$ref": "#/components/schemas/LocationWithStats"
                   }
                 }
               }
@@ -8844,6 +8844,34 @@
         },
         "required": [
           "name"
+        ]
+      },
+      "LocationWithStats": {
+        "description": "A location as returned by `GET /api/locations`. The three statistics fields are present only when the request passes `stats=true`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Location"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "spoolCount": {
+                "type": "integer",
+                "readOnly": true,
+                "description": "Non-retired spools at this location. Only with `stats=true`."
+              },
+              "retiredSpoolCount": {
+                "type": "integer",
+                "readOnly": true,
+                "description": "Retired spools at this location. Only with `stats=true`."
+              },
+              "totalGrams": {
+                "type": "number",
+                "readOnly": true,
+                "description": "Remaining grams across the non-retired spools at this location. Only with `stats=true`."
+              }
+            }
+          }
         ]
       },
       "LocationInput": {
