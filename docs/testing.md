@@ -21,7 +21,7 @@ npm run test:coverage
 
 ## Test Structure
 
-Tests live under `tests/` and mirror the `src/` and `electron/` layout. Files cover:
+Tests live in a flat `tests/` directory, with file names mapping to the `src/` modules and routes (and `electron/` modules) they cover; the only subdirectory is `tests/fixtures/tspl/` (hardware-verified TSPL `.prn` jobs). Files cover:
 
 - **Domain decoders/encoders** — OpenPrintTag CBOR, NDEF wrapping, Bambu Lab MIFARE, NFC roundtrip
 - **Parsers and importers** — INI, CSV/XLSX, Prusament QR, TDS (with AI provider mocks), spool CSV import
@@ -58,7 +58,7 @@ Tests run against Node.js 20 and 22. Coverage reports are uploaded as artifacts 
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
-Runs automatically on version tags (`v*`). The full CI gate (lint, root + Electron typecheck, coverage-enforced tests, `npm audit`, build, and the standalone smoke test) runs **once** via the reusable `ci-gate.yml` workflow in a single `gate` job (#852); the six platform build legs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) `needs: gate`, so a failing gate blocks the whole release rather than being re-run per platform.
+Runs automatically on version tags (`v*`). The full CI gate (lint, root + Electron typecheck, coverage-enforced tests, the security audit gate `node scripts/audit-gate.mjs` (an `npm audit` wrapper with a reviewed `.audit-allowlist.json`), build, and the standalone smoke test) runs **once** via the reusable `ci-gate.yml` workflow in a single `gate` job (#852); the six platform build legs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) `needs: gate`, so a failing gate blocks the whole release rather than being re-run per platform.
 
 ## Test Setup
 

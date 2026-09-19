@@ -97,6 +97,18 @@
     {
       "name": "Setup",
       "description": "Database connectivity"
+    },
+    {
+      "name": "NFC",
+      "description": "Server-side NFC tag decoding and database matching (used by the mobile scanner app)"
+    },
+    {
+      "name": "Labels",
+      "description": "Label printing through the desktop app's OS print system"
+    },
+    {
+      "name": "Maintenance",
+      "description": "Read-only data-health scans (name conflicts, abrasive-filament / nozzle mismatches)"
     }
   ],
   "paths": {
@@ -130,7 +142,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Case-insensitive regex search on filament name"
+            "description": "Case-insensitive substring search on filament name (regex metacharacters are escaped, so the value matches literally)"
           },
           {
             "name": "family",
@@ -296,7 +308,7 @@
                                 "items": {
                                   "type": "integer"
                                 },
-                                "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (28 = gradual_color_change, 29 = coextruded) so client chips can render the right swatch shape."
+                                "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (27 = gradient / gradual_color_change, 28 = dual_color, 29 = triple_color \u2014 28 and 29 both render as coextruded) so client chips can render the right swatch shape."
                               }
                             }
                           }
@@ -436,10 +448,10 @@
           "Filaments"
         ],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first \u2014 so a renamed preset isn't orphaned \u2014 then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative \u2014 a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) \u2014 \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #872: a per-nozzle preset from the bulk export fan-out carries a `filamentdb_nozzle` config hint (`\"<diameter> <type>[ HF]\"`); the sync treats it as a per-nozzle preset when the hint is present AND either the URL is an ObjectId or the URL name is exactly `\"<stored name> <hint>\"`. A recognized per-nozzle preset routes its nozzle-specific keys to the hinted nozzle's calibration entry even without query params (diameter, type and HF flag are parsed from the hint; explicit nozzle_diameter / high_flow params still win) and is exempt from the `name_id_mismatch` 409. When the suffixed name matches no filament (and no filamentdb_id resolves), the route retries the BASE name (the URL name minus the ` <hint>` suffix) instead of returning 404. The ObjectId-path rename below is suppressed whenever the config carries a `filamentdb_nozzle` hint. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first \u2014 so a renamed preset isn't orphaned \u2014 then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative \u2014 a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) \u2014 \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
         "parameters": [
           {
-            "$ref": "#/components/parameters/FilamentId"
+            "$ref": "#/components/parameters/FilamentIdOrName"
           },
           {
             "name": "nozzle_diameter",
@@ -481,7 +493,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "PrusaSlicer INI key-value pairs to sync back (e.g. filament_type, temperature, bed_temperature). An optional `filamentdb_id` key (the filament's _id) routes the update to that filament by id first (#867); it is consumed for routing and never stored in the settings bag."
+                    "description": "PrusaSlicer INI key-value pairs to sync back (e.g. filament_type, temperature, bed_temperature). An optional `filamentdb_id` key (the filament's _id) routes the update to that filament by id first (#867), and an optional `filamentdb_nozzle` key (#872) marks a per-nozzle preset and routes its calibration keys to that nozzle (see the operation description); both are consumed for routing and never stored in the settings bag."
                   }
                 }
               }
@@ -703,7 +715,7 @@
                         "items": {
                           "type": "integer"
                         },
-                        "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (28 = gradual_color_change, 29 = coextruded) so client swatches can render stripes vs gradient vs solid for trashed multi-color filaments."
+                        "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (27 = gradient / gradual_color_change, 28 = dual_color, 29 = triple_color \u2014 28 and 29 both render as coextruded) so client swatches can render stripes vs gradient vs solid for trashed multi-color filaments."
                       },
                       "cost": {
                         "type": "number",
@@ -1253,7 +1265,7 @@
         "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer and OrcaSlicer to auto-adjust filament settings when the user switches printer presets. Optional high_flow, nozzle_type, and bed_type params disambiguate multiple calibrations at the same diameter (a type/bed miss falls back to a same-diameter entry rather than 404ing). With format=orcaslicer the response returns OrcaSlicer key names + array values under calibration_orca instead of the default calibration object.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/FilamentId"
+            "$ref": "#/components/parameters/FilamentIdOrName"
           },
           {
             "name": "nozzle_diameter",
@@ -1514,7 +1526,7 @@
         "description": "Checks whether any spool of this filament has enough remaining filament (by weight in grams) for a print job. If no spools or no spool weight data exists, returns ok: true (no data = no warning). Used by PrusaSlicer to warn after slicing if insufficient filament.",
         "parameters": [
           {
-            "$ref": "#/components/parameters/FilamentId"
+            "$ref": "#/components/parameters/FilamentIdOrName"
           },
           {
             "name": "weight",
@@ -1624,7 +1636,21 @@
           "Filaments"
         ],
         "summary": "Export filaments as INI",
-        "description": "Exports all filaments as a PrusaSlicer-compatible INI config bundle. Generates one [filament:Name] section per filament with base settings; nozzle-specific calibration data is applied dynamically by PrusaSlicer via the per-filament calibration endpoint.",
+        "description": "Legacy alias for GET /api/filaments/prusaslicer (GH #341): it delegates to that route, so it accepts the same query parameters, returns the same bundle and the same error responses, and differs only in the advertised download filename (`filament_profiles.ini`). See GET /api/filaments/prusaslicer for the bundle shape, the template exclusion and the per-nozzle fan-out.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SlicerExportType"
+          },
+          {
+            "$ref": "#/components/parameters/SlicerExportVendor"
+          },
+          {
+            "$ref": "#/components/parameters/SlicerExportIds"
+          },
+          {
+            "$ref": "#/components/parameters/SlicerExportPrinter"
+          }
+        ],
         "responses": {
           "200": {
             "description": "INI file download",
@@ -1636,6 +1662,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/SlicerExportBadRequest"
           }
         }
       }
@@ -1771,9 +1800,19 @@
                                 "nullable": true,
                                 "description": "Primary color hex from the Atlas source. May be null for coextruded filaments."
                               },
-                              "parentId": {
-                                "type": "string",
-                                "nullable": true
+                              "temperatures": {
+                                "type": "object",
+                                "description": "Only the nozzle and bed subfields are projected.",
+                                "properties": {
+                                  "nozzle": {
+                                    "type": "number",
+                                    "nullable": true
+                                  },
+                                  "bed": {
+                                    "type": "number",
+                                    "nullable": true
+                                  }
+                                }
                               }
                             }
                           }
@@ -2397,7 +2436,7 @@
           "Nozzles"
         ],
         "summary": "Delete nozzle",
-        "description": "Soft-deletes a nozzle. Blocked if any filament references it in compatibleNozzles or calibrations.",
+        "description": "Soft-deletes a nozzle. Blocked if any filament (including trashed filaments) references it in compatibleNozzles or calibrations, or if it is installed on any live printer.",
         "parameters": [
           {
             "$ref": "#/components/parameters/NozzleId"
@@ -2421,7 +2460,7 @@
             }
           },
           "400": {
-            "description": "Cannot delete \u2014 referenced by filaments",
+            "description": "Cannot delete \u2014 referenced by filaments or installed on a printer",
             "content": {
               "application/json": {
                 "schema": {
@@ -3683,7 +3722,7 @@
             }
           },
           "400": {
-            "description": "Invalid JSON or duplicate bed type",
+            "description": "Invalid JSON or a schema validation failure (e.g. missing name or material). A duplicate name returns 409.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3864,13 +3903,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Array of locations",
+            "description": "Array of locations. With `stats=true` each row additionally carries `spoolCount`, `retiredSpoolCount` and `totalGrams` (remaining grams of non-retired spools).",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object"
+                    "$ref": "#/components/schemas/LocationWithStats"
                   }
                 }
               }
@@ -3888,7 +3927,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "$ref": "#/components/schemas/LocationInput"
               }
             }
           }
@@ -3899,13 +3938,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Location"
                 }
               }
             }
           },
           "400": {
-            "description": "Invalid JSON or duplicate location",
+            "description": "Invalid JSON, `desiccantChangedAt` not an ISO date string or null, or a schema validation failure (e.g. missing name, humidity outside 0\u2013100). A duplicate name returns 409.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3950,7 +3989,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Location"
                 }
               }
             }
@@ -3977,7 +4016,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "type": "object"
+                "$ref": "#/components/schemas/LocationInput"
               }
             }
           }
@@ -3988,7 +4027,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "$ref": "#/components/schemas/Location"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid JSON, `desiccantChangedAt` not an ISO date string or null, or a schema validation failure (e.g. humidity outside 0\u2013100)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4111,31 +4160,19 @@
           "OrcaSlicer"
         ],
         "summary": "Export OrcaSlicer profiles",
-        "description": "Exports resolved filament profiles as OrcaSlicer-compatible JSON.",
+        "description": "Exports resolved filament profiles as OrcaSlicer-compatible JSON. TEMPLATES (filaments with live variants, GH #605) are excluded from the emitted profiles \u2014 they are still loaded so their variants resolve inherited values through them.",
         "parameters": [
           {
-            "name": "type",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by filament type"
+            "$ref": "#/components/parameters/SlicerExportType"
           },
           {
-            "name": "vendor",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by vendor name"
+            "$ref": "#/components/parameters/SlicerExportVendor"
           },
           {
-            "name": "ids",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Comma-separated filament IDs"
+            "$ref": "#/components/parameters/SlicerExportIds"
+          },
+          {
+            "$ref": "#/components/parameters/SlicerExportPrinter"
           }
         ],
         "responses": {
@@ -4151,6 +4188,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/SlicerExportBadRequest"
           }
         }
       },
@@ -4218,7 +4258,7 @@
           "OrcaSlicer"
         ],
         "summary": "Export one filament as an OrcaSlicer preset",
-        "description": "Downloads a single filament as an OrcaSlicer filament-preset `.json` (one preset object, not the array the bundle route `/api/filaments/orcaslicer` returns). Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent so the preset carries full effective values.",
+        "description": "Downloads a single filament as an OrcaSlicer filament-preset `.json` (one preset object, not the array the bundle route `/api/filaments/orcaslicer` returns). Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent so the preset carries full effective values. A TEMPLATE (a filament with live color variants, GH #605) is not exportable and returns 400 `template_not_exportable` \u2014 export a color variant instead.",
         "parameters": [
           {
             "name": "id",
@@ -4237,6 +4277,16 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The filament is a template (has live color variants, GH #605) and cannot be exported \u2014 export one of its color variants instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateNotExportable"
                 }
               }
             }
@@ -4325,7 +4375,7 @@
           "PrusaSlicer"
         ],
         "summary": "Export one filament as a PrusaSlicer config bundle",
-        "description": "Downloads a single filament as a PrusaSlicer config bundle `.ini` (a one-filament bundle). Import via PrusaSlicer \u2192 File \u2192 Import \u2192 Import Config Bundle. Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent.",
+        "description": "Downloads a single filament as a PrusaSlicer config bundle `.ini` (a one-filament bundle). Import via PrusaSlicer \u2192 File \u2192 Import \u2192 Import Config Bundle. Sets a `Content-Disposition: attachment` header with a filename derived from the filament name. Variants are resolved against their parent. A TEMPLATE (a filament with live color variants, GH #605) is not exportable and returns 400 `template_not_exportable` \u2014 export a color variant instead.",
         "parameters": [
           {
             "name": "id",
@@ -4344,6 +4394,16 @@
               "text/plain": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The filament is a template (has live color variants, GH #605) and cannot be exported \u2014 export one of its color variants instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateNotExportable"
                 }
               }
             }
@@ -4367,7 +4427,7 @@
           "OrcaSlicer"
         ],
         "summary": "Export one filament as a Bambu Studio preset",
-        "description": "Downloads a single filament as a Bambu Studio filament-preset `.json`. Bambu Studio and OrcaSlicer share the filament-preset schema, so this reuses the OrcaSlicer generator with one Bambu-specific tweak: `from` is set to `User` so Bambu Studio files it as a user preset on import. No `inherits` base preset is set (the server can't know the user's installed system presets), so the exported preset is standalone. Variants are resolved against their parent.",
+        "description": "Downloads a single filament as a Bambu Studio filament-preset `.json`. Bambu Studio and OrcaSlicer share the filament-preset schema, so this reuses the OrcaSlicer generator with one Bambu-specific tweak: `from` is set to `User` so Bambu Studio files it as a user preset on import. No `inherits` base preset is set (the server can't know the user's installed system presets), so the exported preset is standalone. Variants are resolved against their parent. A TEMPLATE (a filament with live color variants, GH #605) is not exportable and returns 400 `template_not_exportable` \u2014 export a color variant instead.",
         "parameters": [
           {
             "name": "id",
@@ -4386,6 +4446,16 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The filament is a template (has live color variants, GH #605) and cannot be exported \u2014 export one of its color variants instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateNotExportable"
                 }
               }
             }
@@ -6045,6 +6115,12 @@
                   }
                 }
               }
+            },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "The snapshot JSON (as produced by GET /api/snapshot) sent directly as the raw request body. Any non-multipart request is read this way."
+              }
             }
           }
         },
@@ -6126,6 +6202,16 @@
               }
             }
           },
+          "413": {
+            "description": "Snapshot larger than 50 MB (uploaded file size, declared Content-Length, or buffered raw body bytes)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Restore failed (rolled back)",
             "content": {
@@ -6197,31 +6283,19 @@
           "PrusaSlicer"
         ],
         "summary": "Export PrusaSlicer config bundle",
-        "description": "Exports filaments as a PrusaSlicer-compatible INI config bundle with one section per filament. Structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag. Calibration overrides are applied dynamically via GET /api/filaments/{id}/calibration.",
+        "description": "Exports filaments as a PrusaSlicer-compatible INI config bundle. Structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag. A filament calibrated on fewer than two distinct nozzles exports as ONE `[filament:Name]` section, and its per-nozzle calibration is applied dynamically via GET /api/filaments/{id}/calibration. A filament calibrated on two or more DISTINCT nozzles (diameter + case-folded type + high-flow) fans out into one flat section PER NOZZLE, named `\"<name> <diameter> <type>[ HF]\"` (e.g. `PLA 0.4 Brass HF`): each bakes that nozzle's filament-scoped calibration (pressure advance is NOT baked \u2014 it stays dynamic via the calibration endpoint) plus a `compatible_printers_condition` on that nozzle's diameter (with a high-flow term only when the same diameter appears in both high-flow states; a user-set condition in the settings bag that is not itself a machine-shaped nozzle-diameter condition is kept instead), and all siblings share one `filamentdb_id` and carry a `filamentdb_nozzle` routing hint for the sync-back (see POST /api/filaments/{id}). TEMPLATES (filaments with live variants, GH #605) are excluded from the emitted bundle \u2014 they are still loaded so their variants resolve inherited values through them.",
         "parameters": [
           {
-            "name": "type",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by filament type"
+            "$ref": "#/components/parameters/SlicerExportType"
           },
           {
-            "name": "vendor",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Filter by vendor name"
+            "$ref": "#/components/parameters/SlicerExportVendor"
           },
           {
-            "name": "ids",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "description": "Comma-separated filament IDs"
+            "$ref": "#/components/parameters/SlicerExportIds"
+          },
+          {
+            "$ref": "#/components/parameters/SlicerExportPrinter"
           }
         ],
         "responses": {
@@ -6234,6 +6308,9 @@
                 }
               }
             }
+          },
+          "400": {
+            "$ref": "#/components/responses/SlicerExportBadRequest"
           }
         }
       },
@@ -6890,7 +6967,7 @@
         "summary": "Scan for name conflicts the trim migration could not repair",
         "description": "Read-only scan (no index build, no writes) using the same classification as the GH #1116 name-trim migration: rows whose stored name has edge whitespace and either collides with an active row when trimmed, or is whitespace-only. Only ACTIVE conflicts are returned, each enriched with per-collection dependent counts (the same predicates the entity DELETE guards refuse on) so a client can offer delete (zero dependents) vs rename. In hybrid deployments this covers the database this server talks to; remote-side conflicts are only visible to the desktop sync service. (GH #1149)",
         "tags": [
-          "maintenance"
+          "Maintenance"
         ],
         "responses": {
           "200": {
@@ -6988,7 +7065,7 @@
         "summary": "Scan for abrasive filaments on unsuitable nozzles",
         "description": "Read-only advisory scan (no writes). Reports filaments that read as abrasive \u2014 `settings.filament_abrasive` on; an abrasive-implying OPT tag (4 ABRASIVE, or a specific material tag: 0 glass fibre, 1 aramid, 19 wood, 20 metal, 21 stone, 22 sparkle, 23 phosphorescent, 24 glow, 31 carbon fibre, 32 kevlar \u2014 tags describing thermal or mechanical behaviour are deliberately excluded); a fibre-reinforced type (CF/GF, with or without a separator, so PA6-CF20 and PETGCF both count); or a filled product name \u2014 that either allow a nozzle which is not hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Templates are excluded: a filament with live variants is not printable stock. Runs on RESOLVED documents, so a variant inheriting its template's nozzle set is judged on the effective set and reports the template in `inheritedFrom`. An explicit `filament_abrasive = \"0\"` suppresses only the weakest (name) heuristic \u2014 never a fibre type or an abrasive tag: the app writes that flag from `form.abrasive` alone while its own predicate also honours OPT tag 4, so a stored `\"0\"` is not a reliable negative. Abrasiveness is inferred, so findings are advisory and nothing is repaired.",
         "tags": [
-          "maintenance"
+          "Maintenance"
         ],
         "responses": {
           "200": {
@@ -7290,6 +7367,15 @@
         },
         "description": "MongoDB ObjectId of the filament"
       },
+      "FilamentIdOrName": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filament name (URL-encoded) or MongoDB ObjectId. A 24-hex value is tried as the ObjectId first and is authoritative; the name lookup runs only when that _id matches no live filament."
+      },
       "NozzleId": {
         "name": "id",
         "in": "path",
@@ -7319,6 +7405,63 @@
           ]
         },
         "description": "GH #1027: opt-in slim response. With `shape=spool` the mutation returns only the AFFECTED spool (`{ spool }`; the DELETE returns `{ deleted: true, spoolId }`) instead of the whole filament document carrying every spool's photoDataUrl blob and usageHistory ledger. Omit the parameter for the historical full-document response (shipped clients rely on it). An unrecognized value is rejected with 400 rather than silently falling back to the fat default."
+      },
+      "SlicerExportType": {
+        "name": "type",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by filament type"
+      },
+      "SlicerExportVendor": {
+        "name": "vendor",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Filter by vendor name"
+      },
+      "SlicerExportIds": {
+        "name": "ids",
+        "in": "query",
+        "schema": {
+          "type": "string"
+        },
+        "description": "Comma-separated filament IDs (each must be a 24-hex ObjectId, else 400)"
+      },
+      "SlicerExportPrinter": {
+        "name": "printer",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Opt-in: narrow the bundle to filaments offerable on this printer's installed nozzles. A 24-hex value is tried as the printer ObjectId first (authoritative); otherwise the value matches a LIVE printer's name verbatim, then trimmed, then case-folded. A filament whose effective (parent-resolved) `compatibleNozzles` is empty is INCLUDED (fail open \u2014 unknown compatibility is not known incompatibility). Omit the parameter for the unfiltered bundle. An unknown printer returns 400 `printer_not_found` rather than an empty bundle."
+      }
+    },
+    "responses": {
+      "SlicerExportBadRequest": {
+        "description": "Invalid `ids` value (`{ error: \"Invalid filament ID(s): ...\" }`), or `printer` matched no live printer (`{ error: \"printer_not_found\", message }`)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "example": "printer_not_found"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "error"
+              ]
+            }
+          }
+        }
       }
     },
     "schemas": {
@@ -7331,6 +7474,26 @@
         },
         "required": [
           "error"
+        ]
+      },
+      "TemplateNotExportable": {
+        "type": "object",
+        "description": "Returned byte-identically by the three single-filament slicer exports (GET /api/filaments/{id}/prusaslicer, /orcaslicer, /bambustudio) when the target is a TEMPLATE \u2014 a filament with live color variants (GH #605), which carries no color or inventory and is not selectable stock in a slicer.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "enum": [
+              "template_not_exportable"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "example": "This filament is a template \u2014 an abstract product line with no colour or inventory. Export one of its colour variants instead."
+          }
+        },
+        "required": [
+          "error",
+          "message"
         ]
       },
       "ParentPromotionRequired": {
@@ -7841,14 +8004,15 @@
           "syncId": {
             "type": "string",
             "nullable": true,
-            "description": "External sync identifier (e.g. PrusaSlicer preset name)"
+            "readOnly": true,
+            "description": "Hybrid-sync cross-database identifier, assigned by the desktop hybrid-sync engine. Server-owned: POST and PUT strip it from the request body. Slicer preset matching uses `filamentdb_id` / the preset name, never syncId."
           },
           "optTags": {
             "type": "array",
             "items": {
               "type": "integer"
             },
-            "description": "Optional tag flags (bit field values)"
+            "description": "OpenPrintTag tag IDs (integers from the OPT tag enum, e.g. 4 = abrasive, 27 = gradient, 28 = dual_color, 29 = triple_color) \u2014 not bit-field values"
           },
           "bedTypeTemps": {
             "type": "array",
@@ -7924,10 +8088,20 @@
           "settings": {
             "type": "object",
             "additionalProperties": {
-              "type": "string",
-              "nullable": true
+              "oneOf": [
+                {
+                  "type": "string",
+                  "nullable": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
             },
-            "description": "Raw slicer key-value settings (e.g. extrusion_multiplier, start_filament_gcode)"
+            "description": "Raw slicer key-value settings (e.g. extrusion_multiplier, start_filament_gcode). A value is a string, null (PrusaSlicer `nil` \u2014 inherit from the parent preset), or, since GH #678 / PR #1170, an array of strings for a multi-element slicer value (a per-extruder list, `compatible_printers`) \u2014 array elements are stored raw (unquoted/unescaped); the INI export re-serializes them as an all-quoted `;`-separated list."
           },
           "createdAt": {
             "type": "string",
@@ -8061,6 +8235,18 @@
                   "type": "string",
                   "nullable": true,
                   "description": "Spool's location id (#616) \u2014 projected so the home-page stat line can count distinct spool locations without a Location join. Null for spools with no assigned location."
+                },
+                "purchaseDate": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true,
+                  "description": "#941: projected to drive the sortable Purchased column on the home list (earliest spool date per filament)."
+                },
+                "openedDate": {
+                  "type": "string",
+                  "format": "date-time",
+                  "nullable": true,
+                  "description": "#941: projected to drive the sortable Opened column on the home list (earliest spool date per filament)."
                 }
               }
             }
@@ -8219,10 +8405,6 @@
             "type": "string",
             "nullable": true
           },
-          "syncId": {
-            "type": "string",
-            "nullable": true
-          },
           "optTags": {
             "type": "array",
             "items": {
@@ -8266,8 +8448,18 @@
           "settings": {
             "type": "object",
             "additionalProperties": {
-              "type": "string",
-              "nullable": true
+              "oneOf": [
+                {
+                  "type": "string",
+                  "nullable": true
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              ]
             }
           }
         },
@@ -8593,8 +8785,120 @@
           }
         },
         "required": [
+          "name",
+          "material"
+        ]
+      },
+      "Location": {
+        "type": "object",
+        "description": "Inventory location \u2014 where a physical spool lives (v1.11). Spools reference it via `spools[].locationId`. DELETE is refused while any spool (including retired spools and spools on trashed filaments) still references it.",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "example": "Drybox #1"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Free-form category used to group locations (the UI offers shelf, drybox, cabinet, printer, other). Not constrained.",
+            "default": "shelf",
+            "example": "drybox"
+          },
+          "humidity": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Optional humidity reading (%RH) the user updates manually."
+          },
+          "desiccantChangedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "description": "v1.69: when the desiccant was last changed. Meaningful for `kind: drybox`, where it drives the DESICCANT CHANGED line on a printed dry-box label."
+          },
+          "notes": {
+            "type": "string"
+          },
+          "syncId": {
+            "type": "string",
+            "nullable": true,
+            "readOnly": true
+          },
+          "_deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
           "name"
         ]
+      },
+      "LocationWithStats": {
+        "description": "A location as returned by `GET /api/locations`. The three statistics fields are present only when the request passes `stats=true`.",
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Location"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "spoolCount": {
+                "type": "integer",
+                "readOnly": true,
+                "description": "Non-retired spools at this location. Only with `stats=true`."
+              },
+              "retiredSpoolCount": {
+                "type": "integer",
+                "readOnly": true,
+                "description": "Retired spools at this location. Only with `stats=true`."
+              },
+              "totalGrams": {
+                "type": "number",
+                "readOnly": true,
+                "description": "Remaining grams across the non-retired spools at this location. Only with `stats=true`."
+              }
+            }
+          }
+        ]
+      },
+      "LocationInput": {
+        "type": "object",
+        "description": "Writable location fields. PUT applies an explicit allowlist (GH #424) \u2014 only these keys are applied, any other key is silently ignored. POST strips `_id`, `_deletedAt`, `createdAt`, `updatedAt`, `__v` and `syncId`.",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "humidity": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 100
+          },
+          "desiccantChangedAt": {
+            "type": "string",
+            "nullable": true,
+            "description": "ISO date string (e.g. `2026-07-28`) or null. An impossible-but-ISO-shaped date (e.g. `2026-02-30`) or a non-string value is rejected with 400 rather than rolled over by Mongoose."
+          },
+          "notes": {
+            "type": "string"
+          }
+        }
       },
       "PrinterInput": {
         "type": "object",

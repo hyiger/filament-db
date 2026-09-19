@@ -16,7 +16,7 @@
 | `GET` | `/api/filaments/trash` | List soft-deleted filaments (powers the `/trash` UI) |
 | `POST` | `/api/filaments/:id/restore` | Restore a soft-deleted filament from the trash (returns 409 on name collision) |
 | `POST` | `/api/filaments/:id/promote` | Convert a filament that already has variants into a template — move its own color/spools onto a new variant |
-| `GET` | `/api/filaments/export` | Download all filaments as a PrusaSlicer INI file |
+| `GET` | `/api/filaments/export` | Download all filaments (templates excluded) as a PrusaSlicer INI file. Query params: `type`, `vendor`, `ids`, `printer` |
 | `GET` | `/api/filaments/export-csv` | Download all filaments as a CSV file |
 | `GET` | `/api/filaments/export-xlsx` | Download all filaments as an XLSX spreadsheet |
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
@@ -37,9 +37,9 @@
 | `GET` | `/api/filaments/:id/calibration` | Get calibration data for a filament and nozzle diameter |
 | `GET` | `/api/filaments/:id/spool-check` | Check if a spool has enough filament for a print job |
 | `POST` | `/api/filaments/:id` | Sync a filament preset back from PrusaSlicer |
-| `GET` | `/api/filaments/:id/prusaslicer` | Download one filament as a PrusaSlicer preset (`.ini`) |
-| `GET` | `/api/filaments/:id/orcaslicer` | Download one filament as an OrcaSlicer preset (`.json`) |
-| `GET` | `/api/filaments/:id/bambustudio` | Download one filament as a Bambu Studio preset (.json) |
+| `GET` | `/api/filaments/:id/prusaslicer` | Download one filament as a PrusaSlicer preset (`.ini`); `400 template_not_exportable` for a template |
+| `GET` | `/api/filaments/:id/orcaslicer` | Download one filament as an OrcaSlicer preset (`.json`); `400 template_not_exportable` for a template |
+| `GET` | `/api/filaments/:id/bambustudio` | Download one filament as a Bambu Studio preset (.json); `400 template_not_exportable` for a template |
 | `POST` | `/api/filaments/:id/bambustudio` | Sync a Bambu Studio preset INTO this filament (pinned by id) |
 | `POST` | `/api/filaments/bambustudio` | Import a Bambu Studio preset by name (upsert + auto-detect calibration) |
 | `GET` | `/api/filaments/colors` | Distinct `(colorName, color)` pairs across non-deleted filaments (backs the color-name typeahead) |
@@ -116,6 +116,7 @@ Every route that attaches a spool refuses when the target is a template:
 - `POST /api/filaments/:id/spools` — returns the body above with `400`
 - `POST /api/prusament/import` — same `400` for the `add-spool` action and for the `create` action's "a filament with this name already exists" fallback
 - `POST /api/spools/import` — per row: the same `message` becomes that row's `error` and the rest of the batch still runs
+- `POST /api/print-history` — `400` with the same `message` as `error` when a usage entry would have to migrate a legacy roll on a template (the error code itself is not included)
 
 Spools a legacy parent already carries stay in place, stay counted, and stay editable. The CSV spool importer splits accordingly: a row that would **create** a spool on a template fails, while a row whose `spoolId` matches an existing subdocument (an update) is still applied.
 
@@ -210,7 +211,9 @@ The merged body then flows through the normal create path (same field stripping,
 
 Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `calibrations.printer` populated with full documents. Also includes:
 
-- `_variants` -- array of child variant filaments (`_id`, `name`, `color`, `cost`)
+- `_variants` -- array of live child variant filaments (`_id`, `name`, `color`, `cost`, plus effective `secondaryColors` and `optTags` — a variant with an empty array falls back to this filament's)
+- `_hasOwnOptLink` -- `true` when this row itself carries an OpenPrintTag link (`settings.openprinttag_slug`), computed before inheritance so a variant doesn't report its parent's link
+- `_hasTrashedVariants` -- `true` when non-purged variants of this filament sit in the trash (GH #1103); `_variants` is live-only, so this is what surfaces "Convert to template" on a parent whose variants are all trashed
 - Inherited field resolution when the filament has a `parentId` -- fields not set on the variant are inherited from the parent, and an `_inherited` array lists which fields were inherited
 
 Query parameters:
@@ -241,7 +244,7 @@ Refusal cases:
 
 ### GET /api/filaments/trash
 
-Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `cost`, `parentId`, `_deletedAt`. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
+Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` and `optTags` are the effective arrays (a variant's empty array falls back to its parent's) so the trash swatch renders multi-color and finish correctly. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
 
 ```json
 [
@@ -251,6 +254,8 @@ Returns soft-deleted filaments sorted newest first, with a lightweight projectio
     "vendor": "Prusa",
     "type": "PLA",
     "color": "#1a1a1a",
+    "secondaryColors": [],
+    "optTags": [],
     "cost": 31.99,
     "parentId": null,
     "_deletedAt": "2026-05-09T18:24:11.123Z"
@@ -313,7 +318,7 @@ Refusals:
 
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file. Uses the same generator as `GET /api/filaments/prusaslicer` — structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag, and a filament with calibrations for ≥ 2 distinct nozzles exports one name-suffixed section per nozzle (see that endpoint for the section layout).
+Downloads all filaments as a PrusaSlicer-compatible INI file. This is a thin alias of `GET /api/filaments/prusaslicer` — it delegates to that route and differs only in the download filename (`filament_profiles.ini`) — so it takes the same `type`, `vendor`, `ids` and `printer` query parameters, excludes templates the same way, and returns the same errors. Structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag, and a filament with calibrations for ≥ 2 distinct nozzles exports one name-suffixed section per nozzle (see that endpoint for the section layout).
 
 ### POST /api/filaments/import
 
@@ -335,7 +340,7 @@ Match an NFC tag's decoded data or a scanned Brother label-printer QR against ex
 
 - `instanceId` -- exact instance-ID match (highest-confidence; checked first). As of #732 this resolves against **per-spool** `spools[].instanceId` first (exact-case then case-insensitive), returning the matched spool in `matchedSpool`, then falls back to the **filament-level** `instanceId` (transitional). Same value carried on NFC tags and printed by the label-printer dialog's instance-ID QR mode. A case-only collision (legacy data with both `ABC` and `abc` stored) returns both as `candidates` instead of an arbitrary pick. Max length 128; the value is escaped before the case-insensitive regex so regex-special characters in stored IDs are matched literally.
 - `name` -- material name (exact match, case-insensitive)
-- `vendor` -- brand name (substring match, case-insensitive)
+- `vendor` -- brand name, case-insensitive: an **exact** full-string match when combined with `type` (the tier that can return a confident match, GH #896); a substring match only in the vendor-only fallback, which returns `candidates` and never a `match`
 - `type` -- material type (exact match, case-insensitive)
 
 The parameters are checked in priority order: per-spool `instanceId` → filament-level `instanceId` → `name` → `vendor`+`type` → `vendor` only. If `instanceId` misses, the route falls through to the next branch when the relevant params are also supplied, so a label scan against a since-deleted filament can still surface suggestions instead of 404ing.
@@ -366,7 +371,7 @@ Returns filaments that can serve as parents for color variants, sorted by vendor
 - `search` -- filter by name (case-insensitive regex)
 - `exclude` -- filament ID to exclude from results (e.g., the current filament being edited)
 
-Returns an array of `{ _id, name, vendor, type, color }` objects.
+Returns an array of `{ _id, name, vendor, type, color, hasVariants }` objects — `hasVariants` is `true` when the filament currently has at least one non-deleted variant (drives the picker's parent swatch).
 
 ### POST /api/filaments/parse-ini
 
@@ -666,7 +671,7 @@ Soft-deleted filaments are excluded, and the aggregation's projection never carr
 
 ### GET /api/filaments/prusaslicer
 
-Exports all filaments as a PrusaSlicer-compatible INI config bundle. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. How a filament is split into sections depends on how many **distinct nozzles** it has calibrations for (#876):
+Exports all filaments as a PrusaSlicer-compatible INI config bundle. **Templates are excluded** (#605): a filament with live variants is an abstract product line, not printable stock, so it is never emitted as a preset — its variants still resolve through it and are exported. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. How a filament is split into sections depends on how many **distinct nozzles** it has calibrations for (#876):
 
 - **0 or 1 distinct nozzle** — one `[filament:Name]` section with no calibration baked in. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are applied dynamically by PrusaSlicer Filament Edition via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
 - **≥ 2 distinct nozzles** — one flat, name-suffixed section per distinct nozzle (e.g. `[filament:PLA 0.4 Brass]`), each with that nozzle's **filament-scoped** calibration values **baked in** — extrusion multiplier, retraction, max volumetric speed, and per-calibration temps; **pressure advance is deliberately NOT baked** and stays dynamic via `GET /api/filaments/:id/calibration` (PrusaSlicer has no parent/child model for user filament presets). All sibling sections share one `filamentdb_id` and each carries a `filamentdb_nozzle` routing hint so the sync-back (`POST /api/filaments/:id`) routes updates to the right per-nozzle calibration entry.
@@ -681,6 +686,7 @@ Query parameters:
 - `type` -- filter by filament type (e.g. `PLA`, `PETG`)
 - `vendor` -- filter by vendor name
 - `ids` -- comma-separated list of filament IDs
+- `printer` -- opt-in: a printer id or name (ids are authoritative; names match verbatim, then trimmed, then case-insensitively; only live printers). Keeps only filaments whose effective `compatibleNozzles` share at least one nozzle with that printer's installed nozzles. A filament with **no** compatible nozzles ticked is kept (unknown compatibility is not treated as incompatible). An unknown printer returns `400` with `{ "error": "printer_not_found", "message": "No live printer matches \"…\". …" }` instead of an empty bundle.
 
 Returns `text/plain` INI content.
 
@@ -707,18 +713,19 @@ Returns:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/filaments/orcaslicer` | Export all filaments as OrcaSlicer-compatible JSON profiles (bundle) |
-| `GET` | `/api/filaments/:id/orcaslicer` | Export a single filament as an OrcaSlicer preset (`.json`) |
+| `GET` | `/api/filaments/orcaslicer` | Export all filaments (templates excluded) as OrcaSlicer-compatible JSON profiles (bundle) |
+| `GET` | `/api/filaments/:id/orcaslicer` | Export a single filament as an OrcaSlicer preset (`.json`); `400 template_not_exportable` for a template |
 | `POST` | `/api/filaments/:name-or-id/orcaslicer` | Sync filament settings back from OrcaSlicer |
 
 ### GET /api/filaments/orcaslicer
 
-Exports filaments as an array of OrcaSlicer-compatible JSON profiles. Structured DB fields map to OrcaSlicer keys (e.g. `nozzle_temperature`, `hot_plate_temp`, `filament_flow_ratio`) with values wrapped in single-element arrays per OrcaSlicer's multi-extruder convention. Parent/variant inheritance is resolved before export.
+Exports filaments as an array of OrcaSlicer-compatible JSON profiles. Structured DB fields map to OrcaSlicer keys (e.g. `nozzle_temperature`, `hot_plate_temp`, `filament_flow_ratio`) with values wrapped in single-element arrays per OrcaSlicer's multi-extruder convention. Parent/variant inheritance is resolved before export. **Templates are excluded** (#605): a filament with live variants is an abstract product line, not printable stock, so it is never emitted as a preset — its variants still resolve through it and are exported.
 
 Query parameters:
 - `type` -- filter by filament type (e.g. `PLA`, `PETG`)
 - `vendor` -- filter by vendor name
 - `ids` -- comma-separated list of filament IDs
+- `printer` -- opt-in: a printer id or name (ids are authoritative; names match verbatim, then trimmed, then case-insensitively; only live printers). Keeps only filaments whose effective `compatibleNozzles` share at least one nozzle with that printer's installed nozzles. A filament with **no** compatible nozzles ticked is kept (unknown compatibility is not treated as incompatible). An unknown printer returns `400` with `{ "error": "printer_not_found", "message": "No live printer matches \"…\". …" }` instead of an empty bundle.
 
 Returns `application/json`: an array of OrcaSlicer profile objects.
 
@@ -744,13 +751,22 @@ Bambu Studio is a fork of OrcaSlicer and the two share the filament-preset `.jso
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET`  | `/api/filaments/:id/bambustudio` | Download one filament as a Bambu Studio preset (`.json`) |
+| `GET`  | `/api/filaments/:id/bambustudio` | Download one filament as a Bambu Studio preset (`.json`); `400 template_not_exportable` for a template |
 | `POST` | `/api/filaments/:id/bambustudio` | Sync a Bambu Studio preset INTO this specific filament (pinned by id) |
 | `POST` | `/api/filaments/bambustudio`     | Import a Bambu Studio preset by name (upsert) |
 
 ### GET /api/filaments/:id/bambustudio
 
 Downloads a single filament as a Bambu Studio filament-preset `.json`. Variants are resolved against their parent before serialisation. No `inherits` base preset is set — the server can't know which system presets the user has installed, so the exported preset is standalone (imports fine via Bambu Studio's custom-filament import; the user just doesn't get system-preset inheritance).
+
+All three single-filament exports (`GET /api/filaments/:id/prusaslicer`, `/orcaslicer`, `/bambustudio`) refuse a **template** — a filament with live variants has no spool to load — with `400`:
+
+```json
+{
+  "error": "template_not_exportable",
+  "message": "This filament is a template — an abstract product line with no colour or inventory. Export one of its colour variants instead."
+}
+```
 
 ### POST /api/filaments/:id/bambustudio
 
@@ -790,7 +806,9 @@ Response:
 }
 ```
 
-- `updated` -- top-level fields modified on the filament document.
+- `created` / `updated` -- booleans, always opposites: `created: true` when the bulk route created a new filament, `updated: true` when it updated an active row or resurrected a trashed one. The per-id sync always returns `created: false, updated: true`.
+- `calibrationUnresolved` -- `true` when a calibration hint was present but no unique `(printer, nozzle)` could be resolved (omitted otherwise).
+- `_strippedTemplateFields` -- present only when the target is a template and per-variant fields were dropped (see *Filament templates*).
 - `settingsAdded` -- unknown keys that were preserved in the `settings` bag.
 
 404 if the filament name / id doesn't resolve; 400 if the body isn't valid JSON.
@@ -831,6 +849,7 @@ Each `data:` payload is the same JSON shape:
     "color": "#000000"
   },
   "candidates": [],
+  "matchedSpool": { "_id": "65f00000000000000000ef01", "instanceId": "2acc21072a", "label": "AMS slot 1" },
   "decoded": {
     "materialName": "Prusament PLA Galaxy Black",
     "brandName": "Prusament",
@@ -845,6 +864,7 @@ Each `data:` payload is the same JSON shape:
 Field notes:
 - `filament` is the matched DB row, or `null` when no row matches. Slicers key presets by name and should switch on `filament.name` when non-null.
 - `candidates` is a short list of plausible alternatives (vendor + type, then vendor-only) when there is no exact match; empty otherwise.
+- `matchedSpool` is the specific spool the tag's `spoolUid` resolved to (`{ _id, instanceId, label }`, #732), or `null` for a filament-level / heuristic match.
 - `decoded` carries a subset of the tag fields useful to consumers; `tagSource` is `"openprinttag"`, `"opentag3d"`, or `"bambu"`.
 
 Response headers:
@@ -856,7 +876,7 @@ The stream sends a `retry: 5000` prelude (EventSource clients reconnect after 5s
 
 The bus is in-process (Node `EventEmitter` on `globalThis`). "In-process" here means **one Filament DB instance, not one physical machine** — subscribers can be anywhere reachable over HTTP (a Pi running Filament DB can drive PrusaSlicer on a Mac across the LAN; the slicer just connects to `http://<filament-db-host>:3456/api/scan/stream`). What pins to a single machine is the publisher: NFC reads come from the Electron renderer's `NfcProvider`, so the reader must be plugged into whichever box runs the Electron app — a headless Docker / web-only deploy has no `NfcProvider` and never publishes. A horizontally-scaled multi-process deployment would need an external broker behind the bus.
 
-A few network-deploy notes if you go cross-machine: the API is unauthenticated by default (single-user trust model — see the README warning), so be deliberate about which network port 3456 is exposed on. For exposed deployments you can set `FILAMENTDB_API_KEY`, after which every `/api` request — including this SSE stream and the slicer integrations — must send `Authorization: Bearer <key>`; it's a no-op when unset. The Electron-bundled Next.js binds based on the `HOSTNAME` env var; if cross-machine subscribers can't connect, try `HOSTNAME=0.0.0.0`. And because `replay` events carry stale scans across slicer restarts, consumers should filter on `timestamp` if a multi-hour-old tag shouldn't be re-applied.
+A few network-deploy notes if you go cross-machine: the API is unauthenticated by default (single-user trust model — see the README warning), so be deliberate about which network port 3456 is exposed on. For exposed deployments you can set `FILAMENTDB_API_KEY`, after which every `/api` request — including this SSE stream and the slicer integrations — must send `Authorization: Bearer <key>`; it's a no-op when unset. The desktop app's embedded server binds `localhost` only by default and ignores a `HOSTNAME` you set yourself; if cross-machine subscribers can't connect, turn on **Settings → Network Settings → Share on local network** (the electron-store key `exposeToLan`), which rebinds it to `0.0.0.0`. The `HOSTNAME` env var only matters for a standalone deployment you start yourself (the Docker image already sets `HOSTNAME=0.0.0.0`). And because `replay` events carry stale scans across slicer restarts, consumers should filter on `timestamp` if a multi-hour-old tag shouldn't be re-applied.
 
 ### POST /api/scan/publish
 
@@ -874,6 +894,7 @@ Request body:
     "color": "#000000"
   },
   "candidates": [],
+  "matchedSpool": { "_id": "65f00000000000000000ef01", "instanceId": "2acc21072a", "label": "AMS slot 1" },
   "decoded": {
     "materialName": "Prusament PLA Galaxy Black",
     "brandName": "Prusament",
@@ -887,6 +908,7 @@ Request body:
 
 - `filament` -- the matched DB row, or `null` if no row matched.
 - `candidates` -- optional array of plausible alternatives in the same shape as `filament`.
+- `matchedSpool` -- optional `{ _id, instanceId, label }` of the spool whose `instanceId` matched (#732), or `null`. `_id` and `instanceId` must both be strings or the field is published as `null`.
 - `decoded` -- subset of the decoded tag fields. Unknown `tagSource` values are dropped.
 
 The body is validated against an allow-list — unknown fields are stripped before the event is published, so a malformed POST cannot pollute the replay cache.
@@ -1157,7 +1179,7 @@ Clone an existing nozzle into a new row. The clone copies every spec field (diam
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/printers` | List all printers. Query params: `manufacturer` |
+| `GET` | `/api/printers` | List all printers. Query params: `manufacturer`, `includeTrashed` |
 | `POST` | `/api/printers` | Create a new printer |
 | `GET` | `/api/printers/:id` | Get a single printer by ID (populates installed nozzles) |
 | `PUT` | `/api/printers/:id` | Update a printer by ID |
@@ -1168,6 +1190,7 @@ Clone an existing nozzle into a new row. The clone copies every spec field (diam
 Returns an array of printer documents sorted by manufacturer then name, with `installedNozzles` populated. Supports optional query parameters:
 
 - `manufacturer` -- filter by manufacturer name
+- `includeTrashed` -- set to `1` to also return soft-deleted printers (they carry `_deletedAt`, so callers can label them). The `/history` printer filter uses this because a trashed printer's print-history rows remain queryable (#1168).
 
 ### POST /api/printers
 
@@ -1490,11 +1513,17 @@ Per-job ledger of print runs. Decrements spool weights, appends spool-level usag
 
 Validations:
 - `jobLabel` is required, max 200 chars.
-- `usage` must have 1–100 entries, each with a valid `filamentId` and non-negative `grams`.
+- `usage` must have 1–100 entries, each with a valid `filamentId` and non-negative `grams` no greater than `1000000` (`MAX_USAGE_GRAMS`, v1.68.1, #1030 — a larger value is a `400`).
 - `notes` is truncated to 2000 chars.
 - `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; unknown values default to `manual`.
 
-Every referenced filament is fetched and validated **before** any mutation. If any one is missing the whole request aborts with 404 and no spool weights are touched. The writes run inside a MongoDB transaction when the deployment supports it (Atlas always does), and fall back to sequential saves on standalone mongod.
+Every referenced filament is fetched and validated **before** any mutation. If any one is missing the whole request aborts with 404 and no spool weights are touched. A single-filament job's writes run inside a MongoDB transaction when the deployment supports it (Atlas always does), falling back to sequential saves on standalone mongod; a job spanning several filaments always uses sequential per-filament saves.
+
+**Legacy single-spool filaments are migrated first** (#1121). A filament whose stock lives in its top-level `totalWeight` with an empty `spools[]` has no spool to debit, so before debiting the route converts that roll into a real spool subdocument — carrying the filament's `instanceId` onto it so printed labels and NFC tags keep resolving — and sets the filament's top-level `totalWeight` to `null`, exactly as `POST /api/filaments` does. The debit and any later refund then run against that spool. This is a lasting change to the filament document and it happens on the POST even though the body only names the filament. A filament whose spools are all retired is **not** migrated: it still records the usage with `spoolId: null` and no debit.
+
+Refusals besides the validation `400`s:
+- `400` — a usage entry targets a legacy **template** (a filament with live variants that still holds its roll in `totalWeight`). Inventory belongs on its variants, so the route refuses with the `template_no_spools` message (see *Filament templates*) as `error`. On a multi-filament job every target is checked before any of them is migrated.
+- `409` — `"Filament was modified by another request during this job. Please retry."` A concurrent write changed a target filament between read and save; re-fetch and repeat the request.
 
 Each spool `usageHistory` entry the POST writes is stamped with `jobId` set to the new PrintHistory `_id`, so a later `DELETE` can match the exact entries to refund.
 
@@ -1616,7 +1645,7 @@ Per-spool ledger endpoints. Used by the spool detail UI to log direct weight con
 { "grams": 120, "jobLabel": "optional", "date": "optional ISO string" }
 ```
 
-`grams` must be > 0. `jobLabel` max 200 chars.
+`grams` must be > 0 and no greater than `1000000` (`MAX_USAGE_GRAMS`, the same cap as `POST /api/print-history`). `jobLabel` max 200 chars.
 
 ### POST .../dry-cycles
 
@@ -1724,6 +1753,67 @@ Clears the spool from whatever slot it is in. Idempotent — returns `{ "assignm
 
 ---
 
+## Label Printing
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/labels/print` | Render a 24 mm Brother PT-P710BT label for a spool or a storage location and send it to a local printer (v1.81, #1195) |
+
+### POST /api/labels/print
+
+Renders the label server-side and hands the raster bytes to the OS print system — the same transport the desktop app's Print label dialog uses, reachable from a script or agent. The 100 × 150 mm dry-box label (TSPL) is a separate path and is not printed here.
+
+**Authentication — a local print token, not the same-origin guard.** Every request must send the `x-filamentdb-print-token` header. The packaged desktop app mints a fresh token on each run, passes it to its embedded server as `FILAMENTDB_LOCAL_PRINT_TOKEN`, and writes it to a file named `local-print-token` in the app's user-data directory with mode `0600`, so only a process on the same machine can read it. A loopback check isn't used because Next exposes no socket peer address and the `Host` header is client-supplied.
+
+- `404` — no token is configured on this server. This is the answer on Docker and web deployments, and under `npm run electron:dev` (the dev server doesn't receive the token unless you set `FILAMENTDB_LOCAL_PRINT_TOKEN` on it yourself).
+- `403` — the header is missing or doesn't match.
+- `401` — the server sets `FILAMENTDB_API_KEY`; send `Authorization: Bearer <key>` as well as the print token.
+
+Request body — a JSON object. **Unknown top-level keys are rejected with `400`**, so a misspelling such as `dryrun` can't silently fall back to a real print:
+
+```json
+{
+  "instanceId": "2acc21072a",
+  "printer": "FilamentDB_Label",
+  "preset": "vendorOverType",
+  "qrMode": "instanceId",
+  "dryRun": true
+}
+```
+
+- `instanceId` / `locationId` — the subject; provide **exactly one**. `instanceId` is a spool identity (#732, max 128 chars) resolved like `GET /api/filaments/match`; `locationId` must be a valid ObjectId of a live location, and a location label is always forced to the name-only layout.
+- `printer` — an installed CUPS queue name (e.g. `FilamentDB_Label`), or the printer name on Windows. **Required unless `dryRun` is `true`.** A raw `usb://` device URI is **refused with `400`**: the managed queue is rebound per print and CUPS delivers asynchronously, so concurrent requests naming different devices could send a job to the wrong printer — name the installed queue instead.
+- `preset` — a named layout (`nameOnly`, `vendorType`, `vendorOverType`, `typeColor`) applied over the default format. An unknown name is a `400`.
+- `format` — a partial label-format override (`qr`, `lines`, `font`, `orientation`, `invert`, `maxLinesPerField`) applied over the preset and validated strictly: unknown keys, wrong types, bad enum values and an empty `lines` list are `400`s. `orientation: "vertical"` returns `501` — the server renderer doesn't implement it.
+- `qrMode` — spool labels only: `"instanceId"` (default, the bare id) or `"url"` (a deep link to the filament page, with `?spool=<id>` when the id matched a spool).
+- `baseUrl` — origin for URL-mode QR payloads (and location labels); falls back to the request's own `Host`.
+- `dryRun` — a strict boolean (default `false`): render and report, but send nothing to the printer.
+
+String fields must be strings, not blank, and free of control characters.
+
+Returns `200`:
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "printer": null,
+  "lines": ["Prusament", "PETG"],
+  "qrPayload": "2acc21072a",
+  "rasterLines": 312,
+  "bytes": 5123
+}
+```
+
+`printer` is `null` on a dry run. A `warning` string is added when the QR points at a loopback host (it still prints, but won't resolve from another device).
+
+Other refusals:
+- `400` — body not a JSON object; no subject or both; a malformed field; an unusable print target; an unresolvable base URL; or content that can't fit 24 mm tape.
+- `404` — also returned when the location or the spool `instanceId` isn't found.
+- `501` — an unsupported platform or a missing native image backend.
+
+---
+
 ## Internal helper endpoints
 
 These endpoints back specific pages in the first-party UI. Shapes are tuned for those pages and may change without notice across minor releases — external consumers should use the documented public APIs above instead.
@@ -1737,11 +1827,13 @@ Returns:
 {
   "counts": {
     "filaments": 48,
+    "filamentTemplates": 6,
     "nozzles": 3,
     "printers": 2,
     "bedTypes": 4,
     "spools": 62,
-    "retiredSpools": 5
+    "retiredSpools": 5,
+    "totalSpools": 67
   },
   "totalGrams": 38250,
   "lowStock": [
@@ -1750,13 +1842,14 @@ Returns:
   "dryDue": [
     { "filamentId": "…", "filamentName": "Nylon X", "spoolId": "…", "spoolLabel": "Spool #2", "lastDried": "2025-12-01T…" }
   ],
+  "dryDueTotal": 1,
   "recentPrintHistory": [
     { "_id": "…", "jobLabel": "Benchy", "printerName": "MK4", "startedAt": "…", "source": "manual", "totalGrams": 12.4 }
   ]
 }
 ```
 
-`dryDue` is capped at 20 entries and only includes spools where the filament has a `dryingTemperature` set AND no dry cycle in the last 30 days.
+`dryDue` is capped at 20 entries and only includes spools where the filament has a `dryingTemperature` set AND no dry cycle in the last 30 days; `dryDueTotal` is the true, uncapped count (#1117). `counts.filamentTemplates` is the number of filaments that are templates (have at least one live variant) — the filament list doesn't render those as rows, so this explains the gap between `counts.filaments` and the list's count (#1113). `counts.totalSpools` is `spools + retiredSpools`.
 
 ### GET /api/filaments/compare?ids=a,b,c (v1.11)
 
@@ -1835,6 +1928,20 @@ Returns `{ "conflicts": [...] }`, each entry `{ collection, id, name, trimsTo, r
 - `dependents` carries `{ total, breakdown }` counted by the same predicates the entity DELETE guards refuse on — `total === 0` means the row is a plain duplicate, safe to delete; with dependents, a rename frees the canonical spelling without touching a reference.
 
 In hybrid deployments this covers only the database this server talks to; remote-side conflicts are visible only to the desktop sync service.
+
+### GET /api/abrasive-nozzles (v1.80)
+
+Backs the abrasive-nozzle section of **Settings → Data health** (#1191). Read-only, advisory scan (no writes): it reports filaments that read as abrasive — `settings.filament_abrasive` set (on, or holding a value nothing downstream reads as on), an abrasive-implying OPT tag, a fibre-reinforced type or name (CF/GF), or a filled type or product name — and that either allow a nozzle that isn't hardened, list no compatible nozzles at all, or carry a `filament_abrasive` value that contradicts the material. Abrasiveness is inferred, so nothing is repaired.
+
+The scan runs on **resolved** documents, so a variant that inherits its template's nozzle set is judged on the effective set. **Templates are excluded** — a filament with live variants isn't printable stock (the same filter the slicer exports use).
+
+Returns `{ "findings": [...] }`, worst first (soft nozzle, then unassigned, then flag-only), empty when healthy. Each entry is `{ filamentId, filamentName, filamentType, reasons, softNozzles, unassigned, flagMismatch, inheritedFrom }`:
+
+- `reasons` — why the record reads as abrasive: any of `"flagged"`, `"tagged"`, `"fibre"`, `"filled"`.
+- `softNozzles` — `{ id, name }` of compatible nozzles that aren't hardened (a reference to a nozzle missing from the live catalog is included as unknown).
+- `unassigned` — `true` when no compatible nozzles are recorded.
+- `flagMismatch` — `true` when the material reads as abrasive but `filament_abrasive` isn't on, so exported presets assert the filament is safe.
+- `inheritedFrom` — the template's name when the finding is about a nozzle set the variant inherits (where the fix belongs); `null` otherwise, including on flag-only findings.
 
 ### GET /api/embed-check?url=…
 
