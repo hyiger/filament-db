@@ -5247,6 +5247,16 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "The job failed partway and its already-saved debits could not all be reversed (GH #1208) \u2014 error: \"The print job failed and could not be fully undone. Check the affected spools' weights before recording it again.\" Unlike the 409, do not retry blindly: part of the debit may still be in place. Other unexpected server errors also answer 500.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }

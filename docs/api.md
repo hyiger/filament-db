@@ -1526,6 +1526,7 @@ Every referenced filament is fetched and validated **before** any mutation. If a
 Refusals besides the validation `400`s:
 - `400` — a usage entry targets a legacy **template** (a filament with live variants that still holds its roll in `totalWeight`). Inventory belongs on its variants, so the route refuses with the `template_no_spools` message (see *Filament templates*) as `error`. On a multi-filament job every target is checked before any of them is migrated.
 - `409` — `"Filament was modified by another request during this job. Please retry."` A concurrent write changed a target filament between read and save; re-fetch and repeat the request.
+- `500` — `"The print job failed and could not be fully undone. Check the affected spools' weights before recording it again."` A multi-filament job failed partway and its already-saved debits could not all be reversed (#1208). Unlike the `409`, do **not** retry blindly: part of the debit may still be in place. A job that fails partway is otherwise undone exactly — only this job's grams are added back and only its ledger entries removed, so writes other requests made to the same spools in the meantime are kept.
 
 Each spool `usageHistory` entry the POST writes is stamped with `jobId` set to the new PrintHistory `_id`, so a later `DELETE` can match the exact entries to refund.
 

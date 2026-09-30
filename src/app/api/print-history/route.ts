@@ -249,11 +249,6 @@ export async function POST(request: NextRequest) {
     // "every spool retired, deliberately no debit" (GH #305). Migrating
     // routes debit AND refund through existing machinery.
     //
-    // ORDER IS LOAD-BEARING: this must land before `spoolSnapshots` is built
-    // below. That snapshot drives the sequential-fallback rollback, which
-    // `continue`s past any spool it has no entry for — skipping BOTH the
-    // weight restore and the usageHistory strip, leaving an unrefundable
-    // orphan on a rolled-back request.
     // MUST run while the filament's key is HELD, and — for the
     // single-filament job — the SAME hold that spans the debit: between two
     // separate acquisitions a confirmed first-variant creation can move the
@@ -389,36 +384,6 @@ export async function POST(request: NextRequest) {
     // template) from writing anything; a promotion landing between preflight
     // and migrate simply leaves the migrated row in its new shape.
 
-    // GH #224: snapshot every spool's pre-mutation state BEFORE pass 2 so
-    // the standalone-fallback path can roll back a mid-loop failure —
-    // capturing the real pre-debit totalWeight so the `Math.max(0, ...)`
-    // clamp can't make rollback ambiguous. The transaction branch doesn't
-    // need this (Mongo aborts the txn).
-    //
-    // Rebuildable, because a legacy migration ADDS a spool and the rollback
-    // `continue`s past any spool it has no entry for — on the
-    // single-filament path the migration runs inside the persist's lock
-    // hold, so the snapshot has to be (re)built there too.
-    type SpoolSnapshot = {
-      filamentId: string;
-      spoolId: string;
-      totalWeight: number | null;
-    };
-    const spoolSnapshots: SpoolSnapshot[] = [];
-    const buildSpoolSnapshots = () => {
-      spoolSnapshots.length = 0;
-      for (const f of filaments) {
-        for (const s of f.spools) {
-          spoolSnapshots.push({
-            filamentId: String(f._id),
-            spoolId: String(s._id),
-            totalWeight: typeof s.totalWeight === "number" ? s.totalWeight : null,
-          });
-        }
-      }
-    };
-    buildSpoolSnapshots();
-
     // Generate the PrintHistory _id up front so each spool usageHistory
     // entry can carry a jobId — the DELETE refund uses that linkage to
     // remove exactly the entries this POST created (a `(grams, date)` match
@@ -449,6 +414,13 @@ export async function POST(request: NextRequest) {
       // exactly ONCE after every usage row — trimming inside the loop could
       // evict an entry an earlier row of THIS job just pushed.
       const touchedSpools = new Set<(typeof filaments)[number]["spools"][number]>();
+      // GH #1208: the grams this job actually took off each spool, summed
+      // over every row that hit it — the exact inverse the sequential path's
+      // compensation adds back. Keyed "filamentId:spoolId".
+      const debits = new Map<
+        string,
+        { filamentId: mongoose.Types.ObjectId; spoolId: mongoose.Types.ObjectId; subtracted: number }
+      >();
       for (const u of usage) {
         // Pass 1 validated existence, but the transaction path reloads
         // fresh — a filament soft-deleted/purged in that window drops out of
@@ -490,9 +462,16 @@ export async function POST(request: NextRequest) {
             typeof spool.totalWeight === "number"
               ? Math.max(0, Math.min(spool.totalWeight, u.grams))
               : u.grams;
+          let subtracted = 0;
           if (typeof spool.totalWeight === "number") {
-            spool.totalWeight = Math.max(0, spool.totalWeight - u.grams);
+            const before = spool.totalWeight;
+            spool.totalWeight = Math.max(0, before - u.grams);
+            subtracted = before - spool.totalWeight;
           }
+          const debitKey = `${String(filament._id)}:${String(spool._id)}`;
+          const prior = debits.get(debitKey);
+          if (prior) prior.subtracted += subtracted;
+          else debits.set(debitKey, { filamentId: filament._id, spoolId: spool._id, subtracted });
           spool.usageHistory = spool.usageHistory || [];
           spool.usageHistory.push({
             grams: u.grams,
@@ -519,7 +498,7 @@ export async function POST(request: NextRequest) {
           });
         }
       }
-      return { resolved, touchedSpools };
+      return { resolved, touchedSpools, debits };
     };
 
     // GH #304 / #954: cap each touched spool's usageHistory so a looping
@@ -642,9 +621,9 @@ export async function POST(request: NextRequest) {
 
       // Apply the debit to the pass-1 docs (on the standalone fallback the
       // txn callback never ran, so `filaments` is still pristine), then save
-      // sequentially with explicit rollback — otherwise save #2 throwing
+      // sequentially with explicit compensation — otherwise save #2 throwing
       // after save #1 committed leaks a partial debit with no refund path.
-      const { resolved: resolvedUsage, touchedSpools } = applyJobToFilaments(byId);
+      const { resolved: resolvedUsage, touchedSpools, debits } = applyJobToFilaments(byId);
       const savedFilaments: typeof filaments = [];
       try {
         for (const f of filaments) {
@@ -667,37 +646,89 @@ export async function POST(request: NextRequest) {
           notes,
         });
       } catch (innerErr) {
-        // Reset every already-persisted filament: reload from DB (avoids
-        // version conflicts), strip this job's usageHistory entries, restore
-        // totalWeight from the snapshot. The rollback is a spool write too,
-        // so it takes the same per-filament key (one at a time).
-        for (const f of savedFilaments) {
+        // GH #1208: undo exactly what THIS job did — add back the grams it
+        // took and pull the ledger entries it wrote — relative to each
+        // spool's CURRENT state, in one atomic update per spool. The keys
+        // were released between saves, so other writers may have landed in
+        // the meantime (a manual usage log, an absolute weight edit, a
+        // sibling spool's edit); restoring a pre-job snapshot would silently
+        // erase those acknowledged writes while their own ledger entries
+        // survived.
+        //
+        // - Matching on this job's ledger entry makes the credit
+        //   idempotent (the GH #621 rule): it is applied only while the
+        //   entry is still there to pull, so it can never land twice.
+        // - No clamp at gross capacity (unlike the DELETE refund's GH #228
+        //   cap): the 409 below invites a retry, so this must be the exact
+        //   inverse of the debit or the retry leaves the spool short.
+        // - The `$type: "number"` array filter skips a spool whose weight a
+        //   concurrent edit set to null; its entry is still pulled.
+        // - `$inc __v` fences any document hydrated before this write, so a
+        //   stale positional save can't overwrite the compensation (the
+        //   promoteParent.ts precedent).
+        // - Model.updateOne, not the raw collection, so `updatedAt` moves and
+        //   hybrid sync's last-write-wins propagates the undo.
+        //
+        // Every filament the job debited is compensated, not just the ones
+        // whose save returned: the update is a no-op where no entry was
+        // written, and it also covers a save that failed after its write
+        // landed. A missing entry is only an anomaly on a filament whose
+        // save DID return.
+        const savedIds = new Set(savedFilaments.map((f) => String(f._id)));
+        let incomplete = false;
+        for (const f of filaments) {
+          const own = [...debits.values()].filter(
+            (d) => String(d.filamentId) === String(f._id),
+          );
+          if (own.length === 0) continue;
           try {
             await withFilamentLock(f, async () => {
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const fresh: any = await Filament.findById(f._id);
-              if (!fresh) return;
-              for (const s of fresh.spools) {
-                const snap = spoolSnapshots.find(
-                  (sn) =>
-                    sn.filamentId === String(f._id) &&
-                    sn.spoolId === String(s._id),
+              for (const d of own) {
+                const res = await Filament.updateOne(
+                  {
+                    _id: d.filamentId,
+                    spools: {
+                      $elemMatch: { _id: d.spoolId, "usageHistory.jobId": historyId },
+                    },
+                  },
+                  {
+                    $pull: { "spools.$[s].usageHistory": { jobId: historyId } },
+                    $inc: { "spools.$[w].totalWeight": d.subtracted, __v: 1 },
+                  },
+                  {
+                    arrayFilters: [
+                      { "s._id": d.spoolId },
+                      { "w._id": d.spoolId, "w.totalWeight": { $type: "number" } },
+                    ],
+                  },
                 );
-                if (!snap) continue;
-                if (snap.totalWeight != null) s.totalWeight = snap.totalWeight;
-                if (Array.isArray(s.usageHistory)) {
-                  s.usageHistory = s.usageHistory.filter(
-                    (e: { jobId?: unknown }) =>
-                      String(e.jobId ?? "") !== String(historyId),
+                if (res.matchedCount === 0 && savedIds.has(String(d.filamentId))) {
+                  // The entry left the spool before it could be undone (a
+                  // first-variant promotion moved the spool, or the spool
+                  // was deleted). Whatever became of the debit, a retry is
+                  // no longer known to be safe.
+                  incomplete = true;
+                  console.error(
+                    `[print-history] job ${String(historyId)}: no ledger entry to undo on filament ${String(d.filamentId)} spool ${String(d.spoolId)}`,
                   );
                 }
               }
-              await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
             });
-          } catch {
-            // Best-effort rollback — continue; manual reconciliation beats
-            // swallowing the original error.
+          } catch (compErr) {
+            incomplete = true;
+            console.error(
+              `[print-history] job ${String(historyId)}: undo failed on filament ${String(f._id)}:`,
+              compErr,
+            );
           }
+        }
+        if (incomplete) {
+          // NOT the retryable 409: part of this job's debit may still be in
+          // place, and a blind retry would take it a second time.
+          return errorResponse(
+            "The print job failed and could not be fully undone. Check the affected spools' weights before recording it again.",
+            500,
+          );
         }
         // GH #224: surface concurrent-edit conflicts as 409 here too —
         // rethrowing a VersionError would surface as a generic 500.
@@ -744,7 +775,6 @@ export async function POST(request: NextRequest) {
             filaments.findIndex((f) => String(f._id) === uniqueIds[0]),
           );
           if (migration.refusal) return errorResponse(migration.refusal, 400);
-          buildSpoolSnapshots();
           try {
             await persistWithTransaction();
             return null;
@@ -801,7 +831,6 @@ export async function POST(request: NextRequest) {
         );
         if (migration.refusal) return errorResponse(migration.refusal, 400);
       }
-      buildSpoolSnapshots();
       const conflict = await persistSequential(true);
       if (conflict) return conflict;
     }
