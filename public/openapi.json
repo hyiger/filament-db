@@ -8757,7 +8757,7 @@
           "filamentId": {
             "type": "string",
             "nullable": true,
-            "description": "Currently-loaded filament ObjectId; null = empty slot"
+            "description": "Currently-loaded filament ObjectId; null = empty slot. When spoolId is set, printer create/update derive this from the spool's owning filament and ignore a submitted value (GH #1214)."
           },
           "spoolId": {
             "type": "string",

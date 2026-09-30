@@ -9,8 +9,7 @@ import Filament from "@/models/Filament";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
 import {
   clearSpoolsFromOtherPrinters,
-  findInvalidSlotSpoolRef,
-  findInvalidSlotFilamentRef,
+  validateAndNormalizeAmsSlots,
 } from "@/lib/spoolSlots";
 import Nozzle from "@/models/Nozzle";
 import BedType from "@/models/BedType";
@@ -127,12 +126,11 @@ export async function POST(request: NextRequest) {
     // GH #631: amsSlots[].spoolId must pass the same checks the dedicated
     // assignment route enforces (spool on an active filament; retired
     // spools not loadable) — this route must not be the bypass.
-    const slotError =
-        (await findInvalidSlotSpoolRef(Filament, body.amsSlots)) ??
-        // GH #1114: also reject a slot pointing at a deleted filament, which
-        // a stale PrinterForm would otherwise re-persist after the filament
-        // delete cleared it.
-        (await findInvalidSlotFilamentRef(Filament, body.amsSlots));
+    // GH #1114: also reject a slot pointing at a deleted filament, which a
+    // stale PrinterForm would otherwise re-persist after the filament delete
+    // cleared it. GH #1214: a slot tracking a spool takes that spool's
+    // owner as its filament, overwriting the submitted one.
+    const slotError = await validateAndNormalizeAmsSlots(Filament, body.amsSlots);
     if (slotError) {
       return errorResponse(slotError, 400);
     }

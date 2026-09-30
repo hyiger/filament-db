@@ -1188,6 +1188,8 @@ Liefert einen einzelnen Drucker mit `installedNozzles` als vollständige Düsen-
 
 Aktualisiert einen Drucker. Sende einen JSON-Body mit den zu aktualisierenden Feldern.
 
+**`amsSlots`** (POST und PUT). Jeder Slot führt zwei Referenzen: `filamentId` (das geladene Filament) und `spoolId` (die verfolgte Spule). Ein Slot mit `spoolId` muss eine nicht ausgemusterte Spule an einem aktiven Filament nennen, und eine Spule kann nur einen Slot belegen; sonst wird der Schreibvorgang mit `400` abgelehnt, das den Slot nennt. Ist `spoolId` gesetzt, wird die `filamentId` des Slots **aus dem Filament abgeleitet, dem die Spule gehört**, und ein mitgesendeter Wert ignoriert (#1214) — dieselbe Regel wie bei den Spulen-Zuweisungs-Endpunkten —, sodass ein Slot nie ein Material nennen und dabei eine Rolle eines anderen verfolgen kann. Ein Slot ohne Spule behält die gesendete `filamentId`, die ein aktives Filament sein muss.
+
 ### DELETE /api/printers/:id
 
 Soft-Delete eines Druckers per ID (setzt den Zeitstempel `_deletedAt`). Ein Drucker, der von Filament-Kalibrierungen referenziert wird, kann nicht gelöscht werden. Liefert `{ message: "Deleted" }`.

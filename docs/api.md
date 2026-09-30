@@ -1209,6 +1209,8 @@ Returns a single printer with `installedNozzles` populated with full nozzle docu
 
 Update a printer. Send a JSON body with the fields to update.
 
+**`amsSlots`** (POST and PUT). Each slot carries two refs: `filamentId` (the loaded filament) and `spoolId` (the tracked spool). A slot with a `spoolId` must name a spool on an active filament that isn't retired, and one spool can occupy only one slot; otherwise the write is refused with `400` naming the slot. When `spoolId` is set, the slot's `filamentId` is **derived from the spool's owning filament** and any submitted value is ignored (#1214) — the same rule the spool assignment endpoints apply — so a slot can never name one material while tracking a roll of another. A slot without a spool keeps the `filamentId` it was sent, which must be an active filament.
+
 ### DELETE /api/printers/:id
 
 Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a printer that is referenced by filament calibrations. Returns `{ message: "Deleted" }`.

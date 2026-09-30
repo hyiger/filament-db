@@ -234,7 +234,50 @@ export async function findInvalidSlotSpoolRef(
   FilamentModel: Model<any>,
   amsSlots: unknown,
 ): Promise<string | null> {
-  if (!Array.isArray(amsSlots)) return null;
+  return (await checkSlotSpoolRefs(FilamentModel, amsSlots)).error;
+}
+
+/**
+ * Validate a printer write's `amsSlots` and make each slot's two refs agree.
+ *
+ * GH #1214: the two refs were validated independently, so a slot could name
+ * filament A while tracking a spool that belongs to B — both live, the pair
+ * contradictory: presets chosen by filament and inventory debited by spool
+ * disagreed about what was loaded. A tracked spool now DETERMINES the loaded
+ * filament: when `spoolId` is set, `filamentId` is overwritten with the
+ * spool's owner and any submitted value is ignored — the same derivation the
+ * assignment route (`PUT /api/spools/{spoolId}/assignment`) and the #1041
+ * migration already apply. Only a slot with no spool is checked as
+ * submitted (GH #1114).
+ *
+ * Runs the spool checks first (#631/#646 messages and precedence unchanged)
+ * and rewrites `filamentId`s in place only when every slot passes, so a
+ * rejected payload is left as it arrived.
+ *
+ * Residual, stated like #1114's: while a first-variant promotion is between
+ * its copy and its clear, the moved spool briefly exists on both documents
+ * and the owner lookup can return either; a write landing there can still
+ * store the template. It heals on the next promotion resume or form save.
+ */
+export async function validateAndNormalizeAmsSlots(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: Model<any>,
+  amsSlots: unknown,
+): Promise<string | null> {
+  const { error, owners } = await checkSlotSpoolRefs(FilamentModel, amsSlots);
+  if (error) return error;
+  for (const [slot, ownerId] of owners) slot.filamentId = ownerId;
+  return findInvalidSlotFilamentRef(FilamentModel, amsSlots);
+}
+
+async function checkSlotSpoolRefs(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: Model<any>,
+  amsSlots: unknown,
+): Promise<{ error: string | null; owners: [{ filamentId?: unknown }, unknown][] }> {
+  const owners: [{ filamentId?: unknown }, unknown][] = [];
+  const fail = (error: string) => ({ error, owners: [] });
+  if (!Array.isArray(amsSlots)) return { error: null, owners };
   // GH #631: a spool occupies at most one slot. The
   // per-slot checks below validate each occurrence independently, so the
   // SAME spoolId in two slots of one payload would pass — and the route's
@@ -253,7 +296,7 @@ export async function findInvalidSlotSpoolRef(
         ? `"${slot.slotName}"`
         : `#${i + 1}`;
     if (!mongoose.isValidObjectId(spoolId)) {
-      return `Slot ${slotLabel}: spoolId is not a valid id`;
+      return fail(`Slot ${slotLabel}: spoolId is not a valid id`);
     }
     // Canonicalize before the duplicate check:
     // ObjectId hex is case-insensitive and Mongoose casts e.g. lowercase
@@ -262,7 +305,7 @@ export async function findInvalidSlotSpoolRef(
     // case would slip past a raw-string Set. Normalize to canonical hex.
     const spoolKey = new mongoose.Types.ObjectId(String(spoolId)).toHexString();
     if (seenSpoolIds.has(spoolKey)) {
-      return `Slot ${slotLabel}: the same spool cannot occupy more than one slot`;
+      return fail(`Slot ${slotLabel}: the same spool cannot occupy more than one slot`);
     }
     seenSpoolIds.add(spoolKey);
     // Same lookup as the assignment route: the spool must exist on an
@@ -271,15 +314,16 @@ export async function findInvalidSlotSpoolRef(
     const filament = (await FilamentModel.findOne(
       { _deletedAt: null, "spools._id": spoolId },
       { "spools.$": 1 },
-    ).lean()) as { spools?: { retired?: boolean }[] } | null;
+    ).lean()) as { _id: unknown; spools?: { retired?: boolean }[] } | null;
     if (!filament) {
-      return `Slot ${slotLabel}: spool not found`;
+      return fail(`Slot ${slotLabel}: spool not found`);
     }
     if (filament.spools?.[0]?.retired) {
-      return `Slot ${slotLabel}: retired spools cannot be assigned to a printer slot`;
+      return fail(`Slot ${slotLabel}: retired spools cannot be assigned to a printer slot`);
     }
+    owners.push([slot as { filamentId?: unknown }, filament._id]);
   }
-  return null;
+  return { error: null, owners };
 }
 
 /**
