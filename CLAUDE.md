@@ -17,6 +17,12 @@ npm run electron:dev     # Electron + Next.js dev
 npm run electron:build   # Full Electron build pipeline
 ```
 
+## Pull requests
+
+- **Never open a draft PR.** Open every PR ready for review.
+- **Request a Codex review** by commenting `@codex review` on the PR as soon as it is open, and again after each push that addresses its findings.
+- **Don't merge until Codex's review is clean**: its latest review of the head commit has no open findings (Codex reacts 👍 when it has none).
+
 ## Architecture
 
 - **Frontend**: Next.js App Router (TypeScript, React 19, Tailwind CSS)
