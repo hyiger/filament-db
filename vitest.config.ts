@@ -29,6 +29,10 @@ export default defineConfig({
         // already have. Pinned in CLAUDE.md so a future contributor
         // knows the trade-off.
         "src/lib/labelBitmap.ts",
+        // The include globs also match packages/mobile/src/lib/**, which the
+        // tests/mobile-*.test.ts suites import. The mobile package is its own
+        // project, outside this gate.
+        "packages/**",
       ],
       // The v1.61 coverage sweep drove src/lib + src/models to ~99% lines /
       // ~99% statements / ~97% functions / ~98% branches. The residual
