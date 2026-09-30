@@ -164,6 +164,44 @@ describe("POST /api/filaments/import-atlas — spool identity on re-import (GH #
     expect(fresh.__v).toBeGreaterThan(versionBefore);
   });
 
+  it("keeps a matched spool's photo when the source omits it, and sanitizes one it sends", async () => {
+    const remoteId = new ObjectId();
+    const A = new ObjectId();
+    const B = new ObjectId();
+    const photo = "data:image/png;base64,iVBORw0KGgo=";
+    await withRemote((col) =>
+      col.insertOne({
+        _id: remoteId,
+        name: "Atlas Photo PLA",
+        vendor: "V",
+        type: "PLA",
+        _deletedAt: null,
+        spools: [
+          { _id: A, label: "A", photoDataUrl: photo },
+          { _id: B, label: "B", photoDataUrl: photo },
+        ],
+      }),
+    );
+    await runImport([remoteId]);
+    await withRemote((col) =>
+      col.updateOne(
+        { _id: remoteId },
+        {
+          $set: {
+            spools: [
+              { _id: A, label: "A" },
+              { _id: B, label: "B", photoDataUrl: "data:image/svg+xml;base64,PHN2Zz4=" },
+            ],
+          },
+        },
+      ),
+    );
+    await runImport([remoteId]);
+    const [a, b] = (await Filament.findOne({ name: "Atlas Photo PLA" }).lean()).spools;
+    expect(a.photoDataUrl).toBe(photo);
+    expect(b.photoDataUrl).toBeNull();
+  });
+
   it("keeps each instanceId with its own roll when the source reorders its spools", async () => {
     const remoteId = new ObjectId();
     const A = new ObjectId();

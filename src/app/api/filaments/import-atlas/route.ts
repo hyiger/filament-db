@@ -247,8 +247,12 @@ export async function POST(request: NextRequest) {
               // some rendering contexts). Sanitize rather than reject — a
               // legacy oversized photo in the user's own Atlas DB shouldn't
               // abort the whole import.
-              const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
-              spool.photoDataUrl = photo.ok ? (photo.value ?? null) : null;
+              // Only when the source carries the key: under the #1209 merge
+              // an omitted photo keeps the local spool's.
+              if (spool.photoDataUrl !== undefined) {
+                const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
+                spool.photoDataUrl = photo.ok ? (photo.value ?? null) : null;
+              }
             }
             remoteSpools = keyed.entries;
             if (keyed.dropped > 0) {
