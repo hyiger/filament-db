@@ -98,6 +98,14 @@ describe("reconcileImportedSpools", () => {
     expect(r.newlyRetired).toEqual([localId.toHexString()]);
   });
 
+  it("reads retired the way the schema casts it", () => {
+    const retires = (retired: unknown) =>
+      reconcileImportedSpools([{ id: localId.toHexString(), spool: { retired } }], [local()], new Set(), mint)
+        .newlyRetired.length === 1;
+    for (const v of [true, "true", 1, "1", "yes"]) expect(retires(v)).toBe(true);
+    for (const v of [false, "false", 0, "0", "no", null, undefined, "TRUE", 2]) expect(retires(v)).toBe(false);
+  });
+
   it("appends a new source spool with its own id, a minted instanceId and no location", () => {
     const newId = new ObjectId().toHexString();
     const r = reconcileImportedSpools(

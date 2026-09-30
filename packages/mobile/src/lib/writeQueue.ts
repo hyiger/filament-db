@@ -232,6 +232,9 @@ export async function submitWrite(
       'You have unsynced offline changes. Let them sync first, then log usage or a dry cycle.',
     );
   }
+  // Again after that queue read, with no await between here and the send: a
+  // switch during the read would otherwise dispatch this to the old server.
+  if (gen !== generation) throw new ServerChangedError();
   try {
     const result = await applyWrite(api, { ...entry, id: 'live', createdAt: 0 });
     return { queued: false, result };

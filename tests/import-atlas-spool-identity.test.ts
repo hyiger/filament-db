@@ -252,21 +252,24 @@ describe("POST /api/filaments/import-atlas — spool identity on re-import (GH #
     expect((await Filament.findOne({ name: "Atlas Renamed PLA" }).lean()).spools).toEqual([]);
   });
 
-  it("clears a spool the source retires from its printer slot", async () => {
+  // The write casts "true", 1 and "yes" to true like `true` itself, so the
+  // retirement must be detected from those too (Codex review on PR #1217).
+  it.each([true, "true", 1, "yes"])("clears a spool the source retires (retired: %j) from its printer slot", async (retired) => {
     const remoteId = new ObjectId();
     const A = new ObjectId();
-    const doc = { _id: remoteId, name: "Atlas Retire PLA", vendor: "V", type: "PLA", _deletedAt: null };
+    const name = `Atlas Retire PLA ${JSON.stringify(retired)}`;
+    const doc = { _id: remoteId, name, vendor: "V", type: "PLA", _deletedAt: null };
     await withRemote((col) => col.insertOne({ ...doc, spools: [{ _id: A, totalWeight: 900 }] }));
     await runImport([remoteId]);
-    const local = await Filament.findOne({ name: "Atlas Retire PLA" }).lean();
+    const local = await Filament.findOne({ name }).lean();
     const printer = await Printer.create({
-      name: "Atlas Retire Printer",
+      name: `Atlas Retire Printer ${JSON.stringify(retired)}`,
       manufacturer: "M",
       printerModel: "P",
       amsSlots: [{ slotName: "A1", filamentId: local._id, spoolId: A }],
     });
 
-    await withRemote((col) => col.updateOne({ _id: remoteId }, { $set: { "spools.0.retired": true } }));
+    await withRemote((col) => col.updateOne({ _id: remoteId }, { $set: { "spools.0.retired": retired } }));
     await runImport([remoteId]);
     expect((await Filament.findById(local._id).lean()).spools[0].retired).toBe(true);
     const slot = (await Printer.findById(printer._id).lean()).amsSlots[0];

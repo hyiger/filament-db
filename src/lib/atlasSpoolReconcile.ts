@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import mongoose from "mongoose";
 
 /**
  * GH #1209: spool identity across an Atlas re-import.
@@ -24,6 +25,14 @@ import { createHash } from "node:crypto";
  * DB-free; the route supplies the local spools, the ownership set and the
  * `instanceId` minter.
  */
+
+/** Whether the write will store `value` as `retired: true`. The schema casts
+ *  "true", 1, "1" and "yes" to true, so a strict `=== true` check would miss a
+ *  retirement the write then records — and leave the spool in a printer slot.
+ *  Uses Mongoose's own set, so the two can't disagree. */
+function castsToTrue(value: unknown): boolean {
+  return mongoose.Schema.Types.Boolean.convertToTrue.has(value);
+}
 
 const OBJECT_ID_HEX = /^[0-9a-f]{24}$/i;
 
@@ -125,7 +134,7 @@ export function reconcileImportedSpools(
     const at = indexById.get(id);
     if (at !== undefined) {
       const local = spools[at];
-      if (local.retired !== true && spool.retired === true) newlyRetired.push(id);
+      if (local.retired !== true && castsToTrue(spool.retired)) newlyRetired.push(id);
       spools[at] = {
         ...local,
         ...spool,

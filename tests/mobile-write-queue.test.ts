@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { ApiError, type Api } from "../packages/mobile/src/lib/api";
 import {
   clearQueue,
@@ -7,7 +7,7 @@ import {
   ServerChangedError,
   submitWrite,
 } from "../packages/mobile/src/lib/writeQueue";
-import { resetAsyncStorage } from "./stubs/asyncStorage";
+import AsyncStorage, { resetAsyncStorage } from "./stubs/asyncStorage";
 
 /**
  * packages/mobile's offline write queue, with AsyncStorage swapped for an
@@ -97,6 +97,26 @@ describe("mobile write queue — server change (GH #1210)", () => {
 
     await expect(submission).rejects.toBeInstanceOf(ServerChangedError);
     expect(calls).toEqual(["A:queued", "A:queued"]); // the replay only — s2 never went out
+    expect(await pendingCount()).toBe(0);
+  });
+
+  it("doesn't send a live write when the switch lands during its last queue read", async () => {
+    const calls: string[] = [];
+    // submitWrite reads the queue twice before sending; switch during the second.
+    let reads = 0;
+    const getItem = vi.spyOn(AsyncStorage, "getItem").mockImplementation(async () => {
+      if (++reads === 2) void clearQueue();
+      return null;
+    });
+    try {
+      await expect(
+        submitWrite(fakeApi("A", calls, async () => ({})), entry("s1")),
+      ).rejects.toBeInstanceOf(ServerChangedError);
+    } finally {
+      getItem.mockRestore();
+    }
+    expect(reads).toBe(2);
+    expect(calls).toEqual([]);
     expect(await pendingCount()).toBe(0);
   });
 
