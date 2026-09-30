@@ -338,9 +338,20 @@ export async function POST(request: NextRequest) {
           // A retired spool can't stay loaded in a printer slot (GH #268 —
           // every later printer save would 400), same as a retire through the
           // spool route. Idempotent, so every import repairs a slot an earlier
-          // import's interrupted cleanup left behind.
+          // import's interrupted cleanup left behind. Called under the
+          // filament's key, right after its write: once the key is released,
+          // a spool PUT could un-retire the spool and it could be loaded
+          // again, and a late clear would then empty that valid slot. A
+          // failure is a note, not a failed row — the write has landed, and
+          // the next import retries.
           const clearRetiredFromSlots = async (ids: readonly string[]) => {
-            for (const id of ids) await assignSpoolToSlot(Printer, id, null);
+            try {
+              for (const id of ids) await assignSpoolToSlot(Printer, id, null);
+            } catch (err) {
+              errors.push(
+                `${importName}: couldn't clear retired spools from printer slots (${err instanceof Error ? err.message : String(err)}) — import it again to retry`,
+              );
+            }
           };
           let existing = await Filament.findOne({ name: importName, _deletedAt: null });
           if (!existing && importName !== "") {
@@ -431,10 +442,10 @@ export async function POST(request: NextRequest) {
                 { $set: filamentData, ...(filamentData.spools ? { $inc: { __v: 1 } } : {}) },
                 { runValidators: true, context: "query" },
               );
+              await clearRetiredFromSlots(merged.retiredIds);
             });
             errors.push(...merged.notes);
             updated++;
-            await clearRetiredFromSlots(merged.retiredIds);
           } else {
             // If a soft-deleted doc with the same name exists, resurrect it.
             // GH #499: filter on `_purged: { $ne: true }` like every other
@@ -499,7 +510,9 @@ export async function POST(request: NextRequest) {
                   },
                   { runValidators: true, context: "query" },
                 );
-                return res.matchedCount > 0;
+                if (res.matchedCount === 0) return false;
+                await clearRetiredFromSlots(merged.retiredIds);
+                return true;
               });
               if (!resurrected) {
                 // The tombstone was purged mid-import — mint a fresh doc (the
@@ -513,7 +526,6 @@ export async function POST(request: NextRequest) {
                 updated++;
               }
               errors.push(...merged.notes);
-              await clearRetiredFromSlots(merged.retiredIds);
             } else {
               // The partial-unique index on `name` covers `_deletedAt: null`
               // only, and `_purged` rows keep `_deletedAt` set — so a

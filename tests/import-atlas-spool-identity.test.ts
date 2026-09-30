@@ -3,6 +3,8 @@ import mongoose from "mongoose";
 import { MongoClient, ObjectId } from "mongodb";
 import { NextRequest } from "next/server";
 import { POST as importAtlas } from "@/app/api/filaments/import-atlas/route";
+import { filamentLockKey, runExclusive } from "@/lib/filamentMutex";
+import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { DELETE as deletePrintHistory } from "@/app/api/print-history/[id]/route";
 
@@ -296,6 +298,75 @@ describe("POST /api/filaments/import-atlas — spool identity on re-import (GH #
     await runImport([remoteId]);
     const slot = (await Printer.findById(printer._id).lean()).amsSlots[0];
     expect(slot.spoolId).toBeNull();
+  });
+
+  /** A local filament whose spool A is loaded in a printer slot, and a source
+   *  copy of it that now retires A. */
+  async function retiredSpoolInSlot(tag: string) {
+    const remoteId = new ObjectId();
+    const A = new ObjectId();
+    const name = `Atlas ${tag} PLA`;
+    await withRemote((col) =>
+      col.insertOne({ _id: remoteId, name, vendor: "V", type: "PLA", _deletedAt: null, spools: [{ _id: A, totalWeight: 900 }] }),
+    );
+    await runImport([remoteId]);
+    const local = await Filament.findOne({ name }).lean();
+    const printer = await Printer.create({
+      name: `Atlas ${tag} Printer`,
+      manufacturer: "M",
+      printerModel: "P",
+      amsSlots: [{ slotName: "A1", filamentId: local._id, spoolId: A }],
+    });
+    await withRemote((col) => col.updateOne({ _id: remoteId }, { $set: { "spools.0.retired": true } }));
+    return { remoteId, A, local, printer };
+  }
+
+  // Codex review on PR #1217: cleared after the filament's key was released,
+  // an un-retire and reload landing in between had its valid slot emptied.
+  it("clears retired slots before releasing the filament's lock", async () => {
+    const { remoteId, A, local, printer } = await retiredSpoolInSlot("Lock Order");
+    const slotId = printer.amsSlots[0]._id;
+    const original = Printer.updateMany.bind(Printer);
+    let competitor: Promise<void> | undefined;
+    const spy = vi.spyOn(Printer, "updateMany").mockImplementation(async (...args: unknown[]) => {
+      if (!competitor) {
+        // The import's clear. Un-retire and reload the spool under the
+        // filament's key, as a spool PUT and a slot assignment would.
+        competitor = runExclusive(filamentLockKey(local._id), async () => {
+          await Filament.updateOne({ _id: local._id, "spools._id": A }, { $set: { "spools.$.retired": false } });
+          await assignSpoolToSlot(Printer, A, { printerId: String(printer._id), slotId: String(slotId) }, local._id);
+        });
+        // While the import holds the key the competitor can't start, so this
+        // times out; after the release it finishes first.
+        await Promise.race([competitor, new Promise((r) => setTimeout(r, 300))]);
+      }
+      return original(...args);
+    });
+    try {
+      await runImport([remoteId]);
+      await competitor;
+    } finally {
+      spy.mockRestore();
+    }
+    const slot = (await Printer.findById(printer._id).lean()).amsSlots[0];
+    expect(String(slot.spoolId)).toBe(String(A));
+  });
+
+  it("reports a failed slot clear as a note, and the next import retries it", async () => {
+    const { remoteId, printer } = await retiredSpoolInSlot("Clear Fails");
+    const spy = vi.spyOn(Printer, "updateMany").mockRejectedValueOnce(new Error("printer write failed"));
+    let body: { updated: number; errors?: string[] };
+    try {
+      body = await runImport([remoteId]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(body.updated).toBe(1);
+    expect(body.errors?.join("\n")).toMatch(/couldn't clear retired spools from printer slots \(printer write failed\)/);
+    expect((await Printer.findById(printer._id).lean()).amsSlots[0].spoolId).not.toBeNull();
+
+    await runImport([remoteId]);
+    expect((await Printer.findById(printer._id).lean()).amsSlots[0].spoolId).toBeNull();
   });
 
   it("merges into a trashed row it resurrects, keeping that row's spool identity", async () => {
