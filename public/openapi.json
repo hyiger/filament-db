@@ -1740,7 +1740,7 @@
           "Filaments"
         ],
         "summary": "Import from MongoDB Atlas",
-        "description": "Connect to a remote MongoDB Atlas instance to list or import filaments. Send only `uri` to list available filaments; send `uri` + `filamentIds` to import selected ones.",
+        "description": "Connect to a remote MongoDB Atlas instance to list or import filaments. Send only `uri` to list available filaments; send `uri` + `filamentIds` to import selected ones. An existing same-name filament is updated. Its spools are merged by spool `_id` (GH #1209): a source spool whose `_id` is already on the local filament updates it in place and keeps the local `_id`, `instanceId` and location, so printer slots, print-history refunds and spool links keep resolving. A new source spool is added with a freshly minted `instanceId`, unless another local filament already holds its `_id`, in which case it is skipped with a note. A local spool the source doesn't carry is kept, with a note. A row that fails is reported in `errors` while the rest still import; the request only fails when no row was imported.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1830,6 +1830,17 @@
                         },
                         "updated": {
                           "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "description": "Number of source filaments requested."
+                        },
+                        "errors": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Per-row notes: content the import skipped or kept, and rows that failed to import. Absent when there is nothing to report."
                         }
                       }
                     }

@@ -397,7 +397,12 @@ Liefert:
 }
 ```
 
-Bestehende Filamente mit demselben Namen werden aktualisiert; neue Filamente werden angelegt. Eltern-Varianten-Beziehungen aus der entfernten Datenbank werden nicht erhalten.
+Bestehende Filamente mit demselben Namen werden aktualisiert; neue Filamente werden angelegt. Eltern-Varianten-Beziehungen aus der entfernten Datenbank werden nicht erhalten. Trägt eine Zeile Hinweise oder schlägt sie fehl, enthält die Antwort zusätzlich `errors` — ein String pro Hinweis — und die Meldung endet mit der Anzahl der Hinweise; eine fehlschlagende Zeile hält die übrigen nicht auf, und die Anfrage antwortet nur dann mit `500`, wenn keine Zeile importiert wurde.
+
+**Spulen bei einem erneuten Import** (#1209) werden über die Spulen-`_id` zusammengeführt, nie komplett ersetzt:
+- eine Quellspule, deren `_id` bereits am lokalen Filament hängt, wird an Ort und Stelle aktualisiert und behält die lokale `_id`, `instanceId` und den Lagerort — Druckerslots, Erstattungen im Druckverlauf und `?spool=`-Links lösen also weiter auf; eine von der Quelle ausgemusterte Spule wird zudem aus jedem Druckerslot entfernt;
+- jede andere Quellspule wird mit neu erzeugter `instanceId` hinzugefügt, außer ein anderes lokales Filament hält ihre `_id` bereits — dann wird sie mit Hinweis übersprungen, statt einer Rolle zwei Besitzer zu geben;
+- eine lokale Spule, die die Quelle nicht enthält, bleibt mit Hinweis erhalten. Ein Import aus einer Datenbank, die keine Spulen-IDs mit dieser teilt (Spulen auf beiden Seiten getrennt erfasst), behält die lokalen Rollen deshalb neben denen der Quelle — Duplikate bitte von Hand löschen.
 
 ### GET /api/filaments/:id/calibration
 

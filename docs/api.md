@@ -401,7 +401,12 @@ Returns:
 }
 ```
 
-Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
+Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved. When a row carries notes or fails, the response adds `errors` — one string per note — and the message ends with the note count; a failing row doesn't stop the others, and the request only answers `500` when no row was imported.
+
+**Spools on a re-import** (#1209) are merged by spool `_id`, never replaced wholesale:
+- a source spool whose `_id` is already on the local filament updates it in place, keeping the local `_id`, `instanceId` and location — so printer slots, print-history refunds and `?spool=` links keep resolving; a spool the source retires is also cleared from any printer slot;
+- any other source spool is added with a freshly minted `instanceId`, unless another local filament already holds its `_id` — then it is skipped with a note rather than giving one roll two owners;
+- a local spool the source doesn't carry is kept, with a note. Importing from a database that doesn't share this one's spool ids (spools entered separately on each side) therefore keeps the local rolls next to the source's — delete any duplicates by hand.
 
 ### GET /api/filaments/:id/calibration
 

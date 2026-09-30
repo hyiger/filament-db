@@ -772,7 +772,7 @@
   "atlas.import.deselectAll": "Deselect All",
   "atlas.import.selectAll": "Select All",
   "atlas.import.confirmMessage": "Import {count} filament(s) into your local database?",
-  "atlas.import.confirmDetails": "Existing filaments with the same name will be updated. New filaments will be created. Parent-variant relationships will not be preserved.",
+  "atlas.import.confirmDetails": "Existing filaments with the same name will be updated, matching their spools by ID; local spools the source doesn't have are kept. New filaments will be created. Parent-variant relationships will not be preserved.",
   "atlas.import.cancel": "Cancel",
   "atlas.import.connecting": "Connecting...",
   "atlas.import.connect": "Connect",
