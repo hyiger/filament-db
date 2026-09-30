@@ -436,6 +436,14 @@ function SpoolRow({
       onLocalPatch(spool._id, optimisticPatch);
       return { ok: true };
     } catch (e) {
+      if (e instanceof ApiError && e.committed) {
+        // GH #1211: the server applied the write; only its reply was lost.
+        // Report it as saved — a retry would apply a usage/dry-cycle log
+        // twice — and keep the optimistic patch until the next refresh.
+        onLocalPatch(spool._id, optimisticPatch);
+        Alert.alert('Saved', e.message);
+        return { ok: true };
+      }
       Alert.alert('Update failed', (e as Error).message);
       return { ok: false };
     } finally {
@@ -502,8 +510,12 @@ function SpoolRow({
       // present: `spool` (#1027+ ?shape=spool) or `filament` (older server).
       const updated =
         res.spool ?? res.filament?.spools?.find((sp) => sp._id === spool._id);
-      if (updated?.totalWeight != null) {
-        setGrams(String(Math.max(0, Math.round(updated.totalWeight - tare))));
+      // Neither shape comes back when the reply was lost after the server
+      // applied the usage (GH #1211); fall back to the optimistic weight so a
+      // later Save can't write the pre-usage value back over it.
+      const totalWeight = updated?.totalWeight ?? optimisticTotalWeight;
+      if (totalWeight != null) {
+        setGrams(String(Math.max(0, Math.round(totalWeight - tare))));
       }
     }
   }

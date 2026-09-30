@@ -67,6 +67,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // packages/mobile's write queue imports this React Native native
+      // module; its tests run against an in-memory stand-in.
+      "@react-native-async-storage/async-storage": path.resolve(
+        __dirname,
+        "./tests/stubs/asyncStorage.ts",
+      ),
     },
   },
 });

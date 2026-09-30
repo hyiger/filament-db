@@ -17,9 +17,14 @@ import type {
 
 export class ApiError extends Error {
   status: number;
-  constructor(status: number, message: string) {
+  /** GH #1211: the server answered a write with 2xx — so it was APPLIED — but
+   *  the reply body never arrived. Treat the change as done: retrying (or
+   *  queueing it) would apply it twice or replay it over a newer edit. */
+  committed: boolean;
+  constructor(status: number, message: string, committed = false) {
     super(message);
     this.status = status;
+    this.committed = committed;
     this.name = 'ApiError';
   }
 }
@@ -37,24 +42,49 @@ function safeJson(text: string): unknown {
   }
 }
 
+// Fail fast on an unreachable/wrong host instead of hanging the UI forever —
+// RN's fetch has no default timeout. (GH #693.)
+const HEADERS_TIMEOUT_MS = 15000;
+// GH #1211: the body gets its own, longer bound. A large reply (an older
+// desktop returns every spool's photo) on slow Wi-Fi can outlast the headers
+// legitimately, but it must not hang forever — Expo's native `text()` only
+// settles once the body completes, so a connection that drops or stalls
+// mid-body never settles at all.
+const BODY_TIMEOUT_MS = 60000;
+const TIMED_OUT = Symbol('timed-out');
+
 async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = { ...(init?.headers as Record<string, string>) };
   if (init?.body) headers['content-type'] = 'application/json';
   if (cfg.apiKey) headers['authorization'] = `Bearer ${cfg.apiKey}`;
 
-  let res: Response;
-  // Fail fast on an unreachable/wrong host instead of hanging the UI forever —
-  // RN's fetch has no default timeout. clearTimeout in finally avoids a late
-  // abort firing on a slow-but-successful response. (GH #693.)
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 15000);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  // Race each phase against this rather than relying on the abort alone
+  // (aborting doesn't settle a native body read). It RESOLVES to TIMED_OUT
+  // — a rejection would surface as unhandled whenever the other side won.
+  const deadline = (ms: number) =>
+    new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort();
+        resolve(TIMED_OUT);
+      }, ms);
+    });
+
+  let res: Response;
   try {
-    res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
+    const out = await Promise.race([
+      fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal }),
+      deadline(HEADERS_TIMEOUT_MS),
+    ]);
+    if (out === TIMED_OUT) throw new Error('timed out');
+    res = out;
   } catch (e) {
-    const aborted = (e as Error).name === 'AbortError';
+    // `signal.aborted`, not `e.name === 'AbortError'`: Expo's fetch rejects
+    // an abort with an error named plain 'Error'.
     throw new ApiError(
       0,
-      aborted
+      controller.signal.aborted
         ? `The server didn't respond. Check the address and that this device is on the same network.`
         : `Can't reach the server. Check the address and that this device is on the same network. (${(e as Error).message})`,
     );
@@ -62,7 +92,36 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
     clearTimeout(timer);
   }
 
-  const text = await res.text();
+  // GH #1211: the body read used to run outside both the timeout and the
+  // error normalization — a stalled body hung the caller (and, mid-flush,
+  // every later flush), and a dropped one escaped as a plain Error that the
+  // offline queue read as permanent and deleted.
+  let text: string;
+  try {
+    const out = await Promise.race([res.text(), deadline(BODY_TIMEOUT_MS)]);
+    if (out === TIMED_OUT) throw new Error('timed out');
+    text = out;
+  } catch {
+    // The status line already arrived, so classify by it: an error status
+    // keeps its meaning (retryable or not) without its message.
+    if (!res.ok) throw new ApiError(res.status, `Request failed (${res.status})`);
+    const method = (init?.method ?? 'GET').toUpperCase();
+    // A read has nothing to lose — report it like any network failure.
+    if (method === 'GET') {
+      throw new ApiError(
+        0,
+        `The connection dropped while reading the server's reply. Check that this device is on the same network.`,
+      );
+    }
+    throw new ApiError(
+      res.status,
+      'The server accepted the change, but the connection dropped before its reply arrived. Refresh to see the latest before changing it again.',
+      true,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
   const data = text ? safeJson(text) : null;
   if (!res.ok) {
     const msg =

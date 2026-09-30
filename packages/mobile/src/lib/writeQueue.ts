@@ -102,12 +102,35 @@ export async function pendingCount(): Promise<number> {
   return withLock(async () => (await readQueue()).length);
 }
 
+// GH #1210: bumped by clearQueue. Wiping storage alone left every write
+// still IN FLIGHT against the old server free to land in the new server's
+// queue afterwards (a late network failure enqueued it), and a flush already
+// running kept replaying through the old client. Each submission and flush
+// captures the generation it started in, and nothing from an older one may
+// enqueue or flush.
+let generation = 0;
+
+/** A write started before the server address changed. It was not kept for
+ *  sync — it might have reached the old server before the connection failed,
+ *  so the message doesn't claim it was never applied. */
+export class ServerChangedError extends Error {
+  constructor() {
+    super(
+      "The server address changed while this change was being saved, so it wasn't kept for syncing. Check the spool and enter the change again if it's missing.",
+    );
+    this.name = 'ServerChangedError';
+  }
+}
+
 /**
  * Drop all queued writes. Called when the configured server changes — queued
  * edits were made against the previous server and must NOT replay to a
  * different Filament DB instance (wrong spools / 404s). GH #709.
  */
 export async function clearQueue(): Promise<void> {
+  // Synchronously, before the wipe: an in-flight submission that fails after
+  // this point must see the change (GH #1210).
+  generation++;
   await withLock(async () => {
     await writeQueueRaw([]);
     notify(0);
@@ -130,8 +153,15 @@ export function applyWrite(api: Api, q: QueuedWrite): Promise<unknown> {
 // never evicts the in-flight head (index 0) that a flush is mid-request on.
 let flushing = false;
 
-async function enqueue(entry: Omit<QueuedWrite, 'id' | 'createdAt'>): Promise<void> {
-  await withLock(async () => {
+/** Returns false, writing nothing, when the server changed since `gen` was
+ *  captured. The check runs INSIDE the lock: one made before it could pass,
+ *  then lose the race to clearQueue's wipe and write the stale entry after. */
+async function enqueue(
+  gen: number,
+  entry: Omit<QueuedWrite, 'id' | 'createdAt'>,
+): Promise<boolean> {
+  return withLock(async () => {
+    if (gen !== generation) return false;
     const list = await readQueue();
     list.push({ ...entry, id: nextId(), createdAt: Date.now() });
     // Drop the oldest over the cap — but never index 0 while a flush is in
@@ -142,6 +172,7 @@ async function enqueue(entry: Omit<QueuedWrite, 'id' | 'createdAt'>): Promise<vo
     }
     await writeQueueRaw(list);
     notify(list.length);
+    return true;
   });
 }
 
@@ -173,6 +204,7 @@ export async function submitWrite(
   api: Api,
   entry: Omit<QueuedWrite, 'id' | 'createdAt'>,
 ): Promise<SubmitResult> {
+  const gen = generation;
   // FIFO ordering: while any write is already pending, a live write would let
   // an OLDER queued write replay on top of it on the next flush
   // (e.g. queued remaining=100 then a live remaining=50, or a queued SET that
@@ -184,10 +216,14 @@ export async function submitWrite(
     // (the guard) no-ops here; we then re-check below.
     await flushQueue(api).catch(() => {});
   }
+  // The server may have changed while that flush ran: `api` now points at
+  // the old one, so neither send the write there nor queue it for the new
+  // one (GH #1210).
+  if (gen !== generation) throw new ServerChangedError();
   if ((await pendingCount()) > 0) {
     if (isQueueable(entry.write)) {
       // Idempotent — enqueue it to drain in order behind the pending writes.
-      await enqueue(entry);
+      if (!(await enqueue(gen, entry))) throw new ServerChangedError();
       return { queued: true };
     }
     // Non-idempotent (usage / dry cycle) can't be queued safely, so it must
@@ -201,7 +237,7 @@ export async function submitWrite(
     return { queued: false, result };
   } catch (e) {
     if (e instanceof ApiError && e.status === 0 && isQueueable(entry.write)) {
-      await enqueue(entry);
+      if (!(await enqueue(gen, entry))) throw new ServerChangedError();
       return { queued: true };
     }
     throw e;
@@ -245,6 +281,7 @@ function isTransient(status: number): boolean {
  */
 export async function flushQueue(api: Api): Promise<FlushResult> {
   if (flushing) return { flushed: 0, dropped: 0, remaining: await pendingCount() };
+  const gen = generation;
   flushing = true;
   let flushed = 0;
   let dropped = 0;
@@ -262,14 +299,25 @@ export async function flushQueue(api: Api): Promise<FlushResult> {
   try {
     for (;;) {
       // Peek the head WITHOUT removing it — durability across a crash/kill.
-      const head = await withLock(async () => (await readQueue())[0] ?? null);
+      // Stop once the server changes: `api` points at the old one, and the
+      // queue now belongs to the new one (GH #1210).
+      const head = await withLock(async () =>
+        gen === generation ? ((await readQueue())[0] ?? null) : null,
+      );
       if (!head) break;
       try {
         await applyWrite(api, head);
         flushed++;
       } catch (e) {
-        if (e instanceof ApiError && isTransient(e.status)) break; // keep it, stop
-        dropped++; // permanent rejection — fall through and remove
+        if (e instanceof ApiError && e.committed) {
+          // GH #1211: the server applied it and only the reply was lost —
+          // it's done; replaying it could overwrite a newer edit.
+          flushed++;
+        } else if (e instanceof ApiError && isTransient(e.status)) {
+          break; // keep it, stop
+        } else {
+          dropped++; // permanent rejection — fall through and remove
+        }
       }
       // Remove the processed head. If it's already gone, the queue was cleared
       // under us (a server change called clearQueue) and may now hold entries
