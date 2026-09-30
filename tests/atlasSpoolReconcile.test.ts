@@ -71,7 +71,7 @@ describe("reconcileImportedSpools", () => {
       { _id: localId, instanceId: "localinst1", locationId: "loc-1", totalWeight: 500, label: "remote" },
     ]);
     expect([r.matched, r.added, r.keptLocal, r.skippedOwned]).toEqual([1, 0, 0, 0]);
-    expect(r.newlyRetired).toEqual([]);
+    expect(r.retiredIds).toEqual([]);
   });
 
   it("keeps local values for keys the source omits, and fills a missing instanceId/location", () => {
@@ -84,24 +84,33 @@ describe("reconcileImportedSpools", () => {
     expect(r.spools[0]).toMatchObject({ label: "local", totalWeight: 400, instanceId: "fresh", locationId: null });
   });
 
-  it("reports a spool the source retires, but not one already retired", () => {
-    const other = new ObjectId();
+  it("reports every matched spool that is retired after the merge", () => {
+    const [already, silent, unretired] = [new ObjectId(), new ObjectId(), new ObjectId()];
     const r = reconcileImportedSpools(
       [
         { id: localId.toHexString(), spool: { retired: true } },
-        { id: other.toHexString(), spool: { retired: true } },
+        // Already retired locally: reported again, so an interrupted slot
+        // cleanup is retried (Codex review on PR #1217).
+        { id: already.toHexString(), spool: { retired: true } },
+        { id: silent.toHexString(), spool: { totalWeight: 10 } },
+        { id: unretired.toHexString(), spool: { retired: false } },
       ],
-      [local(), local({ _id: other, retired: true })],
+      [
+        local(),
+        local({ _id: already, retired: true }),
+        local({ _id: silent, retired: true }),
+        local({ _id: unretired, retired: true }),
+      ],
       new Set(),
       mint,
     );
-    expect(r.newlyRetired).toEqual([localId.toHexString()]);
+    expect(r.retiredIds).toEqual([localId, already, silent].map((id) => id.toHexString()));
   });
 
   it("reads retired the way the schema casts it", () => {
     const retires = (retired: unknown) =>
       reconcileImportedSpools([{ id: localId.toHexString(), spool: { retired } }], [local()], new Set(), mint)
-        .newlyRetired.length === 1;
+        .retiredIds.length === 1;
     for (const v of [true, "true", 1, "1", "yes"]) expect(retires(v)).toBe(true);
     for (const v of [false, "false", 0, "0", "no", null, undefined, "TRUE", 2]) expect(retires(v)).toBe(false);
   });

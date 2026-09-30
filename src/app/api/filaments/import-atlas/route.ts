@@ -283,13 +283,14 @@ export async function POST(request: NextRequest) {
 
           // Merge the source spools into `localSpools` (the target's own, read
           // under its key; empty on a create) and set the result on
-          // filamentData. Returns the notes for the user and the ids the source
-          // just retired; the caller reports them once its write has landed.
+          // filamentData. Returns the notes for the user and the matched spools
+          // retired after the merge; the caller clears their printer slots once
+          // its write has landed.
           const mergeSpools = async (
             localSpools: readonly LocalSpool[],
             targetId: Types.ObjectId | null,
-          ): Promise<{ notes: string[]; newlyRetired: string[] }> => {
-            if (!remoteSpools) return { notes: [], newlyRetired: [] };
+          ): Promise<{ notes: string[]; retiredIds: string[] }> => {
+            if (!remoteSpools) return { notes: [], retiredIds: [] };
             // A source spool whose `_id` another local filament already holds
             // would give one roll two owners. Trashed rows count (restoring
             // one would surface the second owner); purged tombstones don't.
@@ -332,11 +333,12 @@ export async function POST(request: NextRequest) {
                 `${importName}: skipped ${r.skippedOwned} spool(s) another local filament already holds`,
               );
             }
-            return { notes, newlyRetired: r.newlyRetired };
+            return { notes, retiredIds: r.retiredIds };
           };
-          // A spool the source retired can't stay loaded in a printer slot
-          // (GH #268 — every later printer save would 400), same as a retire
-          // through the spool route.
+          // A retired spool can't stay loaded in a printer slot (GH #268 —
+          // every later printer save would 400), same as a retire through the
+          // spool route. Idempotent, so every import repairs a slot an earlier
+          // import's interrupted cleanup left behind.
           const clearRetiredFromSlots = async (ids: readonly string[]) => {
             for (const id of ids) await assignSpoolToSlot(Printer, id, null);
           };
@@ -361,7 +363,7 @@ export async function POST(request: NextRequest) {
           }
           if (existing) {
             const existingId = existing._id;
-            let merged: { notes: string[]; newlyRetired: string[] } = { notes: [], newlyRetired: [] };
+            let merged: { notes: string[]; retiredIds: string[] } = { notes: [], retiredIds: [] };
             // GH #605: when the LOCAL row is a TEMPLATE, the remote's
             // per-variant state must not be written onto it. PUT-parity rule:
             // whatever the PUT handler strips on templates (the shared
@@ -432,7 +434,7 @@ export async function POST(request: NextRequest) {
             });
             errors.push(...merged.notes);
             updated++;
-            await clearRetiredFromSlots(merged.newlyRetired);
+            await clearRetiredFromSlots(merged.retiredIds);
           } else {
             // If a soft-deleted doc with the same name exists, resurrect it.
             // GH #499: filter on `_purged: { $ne: true }` like every other
@@ -483,7 +485,7 @@ export async function POST(request: NextRequest) {
               // GH #1209: the source spools merge into the tombstone's own,
               // read fresh under its key like the update path.
               const tombstoneId = softDeleted._id;
-              let merged: { notes: string[]; newlyRetired: string[] } = { notes: [], newlyRetired: [] };
+              let merged: { notes: string[]; retiredIds: string[] } = { notes: [], retiredIds: [] };
               const resurrected = await runExclusive(filamentLockKey(tombstoneId), async () => {
                 const current = await Filament.findOne({ _id: tombstoneId, _purged: { $ne: true } })
                   .select("spools")
@@ -511,7 +513,7 @@ export async function POST(request: NextRequest) {
                 updated++;
               }
               errors.push(...merged.notes);
-              await clearRetiredFromSlots(merged.newlyRetired);
+              await clearRetiredFromSlots(merged.retiredIds);
             } else {
               // The partial-unique index on `name` covers `_deletedAt: null`
               // only, and `_purged` rows keep `_deletedAt` set — so a

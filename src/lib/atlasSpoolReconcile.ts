@@ -106,9 +106,11 @@ export interface ReconcileResult {
   keptLocal: number;
   /** Source spools skipped because another local filament owns their `_id`. */
   skippedOwned: number;
-  /** Local spool ids the source just retired (their printer slots must be
-   *  cleared — a retired spool can't stay loaded, GH #268). */
-  newlyRetired: string[];
+  /** Matched spool ids that are retired after the merge. A retired spool
+   *  can't stay loaded (GH #268), so the caller clears their printer slots on
+   *  EVERY import, not only when the flag flips: a cleanup interrupted after
+   *  the write is then repaired by the next import. */
+  retiredIds: string[];
 }
 
 /**
@@ -126,7 +128,7 @@ export function reconcileImportedSpools(
   const spools: Record<string, unknown>[] = localSpools.map((s) => ({ ...s }));
   const indexById = new Map(spools.map((s, i) => [String(s._id).toLowerCase(), i]));
   const matchedIds = new Set<string>();
-  const newlyRetired: string[] = [];
+  const retiredIds: string[] = [];
   let added = 0;
   let skippedOwned = 0;
 
@@ -134,7 +136,8 @@ export function reconcileImportedSpools(
     const at = indexById.get(id);
     if (at !== undefined) {
       const local = spools[at];
-      if (local.retired !== true && castsToTrue(spool.retired)) newlyRetired.push(id);
+      const retired = spool.retired !== undefined ? castsToTrue(spool.retired) : local.retired === true;
+      if (retired) retiredIds.push(id);
       spools[at] = {
         ...local,
         ...spool,
@@ -165,6 +168,6 @@ export function reconcileImportedSpools(
     added,
     keptLocal: localSpools.length - matchedIds.size,
     skippedOwned,
-    newlyRetired,
+    retiredIds,
   };
 }

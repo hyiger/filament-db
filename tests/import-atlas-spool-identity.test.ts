@@ -276,6 +276,28 @@ describe("POST /api/filaments/import-atlas — spool identity on re-import (GH #
     expect(slot.spoolId).toBeNull();
   });
 
+  it("clears the slot of a spool already retired locally, retrying an interrupted cleanup", async () => {
+    const remoteId = new ObjectId();
+    const A = new ObjectId();
+    const doc = { _id: remoteId, name: "Atlas Retry Retire PLA", vendor: "V", type: "PLA", _deletedAt: null };
+    await withRemote((col) => col.insertOne({ ...doc, spools: [{ _id: A, totalWeight: 900 }] }));
+    await runImport([remoteId]);
+    const local = await Filament.findOne({ name: "Atlas Retry Retire PLA" }).lean();
+    const printer = await Printer.create({
+      name: "Atlas Retry Retire Printer",
+      manufacturer: "M",
+      printerModel: "P",
+      amsSlots: [{ slotName: "A1", filamentId: local._id, spoolId: A }],
+    });
+    // An earlier import retired the spool, then stopped before clearing its slot.
+    await Filament.collection.updateOne({ _id: local._id }, { $set: { "spools.0.retired": true } });
+    await withRemote((col) => col.updateOne({ _id: remoteId }, { $set: { "spools.0.retired": true } }));
+
+    await runImport([remoteId]);
+    const slot = (await Printer.findById(printer._id).lean()).amsSlots[0];
+    expect(slot.spoolId).toBeNull();
+  });
+
   it("merges into a trashed row it resurrects, keeping that row's spool identity", async () => {
     const trashed = await Filament.create({
       name: "Atlas Trashed PLA",
