@@ -1936,7 +1936,7 @@
   "printJob.filament": "Filament",
   "printJob.filamentSelect": "Select filament…",
   "printJob.spool": "Spool",
-  "printJob.spoolAuto": "Auto (first active spool)",
+  "printJob.spoolAuto": "Auto (first spool with filament left)",
   "printJob.grams": "Grams",
   "printJob.addRow": "+ Add filament",
   "printJob.removeRow": "Remove",

@@ -4,6 +4,7 @@ import {
   getRemainingDisplay,
   getRemainingGrams,
   getRemainingPct,
+  selectSpoolForDebit,
   type InventoryFilament,
 } from "@/lib/inventoryStats";
 
@@ -419,5 +420,61 @@ describe("inventoryStats", () => {
         pct: 100, // (1000-200)/800
       });
     });
+  });
+});
+
+/**
+ * GH #1212: `totalWeight` is gross, so an empty roll still reads its tare —
+ * the old `totalWeight > 0` rule picked it ahead of a full roll and debited
+ * the tare while real inventory never moved.
+ */
+describe("selectSpoolForDebit", () => {
+  it("skips a roll that is down to its tare in favour of one with filament", () => {
+    const spools = [{ totalWeight: 200 }, { totalWeight: 1200 }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[1]);
+  });
+
+  it("skips a roll below its tare", () => {
+    const spools = [{ totalWeight: 150 }, { totalWeight: 900 }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[1]);
+  });
+
+  it("takes the first roll with filament left, in order", () => {
+    const spools = [{ totalWeight: 201 }, { totalWeight: 1200 }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[0]);
+  });
+
+  it("never auto-picks a retired roll, however full", () => {
+    const spools = [{ totalWeight: 1200, retired: true }, { totalWeight: 600 }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[1]);
+  });
+
+  it("prefers an untracked roll over a known-empty one", () => {
+    const spools = [{ totalWeight: 200 }, { totalWeight: null }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[1]);
+    // Pinned with no tare too: [0 g, untracked] used to pick the 0 g roll.
+    const noTare = [{ totalWeight: 0 }, { totalWeight: null }];
+    expect(selectSpoolForDebit(noTare, null)).toBe(noTare[1]);
+  });
+
+  it("falls back to the first active roll when every roll is known-empty", () => {
+    const spools = [{ totalWeight: 5, retired: true }, { totalWeight: 200 }, { totalWeight: 180 }];
+    expect(selectSpoolForDebit(spools, 200)).toBe(spools[1]);
+  });
+
+  it("returns undefined when every roll is retired (GH #305)", () => {
+    expect(selectSpoolForDebit([{ totalWeight: 900, retired: true }], 200)).toBeUndefined();
+    expect(selectSpoolForDebit([], 200)).toBeUndefined();
+  });
+
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["NaN", Number.NaN],
+    ["negative", -50],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("treats a %s tare as 0 — the pre-#1212 positive-gross rule", (_label, tare) => {
+    const spools = [{ totalWeight: 0 }, { totalWeight: 10 }, { totalWeight: 900 }];
+    expect(selectSpoolForDebit(spools, tare)).toBe(spools[1]);
   });
 });

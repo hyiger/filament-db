@@ -1795,3 +1795,130 @@ describe("POST /api/print-history — legacy single-spool filaments (#1121)", ()
     expect(fresh.spools[0].totalWeight).toBe(500);
   });
 });
+
+describe("POST /api/print-history — tare-aware spool auto-selection (#1212)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Filament: any;
+  let PrintHistory: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    for (const m of ["Filament", "PrintHistory", "Printer", "Nozzle", "BedType", "Location"]) {
+      delete mongoose.models[m];
+    }
+    Filament = (await import("@/models/Filament")).default;
+    await import("@/models/Printer");
+    await import("@/models/Nozzle");
+    await import("@/models/BedType");
+    await import("@/models/Location");
+    PrintHistory = (await import("@/models/PrintHistory")).default;
+  });
+
+  const postUsage = (usage: { filamentId: string; spoolId?: string; grams: number }[]) =>
+    postPrintHistory(
+      new NextRequest("http://localhost/api/print-history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jobLabel: "Tare job", usage }),
+      }),
+    );
+
+  const weights = async (id: unknown) =>
+    (await Filament.findById(id)).spools.map((s: { totalWeight: number | null }) => s.totalWeight);
+
+  it("debits the full roll, not the empty one ahead of it (the issue's case)", async () => {
+    const f = await Filament.create({
+      name: "Tare PLA",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ totalWeight: 200 }, { totalWeight: 1200 }],
+    });
+    const res = await postUsage([{ filamentId: String(f._id), grams: 50 }]);
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.usage[0].spoolId).toBe(String(f.spools[1]._id));
+    expect(await weights(f._id)).toEqual([200, 1150]);
+  });
+
+  it("uses the template's tare when a variant leaves its own blank", async () => {
+    const parent = await Filament.create({ name: "Tare Template", vendor: "V", type: "PLA", spoolWeight: 250 });
+    const v = await Filament.create({
+      name: "Tare Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      spoolWeight: null,
+      spools: [{ totalWeight: 240 }, { totalWeight: 1250 }],
+    });
+    const res = await postUsage([{ filamentId: String(v._id), grams: 20 }]);
+    expect(res.status).toBe(201);
+    expect(await weights(v._id)).toEqual([240, 1230]);
+  });
+
+  it("honours a variant's own tare over its template's", async () => {
+    const parent = await Filament.create({ name: "Heavy Template", vendor: "V", type: "PLA", spoolWeight: 250 });
+    const v = await Filament.create({
+      name: "Light Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      spoolWeight: 0,
+      spools: [{ totalWeight: 240 }, { totalWeight: 1250 }],
+    });
+    const res = await postUsage([{ filamentId: String(v._id), grams: 20 }]);
+    expect(res.status).toBe(201);
+    expect(await weights(v._id)).toEqual([220, 1250]);
+  });
+
+  it("rolls a multi-row job over to the next roll once the first reaches its tare", async () => {
+    const f = await Filament.create({
+      name: "Rollover PLA",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ totalWeight: 300 }, { totalWeight: 1200 }],
+    });
+    const res = await postUsage([
+      { filamentId: String(f._id), grams: 100 },
+      { filamentId: String(f._id), grams: 40 },
+    ]);
+    expect(res.status).toBe(201);
+    expect(await weights(f._id)).toEqual([200, 1160]);
+  });
+
+  it("still debits an explicitly named empty roll", async () => {
+    const f = await Filament.create({
+      name: "Explicit Empty",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ totalWeight: 200 }, { totalWeight: 1200 }],
+    });
+    const res = await postUsage([
+      { filamentId: String(f._id), spoolId: String(f.spools[0]._id), grams: 50 },
+    ]);
+    expect(res.status).toBe(201);
+    expect(await weights(f._id)).toEqual([150, 1200]);
+  });
+
+  it("refunds the auto-selected roll exactly on undo", async () => {
+    const f = await Filament.create({
+      name: "Refund Tare",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ totalWeight: 200 }, { totalWeight: 1200 }],
+    });
+    const res = await postUsage([{ filamentId: String(f._id), grams: 50 }]);
+    const job = await res.json();
+    const del = await deletePrintHistory(
+      new NextRequest(`http://localhost/api/print-history/${job._id}`, { method: "DELETE" }),
+      { params: Promise.resolve({ id: job._id }) },
+    );
+    expect(del.status).toBe(200);
+    expect(await weights(f._id)).toEqual([200, 1200]);
+    expect(await PrintHistory.countDocuments({ _deletedAt: null })).toBe(0);
+  });
+});

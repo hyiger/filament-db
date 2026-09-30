@@ -9,6 +9,7 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
+import { selectSpoolForDebit } from "@/lib/inventoryStats";
 
 /** What one migration attempt decided. `created` records the spool this
  *  request materialized (as opposed to one it ADOPTED from a peer that
@@ -206,6 +207,33 @@ export async function POST(request: NextRequest) {
         }
       }
     }
+
+    // GH #1212: auto-selection compares each spool's REMAINING filament (gross
+    // totalWeight minus the empty-spool tare), so resolve every target's tare
+    // up front. A variant leaves `spoolWeight` blank to inherit its
+    // template's (GH #106) — one lock-free, spec-only read, the same lookup
+    // the DELETE refund and spool-check make. Read off whichever doc the
+    // selection is handed, so a txn-reloaded or migrated doc uses its own
+    // current value.
+    const parentTareIds = Array.from(
+      new Set(
+        filaments
+          .filter((f) => f.spoolWeight == null && f.parentId)
+          .map((f) => String(f.parentId)),
+      ),
+    );
+    const parentTareById = new Map<string, number | null>();
+    if (parentTareIds.length > 0) {
+      const parents = await Filament.find({ _id: { $in: parentTareIds }, _deletedAt: null })
+        .select("spoolWeight")
+        .lean();
+      for (const p of parents) {
+        parentTareById.set(String(p._id), (p.spoolWeight as number | null) ?? null);
+      }
+    }
+    const effectiveTare = (f: (typeof filaments)[number]): number | null =>
+      f.spoolWeight ??
+      (f.parentId ? parentTareById.get(String(f.parentId)) ?? null : null);
 
     // GH #1121: materialize a LEGACY single-spool filament (stock on the
     // filament's own `totalWeight`, no spools[]) as a real spool before
@@ -429,11 +457,12 @@ export async function POST(request: NextRequest) {
         if (!filament) {
           throw new JobPreconditionError(`Filament not found: ${u.filamentId}`, 404);
         }
+        // No named spool: the first roll that still HOLDS filament (GH #1212 —
+        // see selectSpoolForDebit for the tiers), not merely the first with a
+        // positive gross weight, which an empty roll's tare always is.
         const spool = u.spoolId
           ? filament.spools.find((s) => String(s._id) === u.spoolId)
-          : filament.spools.find(
-              (s) => !s.retired && s.totalWeight !== null && s.totalWeight > 0,
-            ) ?? filament.spools.find((s) => !s.retired);
+          : selectSpoolForDebit(filament.spools, effectiveTare(filament));
 
         // An explicitly-named spool can likewise be deleted before the
         // reload — without this the `else` branch records `spoolId: null`

@@ -5190,7 +5190,8 @@
                           "type": "string"
                         },
                         "spoolId": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "Spool subdocument _id to debit (honoured even when retired). Omit it to let the server pick: the first non-retired spool that still holds filament (gross totalWeight minus the filament's effective empty-spool weight above zero, GH #1212), else the first non-retired spool whose weight is untracked, else the first non-retired spool. When every spool is retired the entry is recorded with spoolId null and nothing is debited."
                         },
                         "grams": {
                           "type": "number",

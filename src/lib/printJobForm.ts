@@ -22,8 +22,8 @@ export const MAX_USAGE_ROWS = 100;
 
 export interface PrintJobUsageRow {
   filamentId: string;
-  /** Spool subdocument id; "" = let the server auto-select (first non-retired
-   *  spool with weight). */
+  /** Spool subdocument id; "" = let the server auto-select (the first
+   *  non-retired spool with filament left — GH #1212). */
   spoolId: string;
   /** Raw input value — validated/parsed here, not in the component. */
   grams: string;

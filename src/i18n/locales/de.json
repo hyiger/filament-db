@@ -1936,7 +1936,7 @@
   "printJob.filament": "Filament",
   "printJob.filamentSelect": "Filament wählen…",
   "printJob.spool": "Spule",
-  "printJob.spoolAuto": "Automatisch (erste aktive Spule)",
+  "printJob.spoolAuto": "Automatisch (erste Spule mit Restfilament)",
   "printJob.grams": "Gramm",
   "printJob.addRow": "+ Filament hinzufügen",
   "printJob.removeRow": "Entfernen",
