@@ -2,7 +2,7 @@
  * CI audit gate: `npm audit --audit-level=moderate` with a reviewed allowlist.
  *
  * npm audit has no native exception mechanism, so an UNFIXABLE advisory (e.g.
- * immutable pinned to ^3.x by swagger-ui-react, no upstream fix) would fail
+ * a transitive dependency with no published patched release) would fail
  * every CI run forever. This wrapper fails on any advisory >= moderate whose
  * (GHSA id, package) pair is NOT in `.audit-allowlist.json`, and prints
  * allowlisted ones as warnings (plus a nudge when an entry is past its

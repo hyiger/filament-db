@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import dns from "node:dns";
+import http from "node:http";
 import net from "node:net";
 
 const { mockLookup } = vi.hoisted(() => ({
@@ -442,5 +443,124 @@ describe("ssrfDispatcher — connection-time DNS guard", () => {
       // Connect is intentionally failed after approval — irrelevant here.
     }
     expect(connectAttempted).toBe(true);
+  });
+});
+
+/**
+ * GH #1216: `ssrfDispatcher` comes from the INSTALLED undici but is handed to
+ * Node's GLOBAL fetch, which is the undici bundled with the running Node. The
+ * two must speak the same dispatch-handler API — undici 6's interceptors call
+ * the legacy `handler.onError`, which Node 26's fetch doesn't provide, so the
+ * success path hung and every error path threw `onError is not a function`.
+ *
+ * These cases drive a real request end to end — no fetch stub — so a
+ * handler-API mismatch fails here on whichever Node runs the suite. DNS is
+ * stubbed to a TEST-NET address, and only connects to that address are
+ * redirected to a local server (the per-file mongod connection is untouched).
+ */
+describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () => {
+  const UPSTREAM_IP = "203.0.113.7";
+  type FetchInit = RequestInit & { dispatcher?: typeof ssrfDispatcher };
+  let server: http.Server;
+  let serverPort: number;
+
+  beforeEach(async () => {
+    server = http.createServer((req, res) => {
+      if (req.url === "/redirect") {
+        res.writeHead(302, { location: "http://public.example.test/landing" });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("hello from upstream");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    serverPort = (server.address() as net.AddressInfo).port;
+    vi.spyOn(dns, "lookup").mockImplementation(((_host: unknown, opts: unknown, cb: unknown) => {
+      const callback = (typeof opts === "function" ? opts : cb) as (
+        err: Error | null,
+        addrs?: dns.LookupAddress[],
+      ) => void;
+      callback(null, [{ address: UPSTREAM_IP, family: 4 }]);
+    }) as unknown as typeof dns.lookup);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  /** Reroute connects aimed at UPSTREAM_IP to 127.0.0.1:`port`; counts them. */
+  function redirectUpstreamTo(port: number): { attempts: () => number } {
+    let attempts = 0;
+    const original = net.Socket.prototype.connect;
+    vi.spyOn(net.Socket.prototype, "connect").mockImplementation(function (
+      this: net.Socket,
+      ...args: unknown[]
+    ) {
+      // net.connect() hands Socket#connect its normalized [options, cb] pair.
+      const first = args[0];
+      const opts = (Array.isArray(first) ? first[0] : first) as { host?: string; port?: number };
+      if (opts && typeof opts === "object" && opts.host === UPSTREAM_IP) {
+        attempts++;
+        opts.host = "127.0.0.1";
+        opts.port = port;
+      }
+      return (original as (...a: unknown[]) => net.Socket).apply(this, args);
+    } as unknown as typeof net.Socket.prototype.connect);
+    return { attempts: () => attempts };
+  }
+
+  it("delivers a 200 response body through the pinned, validated address", async () => {
+    const redirect = redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/doc", {
+      dispatcher: ssrfDispatcher,
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("hello from upstream");
+    expect(redirect.attempts()).toBe(1);
+  });
+
+  it("surfaces a manual redirect's status and Location", async () => {
+    redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/redirect", {
+      dispatcher: ssrfDispatcher,
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("http://public.example.test/landing");
+  });
+
+  it("rejects a refused connection promptly, with a bounded number of attempts", async () => {
+    // A port nobody listens on: close a server we just opened to claim one.
+    // No host argument — listen(port, host) resolves the host through the
+    // dns.lookup this suite stubs.
+    const dead = http.createServer();
+    await new Promise<void>((resolve) => dead.listen(0, resolve));
+    const deadPort = (dead.address() as net.AddressInfo).port;
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+
+    const redirect = redirectUpstreamTo(deadPort);
+    const started = performance.now();
+    let caught: unknown;
+    try {
+      await fetch("http://public.example.test/", {
+        dispatcher: ssrfDispatcher,
+        signal: AbortSignal.timeout(5_000),
+      } as FetchInit);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(String((caught as { name?: string }).name)).not.toBe("TimeoutError");
+    expect(performance.now() - started).toBeLessThan(4_000);
+    // undici's DNS interceptor retries a refused connect once (dual-stack
+    // fallback); an unbounded loop here is the other half of the #1216 report.
+    const settledAttempts = redirect.attempts();
+    expect(settledAttempts).toBeLessThanOrEqual(2);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(redirect.attempts()).toBe(settledAttempts);
   });
 });

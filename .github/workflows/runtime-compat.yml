@@ -1,0 +1,53 @@
+name: Runtime compatibility
+
+# GH #1216: the SSRF dispatcher comes from the INSTALLED undici but is handed
+# to Node's GLOBAL fetch, i.e. the undici bundled with whatever Node runs the
+# server. A major-version mismatch between the two broke every guarded fetch
+# on Node 26 while the 20/22 gate stayed green. This job runs the fetch-path
+# suites on the runtimes the gate doesn't cover: Node 24 (the runtime Electron
+# 41 embeds) and the current Node release.
+#
+# Deliberately NOT part of test.yml / ci-gate.yml and not a required check:
+# ci-gate.yml gates release.yml and docker.yml, and neither shipped artifact
+# runs Node 26, so a future Node release must not be able to block a tag.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - package.json
+      - package-lock.json
+      - src/lib/externalUrlGuard.ts
+      - src/lib/openprinttagBrowser.ts
+      - tests/externalUrlGuard.test.ts
+      - tests/openprinttagBrowser.test.ts
+      - .github/workflows/runtime-compat.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+jobs:
+  fetch-path:
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [24, 26]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies
+        # --ignore-scripts: only the fetch path is under test here, so skip
+        # the NFC native module build (and its PC/SC headers) and Electron's
+        # binary download. mongodb-memory-server fetches mongod on first use.
+        run: npm ci --ignore-scripts
+
+      - name: Fetch-path tests
+        run: npx vitest run tests/externalUrlGuard.test.ts tests/openprinttagBrowser.test.ts
