@@ -27,7 +27,7 @@ import {
  * force-emptied below.
  */
 const IMPORTABLE_FILAMENT_FIELDS = [
-  "name", "vendor", "type", "color", "colorName", "cost", "density",
+  "name", "vendor", "type", "color", "secondaryColors", "colorName", "cost", "density",
   "diameter", "temperatures", "bedTypeTemps", "maxVolumetricSpeed",
   "presets", "spools", "spoolWeight", "netFilamentWeight", "totalWeight",
   "lowStockThreshold", "dryingTemperature", "dryingTime",
@@ -132,6 +132,35 @@ export async function POST(request: NextRequest) {
         const filamentData: Record<string, unknown> = {};
         for (const key of IMPORTABLE_FILAMENT_FIELDS) {
           if (remote[key] !== undefined) filamentData[key] = remote[key];
+        }
+
+        // GH #1213: a coextruded/gradient filament keeps its colors in
+        // `secondaryColors` with a null primary, so dropping the field
+        // imported it colorless (and left a re-import's stale secondaries in
+        // place). The remote is caller-supplied, so keep only what the schema
+        // would accept — up to five `#RRGGBB` strings — rather than letting
+        // one malformed entry fail the write. An explicit `[]` clears the
+        // local array; a value that is not an array, or an array with no
+        // valid entry at all, is not a clear and leaves the local one alone.
+        if ("secondaryColors" in filamentData) {
+          const raw = filamentData.secondaryColors;
+          if (!Array.isArray(raw)) {
+            delete filamentData.secondaryColors;
+          } else {
+            const clean = raw
+              .filter((c): c is string => typeof c === "string" && /^#[0-9A-Fa-f]{6}$/.test(c))
+              .slice(0, 5);
+            if (raw.length > 0 && clean.length === 0) {
+              delete filamentData.secondaryColors;
+            } else {
+              filamentData.secondaryColors = clean;
+            }
+            if (clean.length !== raw.length) {
+              errors.push(
+                `${String(remote.name)}: skipped ${raw.length - clean.length} invalid or excess secondary color(s)`,
+              );
+            }
+          }
         }
 
         // GH #1021: a pre-#1022 source Atlas can carry the stamped machine
