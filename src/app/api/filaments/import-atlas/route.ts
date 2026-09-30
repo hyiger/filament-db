@@ -46,6 +46,16 @@ const IMPORTABLE_FILAMENT_FIELDS = [
   "inherits", "settings",
 ] as const;
 
+/**
+ * Held from an import's spool-ownership check until the write that adds those
+ * spools has landed. Two imports adding the same source spool `_id` to
+ * DIFFERENT local filaments would otherwise both see it unowned — their
+ * filament keys differ, and a create takes none — and persist a second owner
+ * of one roll. Process-wide, and always taken last (inside any filament key),
+ * so it can't deadlock.
+ */
+const SPOOL_OWNERSHIP_KEY = "import-atlas:spool-ownership";
+
 // POST with { uri } — list filaments from remote Atlas
 // POST with { uri, filaments: [...ids] } — import selected filaments
 export async function POST(request: NextRequest) {
@@ -431,17 +441,19 @@ export async function POST(request: NextRequest) {
               // GH #1209: merge into the spools as they are NOW — `existing`
               // was read before this key was held.
               const current = await Filament.findById(existingId).select("spools").lean();
-              merged = await mergeSpools((current?.spools ?? []) as unknown as LocalSpool[], existingId);
-              // GH #255: runValidators so schema constraints (cost.min, etc.)
-              // are enforced on the update path, not just on create. An array
-              // rewrite doesn't move `__v` by itself, so bump it: a document
-              // hydrated before this write must not positionally save over it
-              // (the promoteParent.ts precedent).
-              await Filament.updateOne(
-                { _id: existingId },
-                { $set: filamentData, ...(filamentData.spools ? { $inc: { __v: 1 } } : {}) },
-                { runValidators: true, context: "query" },
-              );
+              await runExclusive(SPOOL_OWNERSHIP_KEY, async () => {
+                merged = await mergeSpools((current?.spools ?? []) as unknown as LocalSpool[], existingId);
+                // GH #255: runValidators so schema constraints (cost.min,
+                // etc.) are enforced on the update path, not just on create.
+                // An array rewrite doesn't move `__v` by itself, so bump it: a
+                // document hydrated before this write must not positionally
+                // save over it (the promoteParent.ts precedent).
+                await Filament.updateOne(
+                  { _id: existingId },
+                  { $set: filamentData, ...(filamentData.spools ? { $inc: { __v: 1 } } : {}) },
+                  { runValidators: true, context: "query" },
+                );
+              });
               await clearRetiredFromSlots(merged.retiredIds);
             });
             errors.push(...merged.notes);
@@ -501,15 +513,17 @@ export async function POST(request: NextRequest) {
                 const current = await Filament.findOne({ _id: tombstoneId, _purged: { $ne: true } })
                   .select("spools")
                   .lean();
-                merged = await mergeSpools((current?.spools ?? []) as unknown as LocalSpool[], tombstoneId);
-                const res = await Filament.updateOne(
-                  { _id: tombstoneId, _purged: { $ne: true } },
-                  {
-                    $set: { ...filamentData, _deletedAt: null },
-                    ...(filamentData.spools ? { $inc: { __v: 1 } } : {}),
-                  },
-                  { runValidators: true, context: "query" },
-                );
+                const res = await runExclusive(SPOOL_OWNERSHIP_KEY, async () => {
+                  merged = await mergeSpools((current?.spools ?? []) as unknown as LocalSpool[], tombstoneId);
+                  return Filament.updateOne(
+                    { _id: tombstoneId, _purged: { $ne: true } },
+                    {
+                      $set: { ...filamentData, _deletedAt: null },
+                      ...(filamentData.spools ? { $inc: { __v: 1 } } : {}),
+                    },
+                    { runValidators: true, context: "query" },
+                  );
+                });
                 if (res.matchedCount === 0) return false;
                 await clearRetiredFromSlots(merged.retiredIds);
                 return true;
@@ -519,8 +533,10 @@ export async function POST(request: NextRequest) {
                 // partial-unique name index permits it; the purged row keeps
                 // `_deletedAt` set). Its spools come from the SOURCE alone: a
                 // merged array would hand it the tombstone's spool identities.
-                merged = await mergeSpools([], null);
-                await Filament.create(filamentData);
+                await runExclusive(SPOOL_OWNERSHIP_KEY, async () => {
+                  merged = await mergeSpools([], null);
+                  await Filament.create(filamentData);
+                });
                 created++;
               } else {
                 updated++;
@@ -530,8 +546,11 @@ export async function POST(request: NextRequest) {
               // The partial-unique index on `name` covers `_deletedAt: null`
               // only, and `_purged` rows keep `_deletedAt` set — so a
               // `_purged` row owning this name doesn't block the create.
-              const merged = await mergeSpools([], null);
-              await Filament.create(filamentData);
+              const merged = await runExclusive(SPOOL_OWNERSHIP_KEY, async () => {
+                const m = await mergeSpools([], null);
+                await Filament.create(filamentData);
+                return m;
+              });
               errors.push(...merged.notes);
               created++;
             }

@@ -369,6 +369,44 @@ describe("POST /api/filaments/import-atlas — spool identity on re-import (GH #
     expect((await Printer.findById(printer._id).lean()).amsSlots[0].spoolId).toBeNull();
   });
 
+  // Codex review on PR #1217: two imports adding the same source spool to
+  // different local filaments each saw it unowned, and both kept it.
+  it("gives a spool one owner when two imports add it at once", async () => {
+    const X = new ObjectId();
+    const [one, two] = [new ObjectId(), new ObjectId()];
+    await withRemote((col) =>
+      col.insertMany([
+        { _id: one, name: "Atlas Race One PLA", vendor: "V", type: "PLA", _deletedAt: null, spools: [{ _id: X, totalWeight: 900 }] },
+        { _id: two, name: "Atlas Race Two PLA", vendor: "V", type: "PLA", _deletedAt: null, spools: [{ _id: X, totalWeight: 900 }] },
+      ]),
+    );
+    // Hold each import's ownership query until both have run it, or 300 ms
+    // pass (serialized, the second can't run it until the first has written).
+    const original = Filament.find.bind(Filament);
+    let arrived = 0;
+    let bothArrived!: () => void;
+    const barrier = new Promise<void>((r) => (bothArrived = r));
+    const spy = vi.spyOn(Filament, "find").mockImplementation((...args: unknown[]) => {
+      const filter = args[0] as Record<string, unknown> | undefined;
+      if (!filter || !("spools._id" in filter)) return original(...args);
+      if (++arrived === 2) bothArrived();
+      return {
+        lean: async () => {
+          await Promise.race([barrier, new Promise((r) => setTimeout(r, 300))]);
+          return original(...args).lean();
+        },
+      };
+    });
+    let bodies: { errors?: string[] }[];
+    try {
+      bodies = await Promise.all([runImport([one]), runImport([two])]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await Filament.countDocuments({ "spools._id": X })).toBe(1);
+    expect(bodies.flatMap((b) => b.errors ?? []).join("\n")).toMatch(/skipped 1 spool\(s\) another local filament already holds/);
+  });
+
   it("merges into a trashed row it resurrects, keeping that row's spool identity", async () => {
     const trashed = await Filament.create({
       name: "Atlas Trashed PLA",
