@@ -234,10 +234,19 @@ function ssrfValidatingLookup(
  * is far above any legitimate working set; `maxTTL` (10s default) also ages
  * entries out.
  *
- * The `lookup` cast bridges a known undici quirk: at runtime the
- * interceptor invokes `lookup` with an origin OBJECT (it reads
- * `origin.hostname`), but the published `.d.ts` types the first
- * parameter as a bare string.
+ * GH #1216: callers hand this dispatcher to Node's GLOBAL fetch, which is the
+ * undici bundled with the running Node — not the installed package. The two
+ * must share a dispatch-handler API: undici 6's interceptors call the legacy
+ * `handler.onError`, which Node 26's fetch no longer provides, so every
+ * guarded fetch hung or threw there. undici 7 speaks both handler shapes and
+ * works with the fetch of Node 20 through 26; undici 8 drops the legacy shape
+ * and breaks Node 20/22. Keep the installed major at 7 until the supported
+ * Node range moves (tests/externalUrlGuard.test.ts drives a real request end
+ * to end; .github/workflows/runtime-compat.yml runs it on Node 24 and 26).
+ *
+ * The `lookup` cast bridges a typing mismatch: at runtime the interceptor
+ * invokes `lookup` with an origin OBJECT (it reads `origin.hostname`), but
+ * the published `.d.ts` types the first parameter as a bare string.
  */
 type DnsInterceptorLookup = NonNullable<
   NonNullable<Parameters<typeof interceptors.dns>[0]>["lookup"]

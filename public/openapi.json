@@ -1740,7 +1740,7 @@
           "Filaments"
         ],
         "summary": "Import from MongoDB Atlas",
-        "description": "Connect to a remote MongoDB Atlas instance to list or import filaments. Send only `uri` to list available filaments; send `uri` + `filamentIds` to import selected ones.",
+        "description": "Connect to a remote MongoDB Atlas instance to list or import filaments. Send only `uri` to list available filaments; send `uri` + `filamentIds` to import selected ones. An existing same-name filament is updated. Its spools are merged by spool `_id` (GH #1209): a source spool whose `_id` is already on the local filament updates it in place and keeps the local `_id`, `instanceId` and location, so printer slots, print-history refunds and spool links keep resolving. A new source spool is added with a freshly minted `instanceId`, unless another local filament already holds its `_id`, in which case it is skipped with a note. A local spool the source doesn't carry is kept, with a note. A row that fails is reported in `errors` while the rest still import; the request only fails when no row was imported.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1830,6 +1830,17 @@
                         },
                         "updated": {
                           "type": "integer"
+                        },
+                        "total": {
+                          "type": "integer",
+                          "description": "Number of source filaments requested."
+                        },
+                        "errors": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "Per-row notes: content the import skipped or kept, and rows that failed to import. Absent when there is nothing to report."
                         }
                       }
                     }
@@ -5190,7 +5201,8 @@
                           "type": "string"
                         },
                         "spoolId": {
-                          "type": "string"
+                          "type": "string",
+                          "description": "Spool subdocument _id to debit (honoured even when retired). Omit it to let the server pick: the first non-retired spool that still holds filament (gross totalWeight minus the filament's effective empty-spool weight above zero, GH #1212), else the first non-retired spool whose weight is untracked, else the first non-retired spool. When every spool is retired the entry is recorded with spoolId null and nothing is debited."
                         },
                         "grams": {
                           "type": "number",
@@ -5239,6 +5251,16 @@
           },
           "409": {
             "description": "Optimistic-concurrency version conflict on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The job failed partway and its already-saved debits could not all be reversed (GH #1208) \u2014 error: \"The print job failed and could not be fully undone. Check the affected spools' weights before recording it again.\" Unlike the 409, do not retry blindly: part of the debit may still be in place. Other unexpected server errors also answer 500.",
             "content": {
               "application/json": {
                 "schema": {
@@ -8735,7 +8757,7 @@
           "filamentId": {
             "type": "string",
             "nullable": true,
-            "description": "Currently-loaded filament ObjectId; null = empty slot"
+            "description": "Currently-loaded filament ObjectId; null = empty slot. When spoolId is set, printer create/update derive this from the spool's owning filament and ignore a submitted value (GH #1214)."
           },
           "spoolId": {
             "type": "string",

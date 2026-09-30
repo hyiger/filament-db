@@ -1,7 +1,30 @@
 import { defineConfig } from "vitest/config";
+import { transformWithOxc } from "vite";
 import path from "path";
 
+// packages/mobile sources, imported by the tests/mobile-*.test.ts suites.
+// Vite's default transform loads the NEAREST tsconfig — for these,
+// packages/mobile/tsconfig.json, which extends `expo/tsconfig.base` from
+// packages/mobile/node_modules. Root CI never installs that, so the transform
+// failed there. They are plain TypeScript (the mobile package type-checks them
+// with its own config), so transform them with no tsconfig instead; every
+// other file keeps the default transform and the root tsconfig.
+const MOBILE_SOURCE = /\/packages\/mobile\/src\/.*\.tsx?$/;
+
 export default defineConfig({
+  oxc: { exclude: [/\.js$/, MOBILE_SOURCE] },
+  plugins: [
+    {
+      name: "mobile-sources-without-expo-tsconfig",
+      enforce: "pre",
+      async transform(code, id) {
+        const file = id.split("?")[0];
+        if (!MOBILE_SOURCE.test(file)) return null;
+        const result = await transformWithOxc(code, file, { lang: "ts", tsconfig: false });
+        return { code: result.code, map: result.map };
+      },
+    },
+  ],
   test: {
     globals: true,
     environment: "node",
@@ -29,6 +52,10 @@ export default defineConfig({
         // already have. Pinned in CLAUDE.md so a future contributor
         // knows the trade-off.
         "src/lib/labelBitmap.ts",
+        // The include globs also match packages/mobile/src/lib/**, which the
+        // tests/mobile-*.test.ts suites import. The mobile package is its own
+        // project, outside this gate.
+        "packages/**",
       ],
       // The v1.61 coverage sweep drove src/lib + src/models to ~99% lines /
       // ~99% statements / ~97% functions / ~98% branches. The residual
@@ -67,6 +94,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // packages/mobile's write queue imports this React Native native
+      // module; its tests run against an in-memory stand-in.
+      "@react-native-async-storage/async-storage": path.resolve(
+        __dirname,
+        "./tests/stubs/asyncStorage.ts",
+      ),
     },
   },
 });

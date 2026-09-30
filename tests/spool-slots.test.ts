@@ -6,6 +6,7 @@ import {
   assignSpoolToSlot,
   clearSpoolsFromOtherPrinters,
   findInvalidSlotSpoolRef,
+  validateAndNormalizeAmsSlots,
 } from "@/lib/spoolSlots";
 import {
   GET as getAssignment,
@@ -385,6 +386,63 @@ describe("spool ↔ printer-slot assignment (GH #242)", () => {
     it("passes non-array input through as valid", async () => {
       expect(await findInvalidSlotSpoolRef(Filament, null)).toBeNull();
       expect(await findInvalidSlotSpoolRef(Filament, undefined)).toBeNull();
+    });
+  });
+
+  describe("validateAndNormalizeAmsSlots (GH #1214)", () => {
+    it("overwrites a tracked spool's slot filament with the spool's owner", async () => {
+      const a = await Filament.create({ name: "Norm A", vendor: "V", type: "PLA" });
+      const b = await Filament.create({ name: "Norm B", vendor: "V", type: "ABS", spools: [{ label: "SB" }] });
+      const deletedId = new mongoose.Types.ObjectId();
+      const slots: Record<string, unknown>[] = [
+        { slotName: "1", filamentId: String(a._id), spoolId: String(b.spools[0]._id) },
+        { slotName: "2", filamentId: a._id, spoolId: null },
+        { slotName: "3" },
+      ];
+      expect(await validateAndNormalizeAmsSlots(Filament, slots)).toBeNull();
+      expect(String(slots[0].filamentId)).toBe(String(b._id));
+      expect(String(slots[1].filamentId)).toBe(String(a._id)); // no spool: kept as submitted
+      expect(slots[2].filamentId).toBeUndefined();
+
+      // A missing, malformed or deleted filamentId beside a live spool is
+      // derived too — the spool decides.
+      for (const filamentId of [undefined, null, "not-an-id", String(deletedId)]) {
+        const one: Record<string, unknown>[] = [{ slotName: "x", filamentId, spoolId: b.spools[0]._id }];
+        expect(await validateAndNormalizeAmsSlots(Filament, one)).toBeNull();
+        expect(String(one[0].filamentId)).toBe(String(b._id));
+      }
+    });
+
+    it("leaves every slot untouched when any spool check fails", async () => {
+      const a = await Filament.create({ name: "Norm Keep A", vendor: "V", type: "PLA" });
+      const b = await Filament.create({
+        name: "Norm Keep B",
+        vendor: "V",
+        type: "PLA",
+        spools: [{ label: "ok" }, { label: "retired", retired: true }],
+      });
+      const slots: Record<string, unknown>[] = [
+        { slotName: "1", filamentId: String(a._id), spoolId: String(b.spools[0]._id) },
+        { slotName: "2", filamentId: String(a._id), spoolId: String(b.spools[1]._id) },
+      ];
+      expect(await validateAndNormalizeAmsSlots(Filament, slots)).toBe(
+        'Slot "2": retired spools cannot be assigned to a printer slot',
+      );
+      expect(slots.map((sl) => sl.filamentId)).toEqual([String(a._id), String(a._id)]);
+    });
+
+    it("still rejects a spool-less slot naming a deleted filament (#1114)", async () => {
+      const gone = new mongoose.Types.ObjectId();
+      expect(
+        await validateAndNormalizeAmsSlots(Filament, [{ slotName: "1", filamentId: gone, spoolId: null }]),
+      ).toBe('Slot "1": filament not found');
+      expect(
+        await validateAndNormalizeAmsSlots(Filament, [{ slotName: "2", filamentId: "not-an-id", spoolId: null }]),
+      ).toBe('Slot "2": filamentId is not a valid id');
+    });
+
+    it("passes non-array input through as valid", async () => {
+      expect(await validateAndNormalizeAmsSlots(Filament, undefined)).toBeNull();
     });
   });
 

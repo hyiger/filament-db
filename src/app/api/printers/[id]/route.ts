@@ -13,8 +13,7 @@ import { printerCalibrationRefFilter } from "@/lib/entityDependents";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
 import {
   clearSpoolsFromOtherPrinters,
-  findInvalidSlotSpoolRef,
-  findInvalidSlotFilamentRef,
+  validateAndNormalizeAmsSlots,
 } from "@/lib/spoolSlots";
 import BedType from "@/models/BedType";
 
@@ -120,12 +119,11 @@ export async function PUT(
     // must pass the same active-filament + non-retired checks the dedicated
     // assignment route enforces, or this PUT is the bypass.
     if ("amsSlots" in body) {
-      const slotError =
-        (await findInvalidSlotSpoolRef(Filament, body.amsSlots)) ??
-        // GH #1114: also reject a slot pointing at a deleted filament, which
-        // a stale PrinterForm would otherwise re-persist after the filament
-        // delete cleared it.
-        (await findInvalidSlotFilamentRef(Filament, body.amsSlots));
+      // GH #1114: also reject a slot pointing at a deleted filament, which a
+      // stale PrinterForm would otherwise re-persist after the filament delete
+      // cleared it. GH #1214: a slot tracking a spool takes that spool's
+      // owner as its filament, overwriting the submitted one.
+      const slotError = await validateAndNormalizeAmsSlots(Filament, body.amsSlots);
       if (slotError) {
         return errorResponse(slotError, 400);
       }

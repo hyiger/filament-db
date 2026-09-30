@@ -72,6 +72,36 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
   return Math.max(0, f.totalWeight - (f.spoolWeight ?? 0));
 }
 
+/** The spool a print job debits when the caller names none (GH #1212).
+ *
+ * `totalWeight` is the GROSS scale reading — filament plus the empty spool —
+ * so a roll that is physically empty still reads its tare. Selecting on
+ * `totalWeight > 0` picked such a roll ahead of a full one and debited its
+ * tare while the real inventory never moved. Tiers, first match wins:
+ *   1. the first active spool with filament left (`totalWeight - tare > 0`);
+ *   2. the first active spool whose weight isn't tracked (`null`) — it may
+ *      hold filament, a known-empty roll does not;
+ *   3. the first active spool — every roll is known-empty, so the grams have
+ *      to land somewhere and the choice matches the pre-#1212 fallback.
+ * All retired → `undefined`: a job must not silently debit a retired spool
+ * (GH #305). `tare` is the filament's EFFECTIVE `spoolWeight` (a variant's
+ * own value, else its template's); a missing or invalid tare counts as 0,
+ * matching `getRemainingGrams`. Returns an element of `spools` itself, never
+ * a copy, so callers can mutate the chosen subdocument in place. */
+export function selectSpoolForDebit<S extends InventorySpool>(
+  spools: readonly S[],
+  tare: number | null | undefined,
+): S | undefined {
+  const t = typeof tare === "number" && Number.isFinite(tare) && tare > 0 ? tare : 0;
+  return (
+    spools.find(
+      (s) => !s.retired && typeof s.totalWeight === "number" && s.totalWeight - t > 0,
+    ) ??
+    spools.find((s) => !s.retired && s.totalWeight == null) ??
+    spools.find((s) => !s.retired)
+  );
+}
+
 /** Three-tier decision for a "remaining" table cell (GH #1048).
  *
  * The home list used to branch only on `getRemainingPct` and rendered a

@@ -401,7 +401,12 @@ Returns:
 }
 ```
 
-Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
+Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved. When a row carries notes or fails, the response adds `errors` — one string per note — and the message ends with the note count; a failing row doesn't stop the others, and the request only answers `500` when no row was imported.
+
+**Spools on a re-import** (#1209) are merged by spool `_id`, never replaced wholesale:
+- a source spool whose `_id` is already on the local filament updates it in place, keeping the local `_id`, `instanceId` and location — so printer slots, print-history refunds and `?spool=` links keep resolving; a spool the source retires is also cleared from any printer slot;
+- any other source spool is added with a freshly minted `instanceId`, unless another local filament already holds its `_id` — then it is skipped with a note rather than giving one roll two owners;
+- a local spool the source doesn't carry is kept, with a note. Importing from a database that doesn't share this one's spool ids (spools entered separately on each side) therefore keeps the local rolls next to the source's — delete any duplicates by hand.
 
 ### GET /api/filaments/:id/calibration
 
@@ -1204,6 +1209,8 @@ Returns a single printer with `installedNozzles` populated with full nozzle docu
 
 Update a printer. Send a JSON body with the fields to update.
 
+**`amsSlots`** (POST and PUT). Each slot carries two refs: `filamentId` (the loaded filament) and `spoolId` (the tracked spool). A slot with a `spoolId` must name a spool on an active filament that isn't retired, and one spool can occupy only one slot; otherwise the write is refused with `400` naming the slot. When `spoolId` is set, the slot's `filamentId` is **derived from the spool's owning filament** and any submitted value is ignored (#1214) — the same rule the spool assignment endpoints apply — so a slot can never name one material while tracking a roll of another. A slot without a spool keeps the `filamentId` it was sent, which must be an active filament.
+
 ### DELETE /api/printers/:id
 
 Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a printer that is referenced by filament calibrations. Returns `{ message: "Deleted" }`.
@@ -1519,11 +1526,14 @@ Validations:
 
 Every referenced filament is fetched and validated **before** any mutation. If any one is missing the whole request aborts with 404 and no spool weights are touched. A single-filament job's writes run inside a MongoDB transaction when the deployment supports it (Atlas always does), falling back to sequential saves on standalone mongod; a job spanning several filaments always uses sequential per-filament saves.
 
+**Spool selection** (#1212). A usage entry that names a `spoolId` debits exactly that spool (even a retired one). Without one, the route picks the first non-retired spool that still holds filament — its gross `totalWeight` minus the filament's empty-spool weight (`spoolWeight`, inherited from the template when a variant leaves it blank) is above zero. Failing that it takes the first non-retired spool whose weight isn't tracked, then the first non-retired spool. A roll that is down to its bare spool is therefore skipped in favour of a later full one rather than having its tare debited. When every spool is retired nothing is debited (`spoolId: null`).
+
 **Legacy single-spool filaments are migrated first** (#1121). A filament whose stock lives in its top-level `totalWeight` with an empty `spools[]` has no spool to debit, so before debiting the route converts that roll into a real spool subdocument — carrying the filament's `instanceId` onto it so printed labels and NFC tags keep resolving — and sets the filament's top-level `totalWeight` to `null`, exactly as `POST /api/filaments` does. The debit and any later refund then run against that spool. This is a lasting change to the filament document and it happens on the POST even though the body only names the filament. A filament whose spools are all retired is **not** migrated: it still records the usage with `spoolId: null` and no debit.
 
 Refusals besides the validation `400`s:
 - `400` — a usage entry targets a legacy **template** (a filament with live variants that still holds its roll in `totalWeight`). Inventory belongs on its variants, so the route refuses with the `template_no_spools` message (see *Filament templates*) as `error`. On a multi-filament job every target is checked before any of them is migrated.
 - `409` — `"Filament was modified by another request during this job. Please retry."` A concurrent write changed a target filament between read and save; re-fetch and repeat the request.
+- `500` — `"The print job failed and could not be fully undone. Check the affected spools' weights before recording it again."` A multi-filament job failed partway and its already-saved debits could not all be reversed (#1208). Unlike the `409`, do **not** retry blindly: part of the debit may still be in place. A job that fails partway is otherwise undone exactly — only this job's grams are added back and only its ledger entries removed, so writes other requests made to the same spools in the meantime are kept.
 
 Each spool `usageHistory` entry the POST writes is stamped with `jobId` set to the new PrintHistory `_id`, so a later `DELETE` can match the exact entries to refund.
 

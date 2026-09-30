@@ -535,6 +535,76 @@ describe("/api/printers", () => {
     });
   });
 
+  describe("amsSlots filament/spool agreement (GH #1214)", () => {
+    // Both refs used to be validated independently, so a slot could name
+    // filament A while tracking a spool owned by B.
+    async function mismatchedPair() {
+      const a = await Filament.create({ name: "Pair A PLA", vendor: "V", type: "PLA" });
+      const b = await Filament.create({
+        name: "Pair B ABS",
+        vendor: "V",
+        type: "ABS",
+        spools: [{ label: "SB", totalWeight: 1000 }],
+      });
+      return { a, b, spoolId: String(b.spools[0]._id) };
+    }
+
+    it("POST stores the spool's owner as the slot's filament (the issue's case)", async () => {
+      const { a, b, spoolId } = await mismatchedPair();
+      const res = await createPrinter(
+        jsonReq("http://localhost/api/printers", {
+          name: "Audit Mismatch",
+          manufacturer: "V",
+          printerModel: "P",
+          amsSlots: [{ slotName: "1", filamentId: String(a._id), spoolId }],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const created = await res.json();
+      const stored = (await Printer.findById(created._id).lean()).amsSlots[0];
+      expect(String(stored.filamentId)).toBe(String(b._id));
+      expect(String(stored.spoolId)).toBe(spoolId);
+    });
+
+    it("PUT derives the filament too, including when the form sent none", async () => {
+      const { a, b, spoolId } = await mismatchedPair();
+      const printer = await Printer.create({
+        name: "Pair Printer",
+        manufacturer: "V",
+        printerModel: "P",
+        amsSlots: [{ slotName: "1", filamentId: null, spoolId: null }],
+      });
+      for (const filamentId of [String(a._id), null]) {
+        const res = await updatePrinter(
+          jsonReq(
+            `http://localhost/api/printers/${printer._id}`,
+            { amsSlots: [{ slotName: "1", filamentId, spoolId }] },
+            "PUT",
+          ),
+          { params: Promise.resolve({ id: String(printer._id) }) },
+        );
+        expect(res.status).toBe(200);
+        const stored = (await Printer.findById(printer._id).lean()).amsSlots[0];
+        expect(String(stored.filamentId)).toBe(String(b._id));
+      }
+    });
+
+    it("keeps an 'Any spool' slot's filament as submitted", async () => {
+      const { a } = await mismatchedPair();
+      const res = await createPrinter(
+        jsonReq("http://localhost/api/printers", {
+          name: "Any Spool Printer",
+          manufacturer: "V",
+          printerModel: "P",
+          amsSlots: [{ slotName: "1", filamentId: String(a._id), spoolId: null }],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const created = await res.json();
+      expect(String((await Printer.findById(created._id).lean()).amsSlots[0].filamentId)).toBe(String(a._id));
+    });
+  });
+
   describe("GET /api/printers/{id}", () => {
     it("returns the printer with populated nozzles", async () => {
       const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });

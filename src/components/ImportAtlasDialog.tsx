@@ -177,7 +177,11 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
         setStep("select");
         return;
       }
-      onImported(data.message);
+      // Per-row notes (spools kept or skipped, rows that failed — GH #1209)
+      // come back as server-composed English like `message`; without them
+      // the toast only says how many there were.
+      const notes: string[] = Array.isArray(data.errors) ? data.errors : [];
+      onImported(notes.length > 0 ? `${data.message} ${notes.join(" · ")}` : data.message);
     } catch (err) {
       if (ac.signal.aborted || (err instanceof DOMException && err.name === "AbortError")) return;
       setError(t("atlas.import.networkErrorDuringImport"));

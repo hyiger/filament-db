@@ -8,6 +8,9 @@
   },
   "license": "(AGPL-3.0-or-later AND CC-BY-NC-ND-4.0)",
   "private": true,
+  "engines": {
+    "node": ">=20.18.1"
+  },
   "main": "electron-dist/main.js",
   "scripts": {
     "dev": "next dev -p 3456",
@@ -53,18 +56,18 @@
     "sharp": "^0.35.4",
     "swagger-ui-react": "^5.32.1",
     "tar": "^7.5.16",
-    "undici": "^6.28.0",
+    "undici": "^7.30.0",
     "yaml": "^2.8.3"
   },
   "overrides": {
     "postcss": "^8.5.18",
-    "undici": "^6.28.0",
+    "undici@6": "^6.28.1",
     "exceljs": {
       "uuid": "^11.1.1"
     },
     "tmp": "^0.2.6",
     "shell-quote": "^1.8.4",
-    "joi": "^18.2.1",
+    "joi": "^18.2.6",
     "esbuild": "^0.28.1",
     "@babel/core": "^7.29.1",
     "dompurify": "^3.4.13",
@@ -73,12 +76,13 @@
     "nanoid": "^3.3.17",
     "vite": "^8.0.16",
     "sharp": "^0.35.4",
-    "brace-expansion@1": "^1.1.18",
-    "brace-expansion@2": "^2.1.4",
-    "brace-expansion@>=3.0.0": "^5.0.9",
-    "fast-uri": "^3.1.7",
+    "brace-expansion@1": "^1.1.21",
+    "brace-expansion@2": "^2.1.7",
+    "brace-expansion@>=3.0.0": "^5.0.12",
+    "fast-uri": "^3.1.8",
     "browserslist": "^4.28.8",
-    "@xmldom/xmldom@0.8": "^0.8.15"
+    "@xmldom/xmldom@0.8": "^0.8.15",
+    "immutable@3": "^3.8.4"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
@@ -90,7 +94,7 @@
     "@types/swagger-ui-react": "^5.18.0",
     "@vitest/coverage-v8": "^4.1.11",
     "concurrently": "^9.2.1",
-    "electron": "^41.10.4",
+    "electron": "^41.10.6",
     "electron-builder": "^26.8.1",
     "esbuild": "^0.28.1",
     "eslint": "^9",

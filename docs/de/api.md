@@ -397,7 +397,12 @@ Liefert:
 }
 ```
 
-Bestehende Filamente mit demselben Namen werden aktualisiert; neue Filamente werden angelegt. Eltern-Varianten-Beziehungen aus der entfernten Datenbank werden nicht erhalten.
+Bestehende Filamente mit demselben Namen werden aktualisiert; neue Filamente werden angelegt. Eltern-Varianten-Beziehungen aus der entfernten Datenbank werden nicht erhalten. Trägt eine Zeile Hinweise oder schlägt sie fehl, enthält die Antwort zusätzlich `errors` — ein String pro Hinweis — und die Meldung endet mit der Anzahl der Hinweise; eine fehlschlagende Zeile hält die übrigen nicht auf, und die Anfrage antwortet nur dann mit `500`, wenn keine Zeile importiert wurde.
+
+**Spulen bei einem erneuten Import** (#1209) werden über die Spulen-`_id` zusammengeführt, nie komplett ersetzt:
+- eine Quellspule, deren `_id` bereits am lokalen Filament hängt, wird an Ort und Stelle aktualisiert und behält die lokale `_id`, `instanceId` und den Lagerort — Druckerslots, Erstattungen im Druckverlauf und `?spool=`-Links lösen also weiter auf; eine von der Quelle ausgemusterte Spule wird zudem aus jedem Druckerslot entfernt;
+- jede andere Quellspule wird mit neu erzeugter `instanceId` hinzugefügt, außer ein anderes lokales Filament hält ihre `_id` bereits — dann wird sie mit Hinweis übersprungen, statt einer Rolle zwei Besitzer zu geben;
+- eine lokale Spule, die die Quelle nicht enthält, bleibt mit Hinweis erhalten. Ein Import aus einer Datenbank, die keine Spulen-IDs mit dieser teilt (Spulen auf beiden Seiten getrennt erfasst), behält die lokalen Rollen deshalb neben denen der Quelle — Duplikate bitte von Hand löschen.
 
 ### GET /api/filaments/:id/calibration
 
@@ -1183,6 +1188,8 @@ Liefert einen einzelnen Drucker mit `installedNozzles` als vollständige Düsen-
 
 Aktualisiert einen Drucker. Sende einen JSON-Body mit den zu aktualisierenden Feldern.
 
+**`amsSlots`** (POST und PUT). Jeder Slot führt zwei Referenzen: `filamentId` (das geladene Filament) und `spoolId` (die verfolgte Spule). Ein Slot mit `spoolId` muss eine nicht ausgemusterte Spule an einem aktiven Filament nennen, und eine Spule kann nur einen Slot belegen; sonst wird der Schreibvorgang mit `400` abgelehnt, das den Slot nennt. Ist `spoolId` gesetzt, wird die `filamentId` des Slots **aus dem Filament abgeleitet, dem die Spule gehört**, und ein mitgesendeter Wert ignoriert (#1214) — dieselbe Regel wie bei den Spulen-Zuweisungs-Endpunkten —, sodass ein Slot nie ein Material nennen und dabei eine Rolle eines anderen verfolgen kann. Ein Slot ohne Spule behält die gesendete `filamentId`, die ein aktives Filament sein muss.
+
 ### DELETE /api/printers/:id
 
 Soft-Delete eines Druckers per ID (setzt den Zeitstempel `_deletedAt`). Ein Drucker, der von Filament-Kalibrierungen referenziert wird, kann nicht gelöscht werden. Liefert `{ message: "Deleted" }`.
@@ -1498,11 +1505,14 @@ Validierungen:
 
 Jedes referenzierte Filament wird **vor** jeder Mutation geholt und validiert. Fehlt eines, wird die gesamte Anfrage mit 404 abgebrochen, und keine Spulengewichte werden angefasst. Die Schreibvorgänge eines Jobs mit nur einem Filament laufen innerhalb einer MongoDB-Transaktion, wenn das Deployment dies unterstützt (Atlas immer), und fallen auf standalone mongod auf sequentielle Saves zurück; ein Job über mehrere Filamente nutzt immer sequentielle Saves pro Filament.
 
+**Spulenauswahl** (#1212). Ein Nutzungseintrag mit `spoolId` bucht genau diese Spule ab (auch eine ausgemusterte). Ohne `spoolId` wählt die Route die erste nicht ausgemusterte Spule, die noch Filament enthält — deren Bruttogewicht `totalWeight` abzüglich des Leerspulengewichts des Filaments (`spoolWeight`, bei einer Variante ohne eigenen Wert von der Vorlage geerbt) über null liegt. Gibt es keine, nimmt sie die erste nicht ausgemusterte Spule ohne erfasstes Gewicht, danach die erste nicht ausgemusterte Spule. Eine Rolle, von der nur noch die leere Spule übrig ist, wird also zugunsten einer späteren vollen übersprungen, statt ihr Leergewicht abzubuchen. Sind alle Spulen ausgemustert, wird nichts abgebucht (`spoolId: null`).
+
 **Legacy-Filamente mit nur einer Rolle werden zuerst migriert** (#1121). Ein Filament, dessen Bestand im Top-Level-`totalWeight` liegt und dessen `spools[]` leer ist, hat keine Spule zum Abbuchen. Vor der Abbuchung wandelt die Route diese Rolle deshalb in ein echtes Spulen-Subdokument um — und überträgt dabei die `instanceId` des Filaments darauf, damit gedruckte Etiketten und NFC-Tags weiter auflösen — und setzt das Top-Level-`totalWeight` des Filaments auf `null`, genau wie `POST /api/filaments`. Abbuchung und spätere Erstattung laufen dann über diese Spule. Das ist eine dauerhafte Änderung am Filament-Dokument, die beim POST passiert, obwohl der Body nur das Filament nennt. Ein Filament, dessen Spulen alle ausgemustert sind, wird **nicht** migriert: Es zeichnet die Nutzung weiterhin mit `spoolId: null` und ohne Abbuchung auf.
 
 Ablehnungen zusätzlich zu den Validierungs-`400`ern:
 - `400` — ein Nutzungseintrag zielt auf eine Legacy-**Vorlage** (ein Filament mit lebenden Varianten, das seine Rolle noch in `totalWeight` hält). Bestand gehört auf die Varianten, daher lehnt die Route mit der `template_no_spools`-Nachricht (siehe **Filament-Vorlagen**) als `error` ab. Bei einem Job über mehrere Filamente wird jedes Ziel geprüft, bevor irgendeines migriert wird.
 - `409` — `"Filament was modified by another request during this job. Please retry."` Ein gleichzeitiger Schreibvorgang hat ein Ziel-Filament zwischen Lesen und Speichern verändert; lade neu und wiederhole die Anfrage.
+- `500` — `"The print job failed and could not be fully undone. Check the affected spools' weights before recording it again."` Ein Auftrag über mehrere Filamente ist mittendrin gescheitert, und seine bereits gespeicherten Abbuchungen ließen sich nicht alle rückgängig machen (#1208). Anders als beim `409` **nicht** einfach wiederholen: Ein Teil der Abbuchung kann noch bestehen. Ansonsten wird ein mittendrin gescheiterter Auftrag exakt rückgängig gemacht — nur die Gramm dieses Auftrags werden zurückgebucht und nur seine Ledger-Einträge entfernt, sodass Schreibvorgänge anderer Anfragen auf dieselben Spulen in der Zwischenzeit erhalten bleiben.
 
 Jeder vom POST geschriebene Spulen-`usageHistory`-Eintrag wird mit `jobId` versehen, das auf die neue PrintHistory-`_id` gesetzt ist, sodass ein späteres `DELETE` die exakten zu erstattenden Einträge matchen kann.
 
