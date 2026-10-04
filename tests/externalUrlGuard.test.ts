@@ -571,6 +571,44 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
     expect(res.headers.get("location")).toBe("http://public.example.test/landing");
   });
 
+  it("GH #1219: endless 1xx responses still end at the caller's deadline, socket closed", async () => {
+    // The filter keeps a request alive through any number of 1xx responses
+    // (undici also refreshes its headers timeout on each), so the caller's
+    // AbortSignal is the bound. Closing the upstream socket on abort depends
+    // on onRequestStart reaching fetch, which is how fetch gets its abort.
+    let socketClosed = false;
+    const sockets = new Set<net.Socket>();
+    const hints = net.createServer((sock) => {
+      sockets.add(sock);
+      sock.on("error", () => {});
+      sock.once("data", () => {
+        const timer = setInterval(() => sock.write("HTTP/1.1 103 Early Hints\r\n\r\n"), 30);
+        sock.on("close", () => {
+          clearInterval(timer);
+          socketClosed = true;
+        });
+      });
+    });
+    // No host argument — see the refused-connection case below.
+    await new Promise<void>((resolve) => hints.listen(0, resolve));
+    try {
+      redirectUpstreamTo((hints.address() as net.AddressInfo).port);
+      const err = await fetch("http://public.example.test/", {
+        dispatcher: ssrfDispatcher,
+        signal: AbortSignal.timeout(300),
+      } as FetchInit).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as { name?: string } | null)?.name).toBe("TimeoutError");
+      for (let i = 0; i < 40 && !socketClosed; i++) await new Promise((r) => setTimeout(r, 25));
+      expect(socketClosed).toBe(true);
+    } finally {
+      for (const sock of sockets) sock.destroy();
+      await new Promise<void>((resolve) => hints.close(() => resolve()));
+    }
+  });
+
   it("rejects a refused connection promptly, with a bounded number of attempts", async () => {
     // A port nobody listens on: close a server we just opened to claim one.
     // No host argument — listen(port, host) resolves the host through the
