@@ -1,4 +1,12 @@
 {
   "$comment": "Advisories the CI audit gate (scripts/audit-gate.mjs) tolerates. Each entry MUST carry a justification and a reviewBy date; the gate warns (does not fail) past reviewBy so releases can't be broken by a calendar, but the warning is the nudge to re-check upstream. Remove an entry the moment a fix ships.",
-  "allow": []
+  "allow": [
+    {
+      "id": "GHSA-vfj7-8cjw-p6xm",
+      "package": "braces",
+      "title": "braces stack-exhaustion DoS through deeply nested patterns",
+      "justification": "NO PATCHED RELEASE EXISTS: the advisory covers braces <=3.0.3 with no first_patched_version, and 3.0.3 is the newest braces on the registry. The only copy is lint tooling: eslint-config-next (devDependency) -> @next/eslint-plugin-next -> fast-glob@3.3.1 -> micromatch@4.0.8 -> braces@3.0.3. An override can't help: the latest fast-glob still needs micromatch ^4.0.8, which needs braces ^3.0.3, and eslint-config-next 16.3.8 pins the same fast-glob@3.3.1. Exposure: NIL. The plugin's only glob call (dist/utils/get-root-dirs.js) expands settings.next.rootDir from this repo's own eslint.config.mjs (unset here, so the default), at lint time only. No user input reaches a brace pattern, and the package is not in the standalone server or the Electron app. Re-check when micromatch or fast-glob drops braces, or braces ships a fix.",
+      "reviewBy": "2026-11-04"
+    }
+  ]
 }

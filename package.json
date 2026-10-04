@@ -44,7 +44,7 @@
     "mongodb-connection-string-url": "^7.0.1",
     "mongodb-memory-server-core": "^11.0.1",
     "mongoose": "~9.7.4",
-    "next": "^16.3.3",
+    "next": "^16.3.8",
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -82,7 +82,9 @@
     "fast-uri": "^3.1.8",
     "browserslist": "^4.28.8",
     "@xmldom/xmldom@0.8": "^0.8.15",
-    "immutable@3": "^3.8.4"
+    "immutable@3": "^3.8.4",
+    "axios": "^1.20.0",
+    "http-cache-semantics": "^4.3.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
