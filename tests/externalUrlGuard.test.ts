@@ -471,6 +471,16 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
         res.end();
         return;
       }
+      // GH #1219: informational responses ahead of the final one.
+      if (req.url === "/early-hints") {
+        res.writeEarlyHints({ link: "</style.css>; rel=preload; as=style" });
+      } else if (req.url === "/processing-redirect") {
+        res.writeProcessing();
+        res.writeEarlyHints({ link: "</style.css>; rel=preload; as=style" });
+        res.writeHead(302, { location: "http://public.example.test/landing" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("hello from upstream");
     });
@@ -528,6 +538,31 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
   it("surfaces a manual redirect's status and Location", async () => {
     redirectUpstreamTo(serverPort);
     const res = await fetch("http://public.example.test/redirect", {
+      dispatcher: ssrfDispatcher,
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("http://public.example.test/landing");
+  });
+
+  it("GH #1219: delivers the final response after a 103 Early Hints", async () => {
+    // undici's DNS interceptor asserts that a request starts exactly one
+    // response, and an informational response is a second start: unfiltered,
+    // this fetch failed with AssertionError `!this.#onResponseStartCalled`.
+    redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/early-hints", {
+      dispatcher: ssrfDispatcher,
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(await res.text()).toBe("hello from upstream");
+  });
+
+  it("GH #1219: surfaces a redirect sent after 102 and 103 responses", async () => {
+    redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/processing-redirect", {
       dispatcher: ssrfDispatcher,
       redirect: "manual",
       signal: AbortSignal.timeout(5_000),
