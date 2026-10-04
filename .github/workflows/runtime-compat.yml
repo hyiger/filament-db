@@ -5,7 +5,9 @@ name: Runtime compatibility
 # server. A major-version mismatch between the two broke every guarded fetch
 # on Node 26 while the 20/22 gate stayed green. This job runs the fetch-path
 # suites on the runtimes the gate doesn't cover: Node 24 (the runtime Electron
-# 41 embeds) and the current Node release.
+# 41 embeds), Node 26, and `current` — whatever Node release is newest when it
+# runs, so the weekly cron reaches a new Node major (and the undici it bundles)
+# without anyone editing this list.
 #
 # Deliberately NOT part of test.yml / ci-gate.yml and not a required check:
 # ci-gate.yml gates release.yml and docker.yml, and neither shipped artifact
@@ -18,8 +20,15 @@ on:
       - package-lock.json
       - src/lib/externalUrlGuard.ts
       - src/lib/openprinttagBrowser.ts
+      # The guarded-fetch callers: a change to how they call fetch (a body, a
+      # hand-set header, a new dispatcher) can break the pairing on its own.
+      - src/lib/tdsExtractor.ts
+      - src/app/api/embed-check/route.ts
+      - src/app/api/prusament/route.ts
       - tests/externalUrlGuard.test.ts
       - tests/openprinttagBrowser.test.ts
+      - tests/setup.ts
+      - vitest.config.ts
       - .github/workflows/runtime-compat.yml
   schedule:
     - cron: "17 6 * * 1"
@@ -32,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [24, 26]
+        node-version: [24, 26, current]
 
     steps:
       - uses: actions/checkout@v4

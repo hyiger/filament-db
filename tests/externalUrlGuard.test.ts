@@ -518,6 +518,9 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
       signal: AbortSignal.timeout(5_000),
     } as FetchInit);
     expect(res.status).toBe(200);
+    // undici 7 releases before 7.27.1 deliver this 200 on Node 26 with every
+    // response header stripped; a status/body check alone would not notice.
+    expect(res.headers.get("content-type")).toBe("text/plain");
     expect(await res.text()).toBe("hello from upstream");
     expect(redirect.attempts()).toBe(1);
   });

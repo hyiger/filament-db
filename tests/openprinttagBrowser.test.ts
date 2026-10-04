@@ -21,6 +21,8 @@ import {
 } from "fs";
 import { dirname, join } from "path";
 import { tmpdir } from "os";
+import http from "node:http";
+import net from "node:net";
 import * as tar from "tar";
 
 import {
@@ -2042,5 +2044,176 @@ describe("SHA-aware refresh (#931)", () => {
     for (const r of results) {
       expect(r).toBe(results[0]);
     }
+  });
+});
+
+describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () => {
+  // getProxyDispatcher builds its EnvHttpProxyAgent from the INSTALLED undici
+  // and hands it to Node's GLOBAL fetch — the same pairing #1216 broke for the
+  // SSRF dispatcher. Every other proxy test in this file stubs fetch, so none
+  // of them dispatches through the agent; these drive a real local proxy (no
+  // outbound network) so .github/workflows/runtime-compat.yml exercises the
+  // pairing on each Node it runs.
+  const PROXY_VARS = [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+  ];
+  let origin: http.Server;
+  let originPort: number;
+  let proxy: http.Server;
+  let proxyPort: number;
+  let refuseConnect: boolean;
+  const connects: string[] = [];
+  const originHits: Array<{ url?: string; remotePort?: number }> = [];
+  const tunnelPorts = new Set<number>();
+  const savedEnv: Record<string, string | undefined> = {};
+
+  const listen = (server: http.Server) =>
+    new Promise<number>((resolve) =>
+      server.listen(0, "127.0.0.1", () => resolve((server.address() as net.AddressInfo).port)),
+    );
+
+  /** Every message in an error's `cause` chain. */
+  function causeMessages(err: unknown): string[] {
+    const out: string[] = [];
+    let cur = err as { message?: string; code?: unknown; cause?: unknown } | undefined;
+    for (let i = 0; cur && i < 6; i++) {
+      out.push(`${String(cur.code ?? "")} ${String(cur.message ?? "")}`);
+      cur = cur.cause as typeof cur;
+    }
+    return out;
+  }
+
+  beforeEach(async () => {
+    vi.restoreAllMocks(); // other suites here stub globalThis.fetch
+    // Clear every proxy variable, NO_PROXY included: a shell's
+    // NO_PROXY=127.0.0.1 would route the loopback origin around the proxy.
+    for (const key of PROXY_VARS) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
+    resetProxyDispatcherForTest();
+    connects.length = 0;
+    originHits.length = 0;
+    tunnelPorts.clear();
+    refuseConnect = false;
+
+    origin = http.createServer((req, res) => {
+      originHits.push({ url: req.url, remotePort: req.socket.remotePort });
+      if (req.url === "/redirect") {
+        res.writeHead(302, { location: `http://127.0.0.1:${originPort}/ok` });
+        res.end();
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("via proxy");
+    });
+    // undici's ProxyAgent tunnels with CONNECT even for http:// targets, so a
+    // plain proxied request reaching this handler is itself a failure.
+    proxy = http.createServer((_req, res) => res.writeHead(501).end());
+    proxy.on("connect", (req: http.IncomingMessage, client: net.Socket) => {
+      client.on("error", () => {});
+      connects.push(String(req.url));
+      if (refuseConnect) {
+        client.end("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n");
+        return;
+      }
+      // Tunnel to the local origin whatever host was asked for.
+      const upstream = net.connect(originPort, "127.0.0.1", () => {
+        tunnelPorts.add(upstream.localPort!);
+        client.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+        upstream.pipe(client);
+        client.pipe(upstream);
+      });
+      upstream.on("error", () => client.destroy());
+      client.on("close", () => upstream.destroy());
+    });
+    originPort = await listen(origin);
+    proxyPort = await listen(proxy);
+  });
+
+  afterEach(async () => {
+    resetProxyDispatcherForTest();
+    for (const server of [origin, proxy]) {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    for (const key of PROXY_VARS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it("delivers a response through the proxy tunnel, across a redirect", async () => {
+    process.env.HTTP_PROXY = `http://127.0.0.1:${proxyPort}`;
+    const dispatcher = getProxyDispatcher(); // the memoized production instance
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+
+    const res = await fetch(`http://127.0.0.1:${originPort}/redirect`, {
+      headers: { "User-Agent": "filament-db" },
+      signal: AbortSignal.timeout(5_000),
+      dispatcher,
+    } as RequestInit & { dispatcher?: unknown });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(await res.text()).toBe("via proxy");
+    // Both hops reached the origin, each over a socket the proxy opened.
+    expect(originHits.map((hit) => hit.url)).toEqual(["/redirect", "/ok"]);
+    expect(originHits.every((hit) => tunnelPorts.has(hit.remotePort!))).toBe(true);
+    expect(new Set(connects)).toEqual(new Set([`127.0.0.1:${originPort}`]));
+  });
+
+  it("fetchUpstreamCommitSha reaches the proxy and fails open on a refused CONNECT", async () => {
+    refuseConnect = true;
+    process.env.HTTPS_PROXY = `http://127.0.0.1:${proxyPort}`;
+    const started = performance.now();
+
+    await expect(fetchUpstreamCommitSha({ timeoutMs: 5_000 })).resolves.toBeNull();
+
+    expect(performance.now() - started).toBeLessThan(4_000);
+    // null alone proves nothing — a handler-API mismatch also returns null.
+    // The CONNECT arriving at the proxy is the evidence the agent dispatched.
+    expect(connects).toEqual(["api.github.com:443"]);
+  });
+
+  it("downloadTarballToBuffer surfaces the proxy's refusal as the error cause", async () => {
+    refuseConnect = true;
+    process.env.HTTPS_PROXY = `http://127.0.0.1:${proxyPort}`;
+    const started = performance.now();
+
+    const err = await downloadTarballToBuffer({ timeoutMs: 5_000 }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(performance.now() - started).toBeLessThan(4_000);
+    expect(causeMessages(err).some((m) => /Proxy response \(502\)/.test(m))).toBe(true);
+    expect(connects).toEqual(["api.github.com:443"]);
+  });
+
+  it("rejects promptly with ECONNREFUSED when the proxy itself is down", async () => {
+    // A port nobody listens on: close a server we just opened to claim one.
+    const dead = net.createServer();
+    const deadPort = await new Promise<number>((resolve) =>
+      dead.listen(0, "127.0.0.1", () => resolve((dead.address() as net.AddressInfo).port)),
+    );
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    process.env.HTTPS_PROXY = `http://127.0.0.1:${deadPort}`;
+    const started = performance.now();
+
+    const err = await downloadTarballToBuffer({ timeoutMs: 5_000 }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(performance.now() - started).toBeLessThan(4_000);
+    expect(causeMessages(err).some((m) => m.includes("ECONNREFUSED"))).toBe(true);
   });
 });
