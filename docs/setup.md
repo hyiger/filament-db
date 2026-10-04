@@ -144,7 +144,7 @@ docker run -p 127.0.0.1:3456:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
 
 ### Prerequisites
 
-- **Node.js** v22.12.0 or later (Node 20 is end-of-life)
+- **Node.js** v22.13.0 or later (Node 20 is end-of-life)
 - **npm** (included with Node.js)
 - **Git**
 - A **MongoDB** database (Atlas free tier, or local MongoDB installation)

@@ -9,7 +9,7 @@
   "license": "(AGPL-3.0-or-later AND CC-BY-NC-ND-4.0)",
   "private": true,
   "engines": {
-    "node": ">=22.12.0"
+    "node": ">=22.13.0"
   },
   "main": "electron-dist/main.js",
   "scripts": {
