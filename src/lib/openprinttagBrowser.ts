@@ -35,32 +35,90 @@ import { readBodyCapped } from "@/lib/externalUrlGuard";
  * regression would silently break OpenPrintTag refresh even though the
  * curl path used to work. Returning a dispatcher only when a proxy is
  * actually configured keeps the no-proxy fast path identical.
+ *
+ * GH #1220:
+ * - The values are read from `env` and passed to EnvHttpProxyAgent
+ *   explicitly. Left to itself the agent reads `process.env`, so an explicit
+ *   `env` argument decided WHETHER to proxy but not WHERE. "No proxy" is
+ *   passed as "" because undefined would fall through to `process.env`.
+ * - `ALL_PROXY` is not a proxy setting here: EnvHttpProxyAgent never reads
+ *   it, so counting it built an agent that went direct anyway. A lone
+ *   `ALL_PROXY` gets a warning instead. It is often `socks5h://`, which the
+ *   agent can't use, so it is not forwarded either.
+ * - A scheme-less `host:port` means `http://host:port`, as curl reads it.
+ * - Anything else unusable throws, naming the variable (credentials
+ *   redacted). Callers build the dispatcher inside their `try`, so that
+ *   fails the fetch instead of silently bypassing a proxy the deployment
+ *   configured.
  */
 // GH #955: memoize a single EnvHttpProxyAgent for the production (default env)
 // path. Every OPT fetch used to `new EnvHttpProxyAgent()`, leaking a dispatcher
-// per call. EnvHttpProxyAgent reads HTTP(S)_PROXY/NO_PROXY per-REQUEST, so one
-// long-lived instance behaves identically to a fresh-per-call one (a mid-process
-// env change isn't a real scenario for the embedded server). `null` = not yet
-// computed; `undefined` = computed, no proxy configured.
+// per call. The agent captures HTTP(S)_PROXY and NO_PROXY when it is built, so
+// a mid-process env change is not picked up, which isn't a real scenario for
+// the embedded server. `null` = not yet computed; `undefined` = computed, no
+// proxy configured.
 let sharedProxyDispatcher: Dispatcher | undefined | null = null;
+let warnedAllProxyOnly = false;
 
-export function getProxyDispatcher(
-  env: Partial<Record<string, string | undefined>> = process.env,
-): Dispatcher | undefined {
-  const hasProxy = Boolean(
-    env.HTTP_PROXY ||
-      env.http_proxy ||
-      env.HTTPS_PROXY ||
-      env.https_proxy ||
-      env.ALL_PROXY ||
-      env.all_proxy,
-  );
-  // Explicit env argument (the unit-test path) stays pure — construct fresh.
-  if (env !== process.env) {
-    return hasProxy ? new EnvHttpProxyAgent() : undefined;
+type ProxyEnv = Partial<Record<string, string | undefined>>;
+
+/** First non-empty value among `keys`, lowercase first as undici reads them. */
+function firstSet(env: ProxyEnv, ...keys: string[]): { key: string; value: string } | undefined {
+  for (const key of keys) {
+    const value = env[key];
+    if (value) return { key, value };
   }
+  return undefined;
+}
+
+/** A proxy URL fit for an error message: any userinfo is masked. */
+function redactProxyUrl(value: string): string {
+  return value.replace(/^([^/@]*:\/\/)?[^/]*@/, (_m, scheme = "") => `${scheme}***@`);
+}
+
+/** The proxy URL EnvHttpProxyAgent should use for `setting`, or a thrown, named error. */
+function proxyUrlFor(setting: { key: string; value: string } | undefined): string {
+  if (!setting) return "";
+  const { key, value } = setting;
+  const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`;
+  let parsed: URL | undefined;
+  try {
+    parsed = new URL(url);
+  } catch {
+    parsed = undefined;
+  }
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+    throw new Error(
+      `${key}=${redactProxyUrl(value)} is not a usable proxy: OpenPrintTag downloads need an http:// or https:// proxy URL.`,
+    );
+  }
+  return url;
+}
+
+function buildProxyDispatcher(env: ProxyEnv): Dispatcher | undefined {
+  const http = firstSet(env, "http_proxy", "HTTP_PROXY");
+  const https = firstSet(env, "https_proxy", "HTTPS_PROXY");
+  if (!http && !https) {
+    if (!warnedAllProxyOnly && firstSet(env, "all_proxy", "ALL_PROXY")) {
+      warnedAllProxyOnly = true;
+      console.warn(
+        `${LOG} ALL_PROXY is set but not supported for OpenPrintTag downloads; set HTTPS_PROXY (and HTTP_PROXY) instead. Connecting directly.`,
+      );
+    }
+    return undefined;
+  }
+  return new EnvHttpProxyAgent({
+    httpProxy: proxyUrlFor(http),
+    httpsProxy: proxyUrlFor(https),
+    noProxy: firstSet(env, "no_proxy", "NO_PROXY")?.value ?? "",
+  });
+}
+
+export function getProxyDispatcher(env: ProxyEnv = process.env): Dispatcher | undefined {
+  // Explicit env argument (the unit-test path) stays pure — construct fresh.
+  if (env !== process.env) return buildProxyDispatcher(env);
   if (sharedProxyDispatcher === null) {
-    sharedProxyDispatcher = hasProxy ? new EnvHttpProxyAgent() : undefined;
+    sharedProxyDispatcher = buildProxyDispatcher(env);
   }
   return sharedProxyDispatcher;
 }
@@ -69,6 +127,7 @@ export function getProxyDispatcher(
  * cache can't bleed across test files that mutate process.env. */
 export function resetProxyDispatcherForTest(): void {
   sharedProxyDispatcher = null;
+  warnedAllProxyOnly = false;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -658,8 +717,10 @@ export async function fetchUpstreamCommitSha(opts?: {
   const timeoutMs = opts?.timeoutMs ?? 5_000;
   const commitsUrl =
     "https://api.github.com/repos/OpenPrintTag/openprinttag-database/commits/main";
-  const dispatcher = getProxyDispatcher();
   try {
+    // Inside the try (GH #1220): an unusable proxy setting throws here, and
+    // this probe's contract is null on any failure.
+    const dispatcher = getProxyDispatcher();
     const response = await fetch(commitsUrl, {
       headers: {
         // The docs-supported SHA media type returns text/plain (a bare
@@ -830,13 +891,15 @@ export async function downloadTarballToBuffer(opts?: {
   const tarballUrl =
     "https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main";
 
-  // Pass the proxy dispatcher when one is configured. `dispatcher` is an
-  // undici-flavoured option not present on the standard RequestInit type,
-  // hence the cast — it's a documented Node fetch extension.
-  const dispatcher = getProxyDispatcher();
   const downloadStart = Date.now();
   console.log(`${LOG} download starting: ${tarballUrl}`);
   try {
+    // Pass the proxy dispatcher when one is configured. `dispatcher` is an
+    // undici-flavoured option not present on the standard RequestInit type,
+    // hence the cast — it's a documented Node fetch extension. Built inside
+    // the try (GH #1220), so an unusable proxy setting fails this download
+    // like any other error and the stale-cache fallback still runs.
+    const dispatcher = getProxyDispatcher();
     const response = await fetch(tarballUrl, {
       headers: {
         Accept: "application/vnd.github+json",

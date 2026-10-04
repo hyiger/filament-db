@@ -884,14 +884,7 @@ describe("getProxyDispatcher", () => {
     expect(getProxyDispatcher({})).toBeUndefined();
   });
 
-  for (const key of [
-    "HTTP_PROXY",
-    "http_proxy",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-  ] as const) {
+  for (const key of ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] as const) {
     it(`returns an EnvHttpProxyAgent when ${key} is set`, () => {
       const dispatcher = getProxyDispatcher({ [key]: "http://proxy.example.invalid:8080" });
       expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
@@ -901,6 +894,42 @@ describe("getProxyDispatcher", () => {
   it("treats an empty proxy string as unset", () => {
     expect(getProxyDispatcher({ HTTPS_PROXY: "" })).toBeUndefined();
   });
+
+  it("GH #1220: ALL_PROXY alone is not a proxy setting, and says so", () => {
+    // undici's EnvHttpProxyAgent never reads ALL_PROXY, so building an agent
+    // for it used to route every request direct while looking configured.
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const key of ["ALL_PROXY", "all_proxy"] as const) {
+        expect(getProxyDispatcher({ [key]: "http://proxy.example.invalid:8080" })).toBeUndefined();
+      }
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ALL_PROXY.*HTTPS_PROXY/));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("GH #1220: accepts a scheme-less host:port, as curl does", () => {
+    const dispatcher = getProxyDispatcher({ HTTPS_PROXY: "proxy.example.invalid:3128" });
+    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+
+  for (const value of [
+    "socks5h://user:hunter2@127.0.0.1:1080",
+    "http://user:hunter2@",
+    "ftp://user:hunter2@proxy.example.invalid:21",
+  ]) {
+    it(`GH #1220: refuses an unusable proxy value (${value.split(":")[0]}) by name, credentials redacted`, () => {
+      let message = "";
+      try {
+        getProxyDispatcher({ HTTPS_PROXY: value });
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toMatch(/HTTPS_PROXY/);
+      expect(message).not.toContain("hunter2");
+    });
+  }
 
   it("GH #955: memoizes a single dispatcher on the production (process.env) path", () => {
     const prev = process.env.HTTP_PROXY;
@@ -2045,6 +2074,31 @@ describe("SHA-aware refresh (#931)", () => {
       expect(r).toBe(results[0]);
     }
   });
+
+  it("GH #1220: an unusable proxy value still serves the stale cache", async () => {
+    // With a cached SHA the forced refresh runs the commits probe first. The
+    // probe built its proxy dispatcher OUTSIDE its try, so an unusable proxy
+    // value threw straight out of fetchOpenPrintTagDatabase and skipped the
+    // stale-cache fallback in runFetchWithRetries.
+    const SHA = "1220aaaa0123456789abcdef0123456789abcdef";
+    installMock({ commitsResponses: [], tarballPath: tarballWithSha(SHA) });
+    const seeded = await fetchOpenPrintTagDatabase();
+    expect(seeded.sha).toBe(SHA);
+
+    const saved = process.env.HTTPS_PROXY;
+    process.env.HTTPS_PROXY = "socks5h://127.0.0.1:1080";
+    resetProxyDispatcherForTest();
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const stale = await fetchOpenPrintTagDatabase({ force: true });
+      expect(stale.materials).toBe(seeded.materials);
+    } finally {
+      if (saved === undefined) delete process.env.HTTPS_PROXY;
+      else process.env.HTTPS_PROXY = saved;
+      resetProxyDispatcherForTest();
+    }
+  }, 15_000);
 });
 
 describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () => {
@@ -2139,6 +2193,7 @@ describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () 
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     resetProxyDispatcherForTest();
     for (const server of [origin, proxy]) {
       server.closeAllConnections();
@@ -2215,5 +2270,58 @@ describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () 
 
     expect(performance.now() - started).toBeLessThan(4_000);
     expect(causeMessages(err).some((m) => m.includes("ECONNREFUSED"))).toBe(true);
+  });
+
+  /** A loopback port with nothing listening (the same claim-then-close trick). */
+  async function deadPort(): Promise<number> {
+    const dead = net.createServer();
+    const port = await new Promise<number>((resolve) =>
+      dead.listen(0, "127.0.0.1", () => resolve((dead.address() as net.AddressInfo).port)),
+    );
+    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    return port;
+  }
+
+  it("GH #1220: proxies through a scheme-less HTTP_PROXY host:port, as curl does", async () => {
+    // This value used to make the EnvHttpProxyAgent constructor throw.
+    process.env.HTTP_PROXY = `127.0.0.1:${proxyPort}`;
+    const res = await fetch(`http://127.0.0.1:${originPort}/ok`, {
+      signal: AbortSignal.timeout(5_000),
+      dispatcher: getProxyDispatcher(),
+    } as RequestInit & { dispatcher?: unknown });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("via proxy");
+    expect(connects).toEqual([`127.0.0.1:${originPort}`]);
+  });
+
+  it("GH #1220: an explicit env argument is used instead of process.env", async () => {
+    // The explicit-env path decided WHETHER to proxy from its argument but
+    // built an agent that read process.env for WHERE — here, a dead port.
+    process.env.HTTP_PROXY = `http://127.0.0.1:${await deadPort()}`;
+    const dispatcher = getProxyDispatcher({ HTTP_PROXY: `http://127.0.0.1:${proxyPort}` });
+    const res = await fetch(`http://127.0.0.1:${originPort}/ok`, {
+      signal: AbortSignal.timeout(5_000),
+      dispatcher,
+    } as RequestInit & { dispatcher?: unknown });
+    expect(res.status).toBe(200);
+    expect(connects).toEqual([`127.0.0.1:${originPort}`]);
+  });
+
+  it("GH #1220: an unusable proxy value fails closed, before any connection", async () => {
+    // Going direct would bypass a proxy the deployment explicitly configured,
+    // so the fetch paths fail instead — the probe with its documented null.
+    process.env.HTTPS_PROXY = "socks5h://127.0.0.1:1080";
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await expect(fetchUpstreamCommitSha({ timeoutMs: 5_000 })).resolves.toBeNull();
+    await expect(downloadTarballToBuffer({ timeoutMs: 5_000 })).rejects.toThrow(/HTTPS_PROXY/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(connects).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("commits API request failed"),
+      expect.stringMatching(/HTTPS_PROXY/),
+    );
   });
 });
