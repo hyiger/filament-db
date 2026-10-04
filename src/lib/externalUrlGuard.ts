@@ -238,11 +238,21 @@ function ssrfValidatingLookup(
  * undici bundled with the running Node — not the installed package. The two
  * must share a dispatch-handler API: undici 6's interceptors call the legacy
  * `handler.onError`, which Node 26's fetch no longer provides, so every
- * guarded fetch hung or threw there. undici 7 speaks both handler shapes and
- * works with the fetch of Node 20 through 26; undici 8 drops the legacy shape
- * and breaks Node 20/22. Keep the installed major at 7 until the supported
- * Node range moves (tests/externalUrlGuard.test.ts drives a real request end
- * to end; .github/workflows/runtime-compat.yml runs it on Node 24 and 26).
+ * guarded fetch hung or threw there. undici 8 drops the legacy shape and
+ * breaks Node 20, 22 and 24 (Electron 41's runtime). undici 7 bridges both,
+ * but not every 7.x does: on Node 26, 7.0.0 hangs like 6, and releases before
+ * 7.27.1 silently drop every response header (Location, X-Frame-Options), so
+ * the ^7.30.0 floor is load-bearing. Keep the installed major at 7 until the
+ * supported Node range moves (tests/externalUrlGuard.test.ts drives a real
+ * request end to end; .github/workflows/runtime-compat.yml runs it on Node
+ * 24, 26 and the current release).
+ *
+ * Never hand-set Content-Length on a request through this dispatcher. On Node
+ * 20/22 the bundled fetch (undici 6) appends its own copy, and this 7.26+
+ * dispatcher rejects the doubled value. Every caller today is a bodyless GET.
+ *
+ * Known gap (GH #1219): the DNS interceptor asserts when an upstream sends a
+ * 1xx informational response (e.g. 103 Early Hints), failing that fetch.
  *
  * The `lookup` cast bridges a typing mismatch: at runtime the interceptor
  * invokes `lookup` with an origin OBJECT (it reads `origin.hostname`), but
