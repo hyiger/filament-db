@@ -41,15 +41,18 @@ import { readBodyCapped } from "@/lib/externalUrlGuard";
  *   explicitly. Left to itself the agent reads `process.env`, so an explicit
  *   `env` argument decided WHETHER to proxy but not WHERE. "No proxy" is
  *   passed as "" because undefined would fall through to `process.env`.
+ *   Precedence is undici's own: a SET lowercase variable wins, even when
+ *   empty.
  * - `ALL_PROXY` is not a proxy setting here: EnvHttpProxyAgent never reads
  *   it, so counting it built an agent that went direct anyway. A lone
  *   `ALL_PROXY` gets a warning instead. It is often `socks5h://`, which the
  *   agent can't use, so it is not forwarded either.
  * - A scheme-less `host:port` means `http://host:port`, as curl reads it.
- * - Anything else unusable throws, naming the variable (credentials
- *   redacted). Callers build the dispatcher inside their `try`, so that
- *   fails the fetch instead of silently bypassing a proxy the deployment
- *   configured.
+ *   undici also takes `https://`, `socks5://` and `socks://` proxies.
+ * - Anything else unusable throws, naming the variable but never echoing its
+ *   value, which may carry credentials and ends up in API responses. Callers
+ *   build the dispatcher inside their `try`, so that fails the fetch instead
+ *   of silently bypassing a proxy the deployment configured.
  */
 // GH #955: memoize a single EnvHttpProxyAgent for the production (default env)
 // path. Every OPT fetch used to `new EnvHttpProxyAgent()`, leaking a dispatcher
@@ -61,23 +64,24 @@ let sharedProxyDispatcher: Dispatcher | undefined | null = null;
 let warnedAllProxyOnly = false;
 
 type ProxyEnv = Partial<Record<string, string | undefined>>;
+type ProxySetting = { key: string; value: string };
 
-/** First non-empty value among `keys`, lowercase first as undici reads them. */
-function firstSet(env: ProxyEnv, ...keys: string[]): { key: string; value: string } | undefined {
-  for (const key of keys) {
-    const value = env[key];
-    if (value) return { key, value };
-  }
-  return undefined;
-}
+/** Proxy schemes undici's ProxyAgent accepts (socks5:/socks: via Socks5ProxyAgent). */
+const SUPPORTED_PROXY_PROTOCOLS = new Set(["http:", "https:", "socks5:", "socks:"]);
 
-/** A proxy URL fit for an error message: any userinfo is masked. */
-function redactProxyUrl(value: string): string {
-  return value.replace(/^([^/@]*:\/\/)?[^/]*@/, (_m, scheme = "") => `${scheme}***@`);
+/**
+ * One proxy variable, read the way undici reads it: the lowercase name wins
+ * whenever it is set, so a set-but-empty lowercase variable disables its
+ * uppercase twin. Surrounding whitespace is ignored; empty means no proxy.
+ */
+function readSetting(env: ProxyEnv, lower: string, upper: string): ProxySetting | undefined {
+  const key = env[lower] !== undefined ? lower : upper;
+  const value = env[key]?.trim();
+  return value ? { key, value } : undefined;
 }
 
 /** The proxy URL EnvHttpProxyAgent should use for `setting`, or a thrown, named error. */
-function proxyUrlFor(setting: { key: string; value: string } | undefined): string {
+function proxyUrlFor(setting: ProxySetting | undefined): string {
   if (!setting) return "";
   const { key, value } = setting;
   const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(value) ? value : `http://${value}`;
@@ -87,19 +91,22 @@ function proxyUrlFor(setting: { key: string; value: string } | undefined): strin
   } catch {
     parsed = undefined;
   }
-  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:") || !parsed.hostname) {
+  if (!parsed?.hostname) {
+    throw new Error(`${key} is not a valid proxy URL.`);
+  }
+  if (!SUPPORTED_PROXY_PROTOCOLS.has(parsed.protocol)) {
     throw new Error(
-      `${key}=${redactProxyUrl(value)} is not a usable proxy: OpenPrintTag downloads need an http:// or https:// proxy URL.`,
+      `${key} uses an unsupported proxy scheme (${parsed.protocol}//): OpenPrintTag downloads support http://, https:// and socks5:// proxies.`,
     );
   }
   return url;
 }
 
 function buildProxyDispatcher(env: ProxyEnv): Dispatcher | undefined {
-  const http = firstSet(env, "http_proxy", "HTTP_PROXY");
-  const https = firstSet(env, "https_proxy", "HTTPS_PROXY");
+  const http = readSetting(env, "http_proxy", "HTTP_PROXY");
+  const https = readSetting(env, "https_proxy", "HTTPS_PROXY");
   if (!http && !https) {
-    if (!warnedAllProxyOnly && firstSet(env, "all_proxy", "ALL_PROXY")) {
+    if (!warnedAllProxyOnly && readSetting(env, "all_proxy", "ALL_PROXY")) {
       warnedAllProxyOnly = true;
       console.warn(
         `${LOG} ALL_PROXY is set but not supported for OpenPrintTag downloads; set HTTPS_PROXY (and HTTP_PROXY) instead. Connecting directly.`,
@@ -107,11 +114,21 @@ function buildProxyDispatcher(env: ProxyEnv): Dispatcher | undefined {
     }
     return undefined;
   }
-  return new EnvHttpProxyAgent({
-    httpProxy: proxyUrlFor(http),
-    httpsProxy: proxyUrlFor(https),
-    noProxy: firstSet(env, "no_proxy", "NO_PROXY")?.value ?? "",
-  });
+  const httpProxy = proxyUrlFor(http);
+  const httpsProxy = proxyUrlFor(https);
+  try {
+    return new EnvHttpProxyAgent({
+      httpProxy,
+      httpsProxy,
+      noProxy: readSetting(env, "no_proxy", "NO_PROXY")?.value ?? "",
+    });
+  } catch (err) {
+    // Name the variables only: undici's message isn't ours to vet for secrets.
+    const keys = [http?.key, https?.key].filter(Boolean).join(" / ");
+    throw new Error(
+      `${keys} could not be used as a proxy (${err instanceof Error ? err.name : "error"}).`,
+    );
+  }
 }
 
 export function getProxyDispatcher(env: ProxyEnv = process.env): Dispatcher | undefined {

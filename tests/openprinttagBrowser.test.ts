@@ -898,6 +898,7 @@ describe("getProxyDispatcher", () => {
   it("GH #1220: ALL_PROXY alone is not a proxy setting, and says so", () => {
     // undici's EnvHttpProxyAgent never reads ALL_PROXY, so building an agent
     // for it used to route every request direct while looking configured.
+    resetProxyDispatcherForTest(); // the warning is once per process
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       for (const key of ["ALL_PROXY", "all_proxy"] as const) {
@@ -906,20 +907,36 @@ describe("getProxyDispatcher", () => {
       expect(warn).toHaveBeenCalledWith(expect.stringMatching(/ALL_PROXY.*HTTPS_PROXY/));
     } finally {
       warn.mockRestore();
+      resetProxyDispatcherForTest();
     }
   });
 
-  it("GH #1220: accepts a scheme-less host:port, as curl does", () => {
-    const dispatcher = getProxyDispatcher({ HTTPS_PROXY: "proxy.example.invalid:3128" });
-    expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  for (const value of [
+    "proxy.example.invalid:3128", // scheme-less, as curl reads it
+    "  http://proxy.example.invalid:3128\n", // surrounding whitespace
+    "https://proxy.example.invalid:3128",
+    "socks5://proxy.example.invalid:1080", // undici routes these to Socks5ProxyAgent
+    "socks://proxy.example.invalid:1080",
+  ]) {
+    it(`GH #1220: accepts ${JSON.stringify(value)}`, () => {
+      expect(getProxyDispatcher({ HTTPS_PROXY: value })).toBeInstanceOf(EnvHttpProxyAgent);
+    });
+  }
+
+  it("GH #1220: a whitespace-only value counts as unset", () => {
+    expect(getProxyDispatcher({ HTTPS_PROXY: "  \t" })).toBeUndefined();
   });
 
   for (const value of [
     "socks5h://user:hunter2@127.0.0.1:1080",
     "http://user:hunter2@",
     "ftp://user:hunter2@proxy.example.invalid:21",
+    // A raw "/" in the password: new URL() cuts the authority there, so any
+    // attempt to mask userinfo in the echoed value missed it. Never echo.
+    "http://user:pa/hunter2@proxy.example.invalid:3128",
+    "user:pa/hunter2@proxy.example.invalid:3128",
   ]) {
-    it(`GH #1220: refuses an unusable proxy value (${value.split(":")[0]}) by name, credentials redacted`, () => {
+    it(`GH #1220: refuses ${JSON.stringify(value.replace("hunter2", "…"))} by name, never echoing it`, () => {
       let message = "";
       try {
         getProxyDispatcher({ HTTPS_PROXY: value });
@@ -2085,7 +2102,11 @@ describe("SHA-aware refresh (#931)", () => {
     const seeded = await fetchOpenPrintTagDatabase();
     expect(seeded.sha).toBe(SHA);
 
-    const saved = process.env.HTTPS_PROXY;
+    // Clear every proxy variable first: a shell's lowercase https_proxy would
+    // otherwise win over the HTTPS_PROXY set below.
+    const keys = ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
     process.env.HTTPS_PROXY = "socks5h://127.0.0.1:1080";
     resetProxyDispatcherForTest();
     vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -2094,8 +2115,10 @@ describe("SHA-aware refresh (#931)", () => {
       const stale = await fetchOpenPrintTagDatabase({ force: true });
       expect(stale.materials).toBe(seeded.materials);
     } finally {
-      if (saved === undefined) delete process.env.HTTPS_PROXY;
-      else process.env.HTTPS_PROXY = saved;
+      for (const k of keys) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
       resetProxyDispatcherForTest();
     }
   }, 15_000);
@@ -2323,5 +2346,95 @@ describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () 
       expect.stringContaining("commits API request failed"),
       expect.stringMatching(/HTTPS_PROXY/),
     );
+  });
+
+  async function fetchOk(dispatcher: unknown) {
+    return fetch(`http://127.0.0.1:${originPort}/ok`, {
+      signal: AbortSignal.timeout(5_000),
+      dispatcher,
+    } as RequestInit & { dispatcher?: unknown });
+  }
+
+  it("GH #1220: proxies through socks5://, which undici supports", async () => {
+    // A minimal SOCKS5 server (no auth, CONNECT only) that tunnels to the origin.
+    const socksTargets: string[] = [];
+    const socks = net.createServer((client) => {
+      client.on("error", () => {});
+      client.once("data", () => {
+        client.write(Buffer.from([5, 0])); // version 5, "no authentication"
+        client.once("data", (req: Buffer) => {
+          const len = req[3] === 3 ? 1 + req[4] : req[3] === 1 ? 4 : 16;
+          socksTargets.push(String(req.readUInt16BE(4 + len)));
+          const upstream = net.connect(originPort, "127.0.0.1", () => {
+            client.write(Buffer.from([5, 0, 0, 1, 0, 0, 0, 0, 0, 0]));
+            upstream.pipe(client);
+            client.pipe(upstream);
+          });
+          upstream.on("error", () => client.destroy());
+          client.on("close", () => upstream.destroy());
+        });
+      });
+    });
+    const socksPort = await new Promise<number>((resolve) =>
+      socks.listen(0, "127.0.0.1", () => resolve((socks.address() as net.AddressInfo).port)),
+    );
+    try {
+      process.env.HTTP_PROXY = `socks5://127.0.0.1:${socksPort}`;
+      const res = await fetchOk(getProxyDispatcher());
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("via proxy");
+      expect(socksTargets).toEqual([String(originPort)]);
+    } finally {
+      await new Promise<void>((resolve) => socks.close(() => resolve()));
+    }
+  });
+
+  it("GH #1220: a set lowercase variable wins, even when empty, as in undici", async () => {
+    const dead = `http://127.0.0.1:${await deadPort()}`;
+    const proxied = await fetchOk(
+      getProxyDispatcher({ http_proxy: `http://127.0.0.1:${proxyPort}`, HTTP_PROXY: dead }),
+    );
+    expect(proxied.status).toBe(200);
+    expect(connects).toEqual([`127.0.0.1:${originPort}`]);
+
+    connects.length = 0;
+    const direct = await fetchOk(
+      getProxyDispatcher({ http_proxy: "", HTTP_PROXY: `http://127.0.0.1:${proxyPort}` }),
+    );
+    expect(direct.status).toBe(200);
+    expect(connects).toEqual([]);
+  });
+
+  it("GH #1220: NO_PROXY is honoured, but never leaks into an explicit env", async () => {
+    process.env.HTTP_PROXY = `http://127.0.0.1:${proxyPort}`;
+    process.env.NO_PROXY = "127.0.0.1";
+    const direct = await fetchOk(getProxyDispatcher());
+    expect(direct.status).toBe(200);
+    expect(connects).toEqual([]);
+
+    const proxied = await fetchOk(getProxyDispatcher({ HTTP_PROXY: `http://127.0.0.1:${proxyPort}` }));
+    expect(proxied.status).toBe(200);
+    expect(connects).toEqual([`127.0.0.1:${originPort}`]);
+  });
+
+  it("GH #1220: an explicit env without HTTP_PROXY goes direct, ignoring process.env's", async () => {
+    process.env.HTTP_PROXY = `http://127.0.0.1:${await deadPort()}`;
+    const res = await fetchOk(getProxyDispatcher({ HTTPS_PROXY: `http://127.0.0.1:${proxyPort}` }));
+    expect(res.status).toBe(200);
+    expect(connects).toEqual([]);
+  });
+
+  it("GH #1220: an explicit env without HTTPS_PROXY doesn't fall back to process.env's", async () => {
+    // With no https proxy of its own the agent tunnels https:// through the
+    // http proxy. Passed undefined instead of "", undici would read the dead
+    // process.env HTTPS_PROXY. The origin speaks plain HTTP, so the TLS
+    // handshake then fails; the CONNECT reaching this proxy is the evidence.
+    process.env.HTTPS_PROXY = `http://127.0.0.1:${await deadPort()}`;
+    const dispatcher = getProxyDispatcher({ HTTP_PROXY: `http://127.0.0.1:${proxyPort}` });
+    await fetch(`https://127.0.0.1:${originPort}/ok`, {
+      signal: AbortSignal.timeout(5_000),
+      dispatcher,
+    } as RequestInit & { dispatcher?: unknown }).catch(() => null);
+    expect(connects).toEqual([`127.0.0.1:${originPort}`]);
   });
 });
