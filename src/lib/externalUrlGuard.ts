@@ -18,7 +18,7 @@
 
 import dns from "node:dns";
 import { lookup } from "node:dns/promises";
-import { Agent, interceptors } from "undici";
+import { Agent, interceptors, type Dispatcher } from "undici";
 
 /** Range-check a dotted-quad IPv4 string. Conservative on parse failure. */
 function isPrivateIpv4(ip: string): boolean {
@@ -222,6 +222,56 @@ function ssrfValidatingLookup(
 }
 
 /**
+ * Forwards every handler callback except the start of a 1xx informational
+ * response (101 Switching Protocols excepted, since it ends in an upgrade).
+ * Written out rather than extending undici's DecoratorHandler: that class is
+ * deprecated in undici 7 and carries the very assertion this filter exists to
+ * keep 1xx responses away from.
+ */
+class DropInformationalHandler implements Dispatcher.DispatchHandler {
+  constructor(private readonly handler: Dispatcher.DispatchHandler) {}
+
+  onRequestStart(controller: Dispatcher.DispatchController, context: unknown) {
+    this.handler.onRequestStart?.(controller, context);
+  }
+
+  onRequestUpgrade(
+    ...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onRequestUpgrade"]>>
+  ) {
+    this.handler.onRequestUpgrade?.(...args);
+  }
+
+  onResponseStart(
+    ...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onResponseStart"]>>
+  ) {
+    const statusCode = args[1];
+    if (statusCode < 200 && statusCode !== 101) return;
+    this.handler.onResponseStart?.(...args);
+  }
+
+  onResponseData(
+    ...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onResponseData"]>>
+  ) {
+    this.handler.onResponseData?.(...args);
+  }
+
+  onResponseEnd(
+    ...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onResponseEnd"]>>
+  ) {
+    this.handler.onResponseEnd?.(...args);
+  }
+
+  onResponseError(
+    ...args: Parameters<NonNullable<Dispatcher.DispatchHandler["onResponseError"]>>
+  ) {
+    this.handler.onResponseError?.(...args);
+  }
+}
+
+const dropInformationalResponses: Dispatcher.DispatcherComposeInterceptor =
+  (dispatch) => (opts, handler) => dispatch(opts, new DropInformationalHandler(handler));
+
+/**
  * undici dispatcher for fetching user-supplied URLs. The DNS interceptor
  * resolves the host through `ssrfValidatingLookup` and pins the socket to
  * that validated IP — so `fetch(url, { dispatcher: ssrfDispatcher })`
@@ -251,8 +301,12 @@ function ssrfValidatingLookup(
  * 20/22 the bundled fetch (undici 6) appends its own copy, and this 7.26+
  * dispatcher rejects the doubled value. Every caller today is a bodyless GET.
  *
- * Known gap (GH #1219): the DNS interceptor asserts when an upstream sends a
- * 1xx informational response (e.g. 103 Early Hints), failing that fetch.
+ * GH #1219: `dropInformationalResponses` sits innermost, between the
+ * connection and the DNS interceptor. That interceptor's handler asserts that
+ * a request starts exactly one response, and a 1xx informational response (103
+ * Early Hints, 102 Processing) is a second start, so without the filter any
+ * upstream sending one failed the fetch on every runtime. fetch discards
+ * informational responses anyway.
  *
  * The `lookup` cast bridges a typing mismatch: at runtime the interceptor
  * invokes `lookup` with an origin OBJECT (it reads `origin.hostname`), but
@@ -261,7 +315,11 @@ function ssrfValidatingLookup(
 type DnsInterceptorLookup = NonNullable<
   NonNullable<Parameters<typeof interceptors.dns>[0]>["lookup"]
 >;
+
+// compose() runs its FIRST interceptor innermost (closest to the connection),
+// so the filter sees each response before the DNS interceptor does.
 export const ssrfDispatcher = new Agent().compose(
+  dropInformationalResponses,
   interceptors.dns({
     lookup: ssrfValidatingLookup as unknown as DnsInterceptorLookup,
     maxItems: 256,
