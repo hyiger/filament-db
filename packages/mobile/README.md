@@ -44,7 +44,8 @@ Core NFC can't read those tags).
 > native code (config plugin), so you must use a **development build** (EAS or a
 > local prebuild). NFC also requires a physical device — simulators have no NFC.
 
-- Node 22.13+, and the Expo tooling (`npx expo`).
+- Node 22.13+ on the 22 line, 24.3+, or 25 and later — the ranges React Native's
+  toolchain supports (not Node 23 or 24.0–24.2) — and the Expo tooling (`npx expo`).
 - For builds: an [Expo / EAS](https://docs.expo.dev/build/introduction/) account,
   or local native toolchains (Xcode / Android Studio) for `expo run:*`.
 
