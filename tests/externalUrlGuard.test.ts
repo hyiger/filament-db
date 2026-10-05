@@ -471,6 +471,16 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
         res.end();
         return;
       }
+      // GH #1219: informational responses ahead of the final one.
+      if (req.url === "/early-hints") {
+        res.writeEarlyHints({ link: "</style.css>; rel=preload; as=style" });
+      } else if (req.url === "/processing-redirect") {
+        res.writeProcessing();
+        res.writeEarlyHints({ link: "</style.css>; rel=preload; as=style" });
+        res.writeHead(302, { location: "http://public.example.test/landing" });
+        res.end();
+        return;
+      }
       res.writeHead(200, { "content-type": "text/plain" });
       res.end("hello from upstream");
     });
@@ -534,6 +544,69 @@ describe("ssrfDispatcher — end to end over the global fetch (GH #1216)", () =>
     } as FetchInit);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("http://public.example.test/landing");
+  });
+
+  it("GH #1219: delivers the final response after a 103 Early Hints", async () => {
+    // undici's DNS interceptor asserts that a request starts exactly one
+    // response, and an informational response is a second start: unfiltered,
+    // this fetch failed with AssertionError `!this.#onResponseStartCalled`.
+    redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/early-hints", {
+      dispatcher: ssrfDispatcher,
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/plain");
+    expect(await res.text()).toBe("hello from upstream");
+  });
+
+  it("GH #1219: surfaces a redirect sent after 102 and 103 responses", async () => {
+    redirectUpstreamTo(serverPort);
+    const res = await fetch("http://public.example.test/processing-redirect", {
+      dispatcher: ssrfDispatcher,
+      redirect: "manual",
+      signal: AbortSignal.timeout(5_000),
+    } as FetchInit);
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("http://public.example.test/landing");
+  });
+
+  it("GH #1219: endless 1xx responses still end at the caller's deadline, socket closed", async () => {
+    // The filter keeps a request alive through any number of 1xx responses
+    // (undici also refreshes its headers timeout on each), so the caller's
+    // AbortSignal is the bound. Closing the upstream socket on abort depends
+    // on onRequestStart reaching fetch, which is how fetch gets its abort.
+    let socketClosed = false;
+    const sockets = new Set<net.Socket>();
+    const hints = net.createServer((sock) => {
+      sockets.add(sock);
+      sock.on("error", () => {});
+      sock.once("data", () => {
+        const timer = setInterval(() => sock.write("HTTP/1.1 103 Early Hints\r\n\r\n"), 30);
+        sock.on("close", () => {
+          clearInterval(timer);
+          socketClosed = true;
+        });
+      });
+    });
+    // No host argument — see the refused-connection case below.
+    await new Promise<void>((resolve) => hints.listen(0, resolve));
+    try {
+      redirectUpstreamTo((hints.address() as net.AddressInfo).port);
+      const err = await fetch("http://public.example.test/", {
+        dispatcher: ssrfDispatcher,
+        signal: AbortSignal.timeout(300),
+      } as FetchInit).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      expect((err as { name?: string } | null)?.name).toBe("TimeoutError");
+      for (let i = 0; i < 40 && !socketClosed; i++) await new Promise((r) => setTimeout(r, 25));
+      expect(socketClosed).toBe(true);
+    } finally {
+      for (const sock of sockets) sock.destroy();
+      await new Promise<void>((resolve) => hints.close(() => resolve()));
+    }
   });
 
   it("rejects a refused connection promptly, with a bounded number of attempts", async () => {
