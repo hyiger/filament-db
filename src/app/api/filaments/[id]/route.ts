@@ -359,6 +359,18 @@ export async function PUT(
     const unsafePath = assertSafeUpdateBody(body);
     if (unsafePath) return unsafePath;
 
+    // GH #1227 (Codex P2 r13 on PR #1228): `optTags` is written as a WHOLE
+    // array or not at all. A dotted element path (`{"optTags.1": 20}`) is a
+    // live update path findOneAndUpdate applies element-wise, so it would
+    // bypass the numbering guard below (which keys off `body.optTags`) and
+    // splice a spec id into an unreviewed legacy array — a mixed `[2, 20]`
+    // that no later Data health decision can read correctly (Convert invents
+    // metal-fill from the 20, Keep reads the 2 as antibacterial). Nothing
+    // first-party writes tags positionally; refuse the shape outright.
+    if (Object.keys(body).some((k) => k.startsWith("optTags."))) {
+      return errorResponse("optTags must be sent as a whole array, not as an element path", 400);
+    }
+
     // GH #1072: enforce the GH #266 settings-bag caps on the generic PUT —
     // `settings` is Schema.Types.Mixed, so `runValidators: true` below is a
     // no-op for it. Both write shapes are covered: the whole-object form and

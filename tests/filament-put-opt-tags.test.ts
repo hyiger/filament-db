@@ -138,6 +138,25 @@ describe("PUT /api/filaments/{id} — optTags numbering guard (GH #1227)", () =>
     expect(await col().findOne({ _id: insertedId })).toMatchObject({ optTags: [4, 16], optTagsSpec: true });
   });
 
+  it("refuses a dotted optTags.<n> element path with 400 — tags are written whole or not at all (Codex P2 r13)", async () => {
+    // `{"optTags.1": 20}` is a live findOneAndUpdate path that the guard
+    // (keyed off `body.optTags`) never sees; applied, it splices a spec id
+    // into an unreviewed legacy array — a mixed `[2, 20]` no later decision
+    // can read correctly.
+    const { insertedId } = await col().insertOne({
+      name: "Dotted", vendor: "V", type: "PLA", optTags: [2], _deletedAt: null,
+    });
+    const res = await put(String(insertedId), { name: "Dotted", vendor: "V", type: "PLA", "optTags.1": 20 });
+    expect(res.status).toBe(400);
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ optTags: [2] });
+    expect((await col().findOne({ _id: insertedId }))?.optTagsSpec).toBeUndefined();
+    // The shape is refused on a verified row too, not only the unreviewed case.
+    const verified = await Filament.create({ name: "Dotted Verified", vendor: "V", type: "PLA", optTags: [20] });
+    const res2 = await put(String(verified._id), { name: "Dotted Verified", vendor: "V", type: "PLA", "optTags.0": 16 });
+    expect(res2.status).toBe(400);
+    expect(await col().findOne({ _id: verified._id })).toMatchObject({ optTags: [20], optTagsSpec: true });
+  });
+
   it("ignores a client-sent optTagsSpec (server-owned)", async () => {
     const { insertedId } = await col().insertOne({
       name: "Forged", vendor: "V", type: "PETG", optTags: [2], _deletedAt: null,
