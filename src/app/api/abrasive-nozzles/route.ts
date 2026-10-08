@@ -5,6 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { auditAbrasiveNozzles, type AuditFilament } from "@/lib/abrasiveNozzleAudit";
 import { liveTemplateIds, excludeTemplates } from "@/lib/templateExportFilter";
+import { effectiveOptTagsAwaitReview, type OptTagReviewRow } from "@/lib/optTagLegacy";
 
 /**
  * GET /api/abrasive-nozzles
@@ -27,8 +28,13 @@ export async function GET() {
     // has to run on RESOLVED docs — a variant that inherits its nozzle set
     // stores an empty array, and auditing that would clear every variant of a
     // wrongly-assigned template.
+    // GH #1227: `optTagsSpec` + the whole `openprinttagSnapshot` ride along so
+    // `effectiveOptTagsAwaitReview` sees every path the numbering classifier
+    // reads (OPT_TAG_CLASSIFIER_PATHS — its `settings.*` / `openprinttagSnapshot.*`
+    // entries are covered by the whole objects selected here; a projection may
+    // not mix `settings` with `settings.x`).
     const filaments = await Filament.find({ _deletedAt: null, _purged: { $ne: true } })
-      .select("name type parentId optTags settings compatibleNozzles")
+      .select("name type parentId optTags optTagsSpec settings compatibleNozzles openprinttagSnapshot")
       .lean();
 
     const parents = new Map<string, (typeof filaments)[number]>();
@@ -49,8 +55,18 @@ export async function GET() {
 
     const resolved = auditable.map((f) => {
       const parent = f.parentId ? parents.get(String(f.parentId)) : undefined;
+      const doc = (parent ? resolveFilament(f, parent) : f) as unknown as AuditFilament;
       return {
-        doc: (parent ? resolveFilament(f, parent) : f) as unknown as AuditFilament,
+        doc: {
+          ...doc,
+          // GH #1227: from the RAW rows — own, then the parent's when the own
+          // array is empty — because the resolved doc's `optTagsSpec` is the
+          // variant's own while its `optTags` may be the parent's.
+          optTagsAwaitReview: effectiveOptTagsAwaitReview(
+            f as unknown as OptTagReviewRow,
+            parent as unknown as OptTagReviewRow | undefined,
+          ),
+        },
         // A variant with an empty stored array is running on its template's
         // nozzles, so that is where the fix belongs. Naming it saves the user
         // from editing the variant and watching the value come straight back.

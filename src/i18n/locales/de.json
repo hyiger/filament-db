@@ -1875,6 +1875,7 @@
   "health.abrasive.because": "Gilt als abrasiv wegen: {reasons}",
   "health.abrasive.reason.flagged": "als abrasiv markiert",
   "health.abrasive.reason.tagged": "Abrasiv- oder Füllstoff-Tag",
+  "health.abrasive.reason.taggedLegacy": "Abrasiv- oder Füllstoff-Tag in der Nummerierung vor v1.83 (diese Tags warten auf dieser Seite auf die Prüfung der Nummerierung)",
   "health.abrasive.reason.fibre": "faserverstärkter Typ",
   "health.abrasive.reason.filled": "gefüllter Name",
   "health.abrasive.softNozzles": "Als kompatibel eingetragen mit nicht gehärteten Düsen: {nozzles}",

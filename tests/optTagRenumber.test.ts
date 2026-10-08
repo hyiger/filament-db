@@ -269,6 +269,38 @@ describe("renumberOptTags", () => {
       dropped: [9],
     });
     expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws", "Throws Manual"]);
+
+    // ACK LOST (Codex P2 r5): the write COMMITS but the driver throws before
+    // the acknowledgement arrives. The record must SURVIVE — the pass never
+    // revisits a marked row, so pulling it would hide the removed tags for good.
+    await col().insertOne({ name: "Ack Lost", vendor: "V", type: "PLA", optTags: [18, 9] });
+    let ackLostOnce = true;
+    const ackLost: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            const res = await c.updateOne(filter, update, options);
+            if (ackLostOnce) {
+              ackLostOnce = false;
+              throw new Error("connection reset before ack");
+            }
+            return res;
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    await expect(renumberOptTags(ackLost, NOW)).rejects.toThrow("connection reset before ack");
+    const ack = await byName("Ack Lost");
+    expect(ack?.optTags).toEqual([57]); // the write landed
+    expect(ack?.optTagsSpec).toBe(true);
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws", "Throws Manual", "Ack Lost"]);
+    // Nothing left to convert, and the record stays exactly once.
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 0 });
+    expect((await readDroppedLegacyTags(db())).filter((d) => d.name === "Ack Lost")).toHaveLength(1);
   });
 
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {

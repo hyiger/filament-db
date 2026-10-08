@@ -7,6 +7,7 @@ import {
   type AuditFilament,
   type AuditNozzle,
 } from "@/lib/abrasiveNozzleAudit";
+import { remapLegacyOptTags } from "@/lib/optTagLegacy";
 
 const SOFT: AuditNozzle = { _id: "indx", name: "INDX 0.4 HF", hardened: false };
 const HARD: AuditNozzle = { _id: "wc04", name: "WC HF 0.4", hardened: true };
@@ -169,6 +170,38 @@ describe("abrasiveReasons", () => {
     };
     expect(abrasiveReasons(f)).toEqual(["flagged"]);
     expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
+  });
+});
+
+describe("abrasiveReasons — tags awaiting numbering review (GH #1227, Codex P2 r5)", () => {
+  it("reads unreviewed tags under BOTH numberings and names a legacy-only hit as the uncertain reading", () => {
+    // Legacy 0 was CONTAINS_GLASS_FIBER; as a spec id, 0 is filtration_recommended.
+    expect(remapLegacyOptTags([0]).tags.some((t) => ABRASIVE_OPT_TAG_IDS.includes(t))).toBe(true);
+    // Verified (or simply not flagged as awaiting review): spec reading only → nothing, as before.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [0], settings: { filament_abrasive: "0" } })).toEqual([]);
+    // Awaiting review: the legacy reading says glass fibre → reported, and
+    // named as the uncertain reading so the user knows what settles it.
+    expect(
+      abrasiveReasons({ _id: "x", type: "PLA", optTags: [0], settings: { filament_abrasive: "0" }, optTagsAwaitReview: true }),
+    ).toEqual(["taggedLegacy"]);
+    // Abrasive under the spec reading already: the certain reason, once.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [4], optTagsAwaitReview: true })).toEqual(["tagged"]);
+    // Abrasive under neither reading (16 is matte in both): still nothing.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [16], optTagsAwaitReview: true })).toEqual([]);
+  });
+
+  it("reports a soft-nozzle assignment when only the legacy reading of unreviewed tags is abrasive", () => {
+    const row: AuditFilament = {
+      _id: "f-legacy", name: "Generic PLA", type: "PLA", optTags: [0],
+      settings: { filament_abrasive: "0" }, compatibleNozzles: [SOFT._id],
+    };
+    expect(auditAbrasiveNozzles([row], NOZZLES)).toEqual([]);
+    const [finding] = auditAbrasiveNozzles([{ ...row, optTagsAwaitReview: true }], NOZZLES);
+    expect(finding).toMatchObject({
+      filamentId: "f-legacy",
+      reasons: ["taggedLegacy"],
+      softNozzles: [{ id: "indx", name: "INDX 0.4 HF" }],
+    });
   });
 });
 

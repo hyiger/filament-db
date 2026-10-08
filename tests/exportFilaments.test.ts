@@ -91,6 +91,17 @@ describe("getExportRows", () => {
     expect(rows[0].optTags).toBe("gradual_color_change,matte");
   });
 
+  it("GH #1227: a verified id the enum does not name exports as `tag:N`, never a bare number (Codex P2 r5)", async () => {
+    // Deprecated 18 can arrive from a vendor NFC tag. A bare `18` would
+    // re-import as PROOF of the legacy numbering and come back as 57
+    // imitates_marble; `tag:18` keeps its spec provenance.
+    await Filament.create({ name: "Vendor Tagged", vendor: "V", type: "PLA", optTags: [18, 16] });
+    expect((await getExportRows())[0].optTags).toBe("tag:18,matte");
+    // An unverified row still exports bare ids for the importer's classifier.
+    await Filament.collection.updateOne({ name: "Vendor Tagged" }, { $set: { optTagsSpec: false } });
+    expect((await getExportRows())[0].optTags).toBe("18,16");
+  });
+
   it("GH #955: spoolCount excludes retired spools (matches getSpoolCount / the UI)", async () => {
     await Filament.create({
       name: "Retired Count PLA",

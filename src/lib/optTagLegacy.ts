@@ -190,6 +190,15 @@ export const LEGACY_TO_SPEC: Readonly<Record<number, number | null>> = {
 export const OPT_SNAPSHOT_NUMBERING_KEY = "tagsNumbering";
 export const OPT_SNAPSHOT_SPEC_NUMBERING = "spec";
 
+/**
+ * CSV `Tags` cell token for a VERIFIED id the enum doesn't name (`tag:18` —
+ * a deprecated 18 can arrive from a vendor NFC tag). Shared by the exporter and
+ * `parseOptTagsCell`: a bare `18` would re-import as PROOF of the legacy
+ * numbering and come back as 57 imitates_marble (Codex P2 r5 on PR #1228), so
+ * a verified unknown id keeps its spec provenance in the token itself.
+ */
+export const SPEC_TAG_TOKEN_PREFIX = "tag:";
+
 /** True when a snapshot object says its `optTags` are already spec ids. */
 export function snapshotIsSpecNumbered(snapshot: Record<string, unknown> | null | undefined): boolean {
   return !!snapshot && snapshot[OPT_SNAPSHOT_NUMBERING_KEY] === OPT_SNAPSHOT_SPEC_NUMBERING;
@@ -678,8 +687,9 @@ export interface ParsedOptTagsCell {
  * Parse a CSV/XLSX `Tags` cell (GH #954 round-trip, GH #1227 numbering).
  *
  * Accepts spec NAMES (what the exporter writes for a verified row — self-
- * describing, survives any renumbering), legacy app names (via the alias
- * table) and bare NUMBERS. Numbers are the hazard: a pre-#1227 export wrote
+ * describing, survives any renumbering), `tag:N` (the exporter's spelling for a
+ * verified id the enum doesn't name — a spec id by provenance, kept verbatim),
+ * legacy app names (via the alias table) and bare NUMBERS. Numbers are the hazard: a pre-#1227 export wrote
  * legacy ids, a post-#1227 export of an unreviewed row writes bare ids too, and
  * neither says which numbering it is. They go through the same classifier the
  * startup pass uses — a provable legacy set is remapped, a set the remap would
@@ -703,6 +713,14 @@ export function parseOptTagsCell(
   const numeric: number[] = [];
   const unknownTokens: string[] = [];
   for (const tok of tokens) {
+    if (tok.toLowerCase().startsWith(SPEC_TAG_TOKEN_PREFIX)) {
+      // `tag:N` — a verified id the enum doesn't name, spec by provenance.
+      const rest = tok.slice(SPEC_TAG_TOKEN_PREFIX.length).trim();
+      const n = /^\d+$/.test(rest) ? Number(rest) : NaN;
+      if (isEncodableOptTag(n)) named.push(n);
+      else unknownTokens.push(tok);
+      continue;
+    }
     if (/^\d+$/.test(tok)) {
       const n = Number(tok);
       if (isEncodableOptTag(n)) numeric.push(n);

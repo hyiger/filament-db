@@ -39,6 +39,7 @@
 
 import { settingFlagScalar } from "@/lib/slicerSettings";
 import { OPT_TAG } from "@/lib/openprinttag";
+import { remapLegacyOptTags } from "@/lib/optTagLegacy";
 
 /**
  * Fibre reinforcement, in the two spellings this codebase actually accepts:
@@ -134,7 +135,12 @@ const ABRASIVE_OPT_TAGS: ReadonlySet<number> = new Set<number>([
 /** Exported for the skill self-test + the audit test, which pin the set. */
 export const ABRASIVE_OPT_TAG_IDS: readonly number[] = [...ABRASIVE_OPT_TAGS].sort((a, b) => a - b);
 
-export type AbrasiveReason = "flagged" | "tagged" | "fibre" | "filled";
+/**
+ * `taggedLegacy` (GH #1227): the tags still await numbering review and are
+ * abrasive under the PRE-v1.83 reading only — reported, but named as the
+ * uncertain reading so the user knows settling the numbering is the fix.
+ */
+export type AbrasiveReason = "flagged" | "tagged" | "taggedLegacy" | "fibre" | "filled";
 
 export interface AuditNozzle {
   _id: unknown;
@@ -148,6 +154,17 @@ export interface AuditFilament {
   name?: string | null;
   type?: string | null;
   optTags?: readonly number[] | null;
+  /**
+   * GH #1227: the EFFECTIVE tags still await numbering review (no
+   * `optTagsSpec: true` on the row that supplies them, array not trivially
+   * spec), so their ids may be in the pre-v1.83 app numbering. The audit then
+   * reads them under BOTH numberings and reports a hit under the legacy one as
+   * `taggedLegacy` — read only as spec ids, a legacy `[0]` (glass fibre) is
+   * `filtration_recommended` and would CLEAR a soft-nozzle assignment, the
+   * false all-clear this check exists to prevent (Codex P2 r5 on PR #1228).
+   * Omitted/false → spec reading only.
+   */
+  optTagsAwaitReview?: boolean;
   settings?: Record<string, unknown> | null;
   compatibleNozzles?: readonly unknown[] | null;
 }
@@ -224,7 +241,18 @@ export function abrasiveReasons(filament: AuditFilament): AbrasiveReason[] {
   const reasons: AbrasiveReason[] = [];
 
   if (flag === "on" || flag === "unusable") reasons.push("flagged");
-  if ((filament.optTags ?? []).some((t) => ABRASIVE_OPT_TAGS.has(t))) reasons.push("tagged");
+  const tags = filament.optTags ?? [];
+  if (tags.some((t) => ABRASIVE_OPT_TAGS.has(t))) {
+    reasons.push("tagged");
+  } else if (
+    filament.optTagsAwaitReview === true &&
+    remapLegacyOptTags(tags).tags.some((t) => ABRASIVE_OPT_TAGS.has(t))
+  ) {
+    // Unreviewed ids may still be the app's old numbering; under THAT reading
+    // this filament is filled/reinforced. No all-clear until the numbering is
+    // settled (see `optTagsAwaitReview`).
+    reasons.push("taggedLegacy");
+  }
   if (isFibreType(filament.type ?? "") || isFibreName(filament.name ?? "")) {
     reasons.push("fibre");
   }

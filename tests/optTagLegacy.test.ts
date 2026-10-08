@@ -394,6 +394,19 @@ describe("parseOptTagsCell", () => {
     expect(parseOptTagsCell("2, 99")).toEqual({ tags: [2, 99], verified: false, unknownTokens: [], rejectReason: null });
   });
 
+  it("reads the exporter's `tag:N` token as a verified spec id, never as numbering evidence (Codex P2 r5)", () => {
+    // A verified row holding the deprecated 18 (from a vendor tag) exports
+    // `tag:18`; re-imported it must stay 18, not become legacy proof → 57.
+    expect(parseOptTagsCell("tag:18, matte")).toEqual({ tags: [18, 16], verified: true, unknownTokens: [], rejectReason: null });
+    expect(parseOptTagsCell("TAG:99")).toEqual({ tags: [99], verified: true, unknownTokens: [], rejectReason: null });
+    // Beside bare ambiguous numbers it is a name-like token: the cell is mixed.
+    expect(parseOptTagsCell("tag:18, 2").rejectReason).toMatch(/mixes tag names/);
+    // Malformed tokens are reported, not guessed.
+    expect(parseOptTagsCell("tag:x, tag:-1, tag:")).toEqual({
+      tags: [], verified: true, unknownTokens: ["tag:x", "tag:-1", "tag:"], rejectReason: null,
+    });
+  });
+
   it("drops empty tokens (no phantom tag 0), negatives and unknown words — and reports the words", () => {
     expect(parseOptTagsCell("28,,16,")).toEqual({ tags: [28, 16], verified: false, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("matte, bogus, -1, 30")).toEqual({

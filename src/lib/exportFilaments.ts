@@ -1,4 +1,5 @@
 import dbConnect from "@/lib/mongodb";
+import { SPEC_TAG_TOKEN_PREFIX } from "@/lib/optTagLegacy";
 import Filament from "@/models/Filament";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { getSpoolCount } from "@/lib/inventoryStats";
@@ -59,22 +60,26 @@ export interface ExportRow {
    *
    * GH #1227: emitted as SPEC NAMES (`transparent,glitter`) when the row's
    * numbering is verified — self-describing, so a file survives the
-   * app's own renumbering and reads as what it means. An id the enum doesn't
-   * know, or a row still awaiting numbering review, is emitted as the bare
-   * number so the importer's classifier (not this exporter) decides.
+   * app's own renumbering and reads as what it means. A verified id the enum
+   * doesn't name is emitted as `tag:N` so it keeps its spec provenance (a bare
+   * `18` would re-import as proof of the LEGACY numbering, Codex P2 r5 on PR
+   * #1228); a row still awaiting numbering review is emitted as bare numbers
+   * so the importer's classifier (not this exporter) decides.
    */
   optTags: string;
 }
 
 /**
- * GH #1227: the `Tags` cell. Spec names for a verified row, bare ids for an
- * unknown id or an unverified row (see the `optTags` field docblock).
+ * GH #1227: the `Tags` cell. For a verified row: spec names, and `tag:N` for an
+ * id the enum doesn't name; for an unverified row: bare ids (see the `optTags`
+ * field docblock).
  */
 export function exportOptTagsCell(tags: readonly number[] | null | undefined, verified: boolean): string {
   return (tags ?? [])
     .map((id) => {
-      const name = verified ? OPT_TAG_TO_NAME[id] : undefined;
-      return name ? name.toLowerCase() : String(id);
+      if (!verified) return String(id);
+      const name = OPT_TAG_TO_NAME[id];
+      return name ? name.toLowerCase() : `${SPEC_TAG_TOKEN_PREFIX}${id}`;
     })
     .join(",");
 }

@@ -179,7 +179,7 @@ async function recordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): P
   await migrations.updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $push: { dropped: entry } }, { upsert: true });
 }
 
-/** Undo `recordDropped` for a conversion that did not land (concurrent edit, or a write that threw). */
+/** Undo `recordDropped` for a conversion that did not land (concurrent edit, or a write shown not to have landed). */
 async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): Promise<void> {
   await db
     .collection("_migrations")
@@ -187,6 +187,40 @@ async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags):
       { _id: OPT_TAG_RENUMBER_MARKER_ID },
       { $pull: { dropped: { filamentId: entry.filamentId, at: entry.at } } },
     );
+}
+
+/**
+ * A conversion write THREW. That is an UNKNOWN outcome, not a failed one:
+ * MongoDB may have committed the update and lost the acknowledgement on the
+ * way back (Codex P2 r5 on PR #1228). Re-read the row to decide what becomes
+ * of the drop record written before the attempt:
+ *  - the row is marked AND holds exactly the array this conversion would have
+ *    written → it landed; the record stays (the pass never revisits a marked
+ *    row, so this is the record's only chance to survive);
+ *  - the row is still unmarked → it did not land; pull the record;
+ *  - the re-read fails too, or the row is gone → keep the record. A kept
+ *    record for a conversion that never landed is REPLACED, not duplicated,
+ *    when the row converts later (`recordDropped` is idempotent per filament),
+ *    and the Data health notice is dismissable — a stale notice is the cheaper
+ *    error, a lost one is silent data loss.
+ */
+async function reconcileDropRecordAfterThrow(
+  db: MinimalRenumberDb,
+  filaments: MinimalRenumberCollection,
+  id: unknown,
+  wouldHaveWritten: readonly number[],
+  entry: DroppedLegacyTags,
+): Promise<void> {
+  let landed: boolean | null = null;
+  try {
+    const row = await filaments.findOne({ _id: id }, { projection: { optTags: 1, optTagsSpec: 1 } });
+    if (row) {
+      landed = row.optTagsSpec === true && sameOptTagSet(row.optTags as unknown[], wouldHaveWritten);
+    }
+  } catch {
+    landed = null;
+  }
+  if (landed === false) await unrecordDropped(db, entry).catch(() => undefined);
 }
 
 async function recordRun(
@@ -224,10 +258,12 @@ export async function renumberOptTags(
     const snapSet = snapshotRemapSet(row);
     const $set: Record<string, unknown> = { optTagsSpec: true, ...snapSet };
     let droppedEntry: DroppedLegacyTags | null = null;
+    let convertedTags: number[] | null = null;
 
     if (verdict.kind === "legacy") {
       const stored = Array.isArray(row.optTags) ? (row.optTags as unknown[]) : [];
       const remapped = remapLegacyOptTags(stored);
+      convertedTags = remapped.tags;
       // Exact-array condition: a concurrent edit of the tags makes this match
       // nothing, and the row is reclassified on the next pass.
       filter.optTags = stored;
@@ -253,10 +289,12 @@ export async function renumberOptTags(
     try {
       res = await filaments.updateOne(filter, { $set });
     } catch (err) {
-      // A conversion that never landed must not leave its pre-written drop
-      // record behind (Codex P2 r4 on PR #1228): best-effort cleanup, then
-      // the failure propagates as before.
-      if (droppedEntry) await unrecordDropped(db, droppedEntry).catch(() => undefined);
+      // A thrown write has an UNKNOWN outcome (Codex P2 r4 + r5 on PR #1228):
+      // reconcile the pre-written drop record against the row, then the
+      // failure propagates as before.
+      if (droppedEntry) {
+        await reconcileDropRecordAfterThrow(db, filaments, row._id, convertedTags ?? [], droppedEntry);
+      }
       throw err;
     }
     if (!matched(res)) {
@@ -421,9 +459,10 @@ export async function resolveOptTagNumbering(
       { $set },
     );
   } catch (err) {
-    // Same cleanup as the pass: no drop record may outlive a conversion that
-    // never landed (Codex P2 r4 on PR #1228).
-    if (droppedEntry) await unrecordDropped(db, droppedEntry).catch(() => undefined);
+    // Same reconciliation as the pass (Codex P2 r4 + r5 on PR #1228).
+    if (droppedEntry) {
+      await reconcileDropRecordAfterThrow(db, filaments, row._id, remapped?.tags ?? [], droppedEntry);
+    }
     throw err;
   }
   if (!matched(res)) {

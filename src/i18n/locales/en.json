@@ -1875,6 +1875,7 @@
   "health.abrasive.because": "Read as abrasive because: {reasons}",
   "health.abrasive.reason.flagged": "marked abrasive",
   "health.abrasive.reason.tagged": "abrasive or filled tag",
+  "health.abrasive.reason.taggedLegacy": "abrasive or filled tag under the pre-v1.83 numbering (these tags are awaiting numbering review on this page)",
   "health.abrasive.reason.fibre": "fibre-reinforced type",
   "health.abrasive.reason.filled": "filled name",
   "health.abrasive.softNozzles": "Recorded as compatible with nozzles that are not hardened: {nozzles}",
