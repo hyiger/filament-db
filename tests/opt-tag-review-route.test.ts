@@ -36,8 +36,12 @@ describe("/api/opt-tag-review", () => {
       // OPT provenance (a link with no snapshot) and the deprecated 18 are both
       // HINTS (Codex P1 r6 + r12) — listed, never converted by the GET's pass.
       { name: "Linked", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "linked" } },
-      { name: "Pending", vendor: "V", type: "PETG", optTags: [2] },
-      { name: "Trivial", vendor: "V", type: "PLA", optTags: [4] },
+      // Stored in the SCHEMA shape (`openprinttagSnapshot: null`, `settings: {}`)
+      // — what every row the pre-v1.83 app saved looks like; the pass must
+      // mark and the resolution must match it (a child-path projection over
+      // the null container used to read it as absent and match nothing).
+      { name: "Pending", vendor: "V", type: "PETG", optTags: [2], openprinttagSnapshot: null, settings: {} },
+      { name: "Trivial", vendor: "V", type: "PLA", optTags: [4], openprinttagSnapshot: null, settings: {} },
     ]);
     const res = await GET();
     expect(res.status).toBe(200);
@@ -71,7 +75,7 @@ describe("/api/opt-tag-review", () => {
 
   it("POST convert / keep apply the answer against the exact array the page showed", async () => {
     const { insertedIds } = await col().insertMany([
-      { name: "A", vendor: "V", type: "PLA", optTags: [2, 9] },
+      { name: "A", vendor: "V", type: "PLA", optTags: [2, 9], openprinttagSnapshot: null, settings: {} }, // schema shape
       { name: "B", vendor: "V", type: "PLA", optTags: [12] },
     ]);
     const a = await post(String(insertedIds[0]), { action: "convert", expectedTags: [2, 9] });

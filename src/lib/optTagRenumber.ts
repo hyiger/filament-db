@@ -126,8 +126,26 @@ export const UNVERIFIED_OPT_TAGS_FILTER: Readonly<Record<string, unknown>> = {
 // Everything the classifier reads (incl. the snapshot's numbering marker — a
 // projection that drops it turns a spec snapshot into a legacy-looking one)
 // plus what the pass and Data health need of their own.
+/**
+ * The snapshot CONTAINER is projected whole, never through its child paths.
+ * MongoDB omits a parent that is not a document from a child-path projection
+ * (`{"openprinttagSnapshot.optTags": 1}` over `openprinttagSnapshot: null`
+ * returns no `openprinttagSnapshot` at all), and `null` is exactly what the
+ * schema default stores on every row the pre-v1.83 app saved. Read through the
+ * child paths, such a row came back with the container ABSENT, the container
+ * pin below said `$exists: false`, and the conditional write matched nothing:
+ * every schema-shaped trivial row was skipped on every pass, and every Data
+ * health decision answered `tags_changed`. The raw-insert test fixtures (field
+ * truly absent) hid it; CI caught it the moment a fixture was written through
+ * Mongoose (PR #1228). The snapshot is a small flat object, so projecting it
+ * whole costs nothing; the settings bag is NOT projected whole (it can be
+ * large) — its two link keys are pinned as children, which is exact for both
+ * the `{}` default and an absent bag.
+ */
 const ROW_PROJECTION: Record<string, 1> = {
-  ...Object.fromEntries(OPT_TAG_CLASSIFIER_PATHS.map((path) => [path, 1 as const])),
+  ...Object.fromEntries(
+    OPT_TAG_CLASSIFIER_PATHS.map((path) => [path.startsWith("openprinttagSnapshot.") ? "openprinttagSnapshot" : path, 1 as const]),
+  ),
   vendor: 1,
   _deletedAt: 1,
   _purged: 1,

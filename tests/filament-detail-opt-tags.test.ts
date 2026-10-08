@@ -17,8 +17,21 @@ describe("GET /api/filaments/{id} — _optTagsAwaitReview (GH #1227)", () => {
   const raw = () => mongoose.connection.collection("filaments");
 
   beforeEach(async () => {
-    const mod = await import("@/models/Filament");
-    if (!mongoose.models.Filament) mongoose.model("Filament", mod.default.schema);
+    // setup.ts wipes mongoose.models after every test, and the route
+    // populates compatibleNozzles / calibrations.* on the document AND on a
+    // variant's parent — so every ref'd model must be registered, or the
+    // variant GET 500s with "Schema hasn't been registered for model Nozzle"
+    // (CLAUDE.md, Testing; the compare-route test carries the same block).
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) mongoose.model("Filament", filamentMod.default.schema);
+    const referenced = [
+      ["Nozzle", await import("@/models/Nozzle")],
+      ["Printer", await import("@/models/Printer")],
+      ["BedType", await import("@/models/BedType")],
+    ] as const;
+    for (const [name, mod] of referenced) {
+      if (!mongoose.models[name]) mongoose.model(name, mod.default.schema);
+    }
     Filament = mongoose.models.Filament;
   });
 

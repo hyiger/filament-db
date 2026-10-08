@@ -186,6 +186,41 @@ describe("renumberOptTags", () => {
     ]);
   });
 
+  it("marks and resolves rows stored in the SCHEMA shape — `openprinttagSnapshot: null`, `settings: {}` — which is every row the pre-v1.83 app saved", async () => {
+    // The other fixtures here are bare raw inserts (fields absent). A row the
+    // old app wrote through Mongoose carries the schema defaults instead, and
+    // a child-path projection over a `null` container drops the container, so
+    // the pin read "absent" and the conditional write never matched: CI on PR
+    // #1228 showed the pass skipping such a row on EVERY connect once a
+    // fixture was written through the schema. Pin the stored shape verbatim.
+    await col().insertMany([
+      { name: "Schema Trivial", vendor: "V", type: "PLA", optTags: [4], openprinttagSnapshot: null, settings: {}, updatedAt: OLD },
+      { name: "Schema Pending", vendor: "V", type: "PETG", optTags: [2], openprinttagSnapshot: null, settings: {}, updatedAt: OLD },
+      // A linked row saved by the old app after v1.36 but before any snapshot
+      // was written: slug present, container still the `null` default.
+      { name: "Schema Linked", vendor: "V", type: "PLA", optTags: [18, 9], openprinttagSnapshot: null, settings: { openprinttag_slug: "s" }, updatedAt: OLD },
+    ]);
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 3, verified: 1, ambiguous: 2, skipped: 0 });
+    expect(await byName("Schema Trivial")).toMatchObject({ optTags: [4], optTagsSpec: true, openprinttagSnapshot: null, updatedAt: OLD });
+    expect((await byName("Schema Pending"))?.optTagsSpec).toBeUndefined();
+    // A `null` container is "no snapshot object": the link alone carries the hint.
+    expect((await scanUnverifiedOptTags(db())).map((r) => [r.name, r.matchesOptProvenance])).toEqual([
+      ["Schema Linked", true],
+      ["Schema Pending", false],
+    ]);
+    // Settled: the second pass has nothing left to skip.
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 2, verified: 0, ambiguous: 2, skipped: 0 });
+
+    // Data health resolves the same shape (same projection, same pins).
+    const pending = (await byName("Schema Pending"))!;
+    expect(await resolveOptTagNumbering(db(), pending._id, "keep", [2], NOW)).toEqual({ outcome: "kept", tags: [2] });
+    expect(await byName("Schema Pending")).toMatchObject({ optTags: [2], optTagsSpec: true, openprinttagSnapshot: null });
+    const linked = (await byName("Schema Linked"))!;
+    expect(await resolveOptTagNumbering(db(), linked._id, "convert", [18, 9], NOW)).toEqual({ outcome: "converted", tags: [57], dropped: [9] });
+    expect(await byName("Schema Linked")).toMatchObject({ optTags: [57], optTagsSpec: true, openprinttagSnapshot: null });
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Schema Linked", tags: [9] })]);
+  });
+
   it("a snapshot written since v1.83 hints nothing; a translated snapshot is never translated twice (Codex P1 r4)", async () => {
     await col().insertMany([
       // An NFC-created spec [2] LINKED after upgrading: the link route's
