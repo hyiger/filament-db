@@ -9,7 +9,7 @@
  *   2. Main map — indefinite map with filament fields
  */
 
-import { OPT_KEY, MATERIAL_TYPE, OPT_TAG_TO_NAME, decodeCBORFloat16 } from "./openprinttag";
+import { OPT_KEY, MATERIAL_TYPE, optTagName, decodeCBORFloat16 } from "./openprinttag";
 
 // Reverse lookup: CBOR key number → field name
 // Meta and main maps share key numbers 0-3 with different meanings,
@@ -420,9 +420,12 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   }
   if (main.TAGS !== undefined && Array.isArray(main.TAGS)) {
     result.tags = main.TAGS as number[];
-    result.tagNames = result.tags
-      .map((t) => OPT_TAG_TO_NAME[t])
-      .filter(Boolean);
+    // GH #1227: spec names, and `tag N` for an id the enum doesn't know —
+    // never dropped. The old `.filter(Boolean)` made spec tag 30
+    // (contains_carbon) vanish from every Prusament CF spool read.
+    result.tagNames = result.tags.map((t) =>
+      typeof t === "number" ? optTagName(t) : `tag ${String(t)}`,
+    );
   }
 
   // Decode auxiliary region if present. GH #311: AUX_REGION_OFFSET comes

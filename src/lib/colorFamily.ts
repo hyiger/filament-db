@@ -32,6 +32,7 @@
  */
 
 import { deriveArrangement } from "./filamentColors";
+import { OPT_TAG } from "./openprinttag";
 import { getSpoolCount, type InventorySpool } from "./inventoryStats";
 import { BLANK_COLOR_HEX } from "./cssNamedColors";
 
@@ -190,8 +191,10 @@ function isAdjacent(a: ColorFamily, b: ColorFamily): boolean {
 /** OptTag ids for see-through finishes (2 = transparent, 3 = translucent;
  *  same ids as `src/lib/filamentFinish.ts`). "Clear" is tag-driven ONLY — an
  *  untagged "Natural" is white or beige, never Clear. */
-const TAG_TRANSPARENT = 2;
-const TAG_TRANSLUCENT = 3;
+// OpenPrintTag SPEC ids (GH #1227) — the pre-#1227 2/3 are antibacterial /
+// air_filtering on the wire.
+const TAG_TRANSPARENT = OPT_TAG.TRANSPARENT;
+const TAG_TRANSLUCENT = OPT_TAG.TRANSLUCENT;
 
 // ---------------------------------------------------------------------------
 // Color science

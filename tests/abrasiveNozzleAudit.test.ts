@@ -3,6 +3,7 @@ import {
   abrasiveReasons,
   auditAbrasiveNozzles,
   OPT_TAG_ABRASIVE,
+  ABRASIVE_OPT_TAG_IDS,
   type AuditFilament,
   type AuditNozzle,
 } from "@/lib/abrasiveNozzleAudit";
@@ -35,15 +36,26 @@ describe("abrasiveReasons", () => {
     // A record tagged `31` carbon fibre states the fact more precisely than
     // tag 4 does; reading only tag 4 threw away the better evidence. A plain
     // type with no flag and a soft nozzle used to be reported not at all.
-    for (const tag of [0, 1, 19, 20, 21, 22, 23, 24, 31, 32]) {
+    // GH #1227: SPEC ids — glitter, glow, the fibre/glass/aramid tags, the
+    // mineral/ceramic fills, every metal fill, wood/cork and their subspecies.
+    for (const tag of ABRASIVE_OPT_TAG_IDS) {
       expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [tag] }), `tag ${tag}`)
         .toEqual(["tagged"]);
     }
+    expect(ABRASIVE_OPT_TAG_IDS).toEqual([
+      4, 23, 24, 31, 33, 34, 35, 36, 37, 39, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+    ]);
   });
 
   it("ignores tags that describe behaviour rather than wear", () => {
     // HEAT_RESISTANT, LOW_WARP, HYGROSCOPIC, MATTE say nothing about abrasion.
-    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 33, 16] })).toEqual([]);
+    // 6 self_extinguishing, 15 limonene_soluble, 9 high_temperature, 16 matte,
+    // 30 contains_carbon (carbon black pigment), 55–58 imitates_* (a look, not
+    // a fill), 32/72 nano-carbon. The pre-#1227 ids 0/1/19–22 — glass fibre,
+    // aramid, wood/metal/stone fill, sparkle in the OLD numbering — are
+    // filtration_recommended … pearlescent on the wire and must NOT fire.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 9, 16, 30, 55, 56, 57, 58, 32, 72] })).toEqual([]);
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [0, 1, 19, 20, 21, 22] })).toEqual([]);
   });
 
   it("reads fibre reinforcement out of the type", () => {

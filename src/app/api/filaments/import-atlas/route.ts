@@ -154,6 +154,11 @@ export async function POST(request: NextRequest) {
           for (const key of IMPORTABLE_FILAMENT_FIELDS) {
             if (remote[key] !== undefined) filamentData[key] = remote[key];
           }
+          // GH #1227: the numbering marker is copied EXPLICITLY, never left to
+          // the schema default — the source is another instance's database, and
+          // an absent marker there means its rows predate the spec enum (or are
+          // awaiting review), so they must await review here as well.
+          filamentData.optTagsSpec = remote.optTagsSpec === true;
 
           // GH #1213: a coextruded/gradient filament keeps its colors in
           // `secondaryColors` with a null primary, so dropping the field

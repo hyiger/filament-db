@@ -6,6 +6,7 @@ import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
 import CopyButton from "./CopyButton";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
+import { optTagLabel } from "@/lib/optTagLabels";
 
 export default function NfcReadDialog() {
   const router = useRouter();
@@ -437,6 +438,14 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
       )}
       {data.transmissionDistance != null && (
         <Stat label={t("nfc.readDialog.labelHueForgeTD")} value={String(data.transmissionDistance)} />
+      )}
+      {/* GH #1227: the tag's property tags, labelled from the spec enum. An id
+          the enum doesn't know renders as "Tag N" rather than disappearing. */}
+      {data.tags && data.tags.length > 0 && (
+        <Stat
+          label={t("nfc.readDialog.labelTags")}
+          value={data.tags.map((id) => optTagLabel(t, id)).join(", ")}
+        />
       )}
       {data.countryOfOrigin && (
         <Stat label={t("nfc.readDialog.labelOrigin")} value={data.countryOfOrigin} />

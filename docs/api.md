@@ -174,7 +174,7 @@ Returns an array of projected filament summaries (not the full documents — hea
 ```
 
 - `hasCalibrations` is `true` when the filament has at least one calibration, **or** when it's a variant whose parent has at least one (via aggregation `$lookup`). The "Missing calibration" quick filter on the list page reads this — variants that inherit from a parent are correctly counted as calibrated.
-- `hasVariants` is `true` when the filament has at least one non-deleted variant (drives the parent cross-hatch/composite swatch); `optTags` (effective, parent-inherited) drives the finish indicator; `spools[].instanceId` is the per-spool id (#732) and `spools[].locationId` powers the inline move-to dropdown on the main list.
+- `hasVariants` is `true` when the filament has at least one non-deleted variant (drives the parent cross-hatch/composite swatch); `optTags` (effective, parent-inherited; OpenPrintTag spec ids since v1.83 — see "OpenPrintTag Tag Numbering Review") drives the finish indicator; `spools[].instanceId` is the per-spool id (#732) and `spools[].locationId` powers the inline move-to dropdown on the main list.
 - `tdsUrl` is included so `FilamentForm`'s vendor-keyed TDS suggestions still work.
 - `spools[].label` is included so `PrinterForm`'s AMS slot picker can render `s.label || s._id.slice(-4)`.
 - `color` is **nullable** — coextruded multi-color filaments leave it null and put their colors in `secondaryColors`. `secondaryColors` is an ordered array of up to 5 `#RRGGBB` hex codes that mirrors OpenPrintTag's `secondary_color_0..4` keys (spec keys 20–24). Variants inherit `secondaryColors` array-fallback style: a variant either declares its own non-empty array or inherits the parent's entire array (same pattern as `optTags` / `bedTypeTemps`). Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu Studio) drop secondaries silently — slicer presets are single-color formats.
@@ -1068,6 +1068,43 @@ Returns (bulk mode):
   "updated": 0
 }
 ```
+
+---
+
+## OpenPrintTag Tag Numbering Review (v1.83)
+
+Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags_enum.yaml`](https://github.com/OpenPrintTag/openprinttag-specification/blob/main/data/tags_enum.yaml) numbering. Earlier versions used an app-invented numbering, so rows written before the upgrade may still carry it. A startup pass converts every row whose numbering it can prove; the rest are surfaced for the user under Settings → Data health through these routes. `Filament.optTagsSpec` (server-owned) is `true` on a verified row.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/opt-tag-review` | Runs the (idempotent) renumbering pass, then lists the rows it could not settle plus the legacy tags it had to drop from converted rows |
+| `POST` | `/api/opt-tag-review/:id` | Apply the user's answer for one row (same-origin guarded) |
+| `DELETE` | `/api/opt-tag-review/dropped` | Dismiss the removed-legacy-tags notice (same-origin guarded) |
+
+### GET /api/opt-tag-review
+
+```json
+{
+  "pending": [
+    {
+      "filamentId": "…", "name": "Overture PETG Transparent", "vendor": "Overture", "type": "PETG",
+      "trashed": false, "verdict": "ambiguous",
+      "stored": [2],
+      "asLegacy": { "tags": [20], "dropped": [] },
+      "asSpec": [2]
+    }
+  ],
+  "dropped": [
+    { "filamentId": "…", "name": "Overture TPU", "tags": [9], "at": "2026-10-08T12:00:00.000Z" }
+  ]
+}
+```
+
+`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is `ambiguous` (both readings consistent) or `inconsistent` (ids from both exclusive sets at once — fix by hand, then keep). `dropped` entries carry LEGACY ids.
+
+### POST /api/opt-tag-review/:id
+
+Body: `{ "action": "convert" | "keep", "expectedTags": number[] }` — `expectedTags` is the `stored` array the caller was shown. Returns `{ "outcome": "converted", "tags": [...], "dropped": [...] }` or `{ "outcome": "kept", "tags": [...] }`. **409** `tags_changed` when the row no longer holds exactly `expectedTags` or is already verified; **404** when the filament is gone; **400** on a malformed id, action or array.
 
 ---
 

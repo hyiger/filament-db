@@ -38,6 +38,7 @@
  */
 
 import { settingFlagScalar } from "@/lib/slicerSettings";
+import { OPT_TAG } from "@/lib/openprinttag";
 
 /**
  * Fibre reinforcement, in the two spellings this codebase actually accepts:
@@ -77,8 +78,8 @@ const isFibreName = (name: string): boolean => FIBRE_TOKEN_RE.test(name);
 const FILLED_RE =
   /(^|[^a-z])(glow|metallic|metal[- ]?fill|steel[- ]?fill|bronze|iron[- ]?fill|marble|sparkle|glitter|wood)([^a-z]|$)/i;
 
-/** OPT tag id 4 marks a filament abrasive; the form treats it as authoritative. */
-export const OPT_TAG_ABRASIVE = 4;
+/** OPT tag `abrasive` (4) marks a filament abrasive; the form treats it as authoritative. */
+export const OPT_TAG_ABRASIVE: number = OPT_TAG.ABRASIVE;
 
 /**
  * Tags that say the filament is abrasive, whether or not tag 4 is also set.
@@ -90,24 +91,48 @@ export const OPT_TAG_ABRASIVE = 4;
  * evidence: a plainly-typed `PLA` with `optTags: [31]`, no flag and a soft
  * nozzle went unreported entirely.
  *
- * Everything here abrades a soft nozzle in ordinary use — mineral and metal
- * fills, glass and carbon fibre, aramid, and the strontium-aluminate pigments
- * behind glow and sparkle. Deliberately NOT here: tags describing thermal or
- * mechanical behaviour, which say nothing about wear.
+ * Everything here abrades a soft nozzle in ordinary use — mineral, ceramic
+ * and metal fills, glass (beads and fibre), carbon fibre, aramid, wood and
+ * cork fills, and the strontium-aluminate / glitter particles behind glow and
+ * sparkle. Deliberately NOT here: tags describing thermal, chemical or
+ * electrical behaviour (they say nothing about wear), the `imitates_*` LOOK
+ * tags (pigment, not fill), `contains_carbon` (carbon black is in every black
+ * filament), and the nano-scale carbon fills (nanotubes, graphene), which are
+ * not established nozzle-wearers.
+ *
+ * SPEC ids (GH #1227). The pre-#1227 set `{0,1,4,19–24,31,32}` was in the
+ * app's own numbering; on the wire those ids are filtration_recommended,
+ * biocompatible, translucent, transparent, iridescent, pearlescent …
  */
-const ABRASIVE_OPT_TAGS: ReadonlySet<number> = new Set([
-  0, // CONTAINS_GLASS_FIBER
-  1, // CONTAINS_ARAMID_FIBER
-  4, // ABRASIVE
-  19, // WOOD_FILL
-  20, // METAL_FILL
-  21, // STONE_FILL
-  22, // SPARKLE
-  23, // PHOSPHORESCENT
-  24, // GLOW_IN_THE_DARK
-  31, // CONTAINS_CARBON_FIBER
-  32, // CONTAINS_KEVLAR
+const ABRASIVE_OPT_TAGS: ReadonlySet<number> = new Set<number>([
+  OPT_TAG.ABRASIVE,
+  OPT_TAG.GLITTER,
+  OPT_TAG.GLOW_IN_THE_DARK,
+  OPT_TAG.CONTAINS_CARBON_FIBER,
+  OPT_TAG.CONTAINS_GLASS,
+  OPT_TAG.CONTAINS_GLASS_FIBER,
+  OPT_TAG.CONTAINS_KEVLAR,
+  OPT_TAG.CONTAINS_STONE,
+  OPT_TAG.CONTAINS_MAGNETITE,
+  OPT_TAG.CONTAINS_CORK,
+  OPT_TAG.CONTAINS_WOOD,
+  OPT_TAG.CONTAINS_BAMBOO,
+  OPT_TAG.CONTAINS_PINE,
+  OPT_TAG.CONTAINS_CERAMIC,
+  OPT_TAG.CONTAINS_BORON_CARBIDE,
+  OPT_TAG.CONTAINS_METAL,
+  OPT_TAG.CONTAINS_BRONZE,
+  OPT_TAG.CONTAINS_IRON,
+  OPT_TAG.CONTAINS_STEEL,
+  OPT_TAG.CONTAINS_SILVER,
+  OPT_TAG.CONTAINS_COPPER,
+  OPT_TAG.CONTAINS_ALUMINIUM,
+  OPT_TAG.CONTAINS_BRASS,
+  OPT_TAG.CONTAINS_TUNGSTEN,
 ]);
+
+/** Exported for the skill self-test + the audit test, which pin the set. */
+export const ABRASIVE_OPT_TAG_IDS: readonly number[] = [...ABRASIVE_OPT_TAGS].sort((a, b) => a - b);
 
 export type AbrasiveReason = "flagged" | "tagged" | "fibre" | "filled";
 

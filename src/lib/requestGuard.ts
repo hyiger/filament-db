@@ -192,6 +192,10 @@ export const SERVER_OWNED_FILAMENT_FIELDS = [
   "openprinttagSnapshot",
   "promotionInFlight",
   "promotedByToken",
+  // GH #1227: the "optTags are spec-numbered" marker. Stamped by the server
+  // when `optTags` is written; the POST create path re-admits an explicit
+  // `false` AFTER this strip (a client may lower certainty, never raise it).
+  "optTagsSpec",
 ] as const;
 
 /**

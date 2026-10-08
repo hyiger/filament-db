@@ -25,75 +25,29 @@ const MONGODB_URI: string = (() => {
 
 const DRY_RUN = process.argv.includes("--dry-run");
 
-// ── OPT_TAG constants (mirrored from openprinttag.ts) ─────────────
-const OPT_TAG = {
-  CONTAINS_GLASS_FIBER: 0,
-  CONTAINS_ARAMID_FIBER: 1,
-  TRANSPARENT: 2,
-  TRANSLUCENT: 3,
-  ABRASIVE: 4,
-  FOOD_SAFE: 5,
-  HEAT_RESISTANT: 6,
-  UV_RESISTANT: 7,
-  FLAME_RETARDANT: 8,
-  FLEXIBLE: 9,
-  CONDUCTIVE: 10,
-  MAGNETIC: 11,
-  BIODEGRADABLE: 12,
-  WATER_SOLUBLE: 13,
-  HIGH_IMPACT: 14,
-  LOW_WARP: 15,
-  MATTE: 16,
-  SILK: 17,
-  MARBLE: 18,
-  WOOD_FILL: 19,
-  METAL_FILL: 20,
-  STONE_FILL: 21,
-  SPARKLE: 22,
-  PHOSPHORESCENT: 23,
-  GLOW_IN_THE_DARK: 24,
-  COLOR_CHANGING: 25,
-  FUZZY: 26,
-  GRADIENT: 27,
-  DUAL_COLOR: 28,
-  TRIPLE_COLOR: 29,
-  CONTAINS_CARBON_FIBER: 31,
-  CONTAINS_KEVLAR: 32,
-  HYGROSCOPIC: 33,
-  CHEMICALLY_RESISTANT: 36,
-  RECYCLED: 49,
-  HIGH_SPEED: 71,
-} as const;
+// ── OPT_TAG: the OpenPrintTag SPEC enum (GH #1227) ─────────────────
+// Imported, not mirrored: the pre-#1227 copy here was an app-invented
+// numbering that shipped onto every written NFC tag. Anything this script
+// writes into `optTags` goes onto the wire as CBOR key 28, so it MUST be a
+// spec id — and the rows it writes are stamped `optTagsSpec: true`.
+import { OPT_TAG } from "../src/lib/openprinttag";
 
 // ── Material-type → inherent tags ─────────────────────────────────
-// Tags that are always true for a given material type.
+// Tags that are always true for a given material type, in SPEC terms. The
+// pre-#1227 table also carried type-inherent marketing properties (low warp,
+// high impact, chemically resistant, hygroscopic, flexible, heat resistant)
+// that have no spec tag — they are implied by the type and are gone.
 const MATERIAL_INHERENT_TAGS: Record<string, number[]> = {
-  PLA:   [OPT_TAG.LOW_WARP, OPT_TAG.BIODEGRADABLE],
-  PETG:  [OPT_TAG.LOW_WARP, OPT_TAG.CHEMICALLY_RESISTANT],
-  ABS:   [OPT_TAG.HIGH_IMPACT, OPT_TAG.HEAT_RESISTANT],
-  ASA:   [OPT_TAG.UV_RESISTANT, OPT_TAG.HEAT_RESISTANT, OPT_TAG.HIGH_IMPACT],
-  PC:    [OPT_TAG.HEAT_RESISTANT, OPT_TAG.HIGH_IMPACT],
-  TPU:   [OPT_TAG.FLEXIBLE],
-  TPE:   [OPT_TAG.FLEXIBLE],
-  TPC:   [OPT_TAG.FLEXIBLE],
-  PEBA:  [OPT_TAG.FLEXIBLE],
-  HIPS:  [OPT_TAG.HIGH_IMPACT],
+  PLA:   [OPT_TAG.INDUSTRIALLY_COMPOSTABLE],
+  ASA:   [OPT_TAG.UV_RESISTANT],
+  HIPS:  [OPT_TAG.LIMONENE_SOLUBLE],
   PVA:   [OPT_TAG.WATER_SOLUBLE],
   BVOH:  [OPT_TAG.WATER_SOLUBLE],
-  PP:    [OPT_TAG.CHEMICALLY_RESISTANT, OPT_TAG.LOW_WARP, OPT_TAG.FOOD_SAFE],
-  POM:   [OPT_TAG.CHEMICALLY_RESISTANT, OPT_TAG.LOW_WARP, OPT_TAG.ABRASIVE],
-  PA:    [OPT_TAG.HYGROSCOPIC, OPT_TAG.HIGH_IMPACT],
-  PA6:   [OPT_TAG.HYGROSCOPIC, OPT_TAG.HIGH_IMPACT],
-  PA12:  [OPT_TAG.HYGROSCOPIC],
-  PA66:  [OPT_TAG.HYGROSCOPIC, OPT_TAG.HIGH_IMPACT],
-  PPA:   [OPT_TAG.HEAT_RESISTANT, OPT_TAG.HYGROSCOPIC, OPT_TAG.CHEMICALLY_RESISTANT],
-  PEI:   [OPT_TAG.HEAT_RESISTANT, OPT_TAG.FLAME_RETARDANT, OPT_TAG.CHEMICALLY_RESISTANT],
-  PEEK:  [OPT_TAG.HEAT_RESISTANT, OPT_TAG.CHEMICALLY_RESISTANT],
-  PEKK:  [OPT_TAG.HEAT_RESISTANT, OPT_TAG.CHEMICALLY_RESISTANT],
-  PVB:   [OPT_TAG.TRANSLUCENT],
-  PCTG:  [OPT_TAG.LOW_WARP, OPT_TAG.CHEMICALLY_RESISTANT, OPT_TAG.HIGH_IMPACT],
-  PHA:   [OPT_TAG.BIODEGRADABLE],
-  IGLIDUR: [OPT_TAG.ABRASIVE, OPT_TAG.CHEMICALLY_RESISTANT, OPT_TAG.LOW_WARP],
+  POM:   [OPT_TAG.ABRASIVE],
+  PEI:   [OPT_TAG.SELF_EXTINGUISHING],
+  PVB:   [OPT_TAG.TRANSLUCENT, OPT_TAG.IPA_SOLUBLE],
+  PHA:   [OPT_TAG.HOME_COMPOSTABLE],
+  IGLIDUR: [OPT_TAG.ABRASIVE],
 };
 
 // ── Name-keyword → additional tags ────────────────────────────────
@@ -105,25 +59,21 @@ const KEYWORD_TAGS: [RegExp, number][] = [
   [/\bGF\d*\b|glass\s*fiber/i, OPT_TAG.ABRASIVE],   // GF is abrasive
   [/matte/i,                    OPT_TAG.MATTE],
   [/silk/i,                     OPT_TAG.SILK],
-  [/marble/i,                   OPT_TAG.MARBLE],
-  [/wood/i,                     OPT_TAG.WOOD_FILL],
-  [/metal/i,                    OPT_TAG.METAL_FILL],
-  [/stone|mineral/i,            OPT_TAG.STONE_FILL],
-  [/sparkle|glitter/i,          OPT_TAG.SPARKLE],
-  [/glow/i,                     OPT_TAG.GLOW_IN_THE_DARK],
-  [/phosphor/i,                 OPT_TAG.PHOSPHORESCENT],
-  [/color.?chang/i,             OPT_TAG.COLOR_CHANGING],
-  [/fuzzy|fur/i,                OPT_TAG.FUZZY],
-  [/gradient|rainbow/i,         OPT_TAG.GRADIENT],
-  [/dual.?color/i,              OPT_TAG.DUAL_COLOR],
-  [/triple.?color|tri.?color/i, OPT_TAG.TRIPLE_COLOR],
+  [/marble/i,                   OPT_TAG.IMITATES_MARBLE],
+  [/wood/i,                     OPT_TAG.CONTAINS_WOOD],
+  [/metal/i,                    OPT_TAG.CONTAINS_METAL],
+  [/stone|mineral/i,            OPT_TAG.CONTAINS_STONE],
+  [/sparkle|glitter/i,          OPT_TAG.GLITTER],
+  [/glow|phosphor/i,            OPT_TAG.GLOW_IN_THE_DARK],
+  [/color.?chang/i,             OPT_TAG.TEMPERATURE_COLOR_CHANGE],
+  [/gradient|rainbow/i,         OPT_TAG.GRADUAL_COLOR_CHANGE],
+  [/dual.?color|triple.?color|tri.?color|coextruded/i, OPT_TAG.COEXTRUDED],
   [/recycl/i,                   OPT_TAG.RECYCLED],
   [/high.?speed|HS\b/i,        OPT_TAG.HIGH_SPEED],
   [/kevlar|aramid/i,            OPT_TAG.CONTAINS_KEVLAR],
   [/transparent|clear/i,        OPT_TAG.TRANSPARENT],
   [/translucent/i,              OPT_TAG.TRANSLUCENT],
-  [/flex/i,                     OPT_TAG.FLEXIBLE],
-  [/ESD/i,                      OPT_TAG.CONDUCTIVE],
+  [/ESD/i,                      OPT_TAG.ESD_SAFE],
 ];
 
 // ── Type aliases ──────────────────────────────────────────────────
@@ -331,6 +281,9 @@ async function main() {
       const tags = computeTags(doc.name, doc.type);
       if (tags.length > 0) {
         $set.optTags = tags;
+        // GH #1227: spec ids, written through the raw driver — mark the row so
+        // the startup renumbering pass never re-judges them.
+        $set.optTagsSpec = true;
         details.push(`optTags=[${tags.join(",")}]`);
       }
     }

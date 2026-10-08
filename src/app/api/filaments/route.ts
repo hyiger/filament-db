@@ -369,6 +369,13 @@ export async function POST(request: NextRequest) {
   // honoured/stripped the same way).
   const promoteParent = body?.promoteParent === true;
   delete body.promoteParent;
+  // GH #1227: a client may declare that it does NOT know which numbering the
+  // `optTags` it sends are in — the share importer forwarding a pre-#1227
+  // publisher's row, the CSV importer meeting bare ids — by sending
+  // `optTagsSpec: false`. Captured before the strip below removes the key;
+  // re-applied after it. Only `false` is honoured: the schema default already
+  // says `true`, and a client cannot raise a certainty the server lacks.
+  const unverifiedOptTags = body?.optTagsSpec === false;
 
   // GH #222 / #1072: drop every SERVER-OWNED field — exact keys AND dotted
   // subpaths (Mongoose treats dotted keys as live nested paths in
@@ -379,6 +386,7 @@ export async function POST(request: NextRequest) {
   // embedded-spool allowlist + validation loop below is the create-path
   // spool contract (GH #431) — but its dotted subpaths are still swept.
   stripServerOwnedFields(body, { allowExact: ["spools"] });
+  if (unverifiedOptTags) body.optTagsSpec = false;
 
   // GH #1072: enforce the GH #266 settings-bag caps here too — `settings` is
   // Schema.Types.Mixed, so Filament.create validates nothing about it. Both

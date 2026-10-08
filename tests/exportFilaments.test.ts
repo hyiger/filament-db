@@ -83,10 +83,12 @@ describe("getExportRows", () => {
       type: "PLA",
       color: null,
       secondaryColors: ["#ff0000", "#00ff00"],
-      optTags: [28, 16], // dual_color + matte
+      optTags: [28, 16], // gradual_color_change + matte (spec ids, GH #1227)
     });
     const rows = await getExportRows();
-    expect(rows[0].optTags).toBe("28,16");
+    // GH #1227: a verified row exports SPEC NAMES — self-describing, so the
+    // file survives the app's own renumbering.
+    expect(rows[0].optTags).toBe("gradual_color_change,matte");
   });
 
   it("GH #955: spoolCount excludes retired spools (matches getSpoolCount / the UI)", async () => {

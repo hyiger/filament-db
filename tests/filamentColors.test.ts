@@ -24,67 +24,54 @@ describe("deriveArrangement", () => {
     expect(deriveArrangement([])).toBe("solid");
   });
 
-  // GH #507: canonical OPT_TAG ids — 27 = gradient, 28 = dual_color,
-  // 29 = triple_color. Both dual and triple render as coextruded.
-  it("returns 'coextruded' when tag 28 (dual_color) is present", () => {
-    expect(deriveArrangement([28])).toBe("coextruded");
-    expect(deriveArrangement([16, 28])).toBe("coextruded"); // tag 16 = MATTE
-  });
-
-  it("returns 'coextruded' when tag 29 (triple_color) is present", () => {
+  // GH #1227: OpenPrintTag SPEC ids — 29 = coextruded, 28 = gradual_color_change
+  // (rendered as "gradient"). The pre-#1227 app table (27 gradient / 28 dual /
+  // 29 triple, which GH #507 aligned this helper to) contradicted the spec.
+  it("returns 'coextruded' when tag 29 (coextruded) is present", () => {
     expect(deriveArrangement([29])).toBe("coextruded");
+    expect(deriveArrangement([16, 29])).toBe("coextruded"); // tag 16 = MATTE
   });
 
-  it("returns 'gradient' when tag 27 (gradient) is present", () => {
-    expect(deriveArrangement([27])).toBe("gradient");
-    expect(deriveArrangement([3, 27])).toBe("gradient");
+  it("returns 'gradient' when tag 28 (gradual_color_change) is present", () => {
+    expect(deriveArrangement([28])).toBe("gradient");
+    expect(deriveArrangement([19, 28])).toBe("gradient");
   });
 
   it("returns 'coextruded' when both coextruded and gradient tags are present (coextruded wins)", () => {
     // A "coextruded gradient" is theoretically possible per OpenPrintTag
     // spec; the rendering UI can only pick one mode, so the more
     // structural property (cross-section) wins over change-over-time.
-    expect(deriveArrangement([27, 28])).toBe("coextruded");
-    expect(deriveArrangement([29, 27])).toBe("coextruded");
+    expect(deriveArrangement([28, 29])).toBe("coextruded");
+    expect(deriveArrangement([29, 28])).toBe("coextruded");
   });
 
   it("returns 'solid' when only non-arrangement tags are present", () => {
-    // Tags 1–5 are FOOD_SAFE/BIODEGRADABLE/ABRASIVE/WATER_SOLUBLE/UV_RESISTANT etc;
-    // none of them describe color arrangement.
-    expect(deriveArrangement([1, 2, 3, 4, 5])).toBe("solid");
+    // 1 biocompatible, 2 antibacterial, 4 abrasive, 13 water_soluble, 27
+    // temperature_color_change — none describe a colour arrangement. 27 in
+    // particular was the pre-#1227 GRADIENT id and must NOT read as one now.
+    expect(deriveArrangement([1, 2, 4, 13, 27])).toBe("solid");
   });
 
   it("type-checks to ColorArrangement", () => {
-    const result: ColorArrangement = deriveArrangement([28]);
+    const result: ColorArrangement = deriveArrangement([29]);
     expect(["solid", "coextruded", "gradient"]).toContain(result);
   });
 });
 
 describe("arrangementToOptTag", () => {
-  it("maps gradient to tag 27", () => {
-    expect(arrangementToOptTag("gradient", 0)).toBe(27);
-    expect(arrangementToOptTag("gradient", 4)).toBe(27);
+  it("maps gradient to tag 28 (gradual_color_change)", () => {
+    expect(arrangementToOptTag("gradient")).toBe(28);
   });
 
   it("returns null for a solid arrangement", () => {
-    expect(arrangementToOptTag("solid", 0)).toBeNull();
-    expect(arrangementToOptTag("solid", 2)).toBeNull();
+    expect(arrangementToOptTag("solid")).toBeNull();
   });
 
-  // GH #817: a coextruded filament persists a null primary, so the color
-  // count equals secondaryColors.length. A 2-color coextruded (2 secondaries)
-  // must be dual_color (28), not triple_color (29).
-  it("maps a 2-secondary coextruded to dual_color (28), not triple", () => {
-    expect(arrangementToOptTag("coextruded", 2)).toBe(28);
-  });
-
-  it("maps a 1-secondary coextruded to dual_color (28)", () => {
-    expect(arrangementToOptTag("coextruded", 1)).toBe(28);
-  });
-
-  it("maps a 3+-secondary coextruded to triple_color (29)", () => {
-    expect(arrangementToOptTag("coextruded", 3)).toBe(29);
-    expect(arrangementToOptTag("coextruded", 5)).toBe(29);
+  // GH #1227: the spec has ONE coextruded tag; the colour count is implicit in
+  // secondaryColors, so the count no longer picks a dual/triple id (the #817
+  // boundary is gone with the pre-spec split).
+  it("maps coextruded to tag 29 — there is no dual/triple split any more", () => {
+    expect(arrangementToOptTag("coextruded")).toBe(29);
   });
 });
 
@@ -98,13 +85,14 @@ describe("stripArrangementTags", () => {
     expect(stripArrangementTags([])).toEqual([]);
   });
 
-  it("removes every arrangement tag (27 gradient, 28 dual, 29 triple)", () => {
-    expect(stripArrangementTags([27, 28, 29])).toEqual([]);
+  it("removes both arrangement tags (28 gradual_color_change, 29 coextruded)", () => {
+    expect(stripArrangementTags([28, 29])).toEqual([]);
   });
 
   it("keeps non-arrangement tags and drops arrangement ones", () => {
-    // 16 = MATTE, 3 = ABRASIVE (non-arrangement) survive; 27/28/29 are stripped.
-    expect(stripArrangementTags([16, 27, 3, 28, 29])).toEqual([16, 3]);
+    // 16 = matte, 4 = abrasive, 27 = temperature_color_change (NOT an
+    // arrangement any more) survive; 28/29 are stripped.
+    expect(stripArrangementTags([16, 28, 4, 29, 27])).toEqual([16, 4, 27]);
   });
 
   it("leaves an array with no arrangement tags untouched (by value)", () => {
@@ -112,11 +100,10 @@ describe("stripArrangementTags", () => {
   });
 
   it("does not mutate the input array", () => {
-    const input = [16, 28, 3];
-    const result = stripArrangementTags(input);
-    expect(input).toEqual([16, 28, 3]);
-    expect(result).toEqual([16, 3]);
-    expect(result).not.toBe(input);
+    const input = [16, 29, 4];
+    const copy = [...input];
+    stripArrangementTags(input);
+    expect(input).toEqual(copy);
   });
 });
 
@@ -301,10 +288,12 @@ describe("submittedColorValue (GH #605)", () => {
     expect(submittedColorValue(BLANK_COLOR_HEX, null)).toBe(BLANK_COLOR_HEX);
   });
 
-  it("coextruded arrangement (tags 28/29) always submits null (GH #477/#533)", () => {
-    expect(submittedColorValue("#FA6E1C", [28])).toBeNull();
+  it("coextruded arrangement (spec tag 29) always submits null (GH #477/#533)", () => {
     expect(submittedColorValue("#FA6E1C", [29])).toBeNull();
-    // Gradient keeps its primary.
+    expect(submittedColorValue("#FA6E1C", [16, 29])).toBeNull();
+    // Gradient (28 gradual_color_change) keeps its primary; so does 27, which
+    // is temperature_color_change on the wire, not an arrangement (GH #1227).
+    expect(submittedColorValue("#FA6E1C", [28])).toBe("#FA6E1C");
     expect(submittedColorValue("#FA6E1C", [27])).toBe("#FA6E1C");
   });
 });

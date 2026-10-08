@@ -131,7 +131,11 @@ export interface FilamentDetail {
   maxPrintSpeed: number | null;
   colorName: string | null;
   spoolType: string | null;
+  /** OpenPrintTag spec tag ids (GH #1227). */
   optTags: number[];
+  /** GH #1227: true once `optTags` are known to be spec-numbered; absent on a
+   *  pre-v1.83 row awaiting review on Data health. Server-owned. */
+  optTagsSpec?: boolean;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;

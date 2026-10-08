@@ -2,6 +2,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { getSpoolCount } from "@/lib/inventoryStats";
+import { OPT_TAG_TO_NAME } from "./openprinttag";
 
 export interface ExportRow {
   name: string;
@@ -52,11 +53,30 @@ export interface ExportRow {
   variantCount: number;
   /**
    * GH #954: OpenPrintTag `optTags` (color-arrangement + finish) as a
-   * comma-separated list of numeric ids. Round-trips through the importer's
-   * split-on-comma parse. Without it a coextruded/gradient/finish filament
-   * collapses to a solid swatch on a create-path CSV round-trip.
+   * comma-separated list. Round-trips through the importer's split-on-comma
+   * parse. Without it a coextruded/gradient/finish filament collapses to a
+   * solid swatch on a create-path CSV round-trip.
+   *
+   * GH #1227: emitted as SPEC NAMES (`transparent,glitter`) when the row's
+   * numbering is verified — self-describing, so a file survives the
+   * app's own renumbering and reads as what it means. An id the enum doesn't
+   * know, or a row still awaiting numbering review, is emitted as the bare
+   * number so the importer's classifier (not this exporter) decides.
    */
   optTags: string;
+}
+
+/**
+ * GH #1227: the `Tags` cell. Spec names for a verified row, bare ids for an
+ * unknown id or an unverified row (see the `optTags` field docblock).
+ */
+export function exportOptTagsCell(tags: readonly number[] | null | undefined, verified: boolean): string {
+  return (tags ?? [])
+    .map((id) => {
+      const name = verified ? OPT_TAG_TO_NAME[id] : undefined;
+      return name ? name.toLowerCase() : String(id);
+    })
+    .join(",");
 }
 
 export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
@@ -184,7 +204,7 @@ export async function getExportRows(): Promise<ExportRow[]> {
       variantCount: variantCountByParent.get(filament._id.toString()) ?? 0,
       // GH #954: resolved so a variant exports its EFFECTIVE tags (matching
       // secondaryColors), keeping the round-trip's arrangement/finish intact.
-      optTags: (resolved.optTags ?? []).join(","),
+      optTags: exportOptTagsCell(resolved.optTags, filament.optTagsSpec === true),
     };
   });
 }

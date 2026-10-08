@@ -82,7 +82,7 @@ const FIXTURE: FixtureTuple[] = [
   ["f29","f27","Overture PETG Grey","Overture","PETG","#808080",[],[],false,"A",null,"gray","mid","gray:mid"],
   ["f30","f27","Overture PETG Pink","Overture","PETG","#F79DBC",[],[],false,"A",null,"pink","light","pink:light"],
   ["f31","f27","Overture PETG Red","Overture","PETG","#ff0000",[],[],false,"A",null,"red","mid","red:mid"],
-  ["f32","f27","Overture PETG Transparent","Overture","PETG",null,[],[2],false,"A",null,"clear",null,"clear"],
+  ["f32","f27","Overture PETG Transparent","Overture","PETG",null,[],[20],false,"A",null,"clear",null,"clear"],
   ["f33","f27","Overture PETG — White","Overture","PETG","#ffffff",[],[],false,"",797,"white",null,"white"],
   ["f34",null,"Overture PLA","Overture","PLA",null,[],[],true,"",null,null,null,""],
   ["f35","f34","Overture PLA Matte White","Overture","PLA","#E6DEDE",[],[12,15,16],false,"A",null,"white",null,"white"],
@@ -96,7 +96,7 @@ const FIXTURE: FixtureTuple[] = [
   ["f43","f41","PC Blend Jet Black","Prusament","PC","#24292A",[],[6,14],false,"A",null,"black",null,"black"],
   ["f44","f41","PC Blend Prusa Orange","Prusament","PC","#EA5E19",[],[6,14],false,"A",null,"orange","mid","orange:mid"],
   ["f45",null,"PRILINE PC-CF","PRILINE","PC-CF","#000000",[],[],false,"A",null,"black",null,"black"],
-  ["f46",null,"PVB Smoky Black","Prusament","PVB","#ADADAD",[],[3],false,"A",609,"black",null,"gray:mid,black,clear"],
+  ["f46",null,"PVB Smoky Black","Prusament","PVB","#ADADAD",[],[19],false,"A",609,"black",null,"gray:mid,black,clear"],
   ["f47",null,"PolyLite PLA Teal","Polymaker","PLA","#48B9C2",[],[],false,"A",null,"teal","mid","teal:mid"],
   ["f48",null,"PolyTerra PLA Red","Polymaker","PLA","#ff0000",[],[],false,"A",null,"red","mid","red:mid"],
   ["f49",null,"Polychroma Green","Polymaker","PLA","#5eab71",[],[],false,"A",null,"green","mid","green:mid"],
@@ -104,7 +104,7 @@ const FIXTURE: FixtureTuple[] = [
   ["f51","f50","Polymaker HT-PLA-GF Black","Polymaker","PLA-GF","#18191b",[],[4,0],false,"A",null,"black",null,"black"],
   ["f52","f50","Polymaker HT-PLA-GF White","Polymaker","PLA-GF","#eff0eb",[],[4,0],false,"A",null,"white",null,"white"],
   ["f53","f50","Polymaker HT-PLA-GF — Original","Polymaker","PLA-GF",null,[],[4,0],false,"A",null,"unknown",null,"unknown"],
-  ["f54",null,"Polymaker PolyLite PC Transparent","Polymaker","PC","#dad5d4",[],[2],false,"A",null,"clear",null,"white,clear"],
+  ["f54",null,"Polymaker PolyLite PC Transparent","Polymaker","PC","#dad5d4",[],[20],false,"A",null,"clear",null,"white,clear"],
   ["f55",null,"Polymax PC Grey","Polymaker","PC","#A5A5AB",[],[],false,"A",875,"gray","mid","gray:mid"],
   ["f56",null,"Pro PCTG","3D Fuel","PCTG",null,[],[],true,"",null,null,null,""],
   ["f57","f56","Pro PCTG Cobalt Blue","3D Fuel","PCTG","#18549B",[],[],false,"",1177,"blue","mid","blue:mid"],
@@ -113,7 +113,7 @@ const FIXTURE: FixtureTuple[] = [
   ["f60","f56","Pro PCTG Grass Green","3D Fuel","PCTG","#469854",[],[],false,"",1177,"green","mid","green:mid"],
   ["f61",null,"Pro PCTG Matte Black","3D Fuel","PCTG","#434443",[],[16,31],false,"A",null,"black",null,"gray:dark,black"],
   ["f62","f56","Pro PCTG Midnight Black","3D Fuel","PCTG","#383737",[],[],false,"",1035,"black",null,"gray:dark,black"],
-  ["f63","f56","Pro PCTG Natural","3D Fuel","PCTG","#A9A9A6",[],[2],false,"A",null,"clear",null,"gray:mid,clear"],
+  ["f63","f56","Pro PCTG Natural","3D Fuel","PCTG","#A9A9A6",[],[20],false,"A",null,"clear",null,"gray:mid,clear"],
   ["f64","f56","Pro PCTG Snow White","3D Fuel","PCTG","#EEF2EF",[],[],false,"A",null,"white",null,"white"],
   ["f65","f56","Pro PCTG Tangerine Orange","3D Fuel","PCTG","#F16A47",[],[],false,"",null,"orange","mid","orange:mid"],
   ["f66","f56","Pro PCTG Toolbox Red","3D Fuel","PCTG","#A74031",[],[14,15,36],false,"R",null,"red","mid","brown:mid,red:mid"],
@@ -128,7 +128,7 @@ const FIXTURE: FixtureTuple[] = [
   ["f75","f74","Prusament rPLA Algae Pigment","Prusament","rPLA","#674B41",[],[],false,"A",null,"brown","dark","brown:dark"],
   ["f76","f74","Prusament rPLA Corn Pigment","Prusament","rPLA","#B37B46",[],[],false,"A",null,"brown","mid","brown:mid"],
   ["f77","f74","Prusament rPLA Risotto Pigment","Prusament","rPLA","#CCC9BF",[],[],false,"A",null,"gray","light","gray:light"],
-  ["f78",null,"Push Plastic PMMA","Push Plastic","PMMA",null,[],[2],false,"A",null,"clear",null,"clear"],
+  ["f78",null,"Push Plastic PMMA","Push Plastic","PMMA",null,[],[20],false,"A",null,"clear",null,"clear"],
   ["f79",null,"SUNLU PLA","SUNLU","PLA","#F5F5DC",[],[],true,"",null,null,null,""],
   ["f80","f79","SUNLU PLA Beige","SUNLU","PLA","#F5F5DC",[],[],false,"A",null,"beige",null,"white,beige"],
   ["f81","f79","SUNLU PLA Cyan","SUNLU","PLA","#00FFFF",[],[],false,"A",null,"teal","light","teal:light"],
@@ -141,8 +141,8 @@ const FIXTURE: FixtureTuple[] = [
   ["f88",null,"Siraya Tech PET-CF","Siraya Tech","PET-CF","#000000",[],[],false,"AA",1156,"black",null,"black"],
   ["f89",null,"Siraya Tech TPU 64D","Siraya Tech","TPU","#000000",[],[9],false,"A",null,"black",null,"black"],
   ["f90",null,"Spectrum PETG-PTFE","Spectrum","PETG","#0000FF",[],[],false,"A",null,"blue","mid","blue:mid"],
-  ["f91",null,"The K8 PC Clear White","kexcelled","PC","#eff0f1",[],[6,14,2],false,"A",null,"clear",null,"white,clear"],
-  ["f92",null,"Yousu PP","Yousu","PP","#DEE0E6",[],[5,15,36,2],false,"A",null,"clear",null,"white,clear"],
+  ["f91",null,"The K8 PC Clear White","kexcelled","PC","#eff0f1",[],[6,14,20],false,"A",null,"clear",null,"white,clear"],
+  ["f92",null,"Yousu PP","Yousu","PP","#DEE0E6",[],[5,15,36,20],false,"A",null,"clear",null,"white,clear"],
   ["f93",null,"iglidur i150","igus","IGLIDUR","#ffffff",[],[4,15,36],false,"A",null,"white",null,"white"],
 ];
 
@@ -462,13 +462,13 @@ describe("classifyFilament — edge cases", () => {
   });
 
   it("Transparent Smoke → Clear, also Gray · Dark", () => {
-    expect(summary({ name: "Acme PETG Transparent Smoke", color: "#3A3A3A", optTags: [2] })).toEqual([
+    expect(summary({ name: "Acme PETG Transparent Smoke", color: "#3A3A3A", optTags: [20] })).toEqual([
       "clear", null, "gray:dark,clear",
     ]);
   });
 
   it("Transparent Red stays red, also Clear (translucent tag 3 counts too)", () => {
-    expect(summary({ name: "Acme PETG Transparent Red", color: "#FF0000", optTags: [3] })).toEqual([
+    expect(summary({ name: "Acme PETG Transparent Red", color: "#FF0000", optTags: [19] })).toEqual([
       "red", "mid", "red:mid,clear",
     ]);
   });
@@ -480,16 +480,16 @@ describe("classifyFilament — edge cases", () => {
   });
 
   it("coextruded black + charcoal → Multicolor, also Black and Gray · Dark", () => {
-    expect(summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [28] })).toEqual([
+    expect(summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [29] })).toEqual([
       "multi", null, "multi,black,gray:dark",
     ]);
-    expect(summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [29, 2] })).toEqual([
+    expect(summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [29, 20] })).toEqual([
       "multi", null, "multi,black,gray:dark,clear",
     ]);
   });
 
   it("a gradient with only ONE real color falls through to the swatch rules", () => {
-    expect(summary({ color: null, secondaryColors: ["#0000FF", "nope"], optTags: [27] })).toEqual([
+    expect(summary({ color: null, secondaryColors: ["#0000FF", "nope"], optTags: [28] })).toEqual([
       "blue", "mid", "blue:mid",
     ]);
   });
@@ -521,7 +521,7 @@ describe("classifyFilament — edge cases", () => {
   it("no usable swatch: the last color word wins without a shade", () => {
     expect(summary({ name: "Acme Red Blue", color: "#12" })).toEqual(["blue", null, "blue"]);
     expect(summary({ name: "Acme", color: null })).toEqual(["unknown", null, "unknown"]);
-    expect(summary({ name: "Acme", color: null, optTags: [2] })).toEqual(["clear", null, "clear"]);
+    expect(summary({ name: "Acme", color: null, optTags: [20] })).toEqual(["clear", null, "clear"]);
   });
 
   it("a template is null; a legacy template still holding stock is classified", () => {
@@ -593,18 +593,18 @@ describe("matchesColorFacet / matchReason", () => {
     expect(matchReason(toolbox, "blue")).toBeNull();
     expect(matchReason(toolbox, "")).toBeNull();
     // Primary family but the requested shade isn't the primary shade.
-    const multi = fil({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [28] });
+    const multi = fil({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [29] });
     expect(matchReason(multi, "multi")).toBe("primary");
     expect(matchReason(multi, "gray-dark")).toBe("swatch");
     // Clear membership comes only from the see-through optTag, never a
     // swatch hex — so a tinted transparent is "tag", not "swatch".
-    const transparentRed = fil({ name: "Transparent Red PETG", color: "#D32F2F", optTags: [2] });
+    const transparentRed = fil({ name: "Transparent Red PETG", color: "#D32F2F", optTags: [20] });
     expect(matchReason(transparentRed, "red")).toBe("primary");
     expect(matchReason(transparentRed, "clear")).toBe("tag");
-    const clearMulti = fil({ color: "#000000", secondaryColors: ["#FFFFFF"], optTags: [28, 3] });
+    const clearMulti = fil({ color: "#000000", secondaryColors: ["#FFFFFF"], optTags: [29, 19] });
     expect(matchReason(clearMulti, "clear")).toBe("tag");
     expect(matchReason(clearMulti, "black")).toBe("swatch");
-    expect(matchReason(fil({ name: "Clear PETG", color: null, optTags: [2] }), "clear")).toBe("primary");
+    expect(matchReason(fil({ name: "Clear PETG", color: null, optTags: [20] }), "clear")).toBe("primary");
     const legacy = fil({ name: "Acme Grey", color: "#B37B46" });
     expect(matchReason(legacy, { family: "gray", shade: "mid" })).toBe("primary");
     expect(matchReason(legacy, "brown-mid")).toBe("swatch");

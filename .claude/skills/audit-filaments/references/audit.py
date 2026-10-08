@@ -255,7 +255,11 @@ LOW_TEMP_TYPES = ("PCL", "FACILAN")
 # A density ceiling has no such escape hatch: raised by name, an ordinary
 # filament silently accepts a corrupt 4 g/cm3 -- a false negative in place of a
 # false positive, which is worse.
-OPT_TAG_METAL_FILL = 20
+# GH #1227: OpenPrintTag SPEC ids — contains_metal plus every specific metal
+# fill (bronze, iron, steel, silver, copper, aluminium, brass, tungsten). The
+# pre-#1227 app id 20 (METAL_FILL) is `transparent` on the wire.
+OPT_TAG_METAL_FILL_IDS = (46, 47, 48, 49, 50, 51, 52, 53, 54)
+OPT_TAG_METAL_FILL = 46
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
 DENSITY_FLOOR = 0.7
@@ -401,7 +405,9 @@ NESTED_BOOL_FIELDS = {"spools": ("retired",)}
 # listing and detail routes both filter on `_deletedAt`, so a row with a
 # malformed `_purged` is still returned and still audited, while the Boolean
 # cast refuses it on restore.
-BOOL_FIELDS = ("_purged",)
+# `optTagsSpec` (GH #1227): the "optTags are OpenPrintTag spec ids" marker —
+# server-owned, Boolean, absent on rows awaiting numbering review.
+BOOL_FIELDS = ("_purged", "optTagsSpec")
 
 # What Mongoose's Boolean cast actually accepts — verified against the installed
 # mongoose: true/false, 0/1, and the strings "true"/"false"/"yes"/"no"/"1"/"0".
@@ -2520,7 +2526,7 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
         # --- physical --------------------------------------------------------
         dens = num(r.get("density"))
-        metal_filled = OPT_TAG_METAL_FILL in (r.get("optTags") or [])
+        metal_filled = any(t in OPT_TAG_METAL_FILL_IDS for t in (r.get("optTags") or []))
         ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
         _ftype = (r.get("type") or "")
         _foaming = bool(FOAMING_TYPE_RE.search(_ftype.upper())) if isinstance(_ftype, str) else False
@@ -2535,12 +2541,12 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # highest-severity category would then report a soft foaming PLA as
             # exporting non-abrasive. A remedy that makes things worse.
             if dens > ceiling and not metal_filled:
-                hint = (" — if this really is metal-filled, add optTag 20 (METAL_FILL), which also "
+                hint = (" — if this really is metal-filled, add optTag 46 (contains_metal), which also "
                         "corrects its abrasive classification")
             elif dens < floor and not _foaming:
                 hint = (" — a foaming grade legitimately sits here (the bundled reference puts "
                         "LW-PLA at 0.40-0.48 fully foamed); if it is one, name the type so it "
-                        "reads as LW-/foaming and this row goes away. Do NOT add optTag 20: it "
+                        "reads as LW-/foaming and this row goes away. Do NOT add optTag 46: it "
                         "does not move the floor and it marks the filament abrasive")
             else:
                 hint = ""

@@ -6,6 +6,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { createSyncCycleWatcher, seededCycleMayPostdate } from "@/lib/syncCycleWatcher";
+import { optTagLabel, legacyOptTagLabel } from "@/lib/optTagLabels";
 
 /**
  * GH #1149 — Data health: the trim-collision resolution surface.
@@ -61,6 +62,32 @@ interface AbrasiveFinding {
   inheritedFrom: string | null;
 }
 
+/**
+ * GH #1227: a filament whose stored `optTags` the renumbering pass could not
+ * place in a numbering. Both readings come pre-computed from the server so the
+ * page only labels ids; `stored` is echoed back as `expectedTags` so a
+ * decision is applied to the exact array the user saw.
+ */
+interface TagReviewRow {
+  filamentId: string;
+  name: string;
+  vendor: string | null;
+  type: string | null;
+  trashed: boolean;
+  verdict: "ambiguous" | "inconsistent";
+  stored: number[];
+  asLegacy: { tags: number[]; dropped: number[] };
+  asSpec: number[];
+}
+
+/** GH #1227: legacy tags (pre-#1227 ids) the automatic conversion removed from one filament. */
+interface DroppedLegacyTags {
+  filamentId: string;
+  name: string;
+  tags: number[];
+  at: string;
+}
+
 /** The id-addressed routes the resolutions act through. */
 const ROUTE_BY_COLLECTION: Record<Conflict["collection"], string> = {
   filaments: "/api/filaments",
@@ -108,6 +135,14 @@ export default function DataHealthPage() {
   // endpoints are independent — one scan superseding the other's write would
   // be a different bug.
   const abrasiveSeq = useRef(0);
+  // GH #1227: tags awaiting numbering review + the legacy tags the conversion
+  // dropped. Independent of the two scans above for the same reason they are
+  // independent of each other; its own ticket for the same ordering race.
+  const [tagReview, setTagReview] = useState<TagReviewRow[]>([]);
+  const [droppedTags, setDroppedTags] = useState<DroppedLegacyTags[]>([]);
+  const [tagReviewLoading, setTagReviewLoading] = useState(true);
+  const [tagReviewError, setTagReviewError] = useState(false);
+  const tagReviewSeq = useRef(0);
   // When the mount scans were issued. The sync subscription is installed by a
   // LATER effect, so a cycle finishing in between is delivered to no listener
   // and then seeded as the baseline — invisible to `observe`, while the scans
@@ -229,6 +264,50 @@ export default function DataHealthPage() {
     };
   }, [markScansIssued]);
 
+  // GH #1227 refetch helper (actions + the sync watcher), mirroring `load`.
+  const loadTagReview = useCallback(async () => {
+    const seq = ++tagReviewSeq.current;
+    try {
+      const res = await fetch("/api/opt-tag-review");
+      if (!res.ok) throw new Error();
+      const body = (await res.json()) as { pending: TagReviewRow[]; dropped: DroppedLegacyTags[] };
+      if (seq !== tagReviewSeq.current) return;
+      setTagReview(body.pending);
+      setDroppedTags(body.dropped);
+      setTagReviewError(false);
+    } catch {
+      if (seq === tagReviewSeq.current) setTagReviewError(true);
+    } finally {
+      if (seq === tagReviewSeq.current) setTagReviewLoading(false);
+    }
+  }, []);
+
+  // GH #1227 mount scan. Same IIFE shape as the two above.
+  useEffect(() => {
+    let cancelled = false;
+    markScansIssued();
+    const seq = ++tagReviewSeq.current;
+    const current = () => !cancelled && seq === tagReviewSeq.current;
+    (async () => {
+      try {
+        const res = await fetch("/api/opt-tag-review");
+        if (!res.ok) throw new Error();
+        const body = (await res.json()) as { pending: TagReviewRow[]; dropped: DroppedLegacyTags[] };
+        if (!current()) return;
+        setTagReview(body.pending);
+        setDroppedTags(body.dropped);
+        setTagReviewError(false);
+      } catch {
+        if (current()) setTagReviewError(true);
+      } finally {
+        if (current()) setTagReviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [markScansIssued]);
+
   // GH #1164, desktop only: the sync service's view of BOTH databases.
   // Same IIFE shape as above for the set-state-in-effect rule.
   useEffect(() => {
@@ -269,6 +348,7 @@ export default function DataHealthPage() {
         if (seededCycleMayPostdate(st as StatusSample, scansIssuedAt.current)) {
           void load();
           void loadAbrasive();
+          void loadTagReview();
         }
       } catch {
         /* status unavailable — the local scan above still stands */
@@ -281,13 +361,15 @@ export default function DataHealthPage() {
       if (watcher.observe(st)) {
         void load();
         void loadAbrasive();
+        // A cycle can sync down a peer's unreviewed row, or a peer's answer.
+        void loadTagReview();
       }
     });
     return () => {
       cancelled = true;
       unsub?.();
     };
-  }, [load, loadAbrasive]);
+  }, [load, loadAbrasive, loadTagReview]);
 
   const handleDelete = useCallback(
     async (c: Conflict) => {
@@ -362,6 +444,63 @@ export default function DataHealthPage() {
     [renameValue, t, toast, load, loadAbrasive],
   );
 
+  // GH #1227: the user's answer for one pending row. The server conditions the
+  // write on the exact array the page showed; a 409 means the tags changed
+  // under us (another tab, a sync), so re-scan rather than retry.
+  const resolveTags = useCallback(
+    async (row: TagReviewRow, action: "convert" | "keep") => {
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/opt-tag-review/${row.filamentId}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, expectedTags: row.stored }),
+        });
+        if (res.status === 409) {
+          toast(t("health.optTags.changed"), "error");
+          await loadTagReview();
+          return;
+        }
+        if (!res.ok) {
+          toast(t("health.actionFailed"), "error");
+          return;
+        }
+        if (action === "convert") toast(t("health.optTags.converted"), "success");
+        else toast(t("health.optTags.kept"), "success");
+        await loadTagReview();
+        // A conversion can change what the abrasive audit reads from the tags
+        // (a fill tag appearing or a false one disappearing).
+        await loadAbrasive();
+      } catch {
+        toast(t("health.actionFailed"), "error");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [t, toast, loadTagReview, loadAbrasive],
+  );
+
+  const dismissDropped = useCallback(async () => {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/opt-tag-review/dropped", { method: "DELETE" });
+      if (!res.ok) {
+        toast(t("health.actionFailed"), "error");
+        return;
+      }
+      toast(t("health.optTags.dismissed"), "success");
+      await loadTagReview();
+    } catch {
+      toast(t("health.actionFailed"), "error");
+    } finally {
+      setBusy(false);
+    }
+  }, [t, toast, loadTagReview]);
+
+  /** Comma-joined spec-tag labels, or the translated "nothing". */
+  const tagLabels = (ids: number[]): string =>
+    ids.length === 0 ? t("health.optTags.none") : ids.map((id) => optTagLabel(t, id)).join(", ");
+
   // GH #1164: derived ONCE — the all-clear banner and the remote section
   // must agree about what "remote conflicts exist" means.
   const remoteConflicts = syncConflicts.filter((c) => c.side === "remote");
@@ -384,12 +523,16 @@ export default function DataHealthPage() {
       {!abrasiveLoading && abrasiveError && (
         <p className="text-sm text-red-500">{t("health.abrasive.error")}</p>
       )}
+      {!tagReviewLoading && tagReviewError && (
+        <p className="text-sm text-red-500">{t("health.optTags.error")}</p>
+      )}
       {/* GH #1164: the all-clear must account for BOTH databases.
           With a clean local scan and a remote-only conflict — the primary
           case this PR adds — the page otherwise rendered "your data is
           healthy" directly above an amber conflict list. */}
-      {!loading && !error && !abrasiveLoading && !abrasiveError && conflicts.length === 0 &&
-        remoteConflicts.length === 0 && abrasive.length === 0 && (
+      {!loading && !error && !abrasiveLoading && !abrasiveError && !tagReviewLoading &&
+        !tagReviewError && conflicts.length === 0 && remoteConflicts.length === 0 &&
+        abrasive.length === 0 && tagReview.length === 0 && droppedTags.length === 0 && (
         <div className="rounded-lg border border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/30 p-5">
           <p className="text-sm text-green-700 dark:text-green-400">{t("health.empty")}</p>
         </div>
@@ -552,6 +695,118 @@ export default function DataHealthPage() {
                 </div>
               ))}
           </div>
+        </section>
+      )}
+
+      {/* GH #1227: stored optTags whose numbering the startup pass could not
+          prove. Both readings are shown and the user says where the tags came
+          from; nothing here is guessed. Above the abrasive audit because it is
+          a decision the audit's own tag reading depends on. */}
+      {(tagReview.length > 0 || droppedTags.length > 0) && (
+        <section className="mt-8">
+          <h2 className="text-lg font-semibold mb-1">{t("health.optTags.title")}</h2>
+          <p className="text-sm text-gray-500 mb-3">{t("health.optTags.subtitle")}</p>
+          <div className="space-y-3">
+            {tagReview.map((r) => (
+              <div
+                key={r.filamentId}
+                className="rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 p-4"
+              >
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <Link
+                    href={`/filaments/${r.filamentId}`}
+                    className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    {r.name}
+                  </Link>
+                  {r.type && (
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                      {r.type}
+                    </span>
+                  )}
+                  {r.trashed && (
+                    <span className="text-[10px] uppercase font-semibold tracking-wider px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                      {t("health.optTags.trashed")}
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-gray-500 mb-2">
+                  {t("health.optTags.stored", { ids: r.stored.join(", ") })}
+                </p>
+                {r.verdict === "inconsistent" ? (
+                  <p className="text-sm text-gray-700 dark:text-gray-300">
+                    {t("health.optTags.inconsistent")}
+                  </p>
+                ) : (
+                  <>
+                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                      {t("health.optTags.ifLegacy", { tags: tagLabels(r.asLegacy.tags) })}
+                    </p>
+                    {r.asLegacy.dropped.length > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        {t("health.optTags.ifLegacyDropped", {
+                          tags: r.asLegacy.dropped.map((id) => legacyOptTagLabel(t, id)).join(", "),
+                        })}
+                      </p>
+                    )}
+                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                      {t("health.optTags.ifSpec", { tags: tagLabels(r.asSpec) })}
+                    </p>
+                  </>
+                )}
+                <div className="flex gap-2 flex-wrap mt-3">
+                  {r.verdict !== "inconsistent" && (
+                    <button
+                      type="button"
+                      onClick={() => resolveTags(r, "convert")}
+                      disabled={busy}
+                      className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700"
+                    >
+                      {t("health.optTags.action.convert")}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => resolveTags(r, "keep")}
+                    disabled={busy}
+                    className="px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+                  >
+                    {t("health.optTags.action.keep")}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Dropped legacy concepts — informational, dismissable. Exists so the
+              removal is never silent; a user re-adds what they still need. */}
+          {droppedTags.length > 0 && (
+            <div className="mt-4 rounded-lg border border-gray-200 dark:border-gray-700 p-4">
+              <h3 className="text-sm font-semibold mb-1">{t("health.optTags.dropped.title")}</h3>
+              <p className="text-xs text-gray-500 mb-2">{t("health.optTags.dropped.subtitle")}</p>
+              <ul className="text-sm space-y-1 text-gray-700 dark:text-gray-300">
+                {droppedTags.map((d) => (
+                  <li key={`${d.filamentId}-${d.at}`}>
+                    <Link
+                      href={`/filaments/${d.filamentId}`}
+                      className="text-blue-600 dark:text-blue-400 hover:underline"
+                    >
+                      {d.name || d.filamentId}
+                    </Link>
+                    {": "}
+                    {d.tags.map((id) => legacyOptTagLabel(t, id)).join(", ")}
+                  </li>
+                ))}
+              </ul>
+              <button
+                type="button"
+                onClick={dismissDropped}
+                disabled={busy}
+                className="mt-3 px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50"
+              >
+                {t("health.optTags.action.dismiss")}
+              </button>
+            </div>
+          )}
         </section>
       )}
 

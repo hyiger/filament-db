@@ -42,6 +42,7 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
+import { sameOptTagSet } from "@/lib/optTagLegacy";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -436,8 +437,23 @@ export async function PUT(
     // body-only check would miss. Always fetch the stored endpoints;
     // `effectiveNozzleRangeForUpdate` understands all the update shapes.
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId")
+      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId optTags optTagsSpec")
       .lean();
+
+    // GH #1227: a write of `optTags` speaks the current contract (spec
+    // numbering), so stamp the row verified — EXCEPT when the row is still
+    // awaiting numbering review AND the array comes back unchanged. The edit
+    // form resubmits every seeded field, so an unrelated edit (a note, a
+    // price) must not launder an unreviewed legacy array into "verified". A
+    // CHANGED array on an unreviewed row IS stamped: the user ticked a
+    // spec-numbered box into it and mixing is the only reading left (the form
+    // warns before that first click). `stored` is lean, so a pre-#1227 row
+    // reads `undefined` here, which is "unverified", not the schema default.
+    if (Array.isArray(body.optTags)) {
+      if (stored?.optTagsSpec === true || !sameOptTagSet(body.optTags, stored?.optTags)) {
+        body.optTagsSpec = true;
+      }
+    }
     const rangeUpdate = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
     // A variant inherits missing endpoints from its parent (resolveFilament:
     // own ?? parent), so a lone min can invert against an inherited parent

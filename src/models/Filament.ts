@@ -249,6 +249,17 @@ export interface IFilament extends Document {
    * object.
    */
   openprinttagSnapshot: Record<string, unknown> | null;
+  /**
+   * GH #1227: `optTags` is in the OpenPrintTag SPEC numbering. `true` on every
+   * row written since the enum was corrected (schema default) and on every row
+   * the startup renumbering pass has settled; absent/false on a row whose
+   * stored array may still be in the pre-#1227 app numbering and is awaiting
+   * review on Data health. Travels with the document (hybrid sync, snapshots,
+   * shared catalogs) so a peer never re-remaps a converted row. Server-owned:
+   * the API stamps it (a write of `optTags` speaks the current contract) and a
+   * client may only ever send `false` on create ("I don't know the numbering").
+   */
+  optTagsSpec: boolean;
   _deletedAt: Date | null;
   /**
    * Trash-tombstone flag for "delete forever". When true, the document is a
@@ -505,6 +516,12 @@ const FilamentSchema = new Schema<IFilament>(
     promotedByToken: { type: String, default: null },
     // GH #607: OpenPrintTag re-sync provenance (see the IFilament docblock).
     openprinttagSnapshot: { type: Schema.Types.Mixed, default: null },
+    // GH #1227: see the IFilament docblock. Default TRUE is correct for every
+    // path that constructs a NEW document through this schema — the create
+    // routes, the importers, the OPT importer — because they all write spec
+    // ids now. The paths that revive OLD arrays (snapshot restore, the Atlas
+    // and share importers) set it explicitly from the source row instead.
+    optTagsSpec: { type: Boolean, default: true },
     _deletedAt: { type: Date, default: null },
     _purged: { type: Boolean, default: false, index: true },
   },

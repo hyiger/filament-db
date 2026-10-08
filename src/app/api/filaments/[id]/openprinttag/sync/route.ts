@@ -191,6 +191,9 @@ export async function POST(
         ...update,
         openprinttagSnapshot: snapshot,
       };
+      // GH #1227: `mapToFilamentPayload` emits spec ids, so a row that adopts
+      // OPT's tags is spec-numbered from here on, whatever it held before.
+      if ("optTags" in update) $set.optTagsSpec = true;
 
       // GH #629: re-filter `_deletedAt: null` on the final write so a
       // concurrent soft-delete can't quietly mutate a tombstoned row (same

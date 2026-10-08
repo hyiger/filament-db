@@ -5,10 +5,12 @@
  * may be null for filaments without a single primary (rainbow,
  * coextruded). Secondary slots (`secondaryColors[]`, spec keys 20–24)
  * carry up to 5 additional colors. Color arrangement is NOT a separate
- * field — it's derived from `optTags` using the canonical OPT_TAG enum
- * values: 27 = `gradient`, 28 = `dual_color`, 29 = `triple_color`. Both
- * 28 and 29 map to the `"coextruded"` arrangement at render time —
- * the count is already implicit in `secondaryColors.length`.
+ * field — it's derived from `optTags` using the OpenPrintTag SPEC enum
+ * (GH #1227): 28 = `gradual_color_change` (rendered as "gradient") and
+ * 29 = `coextruded`. The spec has ONE coextruded tag — the color count is
+ * implicit in `secondaryColors.length` — so the pre-#1227 dual/triple split
+ * (app ids 28/29, which the spec reads as gradual_color_change/coextruded)
+ * is gone, and 27 is `temperature_color_change`, not an arrangement.
  *
  * Kept DB-free so this can be unit-tested without mongoose / vitest
  * env config. Every function is pure and takes a minimal subset of the
@@ -16,17 +18,16 @@
  */
 
 import { BLANK_COLOR_HEX, isIncompleteColorHex } from "./cssNamedColors";
+import { OPT_TAG } from "./openprinttag";
 
 /**
- * OpenPrintTag tag IDs that describe color arrangement. GH #507: these MUST
- * match the canonical OPT_TAG enum in `src/lib/openprinttag.ts` and the OPT
- * browser importer in `src/lib/openprinttagBrowser.ts` (27 = gradient,
- * 28 = dual_color, 29 = triple_color, per the upstream OpenPrintTag YAML) —
- * a mismatch here mis-renders every imported multi-color material.
+ * OpenPrintTag tag IDs that describe color arrangement, straight from the
+ * spec enum (GH #1227). GH #507 aligned this file to the app's OLD table
+ * (27 gradient / 28 dual / 29 triple), which itself contradicted the spec —
+ * the spec's 28 is `gradual_color_change` and its 29 is `coextruded`.
  */
-const TAG_GRADIENT = 27;
-const TAG_DUAL_COLOR = 28;
-const TAG_TRIPLE_COLOR = 29;
+const TAG_GRADIENT = OPT_TAG.GRADUAL_COLOR_CHANGE;
+const TAG_COEXTRUDED = OPT_TAG.COEXTRUDED;
 
 /** What arrangement the filament's colors are physically in. `"solid"`
  *  is the default for single-color filaments and for multi-color
@@ -44,35 +45,26 @@ export function deriveArrangement(
   optTags: number[] | null | undefined,
 ): ColorArrangement {
   if (!optTags || optTags.length === 0) return "solid";
-  if (optTags.includes(TAG_DUAL_COLOR) || optTags.includes(TAG_TRIPLE_COLOR)) {
-    return "coextruded";
-  }
+  if (optTags.includes(TAG_COEXTRUDED)) return "coextruded";
   if (optTags.includes(TAG_GRADIENT)) return "gradient";
   return "solid";
 }
 
 /**
  * Inverse of deriveArrangement. The form's arrangement radio needs to
- * write the right OPT tag for the requested arrangement, with the
- * caveat that `"coextruded"` actually maps to dual vs triple based on
- * how many colors are in play. Both forms render identically (striped
- * coextruded) — only the spec tag id differs.
+ * write the right OPT tag for the requested arrangement.
+ *
+ * The spec has a single `coextruded` tag — "number of colors can be derived
+ * from the defined secondary colors" — so there is no count parameter any
+ * more (GH #1227 retired the pre-spec dual/triple split, and with it #817's
+ * count boundary).
  *
  * Returns the tag id to add, or null when no arrangement tag applies
  * ("solid").
  */
-export function arrangementToOptTag(
-  arrangement: ColorArrangement,
-  secondaryColorCount: number,
-): number | null {
+export function arrangementToOptTag(arrangement: ColorArrangement): number | null {
   if (arrangement === "gradient") return TAG_GRADIENT;
-  if (arrangement === "coextruded") {
-    // A coextruded filament persists a null primary — all colors live in
-    // secondaryColors — so the total color count equals secondaryColorCount:
-    // 3+ secondaries = triple, 2-or-fewer = dual. (#817: the old `>= 2`
-    // tagged a 2-color coextruded as triple_color (29) instead of dual (28).)
-    return secondaryColorCount >= 3 ? TAG_TRIPLE_COLOR : TAG_DUAL_COLOR;
-  }
+  if (arrangement === "coextruded") return TAG_COEXTRUDED;
   return null;
 }
 
@@ -84,9 +76,7 @@ export function arrangementToOptTag(
  */
 export function stripArrangementTags(optTags: number[] | null | undefined): number[] {
   if (!optTags) return [];
-  return optTags.filter(
-    (t) => t !== TAG_GRADIENT && t !== TAG_DUAL_COLOR && t !== TAG_TRIPLE_COLOR,
-  );
+  return optTags.filter((t) => t !== TAG_GRADIENT && t !== TAG_COEXTRUDED);
 }
 
 /**

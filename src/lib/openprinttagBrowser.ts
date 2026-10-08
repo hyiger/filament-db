@@ -21,7 +21,7 @@ import { pipeline } from "node:stream/promises";
 import { createGunzip } from "node:zlib";
 import * as tar from "tar";
 import { EnvHttpProxyAgent, type Dispatcher } from "undici";
-import { OPT_TAG } from "@/lib/openprinttag";
+import { optTagIdForString } from "@/lib/optTagLegacy";
 import { readBodyCapped } from "@/lib/externalUrlGuard";
 
 /**
@@ -206,67 +206,11 @@ export interface OPTDatabase {
 }
 
 // ── Tag string → OPT_TAG enum mapping ──────────────────────────────────
-
-const TAG_STRING_TO_OPT: Record<string, string> = {
-  contains_glass_fiber: "CONTAINS_GLASS_FIBER",
-  contains_carbon_fiber: "CONTAINS_CARBON_FIBER",
-  contains_kevlar: "CONTAINS_KEVLAR",
-  contains_aramid_fiber: "CONTAINS_ARAMID_FIBER",
-  transparent: "TRANSPARENT",
-  translucent: "TRANSLUCENT",
-  abrasive: "ABRASIVE",
-  food_safe: "FOOD_SAFE",
-  heat_resistant: "HEAT_RESISTANT",
-  uv_resistant: "UV_RESISTANT",
-  flame_retardant: "FLAME_RETARDANT",
-  flexible: "FLEXIBLE",
-  conductive: "CONDUCTIVE",
-  magnetic: "MAGNETIC",
-  biodegradable: "BIODEGRADABLE",
-  water_soluble: "WATER_SOLUBLE",
-  high_impact: "HIGH_IMPACT",
-  low_warp: "LOW_WARP",
-  matte: "MATTE",
-  silk: "SILK",
-  imitates_marble: "MARBLE",
-  wood_fill: "WOOD_FILL",
-  metal_fill: "METAL_FILL",
-  stone_fill: "STONE_FILL",
-  sparkle: "SPARKLE",
-  phosphorescent: "PHOSPHORESCENT",
-  glow_in_dark: "GLOW_IN_THE_DARK",
-  glow_in_the_dark: "GLOW_IN_THE_DARK",
-  color_changing: "COLOR_CHANGING",
-  fuzzy: "FUZZY",
-  gradient: "GRADIENT",
-  // GH #604: real-world OPT YAMLs use `gradual_color_change` for the
-  // gradient arrangement. Without this alias the parser drops the tag,
-  // optTags doesn't get OPT_TAG.GRADIENT (27), and `deriveArrangement`
-  // returns "solid" — so the imported filament renders as a flat
-  // single-color swatch instead of a gradient even when its
-  // secondary_colors list is fully populated.
-  gradual_color_change: "GRADIENT",
-  dual_color: "DUAL_COLOR",
-  triple_color: "TRIPLE_COLOR",
-  // GH #604: the same canonical-vs-real-world divergence as gradient
-  // applies to the coextruded arrangement — the spec docs use
-  // `dual_color`/`triple_color` but real OPT YAMLs use the more
-  // descriptive `coextruded` tag. Map it to DUAL_COLOR by default;
-  // `deriveArrangement` collapses both DUAL/TRIPLE into "coextruded"
-  // anyway, so the slot count is already implicit in secondaryColors.
-  coextruded: "DUAL_COLOR",
-  hygroscopic: "HYGROSCOPIC",
-  anti_static: "ANTI_STATIC",
-  esd_safe: "ESD_SAFE",
-  chemically_resistant: "CHEMICALLY_RESISTANT",
-  medical_grade: "MEDICAL_GRADE",
-  automotive_grade: "AUTOMOTIVE_GRADE",
-  aerospace_grade: "AEROSPACE_GRADE",
-  recycled: "RECYCLED",
-  high_speed: "HIGH_SPEED",
-  glitter: "SPARKLE",
-  industrially_compostable: "BIODEGRADABLE",
-};
+//
+// GH #1227: the database's tag strings ARE the spec names, so resolution is
+// the shared `optTagIdForString` (spec names first, then the legacy-app and
+// real-world aliases) in `src/lib/optTagLegacy.ts` — one table decides what a
+// string means here AND what a stored legacy id becomes in the migration.
 
 // ── Completeness scoring ───────────────────────────────────────────────
 
@@ -491,13 +435,13 @@ export function parseMaterialYaml(
 export function mapToFilamentPayload(
   m: OPTMaterial,
 ): Record<string, unknown> {
-  // Map tag strings to OPT_TAG enum values
+  // Map tag strings to SPEC OPT_TAG ids (GH #1227) — deduplicated, since two
+  // legacy spellings can resolve to one spec id (dual_color + triple_color →
+  // coextruded).
   const optTags: number[] = [];
   for (const tag of m.tags) {
-    const enumKey = TAG_STRING_TO_OPT[tag];
-    if (enumKey && enumKey in OPT_TAG) {
-      optTags.push(OPT_TAG[enumKey as keyof typeof OPT_TAG]);
-    }
+    const id = optTagIdForString(tag);
+    if (id !== null && !optTags.includes(id)) optTags.push(id);
   }
 
   return {

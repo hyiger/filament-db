@@ -308,7 +308,7 @@
                                 "items": {
                                   "type": "integer"
                                 },
-                                "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (27 = gradient / gradual_color_change, 28 = dual_color, 29 = triple_color \u2014 28 and 29 both render as coextruded) so client chips can render the right swatch shape."
+                                "description": "OpenPrintTag tag IDs from the specification's tags_enum.yaml (since v1.83, GH #1227). Includes the color-arrangement tags (28 = gradual_color_change, rendered as a gradient; 29 = coextruded) so client chips can render the right swatch shape."
                               }
                             }
                           }
@@ -8034,7 +8034,12 @@
             "items": {
               "type": "integer"
             },
-            "description": "OpenPrintTag tag IDs (integers from the OPT tag enum, e.g. 4 = abrasive, 27 = gradient, 28 = dual_color, 29 = triple_color) \u2014 not bit-field values"
+            "description": "OpenPrintTag tag IDs \u2014 integers from the specification's tags_enum.yaml (e.g. 4 = abrasive, 20 = transparent, 28 = gradual_color_change, 29 = coextruded), not bit-field values. Since v1.83 (GH #1227) these are the SPEC numbers; a write of optTags marks the row optTagsSpec: true."
+          },
+          "optTagsSpec": {
+            "type": "boolean",
+            "readOnly": true,
+            "description": "Server-owned (GH #1227): true when optTags are known to be in the OpenPrintTag spec numbering. Rows written before v1.83 may still be in the app's pre-#1227 numbering; the startup pass converts the provable ones and the rest await the user's decision under Settings \u2192 Data health (GET /api/opt-tag-review). POST may send only `false` (\"numbering unknown\"); PUT strips the field and stamps it when optTags are written."
           },
           "bedTypeTemps": {
             "type": "array",

@@ -105,7 +105,8 @@ describe("snapshot route — bedTypes round-trip", () => {
     // v5 — provenance-carrying snapshots must be REJECTED by pre-#1022
     // builds (their #953 guard), which would otherwise drop the flag.
     // v7: debitedGrams on both usage ledgers (GH #1074 / PR #1092).
-    expect(body.version).toBe(7);
+    // v8: Filament.optTagsSpec, the optTags-numbering marker (GH #1227).
+    expect(body.version).toBe(8);
 
     await mongoose.connection.db!.collection("_migrations").insertOne({
       _id: "legacyNozzleConditions" as never,

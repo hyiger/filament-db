@@ -3,6 +3,7 @@ import { findTrimmedNameCollision } from "@/lib/trimEntityNames";
 import mongoose from "mongoose";
 import dbConnect, {
   rerunLegacyNozzleCleanupAfterRestore,
+  rerunOptTagRenumberAfterRestore,
   RestoreCleanupInvalidationError,
 } from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
@@ -27,7 +28,7 @@ let restoreInProgress = false;
  * strip the field, quietly losing the data that prevents the clamped-debit
  * over-refund. A refused restore is recoverable, a silent partial one
  * isn't. */
-const CURRENT_SNAPSHOT_VERSION = 7;
+const CURRENT_SNAPSHOT_VERSION = 8;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
  * be present so a wrong-shape / newer file 400s instead of silently wiping the
@@ -163,6 +164,19 @@ function normalizePurgedTombstone(doc: Record<string, unknown>): Record<string, 
 }
 
 /**
+ * GH #1227: a restored filament's numbering marker must be EXPLICIT. The
+ * schema defaults `optTagsSpec` to `true` for new documents (the create paths
+ * all write spec ids), but a pre-v8 snapshot — or a v8+ row its owner has not
+ * reviewed — carries no marker, and letting the default fill it in would
+ * stamp legacy ids as spec. Absent → `false`; the re-armed renumbering pass
+ * (see below) then classifies the row like any other unmarked one.
+ */
+function normalizeOptTagsMarker(doc: Record<string, unknown>): Record<string, unknown> {
+  if (doc.optTagsSpec !== true) doc.optTagsSpec = false;
+  return doc;
+}
+
+/**
  * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
  * Includes all documents (soft-deleted too) from the seven collections;
@@ -210,6 +224,12 @@ export async function GET(request: NextRequest) {
   //        would accept the file and silently DROP the date; failing closed
   //        via the #953 guard is the established trade-off)
   //   v7 — adds debitedGrams on both usage ledgers (GH #1074)
+  //   v8 — adds Filament.optTagsSpec, the "optTags are in the OpenPrintTag
+  //        spec numbering" marker (GH #1227). A build without the field would
+  //        accept the file and silently DROP the marker, after which its own
+  //        numbering pass would have to re-judge every row (and could not
+  //        tell a converted array from an unconverted one) — the same
+  //        fail-closed trade-off as v6.
   // Older snapshots still restore cleanly because POST destructures missing
   // collections to `[]`.
   // GH #1021: cleanup provenance — restore uses this to decide whether the
@@ -572,7 +592,10 @@ async function restoreSnapshot(request: NextRequest) {
     if (filaments.length > 0) {
       // normalizePurgedTombstone applies to the three `_purged`-carrying
       // collections (Filament / PrintHistory / SharedCatalog).
-      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
+      const docs = (filaments as Record<string, unknown>[])
+        .map(restoreTypes)
+        .map(normalizePurgedTombstone)
+        .map(normalizeOptTagsMarker);
       await Filament.insertMany(docs, { ordered: true });
       results.filaments = filaments.length;
     }
@@ -603,6 +626,13 @@ async function restoreSnapshot(request: NextRequest) {
     // pins), while the v5+ branch would stamp `completed` over filaments
     // never cleaned, suppressing a legitimate future run. One gate covers
     // both.
+    // GH #1227: the restored rows that carried no `optTagsSpec` marker were
+    // written explicitly unverified (normalizeOptTagsMarker). Re-arm the
+    // per-row, idempotent renumbering pass so the next connect classifies them
+    // — provable rows settle, the rest appear on Data health — instead of
+    // waiting for a restart.
+    if (present.has("filaments")) rerunOptTagRenumberAfterRestore();
+
     if (present.has("filaments")) {
       try {
         await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);

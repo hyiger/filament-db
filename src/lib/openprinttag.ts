@@ -39,7 +39,7 @@ export const OPT_KEY = {
   // multi-color filaments (coextruded / gradient). Per the spec, when
   // primary_color is null, the colors come from these slots. Each is
   // an RGB or RGBA byte string (we always emit RGB — alpha is a
-  // documented gap; translucency is conveyed via tags 5/6 instead).
+  // documented gap; translucency is conveyed via tags 19/20 instead).
   SECONDARY_COLOR_0: 20,
   SECONDARY_COLOR_1: 21,
   SECONDARY_COLOR_2: 22,
@@ -131,56 +131,130 @@ export const MATERIAL_TYPE: Record<string, number> = {
   EVA: 41,
 } as const;
 
-// Tags enum (data/tags_enum.yaml) – material property tags
+// Tags enum (data/tags_enum.yaml) — material property tags.
+//
+// GH #1227: this table is the UPSTREAM enum, key for key and name for name
+// (https://github.com/OpenPrintTag/openprinttag-specification/blob/main/data/tags_enum.yaml,
+// numbering stable since the 2025-09-09 "Rework tags" commit 7264bf2861).
+// The pre-#1227 table was an app-invented numbering that agreed with the
+// spec on only seven ids, so every tag Filament DB wrote carried ids other
+// readers interpreted as different concepts (a "transparent" filament was
+// tagged `antibacterial`). The legacy table and its remap to this one live
+// in `src/lib/optTagLegacy.ts`; do NOT add app-only concepts here — anything
+// in this object goes onto the wire as CBOR key 28 and MUST mean what the
+// spec says it means. Key 18 is deprecated upstream and deliberately absent.
 export const OPT_TAG = {
-  CONTAINS_GLASS_FIBER: 0,
-  CONTAINS_ARAMID_FIBER: 1,
-  TRANSPARENT: 2,
-  TRANSLUCENT: 3,
+  // Biological
+  FILTRATION_RECOMMENDED: 0,
+  BIOCOMPATIBLE: 1,
+  ANTIBACTERIAL: 2,
+  AIR_FILTERING: 3,
+  HOME_COMPOSTABLE: 61,
+  INDUSTRIALLY_COMPOSTABLE: 62,
+  BIO_BASED: 63,
+  // Physical
   ABRASIVE: 4,
-  FOOD_SAFE: 5,
-  HEAT_RESISTANT: 6,
-  UV_RESISTANT: 7,
-  FLAME_RETARDANT: 8,
-  FLEXIBLE: 9,
-  CONDUCTIVE: 10,
-  MAGNETIC: 11,
-  BIODEGRADABLE: 12,
+  FOAMING: 5,
+  SELF_EXTINGUISHING: 6,
+  PARAMAGNETIC: 7,
+  RADIATION_SHIELDING: 8,
+  HIGH_TEMPERATURE: 9,
+  CASTABLE: 67,
+  HIGH_SPEED: 71,
+  UV_RESISTANT: 73,
+  // Electrical
+  ESD_SAFE: 10,
+  CONDUCTIVE: 11,
+  EMI_SHIELDING: 70,
+  // Chemical
+  BLEND: 12,
   WATER_SOLUBLE: 13,
-  HIGH_IMPACT: 14,
-  LOW_WARP: 15,
+  IPA_SOLUBLE: 14,
+  LIMONENE_SOLUBLE: 15,
+  LOW_OUTGASSING: 64,
+  ACETONE_SOLUBLE: 74,
+  // Visual
   MATTE: 16,
   SILK: 17,
-  MARBLE: 18,
-  WOOD_FILL: 19,
-  METAL_FILL: 20,
-  STONE_FILL: 21,
-  SPARKLE: 22,
-  PHOSPHORESCENT: 23,
+  TRANSLUCENT: 19,
+  TRANSPARENT: 20,
+  IRIDESCENT: 21,
+  PEARLESCENT: 22,
+  GLITTER: 23,
   GLOW_IN_THE_DARK: 24,
-  COLOR_CHANGING: 25,
-  FUZZY: 26,
-  GRADIENT: 27,
-  DUAL_COLOR: 28,
-  TRIPLE_COLOR: 29,
+  NEON: 25,
+  ILLUMINESCENT_COLOR_CHANGE: 26,
+  TEMPERATURE_COLOR_CHANGE: 27,
+  GRADUAL_COLOR_CHANGE: 28,
+  COEXTRUDED: 29,
+  WITHOUT_PIGMENTS: 65,
+  // Additives — carbon / glass / aramid / fluoropolymer
+  CONTAINS_CARBON: 30,
   CONTAINS_CARBON_FIBER: 31,
-  CONTAINS_KEVLAR: 32,
-  HYGROSCOPIC: 33,
-  ANTI_STATIC: 34,
-  ESD_SAFE: 35,
-  CHEMICALLY_RESISTANT: 36,
-  MEDICAL_GRADE: 37,
-  AUTOMOTIVE_GRADE: 38,
-  AEROSPACE_GRADE: 39,
-  RECYCLED: 49,
-  HIGH_SPEED: 71,
+  CONTAINS_CARBON_NANO_TUBES: 32,
+  CONTAINS_GLASS: 33,
+  CONTAINS_GLASS_FIBER: 34,
+  CONTAINS_KEVLAR: 35,
+  CONTAINS_PTFE: 68,
+  CONTAINS_GRAPHENE: 72,
+  // Additives — minerals
+  CONTAINS_STONE: 36,
+  CONTAINS_MAGNETITE: 37,
+  CONTAINS_CERAMIC: 44,
+  CONTAINS_BORON_CARBIDE: 45,
+  // Additives — organics
+  CONTAINS_ORGANIC_MATERIAL: 38,
+  CONTAINS_CORK: 39,
+  CONTAINS_WAX: 40,
+  CONTAINS_WOOD: 41,
+  CONTAINS_BAMBOO: 42,
+  CONTAINS_PINE: 43,
+  CONTAINS_ALGAE: 66,
+  // Additives — metals
+  CONTAINS_METAL: 46,
+  CONTAINS_BRONZE: 47,
+  CONTAINS_IRON: 48,
+  CONTAINS_STEEL: 49,
+  CONTAINS_SILVER: 50,
+  CONTAINS_COPPER: 51,
+  CONTAINS_ALUMINIUM: 52,
+  CONTAINS_BRASS: 53,
+  CONTAINS_TUNGSTEN: 54,
+  // Imitations (pigment / look, not fill)
+  IMITATES_WOOD: 55,
+  IMITATES_METAL: 56,
+  IMITATES_MARBLE: 57,
+  IMITATES_STONE: 58,
+  // Other
+  LITHOPHANE: 59,
+  RECYCLED: 60,
+  LIMITED_EDITION: 69,
 } as const;
 
-// Reverse lookup: tag number → name
+/** A spec tag id (the values of {@link OPT_TAG}). */
+export type OptTagId = (typeof OPT_TAG)[keyof typeof OPT_TAG];
+
+/** Reverse lookup: tag number → UPPER_SNAKE spec name (e.g. 20 → "TRANSPARENT"). */
 export const OPT_TAG_TO_NAME: Record<number, string> = {};
 for (const [name, val] of Object.entries(OPT_TAG)) {
   OPT_TAG_TO_NAME[val] = name;
 }
+
+/**
+ * Spec name (lowercase, as written in `tags_enum.yaml`) for a tag id, or the
+ * placeholder `tag N` for an id the enum does not know (GH #1227: an unknown
+ * id must stay VISIBLE — the pre-#1227 decoder silently dropped it, which is
+ * how spec tag 30 `contains_carbon` vanished from every vendor spool read).
+ */
+export function optTagName(id: number): string {
+  const name = OPT_TAG_TO_NAME[id];
+  return name ? name.toLowerCase() : `tag ${id}`;
+}
+
+/** Lowercase spec name → id, for the string→enum importers. */
+export const OPT_TAG_BY_SPEC_NAME: Readonly<Record<string, number>> = Object.fromEntries(
+  Object.entries(OPT_TAG).map(([name, id]) => [name.toLowerCase(), id]),
+);
 
 // ── Low-level CBOR helpers ──────────────────────────────────────────
 

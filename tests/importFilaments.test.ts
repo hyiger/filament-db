@@ -2049,6 +2049,33 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(res.created).toBe(1);
     const f = await Filament.findOne({ name: "Tagged PLA" }).lean();
     expect(f.optTags).toEqual([28, 16]); // deduped; "x"/-1 dropped
+    // GH #1227: bare ids that are valid under BOTH numberings (28 is app
+    // dual_color / spec gradual_color_change) are kept verbatim and the row
+    // lands UNVERIFIED for review on Data health — the importer never guesses.
+    expect(f.optTagsSpec).toBe(false);
+  });
+
+  it("GH #1227: spec NAMES in the Tags cell are verified; a legacy-only id proves the legacy numbering", async () => {
+    const res = await upsertImportRows(
+      rows([
+        ["Named Tags PLA", "Acme", "PLA", "#112233", "coextruded, matte, sparkle", ""],
+        // 18 was the app's MARBLE and is deprecated upstream → provably legacy →
+        // remapped (18→57 imitates_marble, 2→20 transparent) and verified.
+        ["Legacy Ids PLA", "Acme", "PLA", "#112233", "18, 2", ""],
+        // 30 contains_carbon never existed in the app table → provably spec.
+        ["Spec Ids PC", "Prusament", "PC", "#112233", "31,12,4,30", ""],
+      ]),
+    );
+    expect(res.created).toBe(3);
+    const named = await Filament.findOne({ name: "Named Tags PLA" }).lean();
+    expect(named.optTags).toEqual([29, 16, 23]);
+    expect(named.optTagsSpec).toBe(true);
+    const legacy = await Filament.findOne({ name: "Legacy Ids PLA" }).lean();
+    expect(legacy.optTags).toEqual([57, 20]);
+    expect(legacy.optTagsSpec).toBe(true);
+    const spec = await Filament.findOne({ name: "Spec Ids PC" }).lean();
+    expect(spec.optTags).toEqual([31, 12, 4, 30]);
+    expect(spec.optTagsSpec).toBe(true);
   });
 
   it("CREATE variant inheriting the parent's tags is not pinned (empty === inherit)", async () => {
@@ -2073,7 +2100,7 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     const result = await upsertImportRows(
       rows([
         ["TagP2", "Acme", "PLA", "#808080", "28,16", ""],
-        ["TagP2 — Silk", "Acme", "PLA", "#00FF00", "22", "TagP2"], // 22 = sparkle
+        ["TagP2 — Silk", "Acme", "PLA", "#00FF00", "22", "TagP2"], // 22 (ambiguous id; kept verbatim)
       ]),
     );
     expect(result.created).toBe(2);

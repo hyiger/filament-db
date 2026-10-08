@@ -295,8 +295,8 @@ curl -s -X PUT "$BASE/api/filaments/$ID" -H 'Content-Type: application/json' \
 
 Send **its own tags plus a copy of the family's effective tags**, for the same reason the
 promotion cleanup does (step 5a): the array replaces rather than merges, so anything you leave
-out is gone for this colour. A glow colour joining a PLA line tagged `[33]` hygroscopic is
-`[24, 4, 33]`, not `[24, 4]` — read the family's effective tags off the template first.
+out is gone for this colour. A glow colour joining a PLA line tagged `[12]` blend is
+`[24, 4, 12]`, not `[24, 4]` — read the family's effective tags off the template first.
 
 **On the promotion path this cannot be decided yet — create WITHOUT `optTags`.** Promotion and
 creation are the SAME request (the replay carrying `promoteParent: true`), so there is no
@@ -390,13 +390,13 @@ over-specifies rather than loses:
 
   Ask of each tag: *does it describe this colour, or the product line?* That is a question
   about the family, not a fixed list of ids — and it applies to every tag, including the
-  material ones. `0`/`31` fibre, `33` hygroscopic, `9` flexible and `5` food-safe come from the
-  base polymer, so in practice they are always the line. `4` abrasive usually is too, but not
+  material ones. `34`/`31` glass and carbon fibre, `12` blend, `9` high-temperature and `10` ESD-safe come
+  from the base polymer, so in practice they are always the line. `4` abrasive usually is too, but not
   when the abrasive thing is the *pigment*: one glow colour in an otherwise ordinary line is
   abrasive on its own account, and leaving `4` on the template marks every plain sibling
-  abrasive and restricts them all to hardened nozzles. The appearance tags — `2` transparent,
-  `3` translucent, `16` matte, `17` silk, `22` sparkle, `23` phosphorescent, `24` glow, `25`
-  colour-changing, `27` gradient, `28` dual/`29` triple-colour — are usually the colour, but
+  abrasive and restricts them all to hardened nozzles. The appearance tags — `20` transparent,
+  `19` translucent, `16` matte, `17` silk, `23` glitter, `24` glow, `27` temperature
+  colour-change, `28` gradual colour-change (gradient), `29` coextruded — are usually the colour, but
   not always: in a **Matte PLA** or **Silk PLA** line the finish is the product, shared by
   every colour in it, and stripping it off the template makes each new sibling render wrong.
   The family name and the sibling colours tell you which you are looking at.

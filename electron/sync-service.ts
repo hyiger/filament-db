@@ -38,6 +38,11 @@ import {
   retombstonePurgedZombies,
   type MinimalZombieCollection,
 } from "../src/lib/purgedZombies";
+import {
+  renumberOptTags,
+  describeRenumberSummary,
+  type MinimalRenumberDb,
+} from "../src/lib/optTagRenumber";
 
 /** GH #1021: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
@@ -624,6 +629,17 @@ export class SyncService extends EventEmitter {
             );
           }
         }
+        // GH #1227: bring this side's stored `optTags` onto the OpenPrintTag
+        // spec numbering BEFORE any copy, on BOTH peers — the remote never
+        // runs `dbConnect`, so nothing else would ever settle its rows. The
+        // marker is per ROW and rides the whole-document LWW copy, so a row
+        // one side converted is already settled when the other side's pass
+        // meets it; ambiguous rows stay unmarked on both sides and Data health
+        // lists the local copy (resolving it there syncs the answer across).
+        if (this.aborted) break;
+        const renumber = await renumberOptTags(dbHandle as unknown as MinimalRenumberDb);
+        const renumberLine = describeRenumberSummary(renumber);
+        if (renumberLine) console.log(`[sync] ${side}: ${renumberLine}`);
         // Re-check AFTER the zombie repair: the trim is a SEPARATE
         // destructive migration (creates indexes, rewrites names across five
         // collections) and must not resume into a database the user just
