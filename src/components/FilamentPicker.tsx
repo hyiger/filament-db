@@ -24,6 +24,8 @@ interface PickerFilament {
   color: string | null;
   secondaryColors?: string[];
   optTags?: number[];
+  /** GH #1227: see `FilamentSummary._optTagsAwaitReview`. */
+  _optTagsAwaitReview?: boolean;
 }
 
 interface FilamentPickerProps {
@@ -203,8 +205,8 @@ export default function FilamentPicker({
                   <FilamentSwatch
                     color={f.color}
                     secondaryColors={f.secondaryColors}
-                    arrangement={deriveArrangement(f.optTags)}
-                    finish={deriveFinish(f.optTags)}
+                    arrangement={deriveArrangement(f.optTags, f._optTagsAwaitReview)}
+                    finish={deriveFinish(f.optTags, f._optTagsAwaitReview)}
                     size={16}
                   />
                 </span>

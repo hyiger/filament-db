@@ -710,10 +710,10 @@ describe("mapToFilamentPayload", () => {
 
   // GH #604: the OPT YAML uses `gradual_color_change` for the gradient
   // arrangement. The pre-fix TAG_STRING_TO_OPT only knew `gradient`,
-  // so the resolved optTags array didn't include 27 (GRADIENT) and the
+  // so the resolved optTags array didn't include the gradient id and the
   // imported filament rendered as a solid swatch even when secondary
   // colors were populated.
-  it("aliases gradual_color_change to OPT_TAG.GRADIENT (#604)", () => {
+  it("maps gradual_color_change to spec 28 (#604, renumbered by #1227)", () => {
     const material = {
       slug: "test-gradient",
       uuid: "test-uuid",
@@ -747,9 +747,9 @@ describe("mapToFilamentPayload", () => {
     // SILK = 17, GRADIENT = 27, BIODEGRADABLE = 12 (industrially_compostable
     // alias). The order in the array isn't asserted — `deriveArrangement`
     // looks them up by `includes`.
-    expect(optTags).toContain(17);
-    expect(optTags).toContain(27);
-    expect(optTags).toContain(12);
+    expect(optTags).toContain(17); // silk
+    expect(optTags).toContain(28); // gradual_color_change (GH #1227: was app id 27)
+    expect(optTags).toContain(62); // industrially_compostable (was app id 12 BIODEGRADABLE)
     // And the multi-color slots survive into the payload — null primary
     // (no `#808080` phantom) so allColors() falls through to the
     // secondary list at render time.
@@ -757,7 +757,7 @@ describe("mapToFilamentPayload", () => {
     expect(payload.secondaryColors).toEqual(["#000000", "#98282f", "#ddb95d"]);
   });
 
-  it("aliases coextruded to OPT_TAG.DUAL_COLOR so the arrangement renders (#604)", () => {
+  it("maps coextruded to spec 29 so the arrangement renders (#604, #1227)", () => {
     const material = {
       slug: "test-coextruded",
       uuid: "test-uuid",
@@ -791,7 +791,42 @@ describe("mapToFilamentPayload", () => {
     // DUAL_COLOR = 28 — deriveArrangement collapses DUAL/TRIPLE into
     // "coextruded", so the slot count being 2 vs 3 doesn't change the
     // rendered arrangement.
-    expect(optTags).toContain(28);
+    expect(optTags).toContain(29);
+  });
+
+  it("GH #1227: maps the pre-#1227 app vocabulary onto the SAME spec ids the migration assigns, and drops concepts without one", () => {
+    const material = {
+      slug: "legacy-vocab",
+      uuid: "u",
+      brandSlug: "b",
+      brandName: "B",
+      name: "Legacy Vocab",
+      type: "PLA",
+      abbreviation: "PLA",
+      color: "#000000",
+      secondaryColors: [],
+      density: null,
+      nozzleTempMin: null,
+      nozzleTempMax: null,
+      bedTempMin: null,
+      bedTempMax: null,
+      chamberTemp: null,
+      preheatTemp: null,
+      dryingTemp: null,
+      dryingTime: null,
+      hardnessShoreD: null,
+      transmissionDistance: null,
+      tags: ["contains_glass_fiber", "sparkle", "wood_fill", "dual_color", "triple_color", "flexible", "food_safe", "glow_in_dark"],
+      photoUrl: null,
+      productUrl: null,
+      completenessScore: 1,
+      completenessTier: "stub" as const,
+    };
+    const optTags = mapToFilamentPayload(material).optTags as number[];
+    // 34 glass fibre (spec name), 23 glitter (sparkle alias), 41 contains_wood
+    // (wood_fill alias), ONE 29 coextruded for dual+triple, 24 glow (variant
+    // spelling); flexible + food_safe have no spec tag and vanish.
+    expect(optTags).toEqual([34, 23, 41, 29, 24]);
   });
 
   it("maps abrasive tag to optTags", () => {

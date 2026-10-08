@@ -1023,6 +1023,93 @@ describe("legacyShrinkage migration (GH #1008 F1)", () => {
   });
 });
 
+describe("optTagRenumber migration (GH #1227)", () => {
+  function resetMigrations() {
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown; migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+      legacyShrinkage: false, optTagRenumber: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+    return cached;
+  }
+
+  it("marks trivially-spec optTags, converts nothing, leaves every other row for Data health, and settles", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // Raw inserts — pre-#1227 rows carry no marker.
+    await Filament.collection.insertMany([
+      // A link with no snapshot (the pre-v1.36 import shape) is a HINT, not
+      // proof (Codex P1 r12) — the pass leaves it to Data health like 18 itself.
+      { name: "RenumLinked", vendor: "T", type: "PLA", optTags: [18, 2], settings: { openprinttag_slug: "renum" } },
+      { name: "RenumSpec", vendor: "T", type: "PC", optTags: [31, 30] },     // inert ids: nothing to translate
+      { name: "RenumAmbiguous", vendor: "T", type: "PETG", optTags: [2] },   // both readings valid
+    ]);
+
+    const cached = resetMigrations();
+    await dbConnect();
+
+    const byName = async (n: string) => Filament.collection.findOne({ name: n });
+    expect((await byName("RenumLinked"))!.optTags).toEqual([18, 2]); // untouched — the user's call
+    expect((await byName("RenumLinked"))!.optTagsSpec).toBeUndefined();
+    expect((await byName("RenumSpec"))!.optTags).toEqual([31, 30]);
+    expect((await byName("RenumSpec"))!.optTagsSpec).toBe(true);
+    expect((await byName("RenumAmbiguous"))!.optTags).toEqual([2]);
+    expect((await byName("RenumAmbiguous"))!.optTagsSpec).toBeUndefined();
+    // Unsettled USER decisions do not keep the flag false.
+    expect(cached.migrations.optTagRenumber).toBe(true);
+
+    // Idempotent across restarts: nothing is ever remapped by the pass.
+    resetMigrations();
+    await dbConnect();
+    expect((await byName("RenumLinked"))!.optTags).toEqual([18, 2]);
+    expect((await byName("RenumLinked"))!.optTagsSpec).toBeUndefined();
+
+    // A new document written through the schema is marked by default.
+    const fresh = await Filament.create({ name: "RenumFresh", vendor: "T", type: "PLA", optTags: [20] });
+    expect((await Filament.collection.findOne({ _id: fresh._id }))!.optTagsSpec).toBe(true);
+
+    await Filament.collection.deleteMany({ name: { $in: ["RenumLinked", "RenumSpec", "RenumAmbiguous", "RenumFresh"] } });
+    await mongoose.connection.db!.collection("_migrations").deleteMany({ _id: "optTagRenumber" as never });
+  });
+
+  it("leaves the flag false and retries on a transient failure; rerunOptTagRenumberAfterRestore re-arms it", async () => {
+    await dbConnect();
+    const cached = resetMigrations();
+    const renumberMod = await import("@/lib/optTagRenumber");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const passSpy = vi.spyOn(renumberMod, "renumberOptTags").mockRejectedValueOnce(new Error("transient"));
+    try {
+      await dbConnect();
+      expect(cached.migrations.optTagRenumber).toBe(false);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("renumber optTags"),
+        expect.any(Error),
+      );
+    } finally {
+      passSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.optTagRenumber).toBe(true);
+
+    const { rerunOptTagRenumberAfterRestore } = await import("@/lib/mongodb");
+    rerunOptTagRenumberAfterRestore();
+    expect(cached.migrations.optTagRenumber).toBe(false);
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.optTagRenumber).toBe(true);
+  });
+});
+
 /**
  * GH #1021 (#1022) — one-shot clear of machine-derived
  * `nozzle_diameter[0]==D [or ...]` compatibility conditions the pre-#1021

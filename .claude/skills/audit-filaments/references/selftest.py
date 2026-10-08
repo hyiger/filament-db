@@ -59,7 +59,7 @@ def valid_res(**over):
         "density": 1.24, "diameter": 1.75, "cost": 20.0,
         "totalWeight": None, "netFilamentWeight": 1000, "spoolWeight": 200,
         "lowStockThreshold": 100, "parentId": None, "hasVariants": False,
-        "optTags": [4], "secondaryColors": [],
+        "optTags": [4], "optTagsSpec": True, "secondaryColors": [],
         "temperatures": {"nozzle": 210, "bed": 60, "chamber": 0,
                          "nozzleFirstLayer": 215, "bedFirstLayer": 65,
                          "nozzleRangeMin": 190, "nozzleRangeMax": 230, "standby": 175},
@@ -464,7 +464,8 @@ PAIR_TABLES = {           # rows are (label, lowField, highField) -- skip elemen
     "ORDERED_PAIRS", "ORDERED_PAIRS_CAL", "ORDERED_PAIRS_TOP", "ORDERED_PAIRS_USAGE",
 }
 VALUE_TABLES = {          # strings are stored VALUES or output text, not field names
-    "BOOL_CASTABLE", "CATEGORIES", "LOW_TEMP_TYPES", "ORCA_PLATE_KEYS", "USAGE_SOURCES", "_URL_REMOVE",
+    "BOOL_CASTABLE", "CATEGORIES", "LOW_TEMP_TYPES", "OPT_TAG_METAL_FILL_IDS", "ORCA_PLATE_KEYS",
+    "USAGE_SOURCES", "_URL_REMOVE",
 }
 
 # See the check at the end of main(): this is the guard against a SILENT loss of
@@ -474,7 +475,7 @@ VALUE_TABLES = {          # strings are stored VALUES or output text, not field 
 # coverage while staying above the stale value, which is exactly the blind spot
 # this guard exists to close. Every intentional fixture change updates this
 # number.
-FUZZ_COUNT = 17388
+FUZZ_COUNT = 17514  # GH #1227: optTagsSpec joined the fixture
 
 NOT_RECORD_FIELDS = {
     # /api/abrasive-nozzles payload
@@ -1648,9 +1649,9 @@ def case_density_floor_exempts_foaming():
     r = valid_res(type="PLA", density=0.43, optTags=[])
     f, _ = run({"a": rec(r, copy.deepcopy(r))})
     low = [m for rows in f.values() for _, m in rows if "outside the plausible" in m]
-    if low and "add optTag 20" in low[0] and "Do NOT add optTag 20" not in low[0]:
+    if low and "add optTag 46" in low[0] and "Do NOT add optTag 46" not in low[0]:
         bad("density-floor-hint",
-            "the below-floor row tells the user to add optTag 20 — it does not move the floor and "
+            "the below-floor row tells the user to add optTag 46 — it does not move the floor and "
             "it puts the filament in ABRASIVE_OPT_TAGS, so the audit's own abrasive category then "
             "fires on a soft foaming PLA")
     else:

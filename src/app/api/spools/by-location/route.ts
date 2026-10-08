@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Location";
 import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /**
  * GH #389 — `/inventory` page support route.
@@ -54,6 +55,14 @@ interface AggregatedSpool {
    * list does. */
   secondaryColors: string[];
   optTags: number[];
+  /** GH #1227: the numbering marker of the row supplying `optTags` — an
+   * aggregation-only intermediate, replaced by `optTagsAwaitReview` before
+   * the response goes out. */
+  optTagsSpec?: boolean;
+  /** GH #1227 (Codex P2 r11): the effective `optTags` still await numbering
+   * review, so the row's swatch derives finish/arrangement/color only from
+   * ids both numberings agree on. */
+  optTagsAwaitReview?: boolean;
   /** Variant's own values; null falls back to `parent*` on the client. */
   spoolWeight: number | null;
   netFilamentWeight: number | null;
@@ -132,6 +141,7 @@ export async function GET(request: NextRequest) {
                 // inheritance rule in the row projection (GH #477).
                 secondaryColors: 1,
                 optTags: 1,
+                optTagsSpec: 1,
               },
             },
           ],
@@ -303,6 +313,14 @@ export async function GET(request: NextRequest) {
                   { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
                 ],
               },
+              // GH #1227: the marker of the row that supplied the array above.
+              optTagsSpec: {
+                $cond: [
+                  { $gt: [{ $size: { $ifNull: ["$optTags", []] } }, 0] },
+                  "$optTagsSpec",
+                  { $arrayElemAt: ["$_parent.optTagsSpec", 0] },
+                ],
+              },
               spoolWeight: "$spoolWeight",
               netFilamentWeight: "$netFilamentWeight",
               parentSpoolWeight: {
@@ -403,6 +421,13 @@ export async function GET(request: NextRequest) {
         if (n !== 0) return n;
         return (a.label || "").localeCompare(b.label || "");
       });
+      // GH #1227 (Codex P2 r11): the effective tags' review state, so the
+      // row swatch and the color grouping read an unreviewed array only
+      // through the ids both numberings agree on. The marker stays server-side.
+      for (const s of g.spools) {
+        s.optTagsAwaitReview = optTagsAwaitReview({ optTags: s.optTags, optTagsSpec: s.optTagsSpec });
+        delete s.optTagsSpec;
+      }
     }
 
     return NextResponse.json({ groups, totalSpools: groups.reduce((s, g) => s + g.count, 0) });

@@ -96,7 +96,7 @@ without it.
 TD runs 0 (opaque) to 100 (completely clear), which also makes it good evidence about a
 colour's nature: 3D-Fuel's Pro PCTG Natural reads 100, confirming a genuinely clear filament
 rather than a tinted one. A high TD is a reason to set the transparent or translucent finish
-tag (`optTags` 2 and 3) so the swatch renders see-through.
+tag (`optTags` 20 and 19) so the swatch renders see-through.
 
 **A finish tag on a standalone becomes a family-wide default if that filament is ever
 promoted.** Promotion moves colour and inventory to the generated original variant but leaves
@@ -126,10 +126,11 @@ post-create move:
 | the OpenPrintTag link | template-level linkage, which the main skill forbids; a later sync can push one colour's managed values family-wide | **not a PUT**, and link BEFORE deleting — `POST` the saved slug to the variant, then `DELETE …/openprinttag/link` on the template |
 
 **`optTags` is a mixed namespace, and the array does not merge.** It carries how a colour
-*looks* — `2` transparent, `3` translucent, `16` matte, `17` silk, `22` sparkle, `23`
-phosphorescent, `24` glow, `25` colour-changing, `27` gradient, `28` dual-colour, `29`
-triple-colour — alongside what the material *is*: `4` abrasive, `0`/`31` glass and carbon fibre,
-`33` hygroscopic, `9` flexible, `5` food-safe.
+*looks* — `20` transparent, `19` translucent, `16` matte, `17` silk, `23` glitter, `24`
+glow, `27` temperature colour-change, `28` gradual colour-change (gradient), `29`
+coextruded — alongside what the material *is*: `4` abrasive, `34`/`31` glass and carbon fibre,
+`12` blend, `9` high-temperature, `10` ESD-safe. (The ids are the OpenPrintTag spec's since
+v1.83, GH #1227 — the pre-#1227 app numbering differed on most of them.)
 
 Those groupings are the usual case, not a partition you can apply blind, and that cuts both
 ways. A finish is colour-specific in a line with one silk colour among many, and is the
@@ -142,13 +143,13 @@ name and the siblings before deciding, for every tag.
 Both halves of that matter, and the obvious remedies each break one. Sweeping the whole array
 onto the variant takes `4` off the product line, so every later sibling inherits no abrasive
 marker. But moving *only* the appearance tags fails too, and less obviously: `resolveFilament`
-gives `optTags` whole-array fallback, so a variant holding `[2]` **replaces** the template's
+gives `optTags` whole-array fallback, so a variant holding `[20]` **replaces** the template's
 `[4]` instead of adding to it — the original colour loses its abrasive marker and drops out of
 the nozzle-safety check in Settings → Data health, which reads the resolved value.
 
 So the template keeps every product-line tag, and the variant gets an array only when it has a
 colour-specific tag of its own — in which case that array must also repeat the product-line
-tags. `[2, 4]` becomes template `[4]`, variant `[2, 4]`. New siblings leave their array empty
+tags. `[20, 4]` becomes template `[4]`, variant `[20, 4]`. New siblings leave their array empty
 and inherit `[4]`.
 
 On a matte line holding `[16, 4]` the finish is shared, so nothing is colour-specific and
@@ -157,7 +158,7 @@ well would render identically today and pin a copy that stops tracking the templ
 change to the line's shared tags would never reach that colour. Copy only to carry an override.
 
 **When you cannot tell which a tag is, ask the user.** Neither default is safe. Guessing
-product-line leaves a `2` transparent on the template, so the next opaque colour renders
+product-line leaves a `20` transparent on the template, so the next opaque colour renders
 see-through; guessing colour-specific takes a shared `16` matte off it, so the next colour loses
 the finish. Same contamination, opposite directions, both silent. Ask whether every colour in
 that line shares the property.
@@ -209,7 +210,7 @@ guarantee it is complete.
 
 Some products genuinely have no colour. Overture's PETG Transparent is listed in their own PDF
 with the word "Transparent" where a hex would be. The right representation is `color: null`
-plus the transparent finish tag (`optTags` 2 = transparent, 3 = translucent), which renders as
+plus the transparent finish tag (`optTags` 20 = transparent, 19 = translucent), which renders as
 a see-through swatch. Do not substitute the white of the same line — OPT does exactly that,
 and it is wrong.
 

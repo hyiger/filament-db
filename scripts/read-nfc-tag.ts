@@ -13,7 +13,7 @@
 import pcsclite from "@pokusew/pcsclite";
 import { parseNdefFromTag } from "../electron/ndef";
 import { decodeOpenPrintTagBinary } from "../src/lib/openprinttag-decode";
-import { OPT_KEY, OPT_TAG_TO_NAME } from "../src/lib/openprinttag";
+import { OPT_KEY, optTagName } from "../src/lib/openprinttag";
 import * as fs from "fs";
 
 // Reverse lookup: CBOR key number → field name (for detecting unknown keys)
@@ -290,7 +290,7 @@ async function main() {
           if (decoded.dryingTime != null) console.log(`  Drying Time:    ${decoded.dryingTime} min`);
 
           if (decoded.tags && decoded.tags.length > 0) {
-            const tagStrs = decoded.tags.map((t: number) => OPT_TAG_TO_NAME[t] ?? `tag_${t}`);
+            const tagStrs = decoded.tags.map((t: number) => optTagName(t));
             console.log(`\n  ── Tags ──`);
             console.log(`  Tags:           ${tagStrs.join(", ")}`);
           }

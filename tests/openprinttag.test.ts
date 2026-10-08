@@ -14,6 +14,9 @@ import {
   generateOpenPrintTagBinary,
   OPT_KEY,
   OPT_TAG,
+  OPT_TAG_TO_NAME,
+  OPT_TAG_BY_SPEC_NAME,
+  optTagName,
   MATERIAL_CLASS,
   MATERIAL_TYPE,
   type OpenPrintTagInput,
@@ -1340,16 +1343,75 @@ describe("OPT_KEY constants", () => {
   });
 });
 
-describe("OPT_TAG constants", () => {
-  it("has expected tag values from the spec", () => {
+describe("OPT_TAG constants (GH #1227)", () => {
+  /**
+   * The upstream enum, transcribed from
+   * https://github.com/OpenPrintTag/openprinttag-specification/blob/main/data/tags_enum.yaml
+   * (numbering stable since the 2025-09-09 "Rework tags" commit 7264bf2861;
+   * snapshot taken 2026-10-08). Key 18 is deprecated upstream and absent.
+   *
+   * This is the ONLY place the spec's numbering is written down independently
+   * of `OPT_TAG` itself — a drift in either direction fails here, which is
+   * what the pre-#1227 table (an app-invented numbering that agreed with the
+   * spec on seven ids and shipped onto every written NFC tag) never had.
+   */
+  const SPEC_TAGS_ENUM: ReadonlyArray<readonly [number, string]> = [
+    [0, "filtration_recommended"], [1, "biocompatible"], [2, "antibacterial"], [3, "air_filtering"],
+    [4, "abrasive"], [5, "foaming"], [6, "self_extinguishing"], [7, "paramagnetic"],
+    [8, "radiation_shielding"], [9, "high_temperature"], [10, "esd_safe"], [11, "conductive"],
+    [12, "blend"], [13, "water_soluble"], [14, "ipa_soluble"], [15, "limonene_soluble"],
+    [16, "matte"], [17, "silk"], [19, "translucent"], [20, "transparent"],
+    [21, "iridescent"], [22, "pearlescent"], [23, "glitter"], [24, "glow_in_the_dark"],
+    [25, "neon"], [26, "illuminescent_color_change"], [27, "temperature_color_change"],
+    [28, "gradual_color_change"], [29, "coextruded"], [30, "contains_carbon"],
+    [31, "contains_carbon_fiber"], [32, "contains_carbon_nano_tubes"], [33, "contains_glass"],
+    [34, "contains_glass_fiber"], [35, "contains_kevlar"], [36, "contains_stone"],
+    [37, "contains_magnetite"], [38, "contains_organic_material"], [39, "contains_cork"],
+    [40, "contains_wax"], [41, "contains_wood"], [42, "contains_bamboo"], [43, "contains_pine"],
+    [44, "contains_ceramic"], [45, "contains_boron_carbide"], [46, "contains_metal"],
+    [47, "contains_bronze"], [48, "contains_iron"], [49, "contains_steel"], [50, "contains_silver"],
+    [51, "contains_copper"], [52, "contains_aluminium"], [53, "contains_brass"],
+    [54, "contains_tungsten"], [55, "imitates_wood"], [56, "imitates_metal"],
+    [57, "imitates_marble"], [58, "imitates_stone"], [59, "lithophane"], [60, "recycled"],
+    [61, "home_compostable"], [62, "industrially_compostable"], [63, "bio_based"],
+    [64, "low_outgassing"], [65, "without_pigments"], [66, "contains_algae"], [67, "castable"],
+    [68, "contains_ptfe"], [69, "limited_edition"], [70, "emi_shielding"], [71, "high_speed"],
+    [72, "contains_graphene"], [73, "uv_resistant"], [74, "acetone_soluble"],
+  ];
+
+  it("is exactly the upstream tags_enum.yaml — every id, every name, nothing extra", () => {
+    const actual = Object.entries(OPT_TAG)
+      .map(([name, id]) => [id, name.toLowerCase()] as const)
+      .sort((a, b) => a[0] - b[0]);
+    expect(actual).toEqual([...SPEC_TAGS_ENUM]);
+    expect(SPEC_TAGS_ENUM).toHaveLength(74);
+  });
+
+  it("omits the deprecated key 18", () => {
+    expect(Object.values(OPT_TAG)).not.toContain(18);
+    expect(OPT_TAG_TO_NAME[18]).toBeUndefined();
+  });
+
+  it("keeps the seven ids the pre-#1227 table happened to get right", () => {
     expect(OPT_TAG.ABRASIVE).toBe(4);
     expect(OPT_TAG.WATER_SOLUBLE).toBe(13);
     expect(OPT_TAG.MATTE).toBe(16);
     expect(OPT_TAG.SILK).toBe(17);
     expect(OPT_TAG.GLOW_IN_THE_DARK).toBe(24);
     expect(OPT_TAG.CONTAINS_CARBON_FIBER).toBe(31);
-    expect(OPT_TAG.RECYCLED).toBe(49);
     expect(OPT_TAG.HIGH_SPEED).toBe(71);
+  });
+
+  it("optTagName: lowercase spec name, or `tag N` for an id the enum does not know", () => {
+    expect(optTagName(20)).toBe("transparent");
+    expect(optTagName(30)).toBe("contains_carbon");
+    expect(optTagName(18)).toBe("tag 18");
+    expect(optTagName(75)).toBe("tag 75");
+  });
+
+  it("OPT_TAG_BY_SPEC_NAME is the exact inverse", () => {
+    for (const [id, name] of SPEC_TAGS_ENUM) expect(OPT_TAG_BY_SPEC_NAME[name]).toBe(id);
+    expect(Object.keys(OPT_TAG_BY_SPEC_NAME)).toHaveLength(74);
   });
 });
 

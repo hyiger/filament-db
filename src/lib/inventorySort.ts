@@ -57,6 +57,10 @@ export interface InventoryRow {
   filamentColor?: string | null;
   secondaryColors?: string[] | null;
   optTags?: number[] | null;
+  /** GH #1227: the effective `optTags` still await numbering review (the
+   *  by-location aggregation computes it from the row supplying the array);
+   *  the color classifier then reads only ids both numberings agree on. */
+  optTagsAwaitReview?: boolean | null;
 }
 
 export interface InventoryLocation {
@@ -189,6 +193,7 @@ export function inventoryRowColorFamily(row: InventoryRow): ColorFamily {
     color: row.filamentColor ?? null,
     secondaryColors: row.secondaryColors ?? null,
     optTags: row.optTags ?? null,
+    _optTagsAwaitReview: row.optTagsAwaitReview ?? null,
     hasVariants: false,
   })!.primary;
   rowFamilyMemo.set(row, family);

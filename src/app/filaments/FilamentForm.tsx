@@ -25,6 +25,10 @@ import {
   submittedColorValue,
   type ColorArrangement,
 } from "@/lib/filamentColors";
+import Link from "next/link";
+import { OPT_TAG } from "@/lib/openprinttag";
+import { optTagLabel, legacyOptTagLabel, FORM_TAG_GROUPS } from "@/lib/optTagLabels";
+import { optTagsAwaitReview, describeOptTagReadings } from "@/lib/optTagLegacy";
 import {
   calibrationKey,
   hasCalibrationData,
@@ -55,8 +59,8 @@ interface FilamentFormData {
    *  (submittedColorValue — GH #605). */
   color: string;
   /** Up to 5 additional color hexes (OpenPrintTag spec keys 20–24). The
-   *  arrangement is derived from optTags (27 = gradient, 28 = dual_color,
-   *  29 = triple_color; GH #507). */
+   *  arrangement is derived from optTags (spec 28 = gradual_color_change →
+   *  gradient, 29 = coextruded; GH #1227 corrected the #507 numbering). */
   secondaryColors: string[];
   colorName: string;
   cost: string;
@@ -719,12 +723,26 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
 
   // An abrasive filament needs a hardened nozzle, so the compatible-nozzle
   // picker hard-filters to hardened ones when abrasive. The abrasive marker
-  // can come from EITHER the form boolean OR optTags tag 4 — mirror the
+  // can come from EITHER the form boolean OR the OPT `abrasive` tag — mirror the
   // Material Tags checkbox's effective state so the gate isn't silently
   // bypassed when only the tag is set. Already-selected nozzles stay visible
   // (even if soft) so the user can still deselect them — they're flagged;
   // only NEW soft nozzles are hidden.
-  const isAbrasive = form.abrasive || form.optTags.includes(4);
+  const isAbrasive = form.abrasive || form.optTags.includes(OPT_TAG.ABRASIVE);
+
+  // GH #1227: an existing row whose stored tags still await numbering review
+  // (see the Material tags section). Computed from the SEEDED data, not the
+  // live form state — the question is about what is stored.
+  const tagsAwaitReview =
+    Boolean(initialData?._id) &&
+    optTagsAwaitReview({
+      optTags: initialData?.optTags,
+      optTagsSpec: initialData?.optTagsSpec,
+      name: initialData?.name,
+      type: initialData?.type,
+      settings: initialData?.settings,
+      openprinttagSnapshot: initialData?.openprinttagSnapshot,
+    });
   const visibleNozzles = useMemo(() => {
     if (!isAbrasive) return nozzles;
     return nozzles.filter((n) => n.hardened || form.compatibleNozzles.includes(n._id));
@@ -1090,7 +1108,18 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         shrinkageZ: parseNum(form.shrinkageZ),
         shoreHardnessA: parseNum(form.shoreHardnessA),
         shoreHardnessD: parseNum(form.shoreHardnessD),
-        optTags: form.optTags,
+        // GH #1227: a row whose stored tags await numbering review has its tag
+        // controls locked, so the array cannot have changed here — and it must
+        // not be resubmitted either. The user may settle the row on Data health
+        // (converting its ids) while this form sits open; a save that echoed
+        // the seeded legacy ids onto the now-verified row would store them as
+        // spec ids. The server drops an unchanged unreviewed array from the
+        // update too, but it can only compare against what it reads — a form
+        // saved after the conversion sends legacy ids against a row the server
+        // already reads as verified, and it would stamp them as spec ids.
+        // Omitting the key makes a locked form a no-op on tags under every
+        // ordering (Codex P1 on PR #1228).
+        ...(tagsAwaitReview ? {} : { optTags: form.optTags }),
         tdsUrl: form.tdsUrl || null,
         inherits: form.inherits || null,
         parentId: form.parentId || null,
@@ -1801,6 +1830,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             form={form}
             setForm={setForm}
             t={t}
+            locked={tagsAwaitReview}
           />
         </div>
         <div>
@@ -2524,51 +2554,111 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       </div>
 
       <CollapsibleSection id="material-tags" title={t("form.section.materialTags")}>
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-          {([
-            [4, t("form.tag.abrasive")],
-            [13, t("form.tag.waterSoluble")],
-            [9, t("form.tag.flexible")],
-            [31, t("form.tag.carbonFiber")],
-            [0, t("form.tag.glassFiber")],
-            [16, t("form.tag.matte")],
-            [17, t("form.tag.silk")],
-            [22, t("form.tag.sparkle")],
-            [24, t("form.tag.glowInTheDark")],
-            [25, t("form.tag.colorChanging")],
-            [71, t("form.tag.highSpeed")],
-            [49, t("form.tag.recycled")],
-            [2, t("form.tag.transparent")],
-            [3, t("form.tag.translucent")],
-            [19, t("form.tag.woodFill")],
-            [20, t("form.tag.metalFill")],
-            [12, t("form.tag.biodegradable")],
-            [5, t("form.tag.foodSafe")],
-          ] as [number, string][]).map(([val, label]) => (
-            <label key={val} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={form.optTags.includes(val) || (val === 4 && form.abrasive) || (val === 13 && form.soluble)}
-                onChange={(e) => {
-                  const checked = e.target.checked;
-                  // Keep abrasive/soluble booleans in sync
-                  const updates: Partial<FilamentFormData> = {};
-                  if (val === 4) updates.abrasive = checked;
-                  if (val === 13) updates.soluble = checked;
-                  setForm((prev) => ({
-                    ...prev,
-                    ...updates,
-                    optTags: checked
-                      ? [...new Set([...prev.optTags, val])]
-                      : prev.optTags.filter((ft) => ft !== val),
-                  }));
-                }}
-                className="w-4 h-4"
-              />
-              {label}
-            </label>
-          ))}
-        </div>
+        {/* GH #1227: an EXISTING row the startup renumbering could not settle
+            (its ids are valid under BOTH the pre-#1227 app numbering and the
+            spec) carries no `optTagsSpec: true` — the marker is absent, not
+            false — until the user says on Data health where the tags came
+            from. For such a row the checkbox grid is REPLACED by the stored
+            ids with both readings (the two lines Data health shows): the ids
+            are valid under both numberings, so a grid labelled with spec names
+            misreported the row — a legacy `[2]` (transparent) ticked
+            "Antibacterial" (Codex P2 r15 on PR #1228). The arrangement radio
+            in the multi-color editor stays, locked, reading the array through
+            the display projection. A spec-numbered tick added to a legacy
+            array would have no honest storage, and the PUT refuses a changed
+            array with 409 anyway. `optTagsAwaitReview` is the same predicate
+            the server applies. A new filament (no `_id`) has nothing to
+            review. */}
+        {tagsAwaitReview && (
+          <p className="mb-3 rounded border border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            {t("form.tags.pendingReview")}{" "}
+            <Link href="/settings/health" className="underline font-medium">
+              {t("form.tags.pendingReviewLink")}
+            </Link>
+          </p>
+        )}
+        {tagsAwaitReview ? (
+          (() => {
+            const readings = describeOptTagReadings(form.optTags);
+            const labels = (ids: number[]) =>
+              ids.length > 0 ? ids.map((id) => optTagLabel(t, id)).join(", ") : t("health.optTags.none");
+            return (
+              <div className="space-y-1 text-sm" data-testid="opt-tags-pending-readings">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {t("health.optTags.stored", { ids: readings.stored.join(", ") })}
+                </p>
+                <p className="text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifLegacy", { tags: labels(readings.asLegacy.tags) })}
+                </p>
+                {readings.asLegacy.dropped.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {t("health.optTags.ifLegacyDropped", {
+                      tags: readings.asLegacy.dropped.map((id) => legacyOptTagLabel(t, id)).join(", "),
+                    })}
+                  </p>
+                )}
+                <p className="text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifSpec", { tags: labels(readings.asSpec) })}
+                </p>
+              </div>
+            );
+          })()
+        ) : (
+          <>
+            {FORM_TAG_GROUPS.map((group) => (
+              <fieldset key={group.key} className="mb-3 last:mb-0">
+                <legend className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
+                  {t(group.labelKey)}
+                </legend>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {group.tags.map(([val, labelKey]) => (
+                    <label key={val} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={
+                          form.optTags.includes(val) ||
+                          (val === OPT_TAG.ABRASIVE && form.abrasive) ||
+                          (val === OPT_TAG.WATER_SOLUBLE && form.soluble)
+                        }
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          // Keep abrasive/soluble booleans in sync
+                          const updates: Partial<FilamentFormData> = {};
+                          if (val === OPT_TAG.ABRASIVE) updates.abrasive = checked;
+                          if (val === OPT_TAG.WATER_SOLUBLE) updates.soluble = checked;
+                          setForm((prev) => ({
+                            ...prev,
+                            ...updates,
+                            optTags: checked
+                              ? [...new Set([...prev.optTags, val])]
+                              : prev.optTags.filter((ft) => ft !== val),
+                          }));
+                        }}
+                        className="w-4 h-4"
+                      />
+                      {t(labelKey)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+            {/* Ids with no checkbox above (a tag read from a vendor spool, an id a
+                newer spec revision added, or an unknown number) stay in the array
+                untouched — list them so nothing on the record is invisible. The
+                arrangement tags (28/29) are driven by the multi-color editor. */}
+            {(() => {
+              const listed = new Set(FORM_TAG_GROUPS.flatMap((g) => g.tags.map(([id]) => id)));
+              const other = form.optTags.filter(
+                (id) => !listed.has(id) && id !== OPT_TAG.GRADUAL_COLOR_CHANGE && id !== OPT_TAG.COEXTRUDED,
+              );
+              return other.length > 0 ? (
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {t("form.tags.other", { tags: other.map((id) => optTagLabel(t, id)).join(", ") })}
+                </p>
+              ) : null;
+            })()}
+          </>
+        )}
       </CollapsibleSection>
       </div>
 
@@ -3251,10 +3341,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
 /**
  * Multi-color editor + arrangement radio (GH #477).
  *
- * The arrangement radio toggles the canonical OpenPrintTag arrangement
- * tags (GH #507: 27 = gradient, 28 = dual_color, 29 = triple_color — both
- * 28 and 29 render coextruded) in `optTags` — there's no separate
- * "arrangement" schema field. State stays in the parent — we read `form` /
+ * The arrangement radio toggles the OpenPrintTag SPEC arrangement tags
+ * (GH #1227: 28 = gradual_color_change → "gradient", 29 = coextruded) in
+ * `optTags` — there's no separate "arrangement" schema field. State stays in the parent — we read `form` /
  * call `setForm` — so the existing dirty-tracking + unsaved-changes guard
  * work unchanged.
  */
@@ -3262,43 +3351,45 @@ function MultiColorEditor({
   form,
   setForm,
   t,
+  locked = false,
 }: {
   form: FilamentFormData;
   setForm: (next: FilamentFormData) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
+  /** GH #1227: the arrangement tags live in `optTags`; while that array awaits
+   *  numbering review the radio is disabled (see the Material tags notice). */
+  locked?: boolean;
 }) {
-  const arrangement: ColorArrangement = deriveArrangement(form.optTags);
+  const arrangement: ColorArrangement = deriveArrangement(form.optTags, locked);
 
   /** Toggle a single arrangement tag in optTags, removing every other
    *  arrangement tag so they're always mutually exclusive from the UI's
-   *  perspective. `arrangementToOptTag` picks dual vs triple based on the
-   *  current secondary-color count; `stripArrangementTags` removes ALL
-   *  three so a prior arrangement's tag doesn't survive the switch (a
-   *  surviving tag makes deriveArrangement disagree with the UI on the
-   *  next render).
+   *  perspective. `stripArrangementTags` removes both so a prior
+   *  arrangement's tag doesn't survive the switch (a surviving tag makes
+   *  deriveArrangement disagree with the UI on the next render).
    *
    *  Coextruded + gradient simultaneously is theoretically possible per
    *  spec but the form only models one arrangement at a time. */
   const setArrangement = (next: ColorArrangement) => {
     const stripped = stripArrangementTags(form.optTags);
-    const newTag = arrangementToOptTag(next, form.secondaryColors.length);
+    const newTag = arrangementToOptTag(next);
     setForm({
       ...form,
       optTags: newTag != null ? [...stripped, newTag] : stripped,
     });
   };
 
-  /** When the user adds/removes a coextruded secondary slot, refresh the
-   *  arrangement tag so dual→triple (or back) flips on the saved doc
-   *  without re-clicking the radio. Gradient + solid don't carry a count
-   *  distinction so they're untouched. */
+  /** When the user adds/removes a coextruded secondary slot, re-derive the
+   *  arrangement tag. The spec has ONE coextruded tag (the colour count is
+   *  implicit in secondaryColors, GH #1227), so this is now a no-op that
+   *  keeps the tag present; kept as the single place the slot editors call. */
   const refreshArrangementTagForCount = (
     nextSecondaries: string[],
     optTagsAfter: number[],
   ): number[] => {
     if (arrangement !== "coextruded") return optTagsAfter;
     const stripped = stripArrangementTags(optTagsAfter);
-    const newTag = arrangementToOptTag("coextruded", nextSecondaries.length);
+    const newTag = arrangementToOptTag("coextruded");
     return newTag != null ? [...stripped, newTag] : stripped;
   };
 
@@ -3383,6 +3474,7 @@ function MultiColorEditor({
                     name="filament-arrangement"
                     value={opt}
                     checked={active}
+                    disabled={locked}
                     onChange={() => setArrangement(opt)}
                     className="sr-only"
                   />

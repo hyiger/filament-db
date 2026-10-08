@@ -9,12 +9,11 @@
  * that `<FilamentSwatch>` consumes for its texture treatment and that
  * `<FinishChip>` consumes for the label beside the name.
  *
- * The tag IDs themselves are owned by the FilamentForm UI (see the
- * material-tags fieldset in `src/app/filaments/FilamentForm.tsx`).
- * Repeating the numeric IDs here is the lesser of two evils — pulling
- * the form's array into a shared module would couple `src/lib/` to the
- * form's React tree, and these IDs are effectively frozen (they map to
- * OpenPrintTag and Bambu tag enum values).
+ * The tag IDs are the OpenPrintTag SPEC enum (`OPT_TAG` in
+ * `src/lib/openprinttag.ts`, GH #1227 — the pre-#1227 table was an
+ * app-invented numbering, so this module used to read 2/3/22 where the
+ * spec means antibacterial/air_filtering/pearlescent). Glitter (23) is
+ * the spec's name for what the UI calls "sparkle".
  *
  * Priority order when multiple finish-relevant tags coexist on one
  * filament:
@@ -24,6 +23,9 @@
  * silk / matte are ranked by visual distinctiveness; glow ranks last
  * because it's an *additive* property rather than a primary visual finish.
  */
+
+import { OPT_TAG } from "./openprinttag";
+import { displayOptTags } from "./optTagLegacy";
 
 export type Finish =
   | "matte"
@@ -39,12 +41,12 @@ export type Finish =
  * those tags affect material properties, not how the swatch reads.
  */
 const FINISH_BY_TAG_ID: Record<number, Finish> = {
-  2: "transparent",
-  3: "translucent",
-  16: "matte",
-  17: "silk",
-  22: "sparkle",
-  24: "glow",
+  [OPT_TAG.TRANSPARENT]: "transparent",
+  [OPT_TAG.TRANSLUCENT]: "translucent",
+  [OPT_TAG.MATTE]: "matte",
+  [OPT_TAG.SILK]: "silk",
+  [OPT_TAG.GLITTER]: "sparkle",
+  [OPT_TAG.GLOW_IN_THE_DARK]: "glow",
 };
 
 /** Tag IDs that this module considers when deriving a finish. */
@@ -67,11 +69,20 @@ const PRIORITY: readonly Finish[] = [
  *
  * Accepts undefined/null for convenience because list summaries from
  * older clients may omit the field.
+ *
+ * `awaitReview` (GH #1227, Codex P2 r11 on PR #1228): while the row's
+ * `optTags` still await numbering review, only ids that mean the same under
+ * both numberings count (`displayOptTags`) — a legacy `[20]` is METAL_FILL,
+ * not the spec's transparent, so no see-through texture may be derived from
+ * it until the user has said which numbering the array is in.
  */
-export function deriveFinish(optTags: readonly number[] | null | undefined): Finish | null {
+export function deriveFinish(
+  optTags: readonly number[] | null | undefined,
+  awaitReview?: boolean | null,
+): Finish | null {
   if (!optTags || optTags.length === 0) return null;
   const present = new Set<Finish>();
-  for (const id of optTags) {
+  for (const id of displayOptTags(optTags, awaitReview)) {
     const f = FINISH_BY_TAG_ID[id];
     if (f) present.add(f);
   }

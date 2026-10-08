@@ -1,7 +1,9 @@
 import dbConnect from "@/lib/mongodb";
+import { SPEC_TAG_TOKEN_PREFIX } from "@/lib/optTagLegacy";
 import Filament from "@/models/Filament";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { getSpoolCount } from "@/lib/inventoryStats";
+import { OPT_TAG_TO_NAME } from "./openprinttag";
 
 export interface ExportRow {
   name: string;
@@ -52,11 +54,34 @@ export interface ExportRow {
   variantCount: number;
   /**
    * GH #954: OpenPrintTag `optTags` (color-arrangement + finish) as a
-   * comma-separated list of numeric ids. Round-trips through the importer's
-   * split-on-comma parse. Without it a coextruded/gradient/finish filament
-   * collapses to a solid swatch on a create-path CSV round-trip.
+   * comma-separated list. Round-trips through the importer's split-on-comma
+   * parse. Without it a coextruded/gradient/finish filament collapses to a
+   * solid swatch on a create-path CSV round-trip.
+   *
+   * GH #1227: emitted as SPEC NAMES (`transparent,glitter`) when the row's
+   * numbering is verified — self-describing, so a file survives the
+   * app's own renumbering and reads as what it means. A verified id the enum
+   * doesn't name is emitted as `tag:N` so it keeps its spec provenance (a bare
+   * `18` would re-import as proof of the LEGACY numbering, Codex P2 r5 on PR
+   * #1228); a row still awaiting numbering review is emitted as bare numbers
+   * so the importer's classifier (not this exporter) decides.
    */
   optTags: string;
+}
+
+/**
+ * GH #1227: the `Tags` cell. For a verified row: spec names, and `tag:N` for an
+ * id the enum doesn't name; for an unverified row: bare ids (see the `optTags`
+ * field docblock).
+ */
+export function exportOptTagsCell(tags: readonly number[] | null | undefined, verified: boolean): string {
+  return (tags ?? [])
+    .map((id) => {
+      if (!verified) return String(id);
+      const name = OPT_TAG_TO_NAME[id];
+      return name ? name.toLowerCase() : `${SPEC_TAG_TOKEN_PREFIX}${id}`;
+    })
+    .join(",");
 }
 
 export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
@@ -184,7 +209,20 @@ export async function getExportRows(): Promise<ExportRow[]> {
       variantCount: variantCountByParent.get(filament._id.toString()) ?? 0,
       // GH #954: resolved so a variant exports its EFFECTIVE tags (matching
       // secondaryColors), keeping the round-trip's arrangement/finish intact.
-      optTags: (resolved.optTags ?? []).join(","),
+      // GH #1227: the numbering marker must come from whichever row SUPPLIED
+      // the effective array — a variant with an empty own array inherits its
+      // parent's tags, and the parent is the row that may still be awaiting
+      // review (an empty child is trivially verified). Reading the child's
+      // marker there would export the parent's undecided legacy ids as spec
+      // names (Codex P2 on PR #1228).
+      optTags: exportOptTagsCell(
+        resolved.optTags,
+        // Same rule resolveFilament applies: an empty own array falls back to
+        // the parent's whole array.
+        (parentDoc && !(filament.optTags && filament.optTags.length > 0)
+          ? parentDoc.optTagsSpec
+          : filament.optTagsSpec) === true,
+      ),
     };
   });
 }

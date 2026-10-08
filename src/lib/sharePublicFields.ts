@@ -78,6 +78,10 @@ export const SHARED_FILAMENT_FIELDS = [
   "secondaryColors",
   "colorName",
   "optTags",
+  // GH #1227: which numbering `optTags` is in. Not bookkeeping in the
+  // `syncId` sense — without it a recipient would have to guess, and the
+  // importer deliberately refuses to (see shareImport.buildFilamentImportBody).
+  "optTagsSpec",
   // Material properties
   "density",
   "diameter",

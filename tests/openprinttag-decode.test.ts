@@ -104,7 +104,7 @@ describe("decodeOpenPrintTagBinary", () => {
   it("truncates alpha when decoding RGBA-encoded color (GH #477)", () => {
     // GH #477: documented spec-superset gap — OpenPrintTag spec's
     // `color_rgba` is RGB or RGBA, but our DB only stores `#RRGGBB`
-    // (translucency rides finish tags 5/6 with real CSS opacity
+    // (translucency rides finish tags 19/20 with real CSS opacity
     // instead). The decoder now drops the alpha byte; round-trip
     // preserves only the RGB triple. A tag written with alpha in a
     // previous version still decodes successfully — it just loses
@@ -482,9 +482,22 @@ describe("decodeOpenPrintTagBinary", () => {
     const decoded = decodeOpenPrintTagBinary(binary);
 
     expect(decoded.tags).toEqual([16, 31, 71]); // sorted
-    expect(decoded.tagNames).toEqual(
-      expect.arrayContaining(["MATTE", "CONTAINS_CARBON_FIBER", "HIGH_SPEED"]),
-    );
+    // GH #1227: lowercase SPEC names.
+    expect(decoded.tagNames).toEqual(["matte", "contains_carbon_fiber", "high_speed"]);
+  });
+
+  it("GH #1227: names an id the enum does not know `tag N` instead of dropping it", () => {
+    // A Prusament PC Blend CF spool carries spec 30 contains_carbon; pre-#1227
+    // the decoder filtered unknown ids out of tagNames entirely.
+    const input: OpenPrintTagInput = {
+      materialName: "PC Blend Carbon Fiber",
+      brandName: "Prusament",
+      materialType: "PC",
+      optTags: [31, 30, 75],
+    };
+    const decoded = decodeOpenPrintTagBinary(generateOpenPrintTagBinary(input));
+    expect(decoded.tags).toEqual([30, 31, 75]);
+    expect(decoded.tagNames).toEqual(["contains_carbon", "contains_carbon_fiber", "tag 75"]);
   });
 
   it("merges optTags with abrasive/soluble booleans (deduplicated)", () => {

@@ -21,6 +21,8 @@ export interface FilamentVariant {
    * parent-detail variants projection in `/api/filaments/{id}` includes
    * this for the same reason `FilamentSummary` carries it on list rows. */
   optTags?: number[];
+  /** GH #1227 (response-only): see `FilamentSummary._optTagsAwaitReview`. */
+  _optTagsAwaitReview?: boolean;
 }
 
 export interface FilamentNozzle {
@@ -131,7 +133,11 @@ export interface FilamentDetail {
   maxPrintSpeed: number | null;
   colorName: string | null;
   spoolType: string | null;
+  /** OpenPrintTag spec tag ids (GH #1227). */
   optTags: number[];
+  /** GH #1227: true once `optTags` are known to be spec-numbered; absent on a
+   *  pre-v1.83 row awaiting review on Data health. Server-owned. */
+  optTagsSpec?: boolean;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;
@@ -148,6 +154,15 @@ export interface FilamentDetail {
    *  Gates the "Check for updates" button so an inherited slug on a variant
    *  doesn't show a dead action. */
   _hasOwnOptLink?: boolean;
+  /**
+   * GH #1227 (response-only): the EFFECTIVE `optTags` — own, or the parent's
+   * when the own array is empty — still await OpenPrintTag numbering review.
+   * The detail page refuses Write NFC, the weight re-write and the `.bin`
+   * download for such a row; `GET …/openprinttag` answers 409 for the same
+   * reason. Computed from the row that supplies the array, so an inheriting
+   * variant reports its parent's state.
+   */
+  _optTagsAwaitReview?: boolean;
   /** GH #1103: this row has children in the TRASH. `_variants` is live-only,
    *  so a parent whose variants are all trashed reads as a standalone — and
    *  its "Convert to template" action vanished exactly when the restore route
@@ -227,4 +242,9 @@ export interface FilamentSummary {
    * glow/translucent/transparent) and the matching chip beside the
    * name. See `src/lib/filamentFinish.ts` for the tag-id → finish map. */
   optTags?: number[];
+  /** GH #1227 (response-only): the effective `optTags` above still await
+   * numbering review, so finish / arrangement / color-facet derivations read
+   * them only through the ids both numberings agree on (`displayOptTags`).
+   * Computed by the list aggregation from the row that supplies the array. */
+  _optTagsAwaitReview?: boolean;
 }

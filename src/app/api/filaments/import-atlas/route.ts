@@ -154,6 +154,21 @@ export async function POST(request: NextRequest) {
           for (const key of IMPORTABLE_FILAMENT_FIELDS) {
             if (remote[key] !== undefined) filamentData[key] = remote[key];
           }
+          // GH #1227: the numbering marker is copied EXPLICITLY, never left to
+          // the schema default — the source is another instance's database, and
+          // an absent marker there means its rows predate the spec enum (or are
+          // awaiting review), so they must await review here as well — and ONLY
+          // together with the array it describes (Codex P2 r13 on PR #1228): a
+          // source row that omits `optTags` leaves the local array in place
+          // (the allow-list copies only present keys), so its marker must stay
+          // too. Copied unconditionally, a tag-less source row the remote pass
+          // marked verified would stamp a same-name local unreviewed legacy
+          // `[2]` as spec antibacterial with no review. On a CREATE from such a
+          // source the schema default pairs with the schema-default `[]`, which
+          // is trivially spec.
+          if (Array.isArray(remote.optTags)) {
+            filamentData.optTagsSpec = remote.optTagsSpec === true;
+          }
 
           // GH #1213: a coextruded/gradient filament keeps its colors in
           // `secondaryColors` with a null primary, so dropping the field

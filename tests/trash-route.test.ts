@@ -293,4 +293,19 @@ describe("Filament trash workflow", () => {
     const parentPurge = await permanentDelete(String(parent._id));
     expect(parentPurge.status).toBe(200);
   });
+
+  it("GH #1227 (Codex P2 r11): trash rows carry `_optTagsAwaitReview` so the swatch does not read an unreviewed array as spec", async () => {
+    const raw = mongoose.connection.collection("filaments");
+    await raw.insertOne({ name: "Trashed Unmarked", vendor: "T", type: "PLA", optTags: [28], _deletedAt: new Date() });
+    const verified = await Filament.create({ name: "Trashed Verified", vendor: "T", type: "PLA", optTags: [28] });
+    await softDelete(String(verified._id));
+
+    const res = await listTrash();
+    const body = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const find = (name: string) => body.find((f: any) => f.name === name);
+    expect(find("Trashed Unmarked")).toMatchObject({ optTags: [28], _optTagsAwaitReview: true });
+    expect(find("Trashed Verified")).toMatchObject({ optTags: [28], _optTagsAwaitReview: false });
+    for (const row of body) expect(row).not.toHaveProperty("_optTagsSourceSpec");
+  });
 });

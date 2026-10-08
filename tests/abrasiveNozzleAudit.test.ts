@@ -3,9 +3,11 @@ import {
   abrasiveReasons,
   auditAbrasiveNozzles,
   OPT_TAG_ABRASIVE,
+  ABRASIVE_OPT_TAG_IDS,
   type AuditFilament,
   type AuditNozzle,
 } from "@/lib/abrasiveNozzleAudit";
+import { remapLegacyOptTags } from "@/lib/optTagLegacy";
 
 const SOFT: AuditNozzle = { _id: "indx", name: "INDX 0.4 HF", hardened: false };
 const HARD: AuditNozzle = { _id: "wc04", name: "WC HF 0.4", hardened: true };
@@ -35,15 +37,26 @@ describe("abrasiveReasons", () => {
     // A record tagged `31` carbon fibre states the fact more precisely than
     // tag 4 does; reading only tag 4 threw away the better evidence. A plain
     // type with no flag and a soft nozzle used to be reported not at all.
-    for (const tag of [0, 1, 19, 20, 21, 22, 23, 24, 31, 32]) {
+    // GH #1227: SPEC ids — glitter, glow, the fibre/glass/aramid tags, the
+    // mineral/ceramic fills, every metal fill, wood/cork and their subspecies.
+    for (const tag of ABRASIVE_OPT_TAG_IDS) {
       expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [tag] }), `tag ${tag}`)
         .toEqual(["tagged"]);
     }
+    expect(ABRASIVE_OPT_TAG_IDS).toEqual([
+      4, 23, 24, 31, 33, 34, 35, 36, 37, 39, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54,
+    ]);
   });
 
   it("ignores tags that describe behaviour rather than wear", () => {
     // HEAT_RESISTANT, LOW_WARP, HYGROSCOPIC, MATTE say nothing about abrasion.
-    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 33, 16] })).toEqual([]);
+    // 6 self_extinguishing, 15 limonene_soluble, 9 high_temperature, 16 matte,
+    // 30 contains_carbon (carbon black pigment), 55–58 imitates_* (a look, not
+    // a fill), 32/72 nano-carbon. The pre-#1227 ids 0/1/19–22 — glass fibre,
+    // aramid, wood/metal/stone fill, sparkle in the OLD numbering — are
+    // filtration_recommended … pearlescent on the wire and must NOT fire.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [6, 15, 9, 16, 30, 55, 56, 57, 58, 32, 72] })).toEqual([]);
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [0, 1, 19, 20, 21, 22] })).toEqual([]);
   });
 
   it("reads fibre reinforcement out of the type", () => {
@@ -157,6 +170,38 @@ describe("abrasiveReasons", () => {
     };
     expect(abrasiveReasons(f)).toEqual(["flagged"]);
     expect(auditAbrasiveNozzles([f], NOZZLES)[0].flagMismatch).toBe(true);
+  });
+});
+
+describe("abrasiveReasons — tags awaiting numbering review (GH #1227, Codex P2 r5)", () => {
+  it("reads unreviewed tags under BOTH numberings and names a legacy-only hit as the uncertain reading", () => {
+    // Legacy 0 was CONTAINS_GLASS_FIBER; as a spec id, 0 is filtration_recommended.
+    expect(remapLegacyOptTags([0]).tags.some((t) => ABRASIVE_OPT_TAG_IDS.includes(t))).toBe(true);
+    // Verified (or simply not flagged as awaiting review): spec reading only → nothing, as before.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [0], settings: { filament_abrasive: "0" } })).toEqual([]);
+    // Awaiting review: the legacy reading says glass fibre → reported, and
+    // named as the uncertain reading so the user knows what settles it.
+    expect(
+      abrasiveReasons({ _id: "x", type: "PLA", optTags: [0], settings: { filament_abrasive: "0" }, optTagsAwaitReview: true }),
+    ).toEqual(["taggedLegacy"]);
+    // Abrasive under the spec reading already: the certain reason, once.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [4], optTagsAwaitReview: true })).toEqual(["tagged"]);
+    // Abrasive under neither reading (16 is matte in both): still nothing.
+    expect(abrasiveReasons({ _id: "x", type: "PLA", optTags: [16], optTagsAwaitReview: true })).toEqual([]);
+  });
+
+  it("reports a soft-nozzle assignment when only the legacy reading of unreviewed tags is abrasive", () => {
+    const row: AuditFilament = {
+      _id: "f-legacy", name: "Generic PLA", type: "PLA", optTags: [0],
+      settings: { filament_abrasive: "0" }, compatibleNozzles: [SOFT._id],
+    };
+    expect(auditAbrasiveNozzles([row], NOZZLES)).toEqual([]);
+    const [finding] = auditAbrasiveNozzles([{ ...row, optTagsAwaitReview: true }], NOZZLES);
+    expect(finding).toMatchObject({
+      filamentId: "f-legacy",
+      reasons: ["taggedLegacy"],
+      softNozzles: [{ id: "indx", name: "INDX 0.4 HF" }],
+    });
   });
 });
 

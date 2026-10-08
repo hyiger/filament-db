@@ -2049,6 +2049,35 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(res.created).toBe(1);
     const f = await Filament.findOne({ name: "Tagged PLA" }).lean();
     expect(f.optTags).toEqual([28, 16]); // deduped; "x"/-1 dropped
+    // GH #1227: bare ids that are valid under BOTH numberings (28 is app
+    // dual_color / spec gradual_color_change) are kept verbatim and the row
+    // lands UNVERIFIED for review on Data health — the importer never guesses.
+    expect(f.optTagsSpec).toBe(false);
+  });
+
+  it("GH #1227: spec NAMES in the Tags cell are verified; bare ids are never proof", async () => {
+    const res = await upsertImportRows(
+      rows([
+        ["Named Tags PLA", "Acme", "PLA", "#112233", "coextruded, matte, sparkle", ""],
+        // 18 was the app's MARBLE, but an older spec defined 18 too, so it is a
+        // hint, not proof (Codex P1 r6): kept verbatim, unverified for review.
+        ["Legacy Ids PLA", "Acme", "PLA", "#112233", "18, 2", ""],
+        // 30 contains_carbon never existed in the app's FORM, but its CSV
+        // importer stored any id → a hint, not proof: kept verbatim and left
+        // unverified for Data health (Codex P1 r3 on PR #1228).
+        ["Spec Ids PC", "Prusament", "PC", "#112233", "31,12,4,30", ""],
+      ]),
+    );
+    expect(res.created).toBe(3);
+    const named = await Filament.findOne({ name: "Named Tags PLA" }).lean();
+    expect(named.optTags).toEqual([29, 16, 23]);
+    expect(named.optTagsSpec).toBe(true);
+    const legacy = await Filament.findOne({ name: "Legacy Ids PLA" }).lean();
+    expect(legacy.optTags).toEqual([18, 2]);
+    expect(legacy.optTagsSpec).toBe(false);
+    const spec = await Filament.findOne({ name: "Spec Ids PC" }).lean();
+    expect(spec.optTags).toEqual([31, 12, 4, 30]);
+    expect(spec.optTagsSpec).toBe(false);
   });
 
   it("CREATE variant inheriting the parent's tags is not pinned (empty === inherit)", async () => {
@@ -2073,12 +2102,47 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     const result = await upsertImportRows(
       rows([
         ["TagP2", "Acme", "PLA", "#808080", "28,16", ""],
-        ["TagP2 — Silk", "Acme", "PLA", "#00FF00", "22", "TagP2"], // 22 = sparkle
+        ["TagP2 — Silk", "Acme", "PLA", "#00FF00", "22", "TagP2"], // 22 (ambiguous id; kept verbatim)
       ]),
     );
     expect(result.created).toBe(2);
     const variant = await Filament.findOne({ name: "TagP2 — Silk" }).lean();
     expect(variant.optTags).toEqual([22]);
+  });
+
+  it("GH #1227: a Tags cell mixing names with ambiguous bare ids is refused as a row on CREATE (Codex P2 r2)", async () => {
+    const res = await upsertImportRows(
+      rows([["Mixed Tags PLA", "Acme", "PLA", "#112233", "transparent, 2", ""]]),
+    );
+    expect(res.created).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.skippedRows).toHaveLength(1);
+    expect(res.skippedRows[0].name).toBe("Mixed Tags PLA");
+    expect(res.skippedRows[0].reason).toMatch(/mixes tag names with numeric ids/);
+    expect(await Filament.findOne({ name: "Mixed Tags PLA" }).lean()).toBeNull();
+
+    // Names beside an INERT numeric set import normally (4 means the same either way).
+    const ok = await upsertImportRows(
+      rows([["Mixed OK PLA", "Acme", "PLA", "#112233", "transparent, 4", ""]]),
+    );
+    expect(ok.created).toBe(1);
+    expect(ok.skipped).toBe(0);
+    const f = await Filament.findOne({ name: "Mixed OK PLA" }).lean();
+    expect(f.optTags).toEqual([20, 4]);
+    expect(f.optTagsSpec).toBe(true);
+  });
+
+  it("GH #1227: the same mixed cell on an UPDATE row is ignored, not fatal (the Tags column is create/resurrect only)", async () => {
+    await Filament.create({ name: "Mixed Update PLA", vendor: "Acme", type: "PLA", optTags: [16] });
+    const res = await upsertImportRows(
+      rows([["Mixed Update PLA", "Acme", "PLA", "#445566", "transparent, 2", ""]]),
+    );
+    expect(res.updated).toBe(1);
+    expect(res.skipped).toBe(0);
+    const f = await Filament.findOne({ name: "Mixed Update PLA" }).lean();
+    expect(f.color).toBe("#445566");
+    expect(f.optTags).toEqual([16]);
+    expect(f.optTagsSpec).toBe(true);
   });
 
   it("UPDATE ignores the Tags column (create/resurrect only)", async () => {

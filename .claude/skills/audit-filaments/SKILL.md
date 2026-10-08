@@ -75,7 +75,7 @@ reports what it says. Reimplementing it in the script produced a strictly worse 
 was wrong in five separate ways, every one of them a false negative or a false alarm in the
 highest-severity category:
 
-- it recognised only `optTags` 4, where the real `ABRASIVE_OPT_TAGS` is `0, 1, 4, 19–24, 31, 32` —
+- it recognised only `optTags` 4, where the real `ABRASIVE_OPT_TAGS` is the spec's fill set (`4, 23, 24, 31, 33–37, 39, 41–54` — glitter, glow, the fibre/glass/aramid tags, mineral, ceramic, wood/cork and every metal fill; GH #1227) —
   so an imported `type: "PLA", optTags: [31]` carbon-fibre record passed clean;
 - it compared `filament_abrasive` by identity, so a legitimate per-extruder `['1','1']` from an
   Orca/Bambu round trip read as "off" (the app collapses it with `settingFlagScalar`, GH #678);

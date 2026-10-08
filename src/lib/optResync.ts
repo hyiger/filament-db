@@ -33,6 +33,7 @@
  */
 
 import { INHERITABLE_FIELDS } from "@/lib/resolveFilament";
+import { OPT_SNAPSHOT_NUMBERING_KEY, OPT_SNAPSHOT_SPEC_NUMBERING } from "@/lib/optTagLegacy";
 
 /** A flattened, comparable field value. */
 export type OptValue = string | number | string[] | null;
@@ -185,9 +186,15 @@ function hasIncoming(v: OptValue): boolean {
  * dot-free snapshot key. Written to `openprinttagSnapshot` on
  * import and on each sync so future re-checks can tell "OPT changed it" from
  * "the user changed it".
+ *
+ * GH #1227: every snapshot built here is in the OpenPrintTag SPEC tag
+ * numbering and says so (`tagsNumbering: "spec"`), so the renumbering
+ * classifier can tell it from a pre-v1.83 snapshot (legacy by construction)
+ * and never reads equality with it as legacy provenance, nor translates it
+ * (Codex P1 r4 on PR #1228). Not a managed field, so the diff ignores it.
  */
 export function buildOptSnapshot(payload: Record<string, unknown>): Record<string, OptValue> {
-  const snap: Record<string, OptValue> = {};
+  const snap: Record<string, OptValue> = { [OPT_SNAPSHOT_NUMBERING_KEY]: OPT_SNAPSHOT_SPEC_NUMBERING };
   for (const { field } of OPT_MANAGED_FIELDS) {
     const v = getPath(payload, field);
     // The gray sentinel is "OPT has no real color" — not a value worth

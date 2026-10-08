@@ -10,6 +10,11 @@ import {
   retombstonePurgedZombies,
   type MinimalZombieCollection,
 } from "./purgedZombies";
+import {
+  renumberOptTags,
+  describeRenumberSummary,
+  type MinimalRenumberDb,
+} from "./optTagRenumber";
 
 /** GH #1116: how long to wait before re-attempting a trim pass that still
  *  has active conflicts. Bounds the cost of keeping the migration unsettled. */
@@ -61,6 +66,13 @@ interface MongooseCache {
     /** GH #1008 F1 — normalize legacy 100-based `shrinkageXY` values.
      * Full rationale at the migration block below. */
     legacyShrinkage: boolean;
+    /** GH #1227 — bring stored `optTags` onto the OpenPrintTag SPEC
+     * numbering. Per-ROW marker (`Filament.optTagsSpec`), so the pass is
+     * idempotent and hybrid/restore-safe on its own; this flag only records
+     * "checked this process" and is re-armed by a snapshot restore. Rows the
+     * classifier cannot settle stay unmarked for Data health — they do NOT
+     * keep this flag false. Full rationale in src/lib/optTagRenumber.ts. */
+    optTagRenumber: boolean;
     /** GH #1041 — repair AMS slots tracking a spool with no loaded-filament
      * ref. Full rationale at the migration block below. */
     amsSlotFilamentIds: boolean;
@@ -113,7 +125,7 @@ export default async function dbConnect() {
     uri: null,
     migrationsPromise: null,
     trimRetryAt: 0,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, optTagRenumber: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false },
   };
 
   if (!global.mongoose) {
@@ -129,7 +141,7 @@ export default async function dbConnect() {
     cached.uri = null;
     cached.migrationsPromise = null;
     cached.trimRetryAt = 0;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, optTagRenumber: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -155,6 +167,7 @@ export default async function dbConnect() {
     cached.migrations.coreModelIndexes &&
     cached.migrations.purgedZombies &&
     cached.migrations.legacyShrinkage &&
+    cached.migrations.optTagRenumber &&
     cached.migrations.legacyNozzleConditions &&
     cached.migrations.amsSlotFilamentIds &&
     cached.migrations.trimEntityNames
@@ -309,6 +322,33 @@ export default async function dbConnect() {
     } catch (err) {
       console.error(
         "[migration] Failed to normalize legacy shrinkage values (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
+  // GH #1227 — bring stored `optTags` onto the OpenPrintTag SPEC numbering.
+  // Until v1.83 the app wrote an invented tag numbering that agreed with the
+  // spec on seven ids; rows created from a vendor's NFC tag carry the spec
+  // numbering. The pass classifies every row not yet marked `optTagsSpec`:
+  // provably-legacy arrays are translated, provably-spec ones are marked as
+  // is, and anything whose ids are valid under both readings is LEFT for the
+  // user on Data health (never guessed). Idempotent by the per-row marker, so
+  // it is safe to re-run on every connect; settles once no write was skipped
+  // for a concurrent edit (unsettled user decisions do not keep it unsettled
+  // — they are a page, not a retry). Hybrid sync runs the same helper against
+  // BOTH databases before any copy (electron/sync-service.ts).
+  if (!cached.migrations.optTagRenumber) {
+    try {
+      const db = mongoose.connection.db;
+      if (!db) throw new Error("no db handle on the mongoose connection");
+      const summary = await renumberOptTags(db as unknown as MinimalRenumberDb);
+      const line = describeRenumberSummary(summary);
+      if (line) console.log(line);
+      if (summary.skipped === 0) cached.migrations.optTagRenumber = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to renumber optTags to the OpenPrintTag spec (will retry on next connect):",
         err,
       );
     }
@@ -887,4 +927,17 @@ export async function rerunLegacyNozzleCleanupAfterRestore(
     );
   }
   if (cached) cached.migrations.legacyNozzleConditions = true;
+}
+
+/**
+ * GH #1227: re-arm the optTags renumbering pass after a snapshot restore. A
+ * restored filament carries its own `optTagsSpec` marker — but a pre-v8 file
+ * has none, and the restore route writes those rows as explicitly unverified
+ * so the schema default cannot claim spec numbering for legacy ids. The
+ * process-local flag is already settled by then, so without this the restored
+ * rows would wait for a restart. Idempotent per row, so re-running is free.
+ */
+export function rerunOptTagRenumberAfterRestore(): void {
+  const cached = global.mongoose;
+  if (cached) cached.migrations.optTagRenumber = false;
 }

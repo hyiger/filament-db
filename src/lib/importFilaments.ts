@@ -9,6 +9,7 @@ import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
 import { trimmedNameFilter } from "@/lib/trimmedNameLookup";
+import { parseOptTagsCell } from "./optTagLegacy";
 
 export interface ImportRow {
   name?: string;
@@ -833,27 +834,31 @@ export async function upsertImportRows(
         }
       }
     }
-    // GH #954: parse the "Tags" column into a numeric array. Honoured on
-    // CREATE/RESURRECT only — the update path deletes it below. A
-    // PRESENT-but-empty cell maps to [] (not skipped), so re-importing a
-    // solid/untagged row CLEARS a tombstone's tags on resurrect. Empty
-    // tokens are dropped BEFORE Number() so a trailing/double comma
-    // ("28,16," / "28,,16") can't become `Number("") === 0` and add a
-    // phantom tag 0 (glass-fiber).
+    // GH #954: parse the "Tags" column. Honoured on CREATE/RESURRECT only —
+    // the update path deletes it below. A PRESENT-but-empty cell maps to []
+    // (not skipped), so re-importing a solid/untagged row CLEARS a
+    // tombstone's tags on resurrect. GH #1227: the cell may carry spec NAMES
+    // (what the exporter writes), legacy app names or bare ids; bare ids go
+    // through the numbering classifier, and a set it cannot place lands the
+    // row `optTagsSpec: false` for review on Data health — the importer does
+    // not guess any more than the startup pass does. A cell that MIXES names
+    // with such bare ids has no faithful storage (one array, one marker:
+    // `transparent,2` stored unverified as [20, 2] would see its 20 remapped
+    // as legacy METAL_FILL on a later Convert — Codex P2 on PR #1228), so the
+    // row is skipped with the parser's reason on the paths that honour the
+    // cell; on UPDATE the cell is ignored anyway, so it cannot sink the row.
     if (row.optTags !== undefined) {
-      doc.optTags =
-        row.optTags == null
-          ? []
-          : [
-              ...new Set(
-                String(row.optTags)
-                  .split(",")
-                  .map((tag) => tag.trim())
-                  .filter((tag) => tag !== "")
-                  .map(Number)
-                  .filter((n) => Number.isInteger(n) && n >= 0),
-              ),
-            ];
+      const parsed = parseOptTagsCell(row.optTags == null ? "" : String(row.optTags), {
+        name: row.name,
+        type: row.type,
+      });
+      if (parsed.rejectReason && !existing) {
+        skippedRows.push({ row: lineOf(rowIdx), name: row.name, reason: parsed.rejectReason });
+        skipped++;
+        return;
+      }
+      doc.optTags = parsed.tags;
+      doc.optTagsSpec = parsed.verified;
     }
     if (row.diameter !== undefined && row.diameter !== null) {
       doc.diameter = row.diameter;
@@ -905,6 +910,7 @@ export async function upsertImportRows(
       // re-pin a variant's tags (would need the same whole-array inheritance
       // split secondaryColors gets).
       delete updateDoc.optTags;
+      delete updateDoc.optTagsSpec;
       let $set: Record<string, unknown> = { ...updateDoc };
       for (const [tempKey, tempVal] of Object.entries(temps)) {
         $set[`temperatures.${tempKey}`] = tempVal;

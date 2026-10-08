@@ -402,7 +402,7 @@ describe("groupAndSortInventory — color grouping (color facet)", () => {
         // No color at all → the "unknown" family, sorted last by COLOR_FAMILIES.
         row("nocolor", { filamentColor: null }),
         // Coextruded: null primary, colors in secondaryColors + OPT tag 28.
-        row("coex", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [28] }),
+        row("coex", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [29] }),
       ],
     },
     {
@@ -413,7 +413,7 @@ describe("groupAndSortInventory — color grouping (color facet)", () => {
       spools: [
         row("orange-pctg", { filamentColor: "#FF7A00", filamentType: "PCTG", totalWeight: 400 }),
         // Transparent tag over a white swatch → Clear.
-        row("clear", { filamentColor: "#FFFFFF", optTags: [2] }),
+        row("clear", { filamentColor: "#FFFFFF", optTags: [20] }),
         row("black", { filamentColor: "#111111" }),
       ],
     },
@@ -477,14 +477,14 @@ describe("inventoryRowColorFamily (color facet adapter)", () => {
     // Coextruded null primary → multi via secondaryColors + optTags.
     expect(
       inventoryRowColorFamily(
-        row("c", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [28] }),
+        row("c", { filamentColor: null, secondaryColors: ["#000000", "#FFFFFF"], optTags: [29] }),
       ),
     ).toBe("multi");
     // Null primary with one secondary paints (and classifies as) that secondary.
     expect(inventoryRowColorFamily(row("d", { filamentColor: null, secondaryColors: ["#D32F2F"] }))).toBe(
       "red",
     );
-    expect(inventoryRowColorFamily(row("e", { filamentColor: "#FFFFFF", optTags: [2] }))).toBe("clear");
+    expect(inventoryRowColorFamily(row("e", { filamentColor: "#FFFFFF", optTags: [20] }))).toBe("clear");
   });
 
   it("classifies a legacy/stale-shape row with no color fields as unknown", () => {

@@ -25,6 +25,8 @@ export interface ShareImportFilament {
     bedType?: unknown;
     [k: string]: unknown;
   }>;
+  /** GH #1227: present and `true` on a row whose `optTags` are spec-numbered. */
+  optTagsSpec?: boolean;
   [k: string]: unknown;
 }
 
@@ -94,6 +96,15 @@ export function buildFilamentImportBody(
   };
   if (parentId === undefined) delete body.parentId;
   else body.parentId = parentId;
+  // GH #1227: the publisher's numbering marker rides the published row. A
+  // row published WITHOUT `optTagsSpec: true` — a pre-#1227 publisher, or a
+  // row its owner has not reviewed — must land unverified here too, so the
+  // recipient reviews it on Data health instead of the schema default
+  // stamping legacy ids as spec. The POST honours only `false` (`true` is
+  // the default), so the verified case simply omits the key.
+  const tags = (f as { optTags?: unknown }).optTags;
+  if (f.optTagsSpec !== true && Array.isArray(tags) && tags.length > 0) body.optTagsSpec = false;
+  else delete body.optTagsSpec;
   return body;
 }
 

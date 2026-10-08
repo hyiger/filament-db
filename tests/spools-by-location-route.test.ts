@@ -611,4 +611,30 @@ describe("GET /api/spools/by-location", () => {
     expect(spool.photoDataUrl).toBeUndefined();
     expect(spool.usageHistory).toBeUndefined();
   });
+
+  it("GH #1227 (Codex P2 r11): each row carries `optTagsAwaitReview` for the effective tags; the marker stays server-side", async () => {
+    const shelf = await Location.create({ name: "Shelf T", kind: "shelf" });
+    const raw = mongoose.connection.collection("filaments");
+    const { insertedId: unmarkedParentId } = await raw.insertOne({
+      name: "Unmarked Clear", vendor: "QA", type: "PETG", optTags: [20], _deletedAt: null,
+      spools: [{ _id: new mongoose.Types.ObjectId(), label: "U1", totalWeight: 1000, locationId: shelf._id, retired: false, usageHistory: [], dryCycles: [] }],
+    });
+    await Filament.create({
+      name: "Inheriting Child", vendor: "QA", type: "PETG", parentId: unmarkedParentId,
+      spools: [{ label: "I1", totalWeight: 1000, locationId: shelf._id }],
+    });
+    await Filament.create({
+      name: "Verified Clear", vendor: "QA", type: "PETG", optTags: [20],
+      spools: [{ label: "V1", totalWeight: 1000, locationId: shelf._id }],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const byName = Object.fromEntries(body.groups[0].spools.map((s: any) => [s.filamentName, s]));
+    expect(byName["Unmarked Clear"]).toMatchObject({ optTags: [20], optTagsAwaitReview: true });
+    expect(byName["Inheriting Child"]).toMatchObject({ optTags: [20], optTagsAwaitReview: true });
+    expect(byName["Verified Clear"]).toMatchObject({ optTags: [20], optTagsAwaitReview: false });
+    for (const s of body.groups[0].spools) expect(s).not.toHaveProperty("optTagsSpec");
+  });
 });

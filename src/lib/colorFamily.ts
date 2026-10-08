@@ -32,6 +32,8 @@
  */
 
 import { deriveArrangement } from "./filamentColors";
+import { OPT_TAG } from "./openprinttag";
+import { displayOptTags } from "./optTagLegacy";
 import { getSpoolCount, type InventorySpool } from "./inventoryStats";
 import { BLANK_COLOR_HEX } from "./cssNamedColors";
 
@@ -190,8 +192,10 @@ function isAdjacent(a: ColorFamily, b: ColorFamily): boolean {
 /** OptTag ids for see-through finishes (2 = transparent, 3 = translucent;
  *  same ids as `src/lib/filamentFinish.ts`). "Clear" is tag-driven ONLY — an
  *  untagged "Natural" is white or beige, never Clear. */
-const TAG_TRANSPARENT = 2;
-const TAG_TRANSLUCENT = 3;
+// OpenPrintTag SPEC ids (GH #1227) — the pre-#1227 2/3 are antibacterial /
+// air_filtering on the wire.
+const TAG_TRANSPARENT = OPT_TAG.TRANSPARENT;
+const TAG_TRANSLUCENT = OPT_TAG.TRANSLUCENT;
 
 // ---------------------------------------------------------------------------
 // Color science
@@ -307,6 +311,12 @@ export interface ColorClassifiable {
   color?: string | null;
   secondaryColors?: string[] | null;
   optTags?: number[] | null;
+  /** GH #1227 (Codex P2 r11): the `optTags` still await numbering review —
+   *  the classifier then reads only ids both numberings agree on
+   *  (`displayOptTags`), so a legacy METAL_FILL `[20]` is not filed under
+   *  Clear as if it were the spec's transparent. The list and inventory
+   *  routes compute it from the row that supplies the effective array. */
+  _optTagsAwaitReview?: boolean | null;
   hasVariants?: boolean | null;
   spools?: { retired?: boolean | null; totalWeight?: number | null }[] | null;
   totalWeight?: number | null;
@@ -352,7 +362,7 @@ export function classifyFilament(f: ColorClassifiable): ColorClassification | nu
 function classifyUncached(f: ColorClassifiable): ColorClassification | null {
   if (isTemplate(f)) return null;
 
-  const tags = f.optTags ?? [];
+  const tags = displayOptTags(f.optTags, f._optTagsAwaitReview);
   const seeThrough = tags.includes(TAG_TRANSPARENT) || tags.includes(TAG_TRANSLUCENT);
   const words = nameColorWords(f.name, f.vendor, f.type);
 

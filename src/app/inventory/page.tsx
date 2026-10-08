@@ -98,6 +98,10 @@ interface SpoolRow {
    * doesn't explode. */
   secondaryColors?: string[];
   optTags?: number[];
+  /** GH #1227: the effective `optTags` still await numbering review — the
+   * swatch and the color grouping then read them only through the ids both
+   * numberings agree on. Optional for the same stale-cache reason. */
+  optTagsAwaitReview?: boolean;
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   parentSpoolWeight: number | null;
@@ -1280,8 +1284,8 @@ function SpoolEditRow({
             <FilamentSwatch
               color={row.filamentColor}
               secondaryColors={row.secondaryColors}
-              arrangement={deriveArrangement(row.optTags)}
-              finish={deriveFinish(row.optTags)}
+              arrangement={deriveArrangement(row.optTags, row.optTagsAwaitReview)}
+              finish={deriveFinish(row.optTags, row.optTagsAwaitReview)}
               shape="square"
               size={32}
               title={row.filamentColor ?? undefined}
@@ -1339,8 +1343,8 @@ function SpoolEditRow({
           <FilamentSwatch
             color={row.filamentColor}
             secondaryColors={row.secondaryColors}
-            arrangement={deriveArrangement(row.optTags)}
-            finish={deriveFinish(row.optTags)}
+            arrangement={deriveArrangement(row.optTags, row.optTagsAwaitReview)}
+            finish={deriveFinish(row.optTags, row.optTagsAwaitReview)}
             shape="square"
             size={32}
             title={row.filamentColor ?? undefined}

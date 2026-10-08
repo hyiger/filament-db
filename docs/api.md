@@ -145,6 +145,8 @@ Returns an array of projected filament summaries (not the full documents — hea
 - `vendor` -- exact match on vendor name
 - `family` -- set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants come back too even if their own stored `vendor`/`type` differs (a family can legitimately disagree — both fields are `required` and stamped per row, so they never actually inherit). **Off by default**, because `type` and `vendor` are exact row filters and other callers rely on that literally (`FilamentForm` derives vendor-keyed TDS suggestions from `?vendor=`; `PrusamentImportDialog` treats `?type=` results as material matches). The grouping filament list opts in, so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows.
 
+Every row also carries the response-only `_optTagsAwaitReview` (GH #1227): `true` when the EFFECTIVE `optTags` (own, or the parent's when the own array is empty) still await OpenPrintTag numbering review. The swatch finish, the color arrangement and the Clear color facet then derive only from ids both numberings agree on (`displayOptTags`) — a pre-v1.83 `[20]` is METAL_FILL under the legacy reading, not the spec's transparent. Computed from the row that supplies the array; the `optTagsSpec` marker itself never leaves the server on this route.
+
 **Response shape per row** (matches `FilamentSummary` in `src/types/filament.ts` plus a few extras the list / form / picker need):
 
 ```json
@@ -174,7 +176,7 @@ Returns an array of projected filament summaries (not the full documents — hea
 ```
 
 - `hasCalibrations` is `true` when the filament has at least one calibration, **or** when it's a variant whose parent has at least one (via aggregation `$lookup`). The "Missing calibration" quick filter on the list page reads this — variants that inherit from a parent are correctly counted as calibrated.
-- `hasVariants` is `true` when the filament has at least one non-deleted variant (drives the parent cross-hatch/composite swatch); `optTags` (effective, parent-inherited) drives the finish indicator; `spools[].instanceId` is the per-spool id (#732) and `spools[].locationId` powers the inline move-to dropdown on the main list.
+- `hasVariants` is `true` when the filament has at least one non-deleted variant (drives the parent cross-hatch/composite swatch); `optTags` (effective, parent-inherited; OpenPrintTag spec ids since v1.83 — see "OpenPrintTag Tag Numbering Review") drives the finish indicator; `spools[].instanceId` is the per-spool id (#732) and `spools[].locationId` powers the inline move-to dropdown on the main list.
 - `tdsUrl` is included so `FilamentForm`'s vendor-keyed TDS suggestions still work.
 - `spools[].label` is included so `PrinterForm`'s AMS slot picker can render `s.label || s._id.slice(-4)`.
 - `color` is **nullable** — coextruded multi-color filaments leave it null and put their colors in `secondaryColors`. `secondaryColors` is an ordered array of up to 5 `#RRGGBB` hex codes that mirrors OpenPrintTag's `secondary_color_0..4` keys (spec keys 20–24). Variants inherit `secondaryColors` array-fallback style: a variant either declares its own non-empty array or inherits the parent's entire array (same pattern as `optTags` / `bedTypeTemps`). Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu Studio) drop secondaries silently — slicer presets are single-color formats.
@@ -214,6 +216,7 @@ Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `
 - `_variants` -- array of live child variant filaments (`_id`, `name`, `color`, `cost`, plus effective `secondaryColors` and `optTags` — a variant with an empty array falls back to this filament's)
 - `_hasOwnOptLink` -- `true` when this row itself carries an OpenPrintTag link (`settings.openprinttag_slug`), computed before inheritance so a variant doesn't report its parent's link
 - `_hasTrashedVariants` -- `true` when non-purged variants of this filament sit in the trash (GH #1103); `_variants` is live-only, so this is what surfaces "Convert to template" on a parent whose variants are all trashed
+- `_optTagsAwaitReview` -- `true` when the EFFECTIVE `optTags` (own, or the parent's when the own array is empty) still await OpenPrintTag numbering review (GH #1227, see "OpenPrintTag Tag Numbering Review"); the detail page refuses Write NFC and the `.bin` download for such a row, and `GET /api/filaments/:id/openprinttag` answers 409
 - Inherited field resolution when the filament has a `parentId` -- fields not set on the variant are inherited from the parent, and an `_inherited` array lists which fields were inherited
 
 Query parameters:
@@ -244,7 +247,7 @@ Refusal cases:
 
 ### GET /api/filaments/trash
 
-Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` and `optTags` are the effective arrays (a variant's empty array falls back to its parent's) so the trash swatch renders multi-color and finish correctly. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
+Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` and `optTags` are the effective arrays (a variant's empty array falls back to its parent's) so the trash swatch renders multi-color and finish correctly, plus the response-only `_optTagsAwaitReview` (GH #1227 — see `GET /api/filaments`) so an unreviewed array is not rendered through the spec reading alone. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
 
 ```json
 [
@@ -530,6 +533,8 @@ Refusals:
 - `400` — the `{id}` is not a valid ObjectId, or the `spool` id doesn't belong to this filament (`"Spool not found on this filament"` — the route won't silently encode the wrong spool).
 - `404` — filament not found.
 - `422` — no `instanceId` is available to encode (neither the selected spool nor the filament carries one).
+
+Answers **409** `opt_tags_pending_review` when the filament's effective `optTags` (own, or inherited) still await OpenPrintTag numbering review (GH #1227): written now, the pre-v1.83 ids would land on the tag as OpenPrintTag ids. Settle the row under Settings → Data health (`POST /api/opt-tag-review/:id`) first. The desktop Write NFC path refuses for the same reason.
 
 ### GET /api/filaments/:id/openprinttag/check
 
@@ -1068,6 +1073,50 @@ Returns (bulk mode):
   "updated": 0
 }
 ```
+
+---
+
+## OpenPrintTag Tag Numbering Review (v1.83)
+
+Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags_enum.yaml`](https://github.com/OpenPrintTag/openprinttag-specification/blob/main/data/tags_enum.yaml) numbering. Earlier versions used an app-invented numbering, so rows written before the upgrade may still carry it. A startup pass marks every row whose array is trivially spec (only ids that mean the same under both numberings) and converts NOTHING — no stored content proves the pre-v1.83 numbering — so every other unmarked row is surfaced for the user under Settings → Data health through these routes, with hints. `Filament.optTagsSpec` (server-owned) is `true` on a verified row.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/opt-tag-review` | Runs the (idempotent) marking pass, then lists the rows awaiting the user's decision plus the legacy tags earlier conversions had to drop |
+| `POST` | `/api/opt-tag-review/:id` | Apply the user's answer for one row (same-origin guarded) |
+| `DELETE` | `/api/opt-tag-review/dropped` | Dismiss the removed-legacy-tags notice — body `{ "records": [{ "filamentId", "at" }] }` removes only those exact records (the row AND the `at` the caller was shown, so a replacement notice for the same row written since survives), no body clears all (same-origin guarded) |
+
+### GET /api/opt-tag-review
+
+```json
+{
+  "pending": [
+    {
+      "filamentId": "…", "name": "Overture PETG Transparent", "vendor": "Overture", "type": "PETG",
+      "trashed": false, "verdict": "ambiguous", "hints": [],
+      "matchesOptProvenance": false, "matchesBackfill": false, "specOnlyIds": [], "legacyOnlyIds": [],
+      "stored": [2],
+      "asLegacy": { "tags": [20], "dropped": [] },
+      "asSpec": [2]
+    }
+  ],
+  "dropped": [
+    { "filamentId": "…", "name": "Overture TPU", "tags": [9], "at": "2026-10-08T12:00:00.000Z" }
+  ]
+}
+```
+
+`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is always `ambiguous` (both readings are consistent — no array is inconsistent; a spec-only id beside the legacy-only 18 is a stray that rides through the conversion verbatim). `hints` is the classifier's hint list as displayed (`opt-provenance`, `legacy-only-id`, `spec-only-id`, `backfill-derivation`), echoed back on resolve; `matchesOptProvenance` (linked to the OpenPrintTag database with a pre-v1.83 snapshot whose `optTags` equal the array, or linked with no snapshot object → likely imported from OpenPrintTag; the Data health page offers a confirm-gated bulk conversion of exactly these rows), `matchesBackfill` (the array equals the old backfill script's output for the row's type → likely entered in the app), `specOnlyIds` (ids the pre-v1.83 form could not write → likely read from a tag) and `legacyOnlyIds` (the deprecated 18 → likely entered in the app) are hints for the user, never decisions. `dropped` entries carry LEGACY ids; they are written only by this route's `POST … convert` (the pass never converts), on the database that server talks to — a conversion made on another desktop against a shared database records its notice there, and the converted row arrives here already marked, with no notice.
+
+### POST /api/opt-tag-review/:id
+
+Body: `{ "action": "convert" | "keep", "expectedTags": number[], "expectedHints"?: string[] }` — `expectedTags` is the `stored` array the caller was shown, `expectedHints` the row's `hints` as shown (optional, but the Data health page always sends it: its bulk "imported from OpenPrintTag" action selects rows BY the `opt-provenance` hint, and a re-link or sync between the scan and the click can take that hint away while the array stays unchanged). Returns `{ "outcome": "converted", "tags": [...], "dropped": [...] }` or `{ "outcome": "kept", "tags": [...] }`. **409** `tags_changed` when the row no longer holds exactly `expectedTags`, no longer carries exactly `expectedHints` (when sent), or is already verified — and the write itself is pinned to every classifier input as read (array, snapshot container and contents, link keys, `name`, `type`), so a change landing between the check and the write is refused the same way; **404** when the filament is gone; **400** on a malformed id, action or array.
+
+The decision runs under the row's per-filament mutex (the same key `PUT /api/filaments/:id` holds for its write), and the PUT side **drops** an unchanged `optTags` array from its update when the row still awaits review rather than writing it back — so a conversion that lands while an edit is in flight (from this route — on this desktop, or made elsewhere and carried in by the Electron sync service) is never overwritten with the stale pre-v1.83 ids. A changed array on such a row is refused with **409** `opt_tags_pending_review`, and a dotted element path (`{"optTags.1": 20}`) is refused with **400** on every row — `optTags` is written as a whole array or not at all. API clients editing an unreviewed row should settle it here first and re-read it before sending tags.
+
+### Classification rules (what the pass decides on its own)
+
+Only one thing: whether an array needs a decision at all. Ids the conversion would leave untouched — the fixed points (4, 13, 16, 17, 24, 29, 31, 71) and every id outside the legacy table — are inert, so an array made only of those is marked without a decision (`[30]`, `[31, 30, 4]`, `[99]`, `[]`). Every other unmarked array is listed here for the user, because no stored content PROVES either numbering: not the deprecated 18 (the pre-v1.83 app's marble tag; an older specification defined 18 too, so a vendor tag could carry it); not a spec-only id (30, 40–48, 50–70, 72–74) or an id in neither table (the pre-v1.83 form could not write one, but the pre-v1.83 CSV importer and schema stored any integer, so `[2, 30]` and `[2, 99]` are as likely legacy as spec — the 30 or 99 decides nothing about the 2); not equality with the old backfill script's output (a vendor tag can carry the same small set); and not OpenPrintTag provenance either — a pre-v1.83 snapshot equal to the array (the link route and the re-sync store the snapshot without touching field values, so a spec row linked before the upgrade reads equal) or a bare link with no snapshot (the slug is an ordinary settings-bag key that rides the slicer round-trip and the share import). A snapshot written since v1.83 carries `tagsNumbering: "spec"` and hints nothing. Each of these is reported as a hint; none converts a row. The CSV importer applies the same rules to bare ids in a `Tags` cell and refuses a cell that mixes tag names with ids it cannot place.
 
 ---
 
@@ -1863,7 +1912,7 @@ Returns:
 
 ### GET /api/filaments/compare?ids=a,b,c (v1.11)
 
-Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly.
+Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly. Each carries the response-only `_optTagsAwaitReview` (GH #1227 — see `GET /api/filaments`), computed from the row that supplies the effective `optTags` (the resolved document's own marker beside inherited tags would be the wrong pairing).
 
 `400` if `ids` is missing, empty, or over 8.
 
@@ -1881,6 +1930,8 @@ Query parameters:
 | `includeRetired` | `1` to include retired spools (default: excluded — they're out of inventory). |
 
 A synthetic group with `locationId: null` carries any spool whose `locationId` is unset. The aggregation sorts it to the END of the response so the page surfaces it as a "needs attention" trailer rather than as the first bucket.
+
+Each spool row carries `optTagsAwaitReview` (GH #1227): `true` when its effective `optTags` (the GH #1050 parent-fallback array) still await OpenPrintTag numbering review, so the row swatch and the color grouping read them only through the ids both numberings agree on (see `GET /api/filaments`). The `optTagsSpec` marker is an aggregation-only intermediate and is not in the payload.
 
 Response shape:
 

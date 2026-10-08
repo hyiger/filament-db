@@ -42,6 +42,14 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
+import { isEncodableOptTag } from "@/lib/openprinttag";
+import {
+  sameOptTagSet,
+  optTagsAwaitReview,
+  effectiveOptTagsAwaitReview,
+  OPT_TAG_CLASSIFIER_PATHS,
+  type OptTagReviewRow,
+} from "@/lib/optTagLegacy";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -135,6 +143,10 @@ export async function GET(
       transmissionDistance?: number | null; tdsUrl?: string | null;
       temperatures?: Record<string, number | null> | null;
     } | null = null;
+    // GH #1227: the parent row the `_optTagsAwaitReview` flag below reads when
+    // this variant's own `optTags` is empty (the array then comes from the
+    // parent, and so does its review state).
+    let parentForTags: OptTagReviewRow | null = null;
     if (filament.parentId) {
       if (raw) {
         // `inherits` rides the projection for GH #1066: the form adopts a
@@ -153,6 +165,9 @@ export async function GET(
               "tdsUrl temperatures",
           )
           .lean()) as typeof parentSummary;
+        parentForTags = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+          .select(OPT_TAG_CLASSIFIER_PATHS.join(" "))
+          .lean()) as OptTagReviewRow | null;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
           .populate("compatibleNozzles")
@@ -163,6 +178,7 @@ export async function GET(
         if (parentDoc) {
           resolved = resolveFilament(filament, parentDoc);
           parentSummary = { _id: parentDoc._id, name: parentDoc.name };
+          parentForTags = parentDoc as unknown as OptTagReviewRow;
         }
       }
     }
@@ -178,18 +194,26 @@ export async function GET(
     // correct. Mirrors resolveFilament's secondaryColors block + the list
     // aggregation's $project ternary (GH #477).
     const rawVariants = await Filament.find({ parentId: id, _deletedAt: null })
-      .select("name color secondaryColors cost optTags")
+      .select("name color secondaryColors cost optTags optTagsSpec")
       .sort({ name: 1 })
       .lean();
     const parentOptTags = (filament.optTags ?? []) as number[];
     const parentSecondaryColors = (filament.secondaryColors ?? []) as string[];
-    const variants = rawVariants.map((v) => ({
+    const variants = rawVariants.map(({ optTagsSpec: _ownMarker, ...v }) => ({
       ...v,
       optTags: v.optTags && v.optTags.length > 0 ? v.optTags : parentOptTags,
       secondaryColors:
         v.secondaryColors && v.secondaryColors.length > 0
           ? v.secondaryColors
           : parentSecondaryColors,
+      // GH #1227 (Codex P2 r11): the variant chips derive finish + arrangement
+      // from the effective array above; its review state comes from the row
+      // that supplied it (own, else this parent). The marker itself stays
+      // server-side (`_ownMarker` is read through the raw doc, not emitted).
+      _optTagsAwaitReview: effectiveOptTagsAwaitReview(
+        { ...v, optTagsSpec: _ownMarker } as unknown as OptTagReviewRow,
+        filament as unknown as OptTagReviewRow,
+      ),
     }));
 
     // GH #607: whether THIS row carries its own OpenPrintTag link, computed
@@ -212,6 +236,17 @@ export async function GET(
         _purged: { $ne: true },
       })) > 0;
 
+    // GH #1227: do the EFFECTIVE tags (own, or inherited when the own array is
+    // empty) still await numbering review? The detail page refuses Write NFC,
+    // the weight re-write and the `.bin` download on it (Codex P1 r3 on PR
+    // #1228) — computed from the row that SUPPLIES the array, the way
+    // resolveFilament's whole-array fallback picks it, so an inheriting
+    // variant reports its parent's state. Response-only, like the flags above.
+    const _optTagsAwaitReview = effectiveOptTagsAwaitReview(
+      filament as unknown as OptTagReviewRow,
+      parentForTags,
+    );
+
     if (parentSummary) {
       return NextResponse.json({
         ...resolved,
@@ -219,6 +254,7 @@ export async function GET(
         _parent: parentSummary,
         _hasOwnOptLink,
         _hasTrashedVariants,
+        _optTagsAwaitReview,
       });
     }
 
@@ -227,6 +263,7 @@ export async function GET(
       _variants: variants,
       _hasOwnOptLink,
       _hasTrashedVariants,
+      _optTagsAwaitReview,
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to fetch filament");
@@ -322,6 +359,32 @@ export async function PUT(
     // regression from silently reopening it.
     const unsafePath = assertSafeUpdateBody(body);
     if (unsafePath) return unsafePath;
+
+    // GH #1227 (Codex P2 r13 on PR #1228): `optTags` is written as a WHOLE
+    // array or not at all. A dotted element path (`{"optTags.1": 20}`) is a
+    // live update path findOneAndUpdate applies element-wise, so it would
+    // bypass the numbering guard below (which keys off `body.optTags`) and
+    // splice a spec id into an unreviewed legacy array — a mixed `[2, 20]`
+    // that no later Data health decision can read correctly (Convert invents
+    // metal-fill from the 20, Keep reads the 2 as antibacterial). Nothing
+    // first-party writes tags positionally; refuse the shape outright.
+    if (Object.keys(body).some((k) => k.startsWith("optTags."))) {
+      return errorResponse("optTags must be sent as a whole array, not as an element path", 400);
+    }
+    // GH #1227 (Codex P2 r16 on PR #1228): a PRESENT `optTags` must be an
+    // array of tag ids. The schema's `sanitizeOptTags` setter turns any
+    // non-array (`null`, a string, a number) into `[]` and drops unusable
+    // elements, and a non-array skipped the numbering guard below (keyed off
+    // `Array.isArray`) — so `optTags: null` against an unreviewed legacy `[2]`
+    // erased the tags and left the row unmarked, which the next pass then read
+    // as trivially spec and verified: data loss certified as settled. An
+    // explicit `[]` is the honest way to clear tags and goes through the guard.
+    if (Object.prototype.hasOwnProperty.call(body, "optTags")) {
+      const tags = body.optTags;
+      if (!Array.isArray(tags) || !tags.every(isEncodableOptTag)) {
+        return errorResponse("optTags must be an array of non-negative integer tag ids", 400);
+      }
+    }
 
     // GH #1072: enforce the GH #266 settings-bag caps on the generic PUT —
     // `settings` is Schema.Types.Mixed, so `runValidators: true` below is a
@@ -436,8 +499,56 @@ export async function PUT(
     // body-only check would miss. Always fetch the stored endpoints;
     // `effectiveNozzleRangeForUpdate` understands all the update shapes.
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId")
+      .select(
+        // The classifier's own path list (GH #1227) rides along so the
+        // numbering guard below sees everything it reads, snapshot marker
+        // included.
+        ["temperatures.nozzleRangeMin", "temperatures.nozzleRangeMax", "parentId", ...OPT_TAG_CLASSIFIER_PATHS].join(" "),
+      )
       .lean();
+
+    // GH #1227: a write of `optTags` speaks the current contract (spec
+    // numbering), so the row is stamped verified — with two exceptions for a
+    // row whose stored array still awaits numbering review (no marker, and not
+    // trivially spec; `stored` is lean, so a pre-#1227 row reads `undefined`
+    // here, which is "unverified", not the schema default):
+    //   - the array comes back UNCHANGED (set-equal): the edit form resubmits
+    //     every seeded field, so an unrelated edit (a note, a price) must not
+    //     launder an unreviewed legacy array into "verified". The key is
+    //     DROPPED from the update, not written back: writing the same ids is a
+    //     no-op only while the stored array is still that array, and a Data
+    //     health resolution — or the startup pass, in this process or in the
+    //     Electron sync service's — can convert the row to spec ids and mark it
+    //     between this read and the write section below. Written back, the
+    //     stale legacy ids would land on a row now marked verified and read as
+    //     spec ids (legacy 2 "transparent" as spec 2 "antibacterial" — Codex P1
+    //     on PR #1228). Not written, the concurrent conversion stands under any
+    //     ordering, in-process or not, with no observed-state predicate on the
+    //     write. (The review route also takes this row's mutex, and the form
+    //     omits `optTags` entirely for a locked row, which covers the form
+    //     saved AFTER a conversion this read already sees.)
+    //   - the array CHANGED: refused with 409. A legacy `[2]` (transparent)
+    //     plus a newly ticked spec 16 would have to be stored as all-legacy or
+    //     all-spec, and either reading permanently misfiles one tag (Codex P1
+    //     on PR #1228). The form locks its tag controls for exactly these rows
+    //     and points at Data health, where the one decision that unlocks them
+    //     is made; the message carries the same instruction for API callers.
+    if (Array.isArray(body.optTags) && stored) {
+      if (!optTagsAwaitReview(stored)) {
+        body.optTagsSpec = true;
+      } else if (sameOptTagSet(body.optTags, stored.optTags)) {
+        delete body.optTags;
+      } else {
+        return NextResponse.json(
+          {
+            error: "opt_tags_pending_review",
+            message:
+              "This filament's tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed. Resolve them under Settings → Data health first; the tags can be edited once the numbering is settled.",
+          },
+          { status: 409 },
+        );
+      }
+    }
     const rangeUpdate = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
     // A variant inherits missing endpoints from its parent (resolveFilament:
     // own ?? parent), so a lone min can invert against an inherited parent

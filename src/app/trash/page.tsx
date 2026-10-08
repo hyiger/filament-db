@@ -17,6 +17,8 @@ interface TrashedFilament {
   color: string | null;
   secondaryColors?: string[];
   optTags?: number[];
+  /** GH #1227 (response-only): see `FilamentSummary._optTagsAwaitReview`. */
+  _optTagsAwaitReview?: boolean;
   cost: number | null;
   parentId: string | null;
   _deletedAt: string;
@@ -312,7 +314,7 @@ export default function TrashPage() {
                 <FilamentSwatch
                   color={item.color}
                   secondaryColors={item.secondaryColors}
-                  arrangement={deriveArrangement(item.optTags)}
+                  arrangement={deriveArrangement(item.optTags, item._optTagsAwaitReview)}
                   size={20}
                 />
                 <div className="flex-1 min-w-0">

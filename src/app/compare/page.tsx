@@ -22,6 +22,8 @@ interface FilamentOption {
   color: string | null;
   secondaryColors?: string[];
   optTags?: number[];
+  /** GH #1227: see `FilamentSummary._optTagsAwaitReview`. */
+  _optTagsAwaitReview?: boolean;
   type: string;
 }
 
@@ -38,6 +40,9 @@ interface CompareFilament {
   colorName: string | null;
   secondaryColors?: string[];
   optTags?: number[];
+  /** GH #1227 (response-only, from the compare route): the effective tags
+   * above still await numbering review. */
+  _optTagsAwaitReview?: boolean;
   cost: number | null;
   density: number | null;
   diameter: number;
@@ -395,8 +400,8 @@ function ComparePageInner() {
                       <FilamentSwatch
                         color={f.color}
                         secondaryColors={f.secondaryColors}
-                        arrangement={deriveArrangement(f.optTags)}
-                        finish={deriveFinish(f.optTags)}
+                        arrangement={deriveArrangement(f.optTags, f._optTagsAwaitReview)}
+                        finish={deriveFinish(f.optTags, f._optTagsAwaitReview)}
                         size={16}
                         className="flex-shrink-0"
                       />
