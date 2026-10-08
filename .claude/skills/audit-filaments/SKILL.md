@@ -336,7 +336,8 @@ EOF
 
 At the time of writing that reports **45 of 45 covered**. Re-run it after moving a field between tables, not only after a schema change — omitting one table makes the guard report a permanent false gap. The unfilled-polymer ceiling is
 2.5 g/cm³, but copper- and bronze-filled PLA legitimately sit around 3–4, so a filament carrying
-the metal-fill tag (**20**) gets a much higher one. The schema permits any non-negative density;
+a metal-fill tag (**46** `contains_metal`, or one of the specific metal tags 47–54; on a filament still
+awaiting OpenPrintTag numbering review, also the pre-v1.83 id 20) gets a much higher one. The schema permits any non-negative density;
 prompting someone to "correct" a valid one would corrupt every weight-to-length calculation that
 reads it.
 
@@ -348,7 +349,7 @@ the one an explicit `filament_abrasive = "0"` can suppress — the user has an e
 density ceiling has none: raise it by name and an ordinary filament silently accepts a corrupt
 4 g/cm³, trading a false positive for a false negative, which is the worse direction. So name
 matching is unsafe *here* specifically, and the tag stays the only evidence. Note also that adding
-tag 20 is only ever the remedy for a value above the CEILING — below the floor it changes nothing
+tag 46 is only ever the remedy for a value above the CEILING — below the floor it changes nothing
 and marks the filament abrasive (see the density-floor note above).
 
 **Template violations (v1.70 #605).** A filament with variants is a template: colourless, no
@@ -490,7 +491,7 @@ looks obvious:
 
 - **A high-flow calibration above the declared range** — widen `nozzleRangeMax` to what is actually
   run; do not lower a tuned calibration.
-- **A density above the unfilled ceiling** — if the filament really is metal-filled, add optTag 20;
+- **A density above the unfilled ceiling** — if the filament really is metal-filled, add optTag 46 (`contains_metal`);
   do not "correct" a valid 3.9 g/cm³ down to 2.5, which would corrupt every weight-to-length
   calculation reading it.
 - **A low nozzle temperature on PCL** — a valid low-temperature grade, not an error.
