@@ -70,6 +70,7 @@ import {
   SPEC_ONLY_IDS,
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
+  OPT_TAG_CLASSIFIER_PATHS,
   snapshotIsSpecNumbered,
 } from "./optTagLegacy";
 
@@ -101,18 +102,15 @@ export const UNVERIFIED_OPT_TAGS_FILTER: Readonly<Record<string, unknown>> = {
   optTagsSpec: { $ne: true },
 };
 
-const ROW_PROJECTION = {
-  optTags: 1,
-  optTagsSpec: 1,
-  name: 1,
+// Everything the classifier reads (incl. the snapshot's numbering marker — a
+// projection that drops it turns a spec snapshot into a legacy-looking one)
+// plus what the pass and Data health need of their own.
+const ROW_PROJECTION: Record<string, 1> = {
+  ...Object.fromEntries(OPT_TAG_CLASSIFIER_PATHS.map((path) => [path, 1 as const])),
   vendor: 1,
-  type: 1,
   _deletedAt: 1,
   _purged: 1,
-  "settings.openprinttag_slug": 1,
-  "settings.openprinttag_uuid": 1,
-  "openprinttagSnapshot.optTags": 1,
-} as const;
+};
 
 /** A legacy concept the conversion had to drop from one filament. */
 export interface DroppedLegacyTags {

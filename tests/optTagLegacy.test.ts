@@ -15,6 +15,8 @@ import {
   sameOptTagSet,
   optTagsAwaitReview,
   effectiveOptTagsAwaitReview,
+  OPT_TAG_CLASSIFIER_PATHS,
+  OPT_SNAPSHOT_NUMBERING_KEY,
   optTagIdForString,
   parseOptTagsCell,
 } from "@/lib/optTagLegacy";
@@ -236,6 +238,33 @@ describe("classifyOptTags", () => {
     for (const converted of [[20], [28], [62], [19, 23]]) {
       expect(classifyOptTags({ optTags: converted }).kind, JSON.stringify(converted)).not.toBe("legacy");
     }
+  });
+});
+
+describe("OPT_TAG_CLASSIFIER_PATHS (what a projecting caller must select)", () => {
+  it("names every path the classifier reads, the snapshot numbering marker included", () => {
+    // CI on PR #1228 caught the renumber pass projecting the snapshot WITHOUT
+    // its marker: a spec-marked snapshot then read as legacy proof and the
+    // row was converted. The list is the contract; a projection built from it
+    // cannot drop the marker.
+    expect(OPT_TAG_CLASSIFIER_PATHS).toContain(`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`);
+    expect(OPT_TAG_CLASSIFIER_PATHS).toContain("openprinttagSnapshot.optTags");
+    for (const path of ["optTags", "optTagsSpec", "name", "type", "settings.openprinttag_slug", "settings.openprinttag_uuid"]) {
+      expect(OPT_TAG_CLASSIFIER_PATHS, path).toContain(path);
+    }
+    // A row reduced to exactly these paths classifies the same as the full row.
+    const full = {
+      optTags: [2], optTagsSpec: undefined, name: "N", type: "PLA", vendor: "V", color: "#000000",
+      settings: { openprinttag_slug: "s", other: "x" },
+      openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec", density: 1.24 },
+    };
+    expect(classifyOptTags(full)).toEqual({ kind: "ambiguous" });
+    const projected = {
+      optTags: full.optTags, name: full.name, type: full.type,
+      settings: { openprinttag_slug: "s" },
+      openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
+    };
+    expect(classifyOptTags(projected)).toEqual({ kind: "ambiguous" });
   });
 });
 

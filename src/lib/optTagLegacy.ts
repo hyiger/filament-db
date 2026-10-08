@@ -195,6 +195,25 @@ export function snapshotIsSpecNumbered(snapshot: Record<string, unknown> | null 
   return !!snapshot && snapshot[OPT_SNAPSHOT_NUMBERING_KEY] === OPT_SNAPSHOT_SPEC_NUMBERING;
 }
 
+/**
+ * Every document path `classifyOptTags` / `optTagsAwaitReview` read. A caller
+ * that PROJECTS the row (the renumber pass, the PUT and GET routes) must
+ * include all of them — a snapshot projected without its numbering marker
+ * comes back looking like a pre-v1.83 one and is read as legacy proof, which
+ * is exactly what CI caught on PR #1228 (the spec-marked "Linked After" row
+ * was converted). Build projections from this list, never by hand.
+ */
+export const OPT_TAG_CLASSIFIER_PATHS: readonly string[] = [
+  "optTags",
+  "optTagsSpec",
+  "name",
+  "type",
+  "settings.openprinttag_slug",
+  "settings.openprinttag_uuid",
+  "openprinttagSnapshot.optTags",
+  `openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`,
+];
+
 /** Every id the pre-#1227 app could have written. */
 export const LEGACY_IDS: ReadonlySet<number> = new Set(
   Object.keys(LEGACY_TO_SPEC).map(Number),

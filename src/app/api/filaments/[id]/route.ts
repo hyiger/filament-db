@@ -46,6 +46,7 @@ import {
   sameOptTagSet,
   optTagsAwaitReview,
   effectiveOptTagsAwaitReview,
+  OPT_TAG_CLASSIFIER_PATHS,
   type OptTagReviewRow,
 } from "@/lib/optTagLegacy";
 
@@ -164,9 +165,7 @@ export async function GET(
           )
           .lean()) as typeof parentSummary;
         parentForTags = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-          .select(
-            "optTags optTagsSpec name type settings.openprinttag_slug settings.openprinttag_uuid openprinttagSnapshot.optTags",
-          )
+          .select(OPT_TAG_CLASSIFIER_PATHS.join(" "))
           .lean()) as OptTagReviewRow | null;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
@@ -466,8 +465,10 @@ export async function PUT(
     // `effectiveNozzleRangeForUpdate` understands all the update shapes.
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
       .select(
-        "temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId optTags optTagsSpec " +
-          "name type settings.openprinttag_slug settings.openprinttag_uuid openprinttagSnapshot.optTags",
+        // The classifier's own path list (GH #1227) rides along so the
+        // numbering guard below sees everything it reads, snapshot marker
+        // included.
+        ["temperatures.nozzleRangeMin", "temperatures.nozzleRangeMax", "parentId", ...OPT_TAG_CLASSIFIER_PATHS].join(" "),
       )
       .lean();
 
