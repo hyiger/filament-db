@@ -2031,7 +2031,7 @@
   "form.tagGroup.appearance": "Erscheinungsbild",
   "form.tagGroup.additives": "Zusätze & Imitationen",
   "form.tags.other": "Außerdem getaggt (keine Checkbox oben): {tags}",
-  "form.tags.pendingReview": "Diese Tags wurden gespeichert, bevor Filament DB die OpenPrintTag-Nummerierung übernommen hat, und sind noch nicht geprüft. Klären Sie sie unter Einstellungen → Datenzustand, bevor Sie sie hier ändern — sonst vermischen sich die beiden Nummerierungen in einer Liste.",
+  "form.tags.pendingReview": "Diese Tags wurden gespeichert, bevor Filament DB die OpenPrintTag-Nummerierung übernommen hat, und sind noch nicht geprüft. Die Tag- und Farbanordnungs-Steuerelemente sind gesperrt, bis Sie unter Datenzustand angeben, woher sie stammen — sonst würden sich die beiden Nummerierungen in einer Liste vermischen.",
   "form.tags.pendingReviewLink": "Datenzustand öffnen",
   "nfc.readDialog.labelTags": "Tags",
   "health.optTags.title": "OpenPrintTag-Tag-Nummerierung prüfen",
@@ -2052,5 +2052,7 @@
   "health.optTags.dropped.title": "Bei der Umstellung entfernte Alt-Tags",
   "health.optTags.dropped.subtitle": "Diese Filamente wurden automatisch umgestellt, und einige ihrer Tags hatten keine Entsprechung in der OpenPrintTag-Spezifikation. Eine solche Eigenschaft ergibt sich meist aus dem Materialtyp; fügen Sie unter den Material-Tags des Filaments hinzu, was Sie noch brauchen.",
   "health.optTags.action.dismiss": "Ausblenden",
-  "health.optTags.dismissed": "Ausgeblendet"
+  "health.optTags.dismissed": "Ausgeblendet",
+  "health.optTags.backfillHint": "Entspricht dem, was das alte Backfill-Skript für diesen Materialtyp geschrieben hat — diese Tags wurden sehr wahrscheinlich in dieser App eingegeben.",
+  "edit.toast.optTagsPendingReview": "Die Tags konnten nicht geändert werden: sie warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung."
 }

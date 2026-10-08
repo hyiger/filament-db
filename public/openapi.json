@@ -8039,7 +8039,7 @@
           "optTagsSpec": {
             "type": "boolean",
             "readOnly": true,
-            "description": "Server-owned (GH #1227): true when optTags are known to be in the OpenPrintTag spec numbering. Rows written before v1.83 may still be in the app's pre-#1227 numbering; the startup pass converts the provable ones and the rest await the user's decision under Settings \u2192 Data health (GET /api/opt-tag-review). POST may send only `false` (\"numbering unknown\"); PUT strips the field and stamps it when optTags are written."
+            "description": "Server-owned (GH #1227): true when optTags are known to be in the OpenPrintTag spec numbering. Rows written before v1.83 may still be in the app's pre-#1227 numbering; the startup pass converts the provable ones and the rest await the user's decision under Settings \u2192 Data health (GET /api/opt-tag-review). POST may send only `false` (\"numbering unknown\"); PUT strips the field, stamps it when optTags are written on a verified row, and answers 409 `opt_tags_pending_review` to a CHANGED optTags array on a row still awaiting review."
           },
           "bedTypeTemps": {
             "type": "array",

@@ -2031,7 +2031,7 @@
   "form.tagGroup.appearance": "Appearance",
   "form.tagGroup.additives": "Additives & imitations",
   "form.tags.other": "Also tagged (no checkbox above): {tags}",
-  "form.tags.pendingReview": "These tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed yet. Resolve them under Settings → Data health before changing them here — otherwise the two numberings mix in one list.",
+  "form.tags.pendingReview": "These tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed yet. The tag and color-arrangement controls are locked until you say on Data health where they came from — otherwise the two numberings would mix in one list.",
   "form.tags.pendingReviewLink": "Open Data health",
   "nfc.readDialog.labelTags": "Tags",
   "health.optTags.title": "OpenPrintTag tag numbering to review",
@@ -2052,5 +2052,7 @@
   "health.optTags.dropped.title": "Legacy tags removed during conversion",
   "health.optTags.dropped.subtitle": "These filaments were converted automatically, and some of their tags had no equivalent in the OpenPrintTag specification. Such a property is usually implied by the material type; re-add anything you still need under the filament's Material tags.",
   "health.optTags.action.dismiss": "Dismiss",
-  "health.optTags.dismissed": "Dismissed"
+  "health.optTags.dismissed": "Dismissed",
+  "health.optTags.backfillHint": "Matches what the old backfill script wrote for this material type — these tags were most likely entered in this app.",
+  "edit.toast.optTagsPendingReview": "The tags could not be changed: they are awaiting OpenPrintTag numbering review under Settings → Data health."
 }

@@ -27,7 +27,11 @@
  *    `updatedAt` so the change propagates by LWW to a peer that has not run
  *    the pass. Legacy concepts with no spec equivalent are dropped and
  *    RECORDED (in the `_migrations` document) so Data health can show the
- *    user what went away instead of losing it silently.
+ *    user what went away instead of losing it silently. The record is written
+ *    BEFORE the conversion (Codex P2 on PR #1228): a conversion that lands and
+ *    a record that then fails would mark the row settled with no trace of what
+ *    it lost, and no later pass could reconstruct it. If the conversion is
+ *    then skipped (concurrent edit), the just-written record is pulled back.
  *  - `ambiguous` / `inconsistent` → leave it unmarked. Data health lists it
  *    with both readings; `resolveOptTagNumbering` applies the user's answer.
  *
@@ -146,15 +150,31 @@ function matched(res: unknown): boolean {
   return n === undefined || n > 0;
 }
 
+/** Record one row's dropped legacy concepts — written BEFORE the row is converted. */
+async function recordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): Promise<void> {
+  await db
+    .collection("_migrations")
+    .updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $push: { dropped: entry } }, { upsert: true });
+}
+
+/** Undo `recordDropped` for a conversion that did not land (concurrent edit). */
+async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): Promise<void> {
+  await db
+    .collection("_migrations")
+    .updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID },
+      { $pull: { dropped: { filamentId: entry.filamentId, at: entry.at } } },
+    );
+}
+
 async function recordRun(
   db: MinimalRenumberDb,
   now: Date,
   counts: Omit<OptTagRenumberSummary, "dropped">,
-  dropped: DroppedLegacyTags[],
 ): Promise<void> {
-  const update: Record<string, unknown> = { $set: { lastRunAt: now, lastRun: counts } };
-  if (dropped.length > 0) update.$push = { dropped: { $each: dropped } };
-  await db.collection("_migrations").updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, update, { upsert: true });
+  await db
+    .collection("_migrations")
+    .updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $set: { lastRunAt: now, lastRun: counts } }, { upsert: true });
 }
 
 /**
@@ -181,7 +201,7 @@ export async function renumberOptTags(
     const filter: Record<string, unknown> = { _id: row._id, ...UNVERIFIED_OPT_TAGS_FILTER };
     const snapSet = snapshotRemapSet(row);
     const $set: Record<string, unknown> = { optTagsSpec: true, ...snapSet };
-    let dropped: number[] = [];
+    let droppedEntry: DroppedLegacyTags | null = null;
 
     if (verdict.kind === "legacy") {
       const stored = Array.isArray(row.optTags) ? (row.optTags as unknown[]) : [];
@@ -191,7 +211,16 @@ export async function renumberOptTags(
       filter.optTags = stored;
       $set.optTags = remapped.tags;
       $set.updatedAt = now;
-      dropped = remapped.dropped;
+      if (remapped.dropped.length > 0) {
+        droppedEntry = {
+          filamentId: String(row._id),
+          name: typeof row.name === "string" ? row.name : "",
+          tags: remapped.dropped,
+          at: now,
+        };
+        // Record first, convert second — see the module docblock.
+        await recordDropped(db, droppedEntry);
+      }
     } else if (Object.keys(snapSet).length > 0) {
       // Only the marker + a translated snapshot change: still a content change
       // a peer should see.
@@ -200,27 +229,27 @@ export async function renumberOptTags(
 
     const res = await filaments.updateOne(filter, { $set });
     if (!matched(res)) {
+      if (droppedEntry) await unrecordDropped(db, droppedEntry);
       summary.skipped++;
       continue;
     }
     if (verdict.kind === "legacy") {
       summary.converted++;
-      if (dropped.length > 0) {
-        summary.dropped.push({
-          filamentId: String(row._id),
-          name: typeof row.name === "string" ? row.name : "",
-          tags: dropped,
-          at: now,
-        });
-      }
+      if (droppedEntry) summary.dropped.push(droppedEntry);
     } else {
       summary.verified++;
     }
   }
 
   if (summary.scanned > 0) {
-    const { dropped, ...counts } = summary;
-    await recordRun(db, now, counts, dropped);
+    await recordRun(db, now, {
+      scanned: summary.scanned,
+      converted: summary.converted,
+      verified: summary.verified,
+      ambiguous: summary.ambiguous,
+      inconsistent: summary.inconsistent,
+      skipped: summary.skipped,
+    });
   }
   return summary;
 }
@@ -253,6 +282,11 @@ export interface PendingOptTagRow {
   type: string | null;
   trashed: boolean;
   verdict: Extract<OptTagVerdict, { kind: "ambiguous" | "inconsistent" }>["kind"];
+  /**
+   * The array equals what the historical backfill script wrote for this
+   * name + type — likely entered in this app, shown as a hint, never decided.
+   */
+  matchesBackfill: boolean;
   /** The stored ids, verbatim order — echoed back as `expectedTags` on resolve. */
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
@@ -282,6 +316,7 @@ export async function scanUnverifiedOptTags(db: MinimalRenumberDb): Promise<Pend
       type: typeof row.type === "string" ? row.type : null,
       trashed: row._deletedAt != null,
       verdict: verdict.kind,
+      matchesBackfill: verdict.kind === "ambiguous" && verdict.hint === "backfill-derivation",
       ...readings,
     });
   }
@@ -325,32 +360,31 @@ export async function resolveOptTagNumbering(
 
   const $set: Record<string, unknown> = { optTagsSpec: true, updatedAt: now, ...snapshotRemapSet(row) };
   let remapped: { tags: number[]; dropped: number[] } | null = null;
+  let droppedEntry: DroppedLegacyTags | null = null;
   if (action === "convert") {
     remapped = remapLegacyOptTags(stored);
     $set.optTags = remapped.tags;
+    if (remapped.dropped.length > 0) {
+      droppedEntry = {
+        filamentId: String(row._id),
+        name: typeof row.name === "string" ? row.name : "",
+        tags: remapped.dropped,
+        at: now,
+      };
+      // Record first, convert second — same ordering as the pass.
+      await recordDropped(db, droppedEntry);
+    }
   }
   const res = await filaments.updateOne(
     { _id: row._id, optTags: stored, ...UNVERIFIED_OPT_TAGS_FILTER },
     { $set },
   );
-  if (!matched(res)) return { outcome: "changed" };
+  if (!matched(res)) {
+    if (droppedEntry) await unrecordDropped(db, droppedEntry);
+    return { outcome: "changed" };
+  }
 
   if (remapped) {
-    if (remapped.dropped.length > 0) {
-      await recordRun(
-        db,
-        now,
-        { scanned: 1, converted: 1, verified: 0, ambiguous: 0, inconsistent: 0, skipped: 0 },
-        [
-          {
-            filamentId: String(row._id),
-            name: typeof row.name === "string" ? row.name : "",
-            tags: remapped.dropped,
-            at: now,
-          },
-        ],
-      );
-    }
     return { outcome: "converted", tags: remapped.tags, dropped: remapped.dropped };
   }
   return {

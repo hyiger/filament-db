@@ -88,7 +88,7 @@ describe("renumberOptTags", () => {
     expect(marker?.dropped[0]).toMatchObject({ name: "Legacy Marble", tags: [9] });
   });
 
-  it("uses OpenPrintTag provenance and the historical backfill derivation as proofs, translating the snapshot too", async () => {
+  it("uses OpenPrintTag provenance as proof, surfaces a backfill-derivation match as a hint only, and translates the snapshot", async () => {
     await col().insertMany([
       // Imported from the OPT database: the snapshot (legacy by construction)
       // equals the stored array → the importer wrote the array.
@@ -98,7 +98,8 @@ describe("renumberOptTags", () => {
       },
       // Pre-snapshot (v1.36) import: slug, no snapshot array.
       { name: "OPT Old Import", vendor: "V", type: "PLA", optTags: [3], settings: { openprinttag_slug: "v-old" } },
-      // The backfill script's exact output for this name + type.
+      // The backfill script's exact output for this name + type — likely legacy,
+      // but a vendor tag could carry the same set, so NOT converted (Codex P1).
       { name: "Prusament PLA Galaxy Black", vendor: "Prusament", type: "PLA", optTags: [12, 15] },
       // Snapshot DIFFERS → edited in the legacy form, or an NFC row linked later: ambiguous.
       {
@@ -113,16 +114,23 @@ describe("renumberOptTags", () => {
     ]);
 
     const s = await renumberOptTags(db(), NOW);
-    expect(s).toMatchObject({ scanned: 5, converted: 3, verified: 1, ambiguous: 1, inconsistent: 0 });
+    expect(s).toMatchObject({ scanned: 5, converted: 2, verified: 1, ambiguous: 2, inconsistent: 0 });
 
     const imported = await byName("OPT Imported");
     expect(imported?.optTags).toEqual([17, 28]);
     expect(imported?.openprinttagSnapshot).toEqual({ optTags: [28, 17], density: 1.24 });
     expect((await byName("OPT Old Import"))?.optTags).toEqual([19]);
     const galaxy = await byName("Prusament PLA Galaxy Black");
-    expect(galaxy?.optTags).toEqual([62]); // BIODEGRADABLE → industrially_compostable; LOW_WARP dropped
-    expect(s.dropped.map((d) => d.name)).toEqual(["Prusament PLA Galaxy Black"]);
-    expect(s.dropped[0].tags).toEqual([15]);
+    expect(galaxy?.optTags).toEqual([12, 15]); // untouched, unmarked — Data health with the hint
+    expect(galaxy?.optTagsSpec).toBeUndefined();
+    const pending = await scanUnverifiedOptTags(db());
+    expect(pending.find((r) => r.name === "Prusament PLA Galaxy Black")).toMatchObject({
+      verdict: "ambiguous",
+      matchesBackfill: true,
+      asLegacy: { tags: [62], dropped: [15] },
+    });
+    expect(pending.find((r) => r.name === "OPT Edited")?.matchesBackfill).toBe(false);
+    expect(s.dropped).toEqual([]);
     const edited = await byName("OPT Edited");
     expect(edited?.optTags).toEqual([2, 17]);
     expect(edited?.optTagsSpec).toBeUndefined();
@@ -145,7 +153,8 @@ describe("renumberOptTags", () => {
     // A write whose exact-array condition no longer matches (an edit landed
     // between read and write) is a skip, not a conversion, and leaves the
     // flag's settle condition false so the next connect revisits the row.
-    await col().insertOne({ name: "Raced", vendor: "V", type: "PLA", optTags: [18, 2] });
+    // 9 FLEXIBLE drops on conversion, so a drop record WOULD be written.
+    await col().insertOne({ name: "Raced", vendor: "V", type: "PLA", optTags: [18, 2, 9] });
     const real = mongoose.connection.db!;
     const racing: MinimalRenumberDb = {
       collection: (name) => {
@@ -158,7 +167,7 @@ describe("renumberOptTags", () => {
           findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
           updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
             // Simulate the concurrent edit: change the array first, then run the real write.
-            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { optTags: [18, 2, 16] } });
+            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { optTags: [18, 2, 9, 16] } });
             return c.updateOne(filter, update, options);
           },
         } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
@@ -167,11 +176,15 @@ describe("renumberOptTags", () => {
     const raced = await renumberOptTags(racing, NOW);
     expect(raced).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
     const row = await byName("Raced");
-    expect(row?.optTags).toEqual([18, 2, 16]); // the edit survived, untouched
+    expect(row?.optTags).toEqual([18, 2, 9, 16]); // the edit survived, untouched
     expect(row?.optTagsSpec).toBeUndefined();
-    // The next pass picks it up.
+    // No drop was recorded for a conversion that did not land (the pre-write
+    // record is pulled back on a skip).
+    expect(await readDroppedLegacyTags(db())).toEqual([]);
+    // The next pass picks it up — and records the drop exactly once.
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, converted: 1, skipped: 0 });
     expect((await byName("Raced"))?.optTags).toEqual([57, 20, 16]);
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Raced", tags: [9] })]);
   });
 
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {

@@ -204,7 +204,20 @@ export async function getExportRows(): Promise<ExportRow[]> {
       variantCount: variantCountByParent.get(filament._id.toString()) ?? 0,
       // GH #954: resolved so a variant exports its EFFECTIVE tags (matching
       // secondaryColors), keeping the round-trip's arrangement/finish intact.
-      optTags: exportOptTagsCell(resolved.optTags, filament.optTagsSpec === true),
+      // GH #1227: the numbering marker must come from whichever row SUPPLIED
+      // the effective array — a variant with an empty own array inherits its
+      // parent's tags, and the parent is the row that may still be awaiting
+      // review (an empty child is trivially verified). Reading the child's
+      // marker there would export the parent's undecided legacy ids as spec
+      // names (Codex P2 on PR #1228).
+      optTags: exportOptTagsCell(
+        resolved.optTags,
+        // Same rule resolveFilament applies: an empty own array falls back to
+        // the parent's whole array.
+        (parentDoc && !(filament.optTags && filament.optTags.length > 0)
+          ? parentDoc.optTagsSpec
+          : filament.optTagsSpec) === true,
+      ),
     };
   });
 }

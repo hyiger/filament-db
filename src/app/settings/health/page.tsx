@@ -75,6 +75,8 @@ interface TagReviewRow {
   type: string | null;
   trashed: boolean;
   verdict: "ambiguous" | "inconsistent";
+  /** The array equals the old backfill script's output for this type — a hint, not a decision. */
+  matchesBackfill: boolean;
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
   asSpec: number[];
@@ -733,6 +735,11 @@ export default function DataHealthPage() {
                 <p className="text-xs text-gray-500 mb-2">
                   {t("health.optTags.stored", { ids: r.stored.join(", ") })}
                 </p>
+                {r.matchesBackfill && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                    {t("health.optTags.backfillHint")}
+                  </p>
+                )}
                 {r.verdict === "inconsistent" ? (
                   <p className="text-sm text-gray-700 dark:text-gray-300">
                     {t("health.optTags.inconsistent")}

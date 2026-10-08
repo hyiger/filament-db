@@ -28,6 +28,7 @@ import {
 import Link from "next/link";
 import { OPT_TAG } from "@/lib/openprinttag";
 import { optTagLabel, FORM_TAG_GROUPS } from "@/lib/optTagLabels";
+import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 import {
   calibrationKey,
   hasCalibrationData,
@@ -728,6 +729,20 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   // (even if soft) so the user can still deselect them — they're flagged;
   // only NEW soft nozzles are hidden.
   const isAbrasive = form.abrasive || form.optTags.includes(OPT_TAG.ABRASIVE);
+
+  // GH #1227: an existing row whose stored tags still await numbering review
+  // (see the Material tags section). Computed from the SEEDED data, not the
+  // live form state — the question is about what is stored.
+  const tagsAwaitReview =
+    Boolean(initialData?._id) &&
+    optTagsAwaitReview({
+      optTags: initialData?.optTags,
+      optTagsSpec: initialData?.optTagsSpec,
+      name: initialData?.name,
+      type: initialData?.type,
+      settings: initialData?.settings,
+      openprinttagSnapshot: initialData?.openprinttagSnapshot,
+    });
   const visibleNozzles = useMemo(() => {
     if (!isAbrasive) return nozzles;
     return nozzles.filter((n) => n.hardened || form.compatibleNozzles.includes(n._id));
@@ -1804,6 +1819,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             form={form}
             setForm={setForm}
             t={t}
+            locked={tagsAwaitReview}
           />
         </div>
         <div>
@@ -2531,10 +2547,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             (its ids are valid under BOTH the pre-#1227 app numbering and the
             spec) carries no `optTagsSpec: true` — the marker is absent, not
             false — until the user says on Data health where the tags came
-            from. Editing it here would mix spec-numbered ticks into a legacy
-            array, so say so before the first click. A new filament (no `_id`)
-            has nothing to review. */}
-        {Boolean(initialData?._id) && initialData?.optTagsSpec !== true && (
+            from. The checkboxes below (and the arrangement radio in the
+            multi-color editor) are LOCKED for such a row: a spec-numbered tick
+            added to a legacy array has no honest storage, and the PUT refuses
+            a changed array with 409 anyway. `optTagsAwaitReview` is the same
+            predicate the server applies. A new filament (no `_id`) has nothing
+            to review. */}
+        {tagsAwaitReview && (
           <p className="mb-3 rounded border border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
             {t("form.tags.pendingReview")}{" "}
             <Link href="/settings/health" className="underline font-medium">
@@ -2552,6 +2571,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                 <label key={val} className="flex items-center gap-2 text-sm">
                   <input
                     type="checkbox"
+                    disabled={tagsAwaitReview}
                     checked={
                       form.optTags.includes(val) ||
                       (val === OPT_TAG.ABRASIVE && form.abrasive) ||
@@ -3286,10 +3306,14 @@ function MultiColorEditor({
   form,
   setForm,
   t,
+  locked = false,
 }: {
   form: FilamentFormData;
   setForm: (next: FilamentFormData) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
+  /** GH #1227: the arrangement tags live in `optTags`; while that array awaits
+   *  numbering review the radio is disabled (see the Material tags notice). */
+  locked?: boolean;
 }) {
   const arrangement: ColorArrangement = deriveArrangement(form.optTags);
 
@@ -3405,6 +3429,7 @@ function MultiColorEditor({
                     name="filament-arrangement"
                     value={opt}
                     checked={active}
+                    disabled={locked}
                     onChange={() => setArrangement(opt)}
                     className="sr-only"
                   />

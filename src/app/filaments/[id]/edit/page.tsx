@@ -60,6 +60,13 @@ export default function EditFilament() {
     // Same catch → confirm → retry-with-flag flow as the create page.
     if (res.status === 409) {
       const conflict = await res.json().catch(() => null);
+      // GH #1227: a changed tag array on a row still awaiting OpenPrintTag
+      // numbering review is refused — the form locks those controls, so this
+      // is reached only through a stale form or a race with Data health.
+      if (conflict?.error === "opt_tags_pending_review") {
+        toast(t("edit.toast.optTagsPendingReview"), "error");
+        return;
+      }
       if (conflict?.error !== "parent_promotion_required") {
         toast(conflict?.error || t("edit.toast.updateFailed"), "error");
         return;

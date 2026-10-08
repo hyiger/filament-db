@@ -13,6 +13,7 @@ import {
   classifyOptTags,
   describeOptTagReadings,
   sameOptTagSet,
+  optTagsAwaitReview,
   optTagIdForString,
   parseOptTagsCell,
 } from "@/lib/optTagLegacy";
@@ -142,22 +143,37 @@ describe("classifyOptTags", () => {
     ).toEqual({ kind: "ambiguous" });
   });
 
-  it("legacy: equal to the historical backfill derivation for the row's name + type", () => {
+  it("ambiguous WITH A HINT when equal to the historical backfill derivation — likely, never proof", () => {
     expect(
       classifyOptTags({ optTags: [15, 12], name: "Prusament PLA Galaxy Black", type: "PLA" }),
-    ).toEqual({ kind: "legacy", reason: "backfill-derivation" });
-    // A different type breaks the derivation match — back to ambiguous.
+    ).toEqual({ kind: "ambiguous", hint: "backfill-derivation" });
+    // A different type breaks the match — plain ambiguous.
     expect(
       classifyOptTags({ optTags: [15, 12], name: "Prusament PLA Galaxy Black", type: "PETG" }),
     ).toEqual({ kind: "ambiguous" });
+    // Codex P1 (PR #1228): a vendor NFC TPU tagged spec 9 high_temperature
+    // matches the script's TPU [9] FLEXIBLE exactly. Deciding "legacy" here
+    // would drop a real spec tag and mark the row verified with no review.
+    expect(classifyOptTags({ optTags: [9], type: "TPU" })).toEqual({
+      kind: "ambiguous",
+      hint: "backfill-derivation",
+    });
+  });
+
+  it("optTagsAwaitReview: unmarked legacy/ambiguous/inconsistent arrays wait; marked, trivial and spec ones don't", () => {
+    expect(optTagsAwaitReview({ optTags: [2] })).toBe(true);
+    expect(optTagsAwaitReview({ optTags: [18, 2] })).toBe(true); // legacy, pass not run yet
+    expect(optTagsAwaitReview({ optTags: [18, 30] })).toBe(true);
+    expect(optTagsAwaitReview({ optTags: [2], optTagsSpec: true })).toBe(false);
+    expect(optTagsAwaitReview({ optTags: [] })).toBe(false);
+    expect(optTagsAwaitReview({ optTags: [4, 16] })).toBe(false);
+    expect(optTagsAwaitReview({ optTags: [31, 30] })).toBe(false);
   });
 
   it("ambiguous: ids valid under both numberings with nothing outside the array to decide", () => {
     // App "transparent" vs spec "antibacterial"; app "flexible" vs spec "high_temperature";
     // app "dual_color" vs spec "gradual_color_change". Plausibility is not a proof.
     expect(classifyOptTags({ optTags: [2] })).toEqual({ kind: "ambiguous" });
-    // (A bare TPU with [9] is NOT ambiguous — it is exactly the backfill
-    // derivation for that type; give it a type the script never tagged 9.)
     expect(classifyOptTags({ optTags: [9], type: "PETG", name: "Flexi" })).toEqual({ kind: "ambiguous" });
     expect(classifyOptTags({ optTags: [28], color: null } as never)).toEqual({ kind: "ambiguous" });
     // The spec-numbered Prusament "PLA Blend" tag [12] reads the same way.
@@ -239,10 +255,11 @@ describe("parseOptTagsCell", () => {
       verified: false,
       unknownTokens: [],
     });
-    // The historical backfill output IS provable.
+    // The historical backfill output is LIKELY legacy, not provably so: kept
+    // verbatim and unverified, like any other ambiguous numeric set.
     expect(parseOptTagsCell("12,15", { name: "Prusament PLA Galaxy Black", type: "PLA" })).toEqual({
-      tags: [62],
-      verified: true,
+      tags: [12, 15],
+      verified: false,
       unknownTokens: [],
     });
   });

@@ -32,10 +32,13 @@
  *    Data health page for the user to decide.
  *  - {@link deriveLegacyBackfillTags} is the historical `computeTags` from
  *    `scripts/backfill-all-fields.ts`, ported byte-for-byte. A stored array that
- *    equals what that script would have produced for the row's name + type came
- *    from that script (the same provenance-by-derivation argument #1021 makes
- *    for nozzle conditions). Do NOT "improve" it — it must keep reproducing the
- *    historical output.
+ *    equals what that script would have produced for the row's name + type is
+ *    very likely to have come from it — but equality is NOT a proof (Codex P1
+ *    on PR #1228): a vendor NFC tag can carry the same small set by
+ *    coincidence (a TPU tagged spec 9 `high_temperature` matches the script's
+ *    TPU `[9]` FLEXIBLE exactly), so the match is surfaced as a HINT on Data
+ *    health and never decides on its own. Do NOT "improve" the derivation — it
+ *    must keep reproducing the historical output.
  *
  * Pure and DB-free so the heuristics are unit-testable; the pass that applies
  * them to a database is `src/lib/optTagRenumber.ts`.
@@ -379,11 +382,16 @@ export type OptTagVerdict =
   /** Empty, or only fixed-point ids: the remap is a no-op either way. */
   | { kind: "trivial" }
   /** Provably the legacy numbering — remap it. */
-  | { kind: "legacy"; reason: "legacy-only-id" | "opt-provenance" | "backfill-derivation" }
+  | { kind: "legacy"; reason: "legacy-only-id" | "opt-provenance" }
   /** Provably NOT the legacy numbering — leave it alone. */
   | { kind: "spec"; reason: "spec-only-id" }
-  /** Both readings are consistent and nothing outside the array decides. */
-  | { kind: "ambiguous" }
+  /**
+   * Both readings are consistent and nothing outside the array decides. The
+   * optional hint is shown to the user: the array equals what the historical
+   * backfill script wrote for this name + type, which makes "entered in this
+   * app" the likely answer — likely, not proven, so it stays the user's call.
+   */
+  | { kind: "ambiguous"; hint?: "backfill-derivation" }
   /** Ids from both exclusive sets at once — no single numbering explains it. */
   | { kind: "inconsistent" };
 
@@ -405,9 +413,16 @@ export type OptTagVerdict =
  *     snapshots (v1.36) — only the OPT importer could create it → `legacy`.
  *     A snapshot that DIFFERS proves nothing: the user may have edited the tags
  *     in the (legacy) form, or linked an NFC-created (spec) row afterwards.
- *  5. Equal to the historical backfill derivation for this name + type →
- *     written by that script → `legacy`.
- *  6. Otherwise → `ambiguous`.
+ *     (Why the EQUAL case is safe where a vendor row was linked later: the OPT
+ *     database and the vendor tag describe the same product with the same
+ *     concepts, and the old importer mapped each concept to its LEGACY id while
+ *     the tag carries the SPEC id — those coincide only on the fixed points,
+ *     which are trivial anyway. A collision needs two DIFFERENT concepts whose
+ *     legacy and spec ids happen to match on one product.)
+ *  5. Otherwise → `ambiguous`, with a `backfill-derivation` hint when the
+ *     array equals what the historical backfill script wrote for this
+ *     name + type. Equality is likely provenance, not proof — a vendor tag can
+ *     carry the same small set — so it informs the user and decides nothing.
  */
 export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   const ids = usableIds(row.optTags);
@@ -435,10 +450,31 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   }
 
   if (sameOptTagSet(ids, deriveLegacyBackfillTags(row.name, row.type))) {
-    return { kind: "legacy", reason: "backfill-derivation" };
+    return { kind: "ambiguous", hint: "backfill-derivation" };
   }
 
   return { kind: "ambiguous" };
+}
+
+/**
+ * True when a row's `optTags` must not be changed piecemeal: it carries no
+ * `optTagsSpec: true` marker and its array is not trivially spec (an unmarked
+ * legacy, ambiguous or inconsistent array). Shared by the PUT route — which
+ * refuses a changed array on such a row with 409 `opt_tags_pending_review`,
+ * because ticking one spec-numbered box into a legacy array would have to be
+ * stored as either all-legacy or all-spec and both lose a tag's meaning — and
+ * by the form, which locks the tag controls for the same row (Codex P1 on PR
+ * #1228). A decisive-legacy array is included deliberately: the startup pass
+ * settles it on the next connect (and `GET /api/opt-tag-review` runs that pass
+ * on demand), so a user who meets the lock is one Data health visit away from
+ * an editable row.
+ */
+export function optTagsAwaitReview(
+  row: OptTagClassifiable & { optTagsSpec?: boolean | null },
+): boolean {
+  if (row.optTagsSpec === true) return false;
+  const kind = classifyOptTags(row).kind;
+  return kind !== "trivial" && kind !== "spec";
 }
 
 /**

@@ -42,7 +42,7 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
-import { sameOptTagSet } from "@/lib/optTagLegacy";
+import { sameOptTagSet, optTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -437,21 +437,38 @@ export async function PUT(
     // body-only check would miss. Always fetch the stored endpoints;
     // `effectiveNozzleRangeForUpdate` understands all the update shapes.
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId optTags optTagsSpec")
+      .select(
+        "temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId optTags optTagsSpec " +
+          "name type settings.openprinttag_slug settings.openprinttag_uuid openprinttagSnapshot.optTags",
+      )
       .lean();
 
     // GH #1227: a write of `optTags` speaks the current contract (spec
-    // numbering), so stamp the row verified — EXCEPT when the row is still
-    // awaiting numbering review AND the array comes back unchanged. The edit
-    // form resubmits every seeded field, so an unrelated edit (a note, a
-    // price) must not launder an unreviewed legacy array into "verified". A
-    // CHANGED array on an unreviewed row IS stamped: the user ticked a
-    // spec-numbered box into it and mixing is the only reading left (the form
-    // warns before that first click). `stored` is lean, so a pre-#1227 row
-    // reads `undefined` here, which is "unverified", not the schema default.
-    if (Array.isArray(body.optTags)) {
-      if (stored?.optTagsSpec === true || !sameOptTagSet(body.optTags, stored?.optTags)) {
+    // numbering), so the row is stamped verified — with two exceptions for a
+    // row whose stored array still awaits numbering review (no marker, and not
+    // trivially spec; `stored` is lean, so a pre-#1227 row reads `undefined`
+    // here, which is "unverified", not the schema default):
+    //   - the array comes back UNCHANGED: the edit form resubmits every
+    //     seeded field, so an unrelated edit (a note, a price) must not launder
+    //     an unreviewed legacy array into "verified" — write it as is, unmarked;
+    //   - the array CHANGED: refused with 409. A legacy `[2]` (transparent)
+    //     plus a newly ticked spec 16 would have to be stored as all-legacy or
+    //     all-spec, and either reading permanently misfiles one tag (Codex P1
+    //     on PR #1228). The form locks its tag controls for exactly these rows
+    //     and points at Data health, where the one decision that unlocks them
+    //     is made; the message carries the same instruction for API callers.
+    if (Array.isArray(body.optTags) && stored) {
+      if (!optTagsAwaitReview(stored)) {
         body.optTagsSpec = true;
+      } else if (!sameOptTagSet(body.optTags, stored.optTags)) {
+        return NextResponse.json(
+          {
+            error: "opt_tags_pending_review",
+            message:
+              "This filament's tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed. Resolve them under Settings → Data health first; the tags can be edited once the numbering is settled.",
+          },
+          { status: 409 },
+        );
       }
     }
     const rangeUpdate = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
