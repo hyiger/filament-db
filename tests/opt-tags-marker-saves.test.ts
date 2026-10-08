@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
-import { DELETE as deletePrintHistory } from "@/app/api/print-history/[id]/route";
+import { DELETE as deletePrintHistory, PUT as putPrintHistory } from "@/app/api/print-history/[id]/route";
 import { POST as postUsage } from "@/app/api/filaments/[id]/spools/[spoolId]/usage/route";
 import { POST as restoreFilament } from "@/app/api/filaments/[id]/restore/route";
 import { POST as importSpools } from "@/app/api/spools/import/route";
@@ -114,6 +114,32 @@ describe("routes that save a filament keep its numbering review open (GH #1227)"
     expect(del.status).toBe(200);
     const raw = await col().findOne({ _id: new mongoose.Types.ObjectId(id) });
     expect(raw!.spools[0].totalWeight).toBe(1000);
+    await expectStillUnreviewed(id);
+  });
+
+  it("PUT /api/print-history/{id} backfills a legacy entry's job id and leaves the row unreviewed", async () => {
+    // A pre-jobId job: its spool ledger entry carries no jobId, so moving the
+    // job's startedAt makes the route load the filament, stamp the id and save.
+    const { id, spoolId } = await unreviewed("Edit Job PLA");
+    const oldStarted = new Date("2026-01-10T12:00:00Z");
+    await col().updateOne(
+      { _id: new mongoose.Types.ObjectId(id) },
+      { $push: { "spools.0.usageHistory": { grams: 50, date: oldStarted, source: "job" } } } as never,
+    );
+    const job = await mongoose.models.PrintHistory.create({
+      jobLabel: "legacy-job",
+      source: "manual",
+      startedAt: oldStarted,
+      usage: [{ filamentId: new mongoose.Types.ObjectId(id), spoolId: new mongoose.Types.ObjectId(spoolId), grams: 50 }],
+    });
+    const res = await putPrintHistory(
+      json(`http://localhost/api/print-history/${job._id}`, "PUT", { startedAt: "2026-01-11T12:00:00Z" }),
+      { params: Promise.resolve({ id: String(job._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const raw = await col().findOne({ _id: new mongoose.Types.ObjectId(id) });
+    const entry = raw!.spools[0].usageHistory.find((h: { grams: number }) => h.grams === 50);
+    expect(String(entry.jobId)).toBe(String(job._id));
     await expectStillUnreviewed(id);
   });
 

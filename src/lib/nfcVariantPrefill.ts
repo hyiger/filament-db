@@ -23,6 +23,7 @@
 
 import { snapToStep } from "@/lib/snapToStep";
 import { unwrapIniString } from "@/lib/parseIni";
+import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /** The raw parent doc fields the prune compares against (from ?raw=true). */
 export interface VariantPrefillParent {
@@ -39,6 +40,8 @@ export interface VariantPrefillParent {
   spoolWeight?: number | null;
   temperatures?: Record<string, number | null> | null;
   optTags?: number[] | null;
+  /** GH #1227: the parent's numbering marker (absent = never reviewed). */
+  optTagsSpec?: boolean | null;
   secondaryColors?: string[] | null;
 }
 
@@ -170,12 +173,17 @@ export function pruneParentEqualPrefill(
     out.settings = pruned;
   }
 
+  // GH #1227: a tag's ids are spec ids; a parent still awaiting numbering
+  // review may hold legacy ids, so an equal set is not the same tags. Keep
+  // the variant's own array then, or the parent's later review would decide
+  // what the variant's tags mean.
   const ownTags = out.optTags;
   if (
     Array.isArray(ownTags) &&
     ownTags.length > 0 &&
     Array.isArray(parent.optTags) &&
     parent.optTags.length > 0 &&
+    !optTagsAwaitReview(parent) &&
     sameNumericSet(ownTags as number[], parent.optTags)
   ) {
     delete out.optTags;
