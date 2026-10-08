@@ -595,6 +595,35 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Competing", tags: [9] })]);
   });
 
+  it("refuses when a rename or re-type lands between the read and the write — the backfill hint depends on both (Codex P2 r15)", async () => {
+    // Listed with the `backfill-derivation` hint for name + type; the echoed
+    // hints pass against the read, then a sync renames the row before the
+    // write. Unpinned, the write would apply a decision made on a hint the
+    // row no longer carries.
+    const { insertedId } = await col().insertOne({ name: "Prusament PLA Galaxy Black", vendor: "Prusament", type: "PLA", optTags: [12, 15] });
+    const shown = (await scanUnverifiedOptTags(db())).find((r) => r.name === "Prusament PLA Galaxy Black")!;
+    expect(shown.hints).toEqual(["backfill-derivation"]);
+    const real = mongoose.connection.db!;
+    const renaming = wrapping(async (filter) => {
+      await real.collection("filaments").updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { name: "Renamed" } });
+    });
+    expect(await resolveOptTagNumbering(renaming, insertedId, "convert", [12, 15], NOW, shown.hints)).toEqual({ outcome: "changed" });
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ name: "Renamed", optTags: [12, 15] });
+    expect((await col().findOne({ _id: insertedId }))?.optTagsSpec).toBeUndefined();
+    expect(await readDroppedLegacyTags(db())).toEqual([]); // the pre-written record was pulled back
+    // The same for the material type.
+    await col().updateOne({ _id: insertedId }, { $set: { name: "Prusament PLA Galaxy Black" } });
+    const retyping = wrapping(async (filter) => {
+      await real.collection("filaments").updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { type: "PETG" } });
+    });
+    expect(await resolveOptTagNumbering(retyping, insertedId, "convert", [12, 15], NOW, shown.hints)).toEqual({ outcome: "changed" });
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ type: "PETG", optTags: [12, 15] });
+    // Re-read, the row carries no hint; a decision made against THAT applies.
+    const rescanned = (await scanUnverifiedOptTags(db())).find((r) => String(r.filamentId) === String(insertedId))!;
+    expect(rescanned.hints).toEqual([]);
+    expect(await resolveOptTagNumbering(db(), insertedId, "convert", [12, 15], NOW, rescanned.hints)).toEqual({ outcome: "converted", tags: [62], dropped: [15] });
+  });
+
   it("dismisses only the records the page displayed; no list clears all (Codex P2 r7)", async () => {
     const { insertedIds } = await col().insertMany([
       { name: "Seen", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "s" } },

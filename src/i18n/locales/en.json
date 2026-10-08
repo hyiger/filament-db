@@ -2032,7 +2032,7 @@
   "form.tagGroup.appearance": "Appearance",
   "form.tagGroup.additives": "Additives & imitations",
   "form.tags.other": "Also tagged (no checkbox above): {tags}",
-  "form.tags.pendingReview": "These tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed yet. The tag and color-arrangement controls are locked until you say on Data health where they came from — otherwise the two numberings would mix in one list.",
+  "form.tags.pendingReview": "These tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed yet. They are shown below with both possible readings, and the tag and color-arrangement controls are locked until you say on Data health where they came from — otherwise the two numberings would mix in one list.",
   "form.tags.pendingReviewLink": "Open Data health",
   "nfc.readDialog.labelTags": "Tags",
   "health.optTags.title": "OpenPrintTag tag numbering to review",

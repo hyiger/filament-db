@@ -27,8 +27,8 @@ import {
 } from "@/lib/filamentColors";
 import Link from "next/link";
 import { OPT_TAG } from "@/lib/openprinttag";
-import { optTagLabel, FORM_TAG_GROUPS } from "@/lib/optTagLabels";
-import { optTagsAwaitReview } from "@/lib/optTagLegacy";
+import { optTagLabel, legacyOptTagLabel, FORM_TAG_GROUPS } from "@/lib/optTagLabels";
+import { optTagsAwaitReview, describeOptTagReadings } from "@/lib/optTagLegacy";
 import {
   calibrationKey,
   hasCalibrationData,
@@ -2558,12 +2558,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             (its ids are valid under BOTH the pre-#1227 app numbering and the
             spec) carries no `optTagsSpec: true` — the marker is absent, not
             false — until the user says on Data health where the tags came
-            from. The checkboxes below (and the arrangement radio in the
-            multi-color editor) are LOCKED for such a row: a spec-numbered tick
-            added to a legacy array has no honest storage, and the PUT refuses
-            a changed array with 409 anyway. `optTagsAwaitReview` is the same
-            predicate the server applies. A new filament (no `_id`) has nothing
-            to review. */}
+            from. For such a row the checkbox grid is REPLACED by the stored
+            ids with both readings (the two lines Data health shows): the ids
+            are valid under both numberings, so a grid labelled with spec names
+            misreported the row — a legacy `[2]` (transparent) ticked
+            "Antibacterial" (Codex P2 r15 on PR #1228). The arrangement radio
+            in the multi-color editor stays, locked, reading the array through
+            the display projection. A spec-numbered tick added to a legacy
+            array would have no honest storage, and the PUT refuses a changed
+            array with 409 anyway. `optTagsAwaitReview` is the same predicate
+            the server applies. A new filament (no `_id`) has nothing to
+            review. */}
         {tagsAwaitReview && (
           <p className="mb-3 rounded border border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
             {t("form.tags.pendingReview")}{" "}
@@ -2572,59 +2577,88 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             </Link>
           </p>
         )}
-        {FORM_TAG_GROUPS.map((group) => (
-          <fieldset key={group.key} className="mb-3 last:mb-0">
-            <legend className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
-              {t(group.labelKey)}
-            </legend>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {group.tags.map(([val, labelKey]) => (
-                <label key={val} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    disabled={tagsAwaitReview}
-                    checked={
-                      form.optTags.includes(val) ||
-                      (val === OPT_TAG.ABRASIVE && form.abrasive) ||
-                      (val === OPT_TAG.WATER_SOLUBLE && form.soluble)
-                    }
-                    onChange={(e) => {
-                      const checked = e.target.checked;
-                      // Keep abrasive/soluble booleans in sync
-                      const updates: Partial<FilamentFormData> = {};
-                      if (val === OPT_TAG.ABRASIVE) updates.abrasive = checked;
-                      if (val === OPT_TAG.WATER_SOLUBLE) updates.soluble = checked;
-                      setForm((prev) => ({
-                        ...prev,
-                        ...updates,
-                        optTags: checked
-                          ? [...new Set([...prev.optTags, val])]
-                          : prev.optTags.filter((ft) => ft !== val),
-                      }));
-                    }}
-                    className="w-4 h-4"
-                  />
-                  {t(labelKey)}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-        ))}
-        {/* Ids with no checkbox above (a tag read from a vendor spool, an id a
-            newer spec revision added, or an unknown number) stay in the array
-            untouched — list them so nothing on the record is invisible. The
-            arrangement tags (28/29) are driven by the multi-color editor. */}
-        {(() => {
-          const listed = new Set(FORM_TAG_GROUPS.flatMap((g) => g.tags.map(([id]) => id)));
-          const other = form.optTags.filter(
-            (id) => !listed.has(id) && id !== OPT_TAG.GRADUAL_COLOR_CHANGE && id !== OPT_TAG.COEXTRUDED,
-          );
-          return other.length > 0 ? (
-            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-              {t("form.tags.other", { tags: other.map((id) => optTagLabel(t, id)).join(", ") })}
-            </p>
-          ) : null;
-        })()}
+        {tagsAwaitReview ? (
+          (() => {
+            const readings = describeOptTagReadings(form.optTags);
+            const labels = (ids: number[]) =>
+              ids.length > 0 ? ids.map((id) => optTagLabel(t, id)).join(", ") : t("health.optTags.none");
+            return (
+              <div className="space-y-1 text-sm" data-testid="opt-tags-pending-readings">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {t("health.optTags.stored", { ids: readings.stored.join(", ") })}
+                </p>
+                <p className="text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifLegacy", { tags: labels(readings.asLegacy.tags) })}
+                </p>
+                {readings.asLegacy.dropped.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {t("health.optTags.ifLegacyDropped", {
+                      tags: readings.asLegacy.dropped.map((id) => legacyOptTagLabel(t, id)).join(", "),
+                    })}
+                  </p>
+                )}
+                <p className="text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifSpec", { tags: labels(readings.asSpec) })}
+                </p>
+              </div>
+            );
+          })()
+        ) : (
+          <>
+            {FORM_TAG_GROUPS.map((group) => (
+              <fieldset key={group.key} className="mb-3 last:mb-0">
+                <legend className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-1.5">
+                  {t(group.labelKey)}
+                </legend>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {group.tags.map(([val, labelKey]) => (
+                    <label key={val} className="flex items-center gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={
+                          form.optTags.includes(val) ||
+                          (val === OPT_TAG.ABRASIVE && form.abrasive) ||
+                          (val === OPT_TAG.WATER_SOLUBLE && form.soluble)
+                        }
+                        onChange={(e) => {
+                          const checked = e.target.checked;
+                          // Keep abrasive/soluble booleans in sync
+                          const updates: Partial<FilamentFormData> = {};
+                          if (val === OPT_TAG.ABRASIVE) updates.abrasive = checked;
+                          if (val === OPT_TAG.WATER_SOLUBLE) updates.soluble = checked;
+                          setForm((prev) => ({
+                            ...prev,
+                            ...updates,
+                            optTags: checked
+                              ? [...new Set([...prev.optTags, val])]
+                              : prev.optTags.filter((ft) => ft !== val),
+                          }));
+                        }}
+                        className="w-4 h-4"
+                      />
+                      {t(labelKey)}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            ))}
+            {/* Ids with no checkbox above (a tag read from a vendor spool, an id a
+                newer spec revision added, or an unknown number) stay in the array
+                untouched — list them so nothing on the record is invisible. The
+                arrangement tags (28/29) are driven by the multi-color editor. */}
+            {(() => {
+              const listed = new Set(FORM_TAG_GROUPS.flatMap((g) => g.tags.map(([id]) => id)));
+              const other = form.optTags.filter(
+                (id) => !listed.has(id) && id !== OPT_TAG.GRADUAL_COLOR_CHANGE && id !== OPT_TAG.COEXTRUDED,
+              );
+              return other.length > 0 ? (
+                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+                  {t("form.tags.other", { tags: other.map((id) => optTagLabel(t, id)).join(", ") })}
+                </p>
+              ) : null;
+            })()}
+          </>
+        )}
       </CollapsibleSection>
       </div>
 

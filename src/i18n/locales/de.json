@@ -2032,7 +2032,7 @@
   "form.tagGroup.appearance": "Erscheinungsbild",
   "form.tagGroup.additives": "Zusätze & Imitationen",
   "form.tags.other": "Außerdem getaggt (keine Checkbox oben): {tags}",
-  "form.tags.pendingReview": "Diese Tags wurden gespeichert, bevor Filament DB die OpenPrintTag-Nummerierung übernommen hat, und sind noch nicht geprüft. Die Tag- und Farbanordnungs-Steuerelemente sind gesperrt, bis Sie unter Datenzustand angeben, woher sie stammen — sonst würden sich die beiden Nummerierungen in einer Liste vermischen.",
+  "form.tags.pendingReview": "Diese Tags wurden gespeichert, bevor Filament DB die OpenPrintTag-Nummerierung übernommen hat, und wurden noch nicht geprüft. Sie werden unten mit beiden möglichen Lesarten angezeigt, und die Tag- und Farbanordnungs-Steuerelemente sind gesperrt, bis Sie unter Datenintegrität angeben, woher sie stammen — sonst würden sich die beiden Nummerierungen in einer Liste vermischen.",
   "form.tags.pendingReviewLink": "Datenzustand öffnen",
   "nfc.readDialog.labelTags": "Tags",
   "health.optTags.title": "OpenPrintTag-Tag-Nummerierung prüfen",

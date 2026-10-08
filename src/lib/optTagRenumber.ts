@@ -196,7 +196,7 @@ function snapshotRemapSet(row: Record<string, unknown>): Record<string, unknown>
 /**
  * The exact classifier inputs this pass observed, as a filter fragment: the
  * conditional write below matches only a row that still looks exactly like
- * what was classified (Codex P1 r6 on PR #1228). An absent field pins
+ * what was classified AND hinted (Codex P1 r6 + P2 r15 on PR #1228). An absent field pins
  * "absent" — `undefined` is not a valid query value, and a row that GAINED a
  * snapshot or a link since the read must not match either.
  */
@@ -221,6 +221,12 @@ function observedClassifierInputs(row: Record<string, unknown>): Record<string, 
   };
   return {
     optTags: pin(row.optTags),
+    // `name` + `type` feed the `backfill-derivation` hint (Codex P2 r15 on PR
+    // #1228): a rename or re-type landing between the read that validated the
+    // echoed hints and this write would otherwise apply a decision made on a
+    // hint the row no longer carries. Every hint-producing input is pinned.
+    name: pin(row.name),
+    type: pin(row.type),
     openprinttagSnapshot: pinContainer(row.openprinttagSnapshot),
     "openprinttagSnapshot.optTags": pin(snapshot?.optTags),
     [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: pin(snapshot?.[OPT_SNAPSHOT_NUMBERING_KEY]),
