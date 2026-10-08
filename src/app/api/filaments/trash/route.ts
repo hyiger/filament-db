@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /**
  * GET /api/filaments/trash — list soft-deleted filaments.
@@ -35,7 +36,7 @@ export async function GET() {
           localField: "parentId",
           foreignField: "_id",
           as: "_parent",
-          pipeline: [{ $project: { secondaryColors: 1, optTags: 1 } }],
+          pipeline: [{ $project: { secondaryColors: 1, optTags: 1, optTagsSpec: 1 } }],
         },
       },
       {
@@ -63,12 +64,28 @@ export async function GET() {
               { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
             ],
           },
+          // GH #1227 (Codex P2 r11): the marker of the row supplying the array
+          // — folded into `_optTagsAwaitReview` below and stripped.
+          _optTagsSourceSpec: {
+            $cond: [
+              { $gt: [{ $size: { $ifNull: ["$optTags", []] } }, 0] },
+              "$optTagsSpec",
+              { $arrayElemAt: ["$_parent.optTagsSpec", 0] },
+            ],
+          },
           cost: 1,
           parentId: 1,
           _deletedAt: 1,
         },
       },
     ]);
+    for (const row of trashed as Array<Record<string, unknown>>) {
+      row._optTagsAwaitReview = optTagsAwaitReview({
+        optTags: row.optTags as number[] | undefined,
+        optTagsSpec: row._optTagsSourceSpec as boolean | undefined,
+      });
+      delete row._optTagsSourceSpec;
+    }
     return NextResponse.json(trashed);
   } catch (err) {
     return errorResponse("Failed to list trash", 500, getErrorMessage(err));

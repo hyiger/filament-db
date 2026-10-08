@@ -19,6 +19,7 @@
 
 import { BLANK_COLOR_HEX, isIncompleteColorHex } from "./cssNamedColors";
 import { OPT_TAG } from "./openprinttag";
+import { displayOptTags } from "./optTagLegacy";
 
 /**
  * OpenPrintTag tag IDs that describe color arrangement, straight from the
@@ -43,10 +44,15 @@ export type ColorArrangement = "solid" | "coextruded" | "gradient";
  */
 export function deriveArrangement(
   optTags: number[] | null | undefined,
+  /** GH #1227 (Codex P2 r11): the row's `optTags` still await numbering
+   *  review — derive only from ids both numberings agree on (`displayOptTags`;
+   *  the two-reading multi-color 28 renders as coextruded there). */
+  awaitReview?: boolean | null,
 ): ColorArrangement {
   if (!optTags || optTags.length === 0) return "solid";
-  if (optTags.includes(TAG_COEXTRUDED)) return "coextruded";
-  if (optTags.includes(TAG_GRADIENT)) return "gradient";
+  const tags = displayOptTags(optTags, awaitReview);
+  if (tags.includes(TAG_COEXTRUDED)) return "coextruded";
+  if (tags.includes(TAG_GRADIENT)) return "gradient";
   return "solid";
 }
 

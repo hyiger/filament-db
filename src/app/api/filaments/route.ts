@@ -18,6 +18,7 @@ import {
 } from "@/lib/slicerSettings";
 import { validateSpoolPhotoDataUrl, isValidIsoDateString } from "@/lib/validateSpoolBody";
 import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
+import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import {
   isInvertedNozzleRange,
@@ -142,6 +143,7 @@ export async function GET(request: NextRequest) {
               $project: {
                 calibrations: 1,
                 optTags: 1,
+                optTagsSpec: 1,
                 secondaryColors: 1,
                 temperatures: 1,
                 cost: 1,
@@ -233,6 +235,16 @@ export async function GET(request: NextRequest) {
               { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
             ],
           },
+          // GH #1227 (Codex P2 r11): the numbering marker of the row that
+          // SUPPLIES the effective array above — turned into the
+          // `_optTagsAwaitReview` flag below and stripped from the response.
+          _optTagsSourceSpec: {
+            $cond: [
+              { $gt: [{ $size: { $ifNull: ["$optTags", []] } }, 0] },
+              "$optTagsSpec",
+              { $arrayElemAt: ["$_parent.optTagsSpec", 0] },
+            ],
+          },
           // Same parent-fallback as the scalars. Built as a single computed
           // object (not two `temperatures.x: 1` paths) — mixing a computed
           // field with dotted sub-paths of the same root is a
@@ -298,6 +310,19 @@ export async function GET(request: NextRequest) {
         },
       },
     ]);
+    // GH #1227 (Codex P2 r11): do the EFFECTIVE tags still await numbering
+    // review? The swatch finish, the color arrangement and the Clear facet
+    // all derive from `optTags`, and an unreviewed array has two readings —
+    // the row carries the flag so every derivation reads only the ids both
+    // numberings agree on (`displayOptTags`). Response-only, like the detail
+    // route's flag; the source marker never leaves the server.
+    for (const row of filaments as Array<Record<string, unknown>>) {
+      row._optTagsAwaitReview = optTagsAwaitReview({
+        optTags: row.optTags as number[] | undefined,
+        optTagsSpec: row._optTagsSourceSpec as boolean | undefined,
+      });
+      delete row._optTagsSourceSpec;
+    }
     return NextResponse.json(filaments);
   } catch (err) {
     return errorResponse("Failed to fetch filaments", 500, getErrorMessage(err));

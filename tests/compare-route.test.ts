@@ -159,4 +159,19 @@ describe("/api/filaments/compare — variant inheritance (GH #184)", () => {
     expect(body[1].cost).toBe(19);     // own value
     expect(body[1].density).toBe(1.24); // own value
   });
+
+  it("GH #1227 (Codex P2 r11): `_optTagsAwaitReview` follows the row that supplies the effective tags", async () => {
+    const raw = mongoose.connection.collection("filaments");
+    const { insertedId: unmarkedParentId } = await raw.insertOne({
+      name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20], _deletedAt: null,
+    });
+    // Empty own array → inherits the parent's [20] AND its unreviewed state.
+    const child = await Filament.create({ name: "Inheriting Child", vendor: "QA", type: "PLA", parentId: unmarkedParentId });
+    const verified = await Filament.create({ name: "Verified", vendor: "QA", type: "PLA", optTags: [20] });
+
+    const res = await compareFilaments(req([String(child._id), String(verified._id)]));
+    const body = await res.json();
+    expect(body[0]).toMatchObject({ name: "Inheriting Child", optTags: [20], _optTagsAwaitReview: true });
+    expect(body[1]).toMatchObject({ name: "Verified", optTags: [20], _optTagsAwaitReview: false });
+  });
 });

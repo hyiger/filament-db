@@ -21,6 +21,8 @@ export interface FilamentVariant {
    * parent-detail variants projection in `/api/filaments/{id}` includes
    * this for the same reason `FilamentSummary` carries it on list rows. */
   optTags?: number[];
+  /** GH #1227 (response-only): see `FilamentSummary._optTagsAwaitReview`. */
+  _optTagsAwaitReview?: boolean;
 }
 
 export interface FilamentNozzle {
@@ -240,4 +242,9 @@ export interface FilamentSummary {
    * glow/translucent/transparent) and the matching chip beside the
    * name. See `src/lib/filamentFinish.ts` for the tag-id → finish map. */
   optTags?: number[];
+  /** GH #1227 (response-only): the effective `optTags` above still await
+   * numbering review, so finish / arrangement / color-facet derivations read
+   * them only through the ids both numberings agree on (`displayOptTags`).
+   * Computed by the list aggregation from the row that supplies the array. */
+  _optTagsAwaitReview?: boolean;
 }

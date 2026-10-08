@@ -582,6 +582,44 @@ export function optTagsAwaitReview(
 export type OptTagReviewRow = OptTagClassifiable & { optTagsSpec?: boolean | null };
 
 /**
+ * The ids a row's VISUALS (finish texture, color arrangement, the Clear color
+ * facet) may be derived from while its `optTags` still await numbering review
+ * (Codex P2 r11 on PR #1228). An unreviewed array has two readings, and a
+ * visual derived from the spec reading alone misrepresents the row: legacy
+ * `[20]` is METAL_FILL, which the spec reading renders as a see-through
+ * transparent swatch and files under the Clear facet. So only ids that mean
+ * the same under BOTH numberings are kept — the inert ids (`isInertOptTagId`:
+ * the fixed points 16 matte / 17 silk / 24 glow / 29 coextruded / …, and any
+ * id outside the legacy table). One disambiguation on top: 28 is DUAL_COLOR
+ * under the legacy reading and `gradual_color_change` under the spec one —
+ * BOTH a multi-color arrangement whose colors live in `secondaryColors` —
+ * so it is kept as the spec's `coextruded` (29), the stripe rendering the
+ * pre-v1.83 app drew for that exact stored value; dropping it would turn
+ * every pre-upgrade two-color filament into a solid swatch until reviewed.
+ * 27 is NOT kept: legacy GRADIENT against the spec's `temperature_color_change`
+ * — the readings disagree on whether it is an arrangement at all.
+ * This is a DISPLAY projection only: nothing here is written back, and a
+ * verified row (`awaitReview === false`) passes through untouched.
+ */
+export function displayOptTags(
+  optTags: readonly number[] | null | undefined,
+  awaitReview: boolean | null | undefined,
+): number[] {
+  if (!Array.isArray(optTags)) return [];
+  if (!awaitReview) return [...optTags];
+  const out: number[] = [];
+  for (const id of optTags) {
+    if (typeof id !== "number") continue;
+    if (isInertOptTagId(id)) {
+      if (!out.includes(id)) out.push(id);
+    } else if (id === LEGACY_OPT_TAG.DUAL_COLOR && !out.includes(OPT_TAG.COEXTRUDED)) {
+      out.push(OPT_TAG.COEXTRUDED);
+    }
+  }
+  return out;
+}
+
+/**
  * The row whose `optTags` a reader actually sees: the variant's own when it is
  * non-empty, else the parent's — resolveFilament's whole-array fallback (GH
  * #477). A variant with an empty own array inherits its parent's review state

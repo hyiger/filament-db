@@ -1329,9 +1329,9 @@ export default function Home() {
           <FilamentSwatch
             color={f.color}
             secondaryColors={f.secondaryColors}
-            arrangement={deriveArrangement(f.optTags)}
+            arrangement={deriveArrangement(f.optTags, f._optTagsAwaitReview)}
             isParent={!isVariant && f.hasVariants === true}
-            finish={deriveFinish(f.optTags)}
+            finish={deriveFinish(f.optTags, f._optTagsAwaitReview)}
             size={isVariant ? 20 : 24}
             title={f.color ?? undefined}
           />
@@ -1350,7 +1350,7 @@ export default function Home() {
           </span>
         )}
         {(() => {
-          const finish = deriveFinish(f.optTags);
+          const finish = deriveFinish(f.optTags, f._optTagsAwaitReview);
           return finish ? <FinishChip finish={finish} className="ml-1.5" /> : null;
         })()}
         {/* Color facet: this row is listed under the active color through its
@@ -1608,8 +1608,8 @@ export default function Home() {
                     <FilamentSwatch
                       color={v.color}
                       secondaryColors={v.secondaryColors}
-                      arrangement={deriveArrangement(v.optTags)}
-                      finish={deriveFinish(v.optTags)}
+                      arrangement={deriveArrangement(v.optTags, v._optTagsAwaitReview)}
+                      finish={deriveFinish(v.optTags, v._optTagsAwaitReview)}
                       size={16}
                       className="hover:ring-2 hover:ring-blue-400 transition-all"
                       title={v.name}

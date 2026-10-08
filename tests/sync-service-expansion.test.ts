@@ -3495,10 +3495,13 @@ describe("SyncService — v1.12 sync expansion", () => {
         name: "DivergentRemoteWins", vendor: "T", type: "PLA", optTags: [6, 2],
         settings: { openprinttag_slug: "drw" }, syncId: "fil-drw", _deletedAt: null, createdAt: now, updatedAt: later,
       });
-      // C: remote-only — pulled fresh; its notice must follow the new local copy.
+      // C: remote-only, and WITHOUT a syncId (a legacy row the sync never
+      // touched) — the remote pass must see one backfilled before it records
+      // the drop (Codex P2 r11), or the notice could never follow the pulled
+      // local copy.
       await remoteDb.collection("filaments").insertOne({
         name: "RemoteOnlyLegacy", vendor: "T", type: "PLA", optTags: [18, 9],
-        settings: { openprinttag_slug: "rol" }, syncId: "fil-rol", _deletedAt: null, createdAt: now, updatedAt: now,
+        settings: { openprinttag_slug: "rol" }, _deletedAt: null, createdAt: now, updatedAt: now,
       });
 
       sync = makeSync();
@@ -3508,8 +3511,10 @@ describe("SyncService — v1.12 sync expansion", () => {
       for (const dbh of [localDb, remoteDb]) {
         expect(await dbh.collection("filaments").findOne({ syncId: "fil-dlw" })).toMatchObject({ optTags: [20], optTagsSpec: true });
         expect(await dbh.collection("filaments").findOne({ syncId: "fil-drw" })).toMatchObject({ optTags: [20], optTagsSpec: true });
-        expect(await dbh.collection("filaments").findOne({ syncId: "fil-rol" })).toMatchObject({ optTags: [57], optTagsSpec: true });
+        expect(await dbh.collection("filaments").findOne({ name: "RemoteOnlyLegacy" })).toMatchObject({ optTags: [57], optTagsSpec: true });
       }
+      // C got its cross-peer identity before the pass recorded its drop.
+      expect(typeof (await remoteDb.collection("filaments").findOne({ name: "RemoteOnlyLegacy" }))!.syncId).toBe("string");
       // The pass never stamps updatedAt, so LWW saw the ORIGINAL timestamps:
       // A kept the local revision, B took the remote one.
       expect((await localDb.collection("filaments").findOne({ syncId: "fil-dlw" }))!.updatedAt).toEqual(later);
@@ -3517,8 +3522,10 @@ describe("SyncService — v1.12 sync expansion", () => {
 
       // ONE notice per row, describing the revision the LOCAL database holds:
       // A's local notice (9), B's remote notice (6), C's remote notice (9) —
-      // every one pointing at the local copy.
+      // every one pointing at the local copy, and each naming the revision it
+      // describes by that revision's timestamp.
       const notices = await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb);
+      expect(notices.map((n) => n.revisionUpdatedAt)).toEqual([later, later, now]);
       expect(notices.map((n) => [n.name, n.tags, n.peer ?? "local"])).toEqual([
         ["DivergentLocalWins", [9], "local"],
         ["DivergentRemoteWins", [6], "remote"],

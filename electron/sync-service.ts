@@ -43,7 +43,6 @@ import {
   describeRenumberSummary,
   mergeDroppedLegacyTags,
   reconcileMergedDroppedLegacyTags,
-  type DroppedLegacyTags,
   type MinimalRenumberDb,
 } from "../src/lib/optTagRenumber";
 
@@ -582,9 +581,6 @@ export class SyncService extends EventEmitter {
       // because trimming would collide is reported and the cycle continues,
       // since that pair needs a human either way. A THROWN failure is
       // different and aborts, for the reason in the loop below.
-      // GH #1227: the REMOTE pass's drop records, kept for the reconciliation
-      // that runs after the filament LWW step (see there).
-      const remoteDroppedLegacyTags: DroppedLegacyTags[] = [];
       for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
         if (this.aborted) break;
         // A THROW here aborts the cycle. Swallowing it and syncing anyway is
@@ -642,7 +638,15 @@ export class SyncService extends EventEmitter {
         // one side converted is already settled when the other side's pass
         // meets it; ambiguous rows stay unmarked on both sides and Data health
         // lists the local copy (resolving it there syncs the answer across).
+        //
+        // Every filament gets its cross-peer identity FIRST (Codex P2 r11 on
+        // PR #1228): a drop the pass records on a row without a `syncId`
+        // could never be re-pointed at the local copy or reconciled — the
+        // notice would link to a nonexistent filament forever. The later
+        // backfill ahead of the name reconciliation (GH #904) stays and is a
+        // no-op after this one.
         if (this.aborted) break;
+        await this.backfillSyncIds(dbHandle.collection("filaments"));
         const renumber = await renumberOptTags(dbHandle as unknown as MinimalRenumberDb);
         const renumberLine = describeRenumberSummary(renumber);
         if (renumberLine) console.log(`[sync] ${side}: ${renumberLine}`);
@@ -661,7 +665,6 @@ export class SyncService extends EventEmitter {
         // loser's notice is pruned there (Codex P2 r9).
         if (side === "remote" && renumber.dropped.length > 0) {
           await mergeDroppedLegacyTags(localDb as unknown as MinimalRenumberDb, renumber.dropped);
-          remoteDroppedLegacyTags.push(...renumber.dropped);
         }
         // Re-check AFTER the zombie repair: the trim is a SEPARATE
         // destructive migration (creates indexes, rewrites names across five
@@ -977,31 +980,24 @@ export class SyncService extends EventEmitter {
 
       // GH #1227: now that LWW has picked a revision for every paired
       // filament, keep ONE drop notice per row — the one describing the
-      // revision the LOCAL database holds (Codex P2 r9 on PR #1228). A local
-      // row this cycle REWROTE (its `updatedAt` differs from the pre-sync
-      // snapshot, or it was not in the snapshot — a fresh pull) now carries
-      // the remote revision, so the local pass's notice described a document
-      // that no longer exists anywhere; an untouched local row kept its own
-      // revision (it won, or the timestamps tied and nothing was copied), so
-      // the remote pass's notice is the stale one. Only when the collection
-      // SETTLED: after an errored or held-back sync nothing was decided and
-      // both notices stay (dismissable) — the remote pass has already marked
-      // its rows, so it could never re-report them. Best-effort, like the
-      // repair passes: a failure here leaves two notices, never none.
-      if (remoteDroppedLegacyTags.length > 0 && !this.aborted && !collectionErrored("filaments")) {
+      // revision the LOCAL database holds (Codex P2 r9 on PR #1228). Decided
+      // from the store, not from this cycle's merges: each record carries the
+      // `updatedAt` of the revision it describes and LWW copies a revision
+      // with its timestamp, so the local row's `updatedAt` names the survivor
+      // — on this cycle or any later one (a record merged in a cycle whose
+      // filament sync then errored is reconciled by the first cycle that
+      // settles, Codex P2 r11). Only when the collection SETTLED: before LWW
+      // has run for a row, "the local row holds its own revision" proves
+      // nothing, and both notices stay (dismissable) — the remote pass has
+      // already marked its rows, so it could never re-report them. Best-effort,
+      // like the repair passes: a failure here leaves two notices, never none.
+      if (!this.aborted && !collectionErrored("filaments")) {
         try {
-          const kept = await reconcileMergedDroppedLegacyTags(
-            localDb as unknown as MinimalRenumberDb,
-            remoteDroppedLegacyTags,
-            (row) => {
-              const before = localFilamentSnapshot.get(String(row._id));
-              if (before === undefined) return true; // inserted by this cycle's pull
-              return (SyncService.readUpdatedAt(row as Document) ?? null) !== before;
-            },
-          );
-          if (kept.remoteWon + kept.localWon > 0) {
+          const pruned = await reconcileMergedDroppedLegacyTags(localDb as unknown as MinimalRenumberDb);
+          if (pruned.prunedLocal + pruned.prunedRemote > 0) {
             console.log(
-              `[sync] GH #1227: reconciled dropped-tag notices after LWW — remote revision kept on ${kept.remoteWon}, local on ${kept.localWon}`,
+              `[sync] GH #1227: reconciled dropped-tag notices after LWW — pruned ${pruned.prunedLocal} local, ${pruned.prunedRemote} remote` +
+                (pruned.undecided > 0 ? `, ${pruned.undecided} undecided` : ""),
             );
           }
         } catch (err) {

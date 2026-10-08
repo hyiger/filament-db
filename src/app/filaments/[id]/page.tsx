@@ -1298,9 +1298,9 @@ function FilamentDetail() {
   // texture treatment + chip. resolveFilament() doesn't inherit optTags,
   // so a variant only shows a finish when its own optTags include one
   // of the FINISH_TAG_IDS.
-  const finish = !isParent ? deriveFinish(filament.optTags) : null;
+  const finish = !isParent ? deriveFinish(filament.optTags, filament._optTagsAwaitReview) : null;
   // `<FilamentSwatch isParent>` ignores `arrangement`.
-  const arrangement = !isParent ? deriveArrangement(filament.optTags) : "solid";
+  const arrangement = !isParent ? deriveArrangement(filament.optTags, filament._optTagsAwaitReview) : "solid";
 
   return (
     <main id="main-content" className="max-w-4xl mx-auto px-4 py-8">
@@ -1686,7 +1686,7 @@ function FilamentDetail() {
           <h2 className="text-sm font-medium text-gray-500 mb-2">{t("detail.section.colorVariants")}</h2>
           <div className="flex flex-wrap gap-2">
             {filament._variants.map((v) => {
-              const vFinish = deriveFinish(v.optTags);
+              const vFinish = deriveFinish(v.optTags, v._optTagsAwaitReview);
               return (
                 <Link
                   key={v._id}
@@ -1696,7 +1696,7 @@ function FilamentDetail() {
                   <FilamentSwatch
                     color={v.color}
                     secondaryColors={v.secondaryColors}
-                    arrangement={deriveArrangement(v.optTags)}
+                    arrangement={deriveArrangement(v.optTags, v._optTagsAwaitReview)}
                     finish={vFinish}
                     size={20}
                     ariaLabel={t("swatch.colorSwatch", { color: v.color ?? "#808080" })}

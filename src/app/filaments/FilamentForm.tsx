@@ -3326,7 +3326,7 @@ function MultiColorEditor({
    *  numbering review the radio is disabled (see the Material tags notice). */
   locked?: boolean;
 }) {
-  const arrangement: ColorArrangement = deriveArrangement(form.optTags);
+  const arrangement: ColorArrangement = deriveArrangement(form.optTags, locked);
 
   /** Toggle a single arrangement tag in optTags, removing every other
    *  arrangement tag so they're always mutually exclusive from the UI's

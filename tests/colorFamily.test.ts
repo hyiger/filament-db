@@ -524,6 +524,20 @@ describe("classifyFilament — edge cases", () => {
     expect(summary({ name: "Acme", color: null, optTags: [20] })).toEqual(["clear", null, "clear"]);
   });
 
+  // GH #1227 (Codex P2 r11): an unreviewed array has two readings — legacy 20
+  // is METAL_FILL — so Clear is not derived from it; a two-reading multi-color
+  // 28 still files under multi; a verified row is unchanged.
+  it("a row whose tags await numbering review is not filed under Clear from the spec reading alone", () => {
+    expect(summary({ name: "Acme", color: null, optTags: [20], _optTagsAwaitReview: true })).toEqual(["unknown", null, "unknown"]);
+    expect(summary({ name: "Acme Red", color: "#D32F2F", optTags: [20, 19], _optTagsAwaitReview: true })).toEqual(
+      summary({ name: "Acme Red", color: "#D32F2F" }),
+    );
+    expect(summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [28], _optTagsAwaitReview: true })).toEqual(
+      summary({ color: "#000000", secondaryColors: ["#3A3A3A"], optTags: [29] }),
+    );
+    expect(summary({ name: "Acme", color: null, optTags: [20], _optTagsAwaitReview: false })).toEqual(["clear", null, "clear"]);
+  });
+
   it("a template is null; a legacy template still holding stock is classified", () => {
     expect(summary({ hasVariants: true, color: "#FF0000", spools: [] })).toBeNull();
     expect(summary({ hasVariants: true, color: "#FF0000", spools: [{ retired: true, totalWeight: 1 }] })).toBeNull();

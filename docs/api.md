@@ -145,6 +145,8 @@ Returns an array of projected filament summaries (not the full documents — hea
 - `vendor` -- exact match on vendor name
 - `family` -- set to `1` to widen a `type`/`vendor` filter to the whole family: when the filter matches a TEMPLATE, its variants come back too even if their own stored `vendor`/`type` differs (a family can legitimately disagree — both fields are `required` and stamped per row, so they never actually inherit). **Off by default**, because `type` and `vendor` are exact row filters and other callers rely on that literally (`FilamentForm` derives vendor-keyed TDS suggestions from `?vendor=`; `PrusamentImportDialog` treats `?type=` results as material matches). The grouping filament list opts in, so a matched template isn't rendered as a group header with no members (GH #1108). A `search` predicate, when present, still applies to the widened rows.
 
+Every row also carries the response-only `_optTagsAwaitReview` (GH #1227): `true` when the EFFECTIVE `optTags` (own, or the parent's when the own array is empty) still await OpenPrintTag numbering review. The swatch finish, the color arrangement and the Clear color facet then derive only from ids both numberings agree on (`displayOptTags`) — a pre-v1.83 `[20]` is METAL_FILL under the legacy reading, not the spec's transparent. Computed from the row that supplies the array; the `optTagsSpec` marker itself never leaves the server on this route.
+
 **Response shape per row** (matches `FilamentSummary` in `src/types/filament.ts` plus a few extras the list / form / picker need):
 
 ```json
@@ -245,7 +247,7 @@ Refusal cases:
 
 ### GET /api/filaments/trash
 
-Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` and `optTags` are the effective arrays (a variant's empty array falls back to its parent's) so the trash swatch renders multi-color and finish correctly. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
+Returns soft-deleted filaments sorted newest first, with a lightweight projection: `_id`, `name`, `vendor`, `type`, `color`, `secondaryColors`, `optTags`, `cost`, `parentId`, `_deletedAt`. `secondaryColors` and `optTags` are the effective arrays (a variant's empty array falls back to its parent's) so the trash swatch renders multi-color and finish correctly, plus the response-only `_optTagsAwaitReview` (GH #1227 — see `GET /api/filaments`) so an unreviewed array is not rendered through the spec reading alone. Powers the `/trash` UI page. **Excludes** `_purged: true` tombstones — those are kept on disk only for sync propagation and never reappear in any user surface.
 
 ```json
 [
@@ -1099,12 +1101,12 @@ Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags
     }
   ],
   "dropped": [
-    { "filamentId": "…", "name": "Overture TPU", "tags": [9], "at": "2026-10-08T12:00:00.000Z" }
+    { "filamentId": "…", "name": "Overture TPU", "tags": [9], "at": "2026-10-08T12:00:00.000Z", "revisionUpdatedAt": "2026-07-01T09:30:00.000Z" }
   ]
 }
 ```
 
-`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is always `ambiguous` (both readings are consistent — no array is inconsistent; a spec-only id beside the legacy-only 18 is a stray that rides through the conversion verbatim). `matchesBackfill` (the array equals the old backfill script's output for the row's type → likely entered in the app), `specOnlyIds` (ids the pre-v1.83 form could not write → likely read from a tag) and `legacyOnlyIds` (the deprecated 18 → likely entered in the app) are hints for the user, never decisions. `dropped` entries carry LEGACY ids; one that the desktop's hybrid sync merged from the remote database's own pass additionally carries `"peer": "remote"` (its `filamentId` is the local copy's id once that copy exists).
+`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is always `ambiguous` (both readings are consistent — no array is inconsistent; a spec-only id beside the legacy-only 18 is a stray that rides through the conversion verbatim). `matchesBackfill` (the array equals the old backfill script's output for the row's type → likely entered in the app), `specOnlyIds` (ids the pre-v1.83 form could not write → likely read from a tag) and `legacyOnlyIds` (the deprecated 18 → likely entered in the app) are hints for the user, never decisions. `dropped` entries carry LEGACY ids and `revisionUpdatedAt`, the `updatedAt` of the filament revision the conversion produced (absent when the row never had a timestamp); one that the desktop's hybrid sync merged from the remote database's own pass additionally carries `"peer": "remote"` (its `filamentId` is the local copy's id once that copy exists). After a settled hybrid sync, the notice whose `revisionUpdatedAt` the local row no longer holds is pruned, so one notice per filament describes the revision you actually have.
 
 ### POST /api/opt-tag-review/:id
 
@@ -1910,7 +1912,7 @@ Returns:
 
 ### GET /api/filaments/compare?ids=a,b,c (v1.11)
 
-Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly.
+Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly. Each carries the response-only `_optTagsAwaitReview` (GH #1227 — see `GET /api/filaments`), computed from the row that supplies the effective `optTags` (the resolved document's own marker beside inherited tags would be the wrong pairing).
 
 `400` if `ids` is missing, empty, or over 8.
 
@@ -1928,6 +1930,8 @@ Query parameters:
 | `includeRetired` | `1` to include retired spools (default: excluded — they're out of inventory). |
 
 A synthetic group with `locationId: null` carries any spool whose `locationId` is unset. The aggregation sorts it to the END of the response so the page surfaces it as a "needs attention" trailer rather than as the first bucket.
+
+Each spool row carries `optTagsAwaitReview` (GH #1227): `true` when its effective `optTags` (the GH #1050 parent-fallback array) still await OpenPrintTag numbering review, so the row swatch and the color grouping read them only through the ids both numberings agree on (see `GET /api/filaments`). The `optTagsSpec` marker is an aggregation-only intermediate and is not in the payload.
 
 Response shape:
 

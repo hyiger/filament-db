@@ -614,4 +614,31 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
     const names = (await list("?vendor=OVV3D&family=1")).map((f) => f.name).sort();
     expect(names).not.toContain("Unrelated OCC3D");
   });
+
+  it("GH #1227 (Codex P2 r11): `_optTagsAwaitReview` reports the EFFECTIVE tags' review state; the marker never leaves the server", async () => {
+    const raw = mongoose.connection.collection("filaments");
+    // Pre-v1.83 rows: no marker. Legacy 20 is METAL_FILL — the swatch must
+    // not read it as the spec's transparent until the user has decided.
+    const { insertedId: unmarkedParentId } = await raw.insertOne({
+      name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20], _deletedAt: null,
+    });
+    await raw.insertOne({ name: "Unmarked Inert", vendor: "QA", type: "PLA", optTags: [16, 4], _deletedAt: null });
+    // A variant with an EMPTY own array inherits the parent's tags AND its review state.
+    await Filament.create({ name: "Inheriting Child", vendor: "QA", type: "PLA", parentId: unmarkedParentId });
+    // Every row written since v1.83 is verified (schema default).
+    await Filament.create({ name: "Verified Transparent", vendor: "QA", type: "PLA", optTags: [20] });
+
+    const res = await listFilaments(new NextRequest("http://localhost/api/filaments"));
+    const body = await res.json();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const find = (name: string) => body.find((f: any) => f.name === name);
+    expect(find("Unmarked Parent")).toMatchObject({ optTags: [20], _optTagsAwaitReview: true });
+    expect(find("Inheriting Child")).toMatchObject({ optTags: [20], _optTagsAwaitReview: true });
+    expect(find("Unmarked Inert")._optTagsAwaitReview).toBe(false); // nothing legacy to protect
+    expect(find("Verified Transparent")._optTagsAwaitReview).toBe(false);
+    for (const row of body) {
+      expect(row).not.toHaveProperty("_optTagsSourceSpec");
+      expect(row).not.toHaveProperty("optTagsSpec");
+    }
+  });
 });

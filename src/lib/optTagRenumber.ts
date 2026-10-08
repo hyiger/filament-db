@@ -41,7 +41,9 @@
  *    ONE atomic replacement per row and origin (`recordDropped`), and a record
  *    merged from the REMOTE peer (`peer: "remote"`) never displaces a local
  *    one: `reconcileMergedDroppedLegacyTags` prunes whichever notice describes
- *    the revision the hybrid LWW step discarded, once that step has run.
+ *    the revision the hybrid LWW step discarded, once that step has run —
+ *    decided by the local row's `updatedAt` against each record's
+ *    `revisionUpdatedAt`, on every settled cycle.
  *  - `ambiguous` → leave it unmarked. Data health lists it
  *    with both readings; `resolveOptTagNumbering` applies the user's answer.
  *
@@ -126,6 +128,7 @@ const ROW_PROJECTION: Record<string, 1> = {
   ...Object.fromEntries(OPT_TAG_CLASSIFIER_PATHS.map((path) => [path, 1 as const])),
   vendor: 1,
   syncId: 1,
+  updatedAt: 1,
   _deletedAt: 1,
   _purged: 1,
 };
@@ -147,13 +150,24 @@ export interface DroppedLegacyTags {
   tags: number[];
   at: Date;
   /**
+   * `updatedAt` of the REVISION this record describes — the row as it stood
+   * when converted (the pass never touches the timestamp; a Data health
+   * resolution stamps the one it writes). A hybrid LWW copy carries a
+   * revision's timestamp with it, so after a sync the local row's `updatedAt`
+   * names the revision the local database holds, and
+   * `reconcileMergedDroppedLegacyTags` keeps the notice describing THAT one —
+   * on any later cycle, not just the one that merged the record (Codex P2
+   * r9/r11 on PR #1228). Absent on a row that never had a timestamp.
+   */
+  revisionUpdatedAt?: Date | null;
+  /**
    * Set on a record merged from the REMOTE peer's pass. A record this
    * database's own pass or Data health wrote has no `peer`. The two origins
    * never replace each other in `recordDropped`: when both peers converted
    * DIVERGENT revisions of one row, each notice is true of its own revision,
    * and only the hybrid LWW step knows which revision the local database ends
    * up holding — `reconcileMergedDroppedLegacyTags` prunes the loser's notice
-   * once it has run (Codex P2 r9 on PR #1228).
+   * once it has run, by `revisionUpdatedAt` (Codex P2 r9 on PR #1228).
    */
   peer?: "remote";
 }
@@ -238,16 +252,40 @@ function matched(res: unknown): boolean {
 
 /**
  * The drop record for one row: `syncId` only when the row has one (the
- * cross-peer identity `readDroppedLegacyTags` re-points by).
+ * cross-peer identity `readDroppedLegacyTags` re-points by), and the
+ * `updatedAt` of the revision the record describes — the row's own, unless
+ * the caller is about to stamp a new one (a Data health resolution).
  */
-function droppedEntryFor(row: Record<string, unknown>, dropped: number[], now: Date): DroppedLegacyTags {
+function droppedEntryFor(
+  row: Record<string, unknown>,
+  dropped: number[],
+  now: Date,
+  revisionUpdatedAt: unknown = row.updatedAt,
+): DroppedLegacyTags {
   return {
     filamentId: String(row._id),
     ...(typeof row.syncId === "string" && row.syncId !== "" ? { syncId: row.syncId } : {}),
     name: typeof row.name === "string" ? row.name : "",
     tags: dropped,
     at: now,
+    ...(revisionUpdatedAt != null ? { revisionUpdatedAt: revisionUpdatedAt as Date } : {}),
   };
+}
+
+/** A stored `dropped[]` element that is a usable record. */
+function isDropRecord(d: unknown): d is DroppedLegacyTags {
+  return !!d && typeof d === "object" && typeof (d as DroppedLegacyTags).filamentId === "string";
+}
+
+/** Epoch ms of a Date / ISO string / number, else null (absent or unparseable). */
+function timestampOf(value: unknown): number | null {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value.getTime();
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  if (typeof value === "string") {
+    const t = Date.parse(value);
+    return Number.isNaN(t) ? null : t;
+  }
+  return null;
 }
 
 /**
@@ -327,58 +365,75 @@ export async function mergeDroppedLegacyTags(
 }
 
 /**
- * After the hybrid filament LWW step: for each remote drop record whose row
- * also exists locally, exactly one of the two peers' notices describes the
- * revision the local database now holds, and this prunes the other (Codex P2
- * r9 on PR #1228). `remoteRevisionLanded(localRow)` is the sync service's
- * knowledge of whether THIS cycle rewrote the local row with the remote
- * revision (a pull, or a fresh insert):
+ * After a SETTLED hybrid filament LWW step: for every persisted remote record
+ * (`peer: "remote"`) whose row exists locally, keep the notice that describes
+ * the revision the local database now holds and prune the other (Codex P2 r9
+ * on PR #1228). Reads the store, not the cycle's own merges, so a record
+ * merged in a cycle whose filament sync then errored is still reconciled by
+ * the first later cycle that settles (Codex P2 r11) — hence durable and
+ * idempotent: run it every settled cycle.
  *
- *  - landed → the local revision is gone everywhere; a LOCAL record for the
- *    row described a conversion of a document that no longer exists → pulled.
- *    The remote record stays (re-pointed to the local `_id` when read).
- *  - not landed → the local revision stands (it won, or the timestamps tied
- *    and nothing was copied); the REMOTE record described the revision LWW
- *    discarded → pulled, whether or not a local record exists.
- *  - no local row with that `syncId` → not pulled this cycle; the remote
- *    record stands and re-points once the row arrives.
- *
- * Called only when the filament collection settled this cycle — after a
- * failed or held-back sync nothing has been decided, and both notices stay
- * (a stale notice is dismissable; a lost one is silent).
+ * The decision is the local row's `updatedAt` against each record's
+ * `revisionUpdatedAt`: LWW copies a revision WITH its timestamp and the pass
+ * never stamps one, so the row's timestamp names the revision it holds.
+ *  - it equals the remote record's and no local record's → the remote
+ *    revision landed; every local record for the row described a document
+ *    that no longer exists anywhere → pulled; the remote record stays.
+ *  - it equals a local record's and not the remote's → the local revision
+ *    stands (it won); the remote record described the revision LWW
+ *    discarded → pulled.
+ *  - it equals both (an equal-timestamp tie: nothing was copied, each side
+ *    kept its own) or neither (the row was edited since, or never carried a
+ *    timestamp) → undecidable; both notices stay (dismissable) rather than
+ *    one being guessed away.
+ *  - no local row with that `syncId` → not pulled yet; the record stands and
+ *    re-points once the row arrives.
+ * Only meaningful once the filament collection has settled: before LWW has
+ * run for a row, "the local row holds the local revision" proves nothing.
  */
 export async function reconcileMergedDroppedLegacyTags(
   db: MinimalRenumberDb,
-  remoteEntries: readonly DroppedLegacyTags[],
-  remoteRevisionLanded: (localRow: Record<string, unknown>) => boolean,
-): Promise<{ remoteWon: number; localWon: number }> {
-  const outcome = { remoteWon: 0, localWon: 0 };
-  const syncIds = [
-    ...new Set(remoteEntries.map((e) => e.syncId).filter((s): s is string => typeof s === "string" && s !== "")),
-  ];
-  if (syncIds.length === 0) return outcome;
+): Promise<{ prunedLocal: number; prunedRemote: number; undecided: number }> {
+  const outcome = { prunedLocal: 0, prunedRemote: 0, undecided: 0 };
+  const migrations = db.collection("_migrations");
+  const doc = await migrations.findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID });
+  const list = (doc as { dropped?: unknown } | null)?.dropped;
+  if (!Array.isArray(list)) return outcome;
+  const records = list.filter(isDropRecord);
+  const remote = records.filter(
+    (r) => r.peer === "remote" && typeof r.syncId === "string" && r.syncId !== "",
+  );
+  if (remote.length === 0) return outcome;
+  const syncIds = [...new Set(remote.map((r) => r.syncId as string))];
   const rows = await db
     .collection("filaments")
     .find({ syncId: { $in: syncIds } }, { projection: { _id: 1, syncId: 1, updatedAt: 1 } })
     .toArray();
   const localBySyncId = new Map(rows.map((r) => [String(r.syncId), r]));
-  const migrations = db.collection("_migrations");
-  for (const entry of remoteEntries) {
-    if (!entry.syncId) continue;
-    const localRow = localBySyncId.get(entry.syncId);
+  for (const r of remote) {
+    const localRow = localBySyncId.get(r.syncId as string);
     if (!localRow) continue;
-    if (remoteRevisionLanded(localRow)) {
+    const localId = String(localRow._id);
+    const held = timestampOf(localRow.updatedAt);
+    const remoteMatches = timestampOf(r.revisionUpdatedAt) === held;
+    const localRecords = records.filter((l) => l.peer !== "remote" && l.filamentId === localId);
+    const localMatches = localRecords.some((l) => timestampOf(l.revisionUpdatedAt) === held);
+    if (remoteMatches && !localMatches) {
+      if (localRecords.length > 0) {
+        await migrations.updateOne(
+          { _id: OPT_TAG_RENUMBER_MARKER_ID },
+          { $pull: { dropped: { peer: { $ne: "remote" }, filamentId: localId } } },
+        );
+        outcome.prunedLocal += localRecords.length;
+      }
+    } else if (localMatches && !remoteMatches) {
       await migrations.updateOne(
         { _id: OPT_TAG_RENUMBER_MARKER_ID },
-        { $pull: { dropped: { peer: { $ne: "remote" }, filamentId: String(localRow._id) } } },
+        { $pull: { dropped: { peer: "remote", syncId: r.syncId } } },
       );
-      outcome.remoteWon++;
+      outcome.prunedRemote++;
     } else {
-      await migrations.updateOne(
-        { _id: OPT_TAG_RENUMBER_MARKER_ID },
-        { $pull: { dropped: { peer: "remote", syncId: entry.syncId } } },
-      );
-      outcome.localWon++;
+      outcome.undecided++;
     }
   }
   return outcome;
@@ -660,7 +715,8 @@ export async function resolveOptTagNumbering(
     remapped = remapLegacyOptTags(stored);
     $set.optTags = remapped.tags;
     if (remapped.dropped.length > 0) {
-      droppedEntry = droppedEntryFor(row, remapped.dropped, now);
+      // The record describes the revision this resolution WRITES (`updatedAt: now`).
+      droppedEntry = droppedEntryFor(row, remapped.dropped, now, now);
       // Record first, convert second — same ordering as the pass.
       await recordDropped(db, droppedEntry);
     }
@@ -707,10 +763,7 @@ export async function readDroppedLegacyTags(db: MinimalRenumberDb): Promise<Drop
   const doc = await migrations.findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID });
   const list = (doc as { dropped?: unknown } | null)?.dropped;
   if (!Array.isArray(list)) return [];
-  const entries = list.filter(
-    (d): d is DroppedLegacyTags =>
-      !!d && typeof d === "object" && typeof (d as DroppedLegacyTags).filamentId === "string",
-  );
+  const entries = list.filter(isDropRecord);
 
   const syncIds = [...new Set(entries.map((d) => d.syncId).filter((s): s is string => typeof s === "string" && s !== ""))];
   if (syncIds.length === 0) return entries;

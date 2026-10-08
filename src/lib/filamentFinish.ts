@@ -25,6 +25,7 @@
  */
 
 import { OPT_TAG } from "./openprinttag";
+import { displayOptTags } from "./optTagLegacy";
 
 export type Finish =
   | "matte"
@@ -68,11 +69,20 @@ const PRIORITY: readonly Finish[] = [
  *
  * Accepts undefined/null for convenience because list summaries from
  * older clients may omit the field.
+ *
+ * `awaitReview` (GH #1227, Codex P2 r11 on PR #1228): while the row's
+ * `optTags` still await numbering review, only ids that mean the same under
+ * both numberings count (`displayOptTags`) — a legacy `[20]` is METAL_FILL,
+ * not the spec's transparent, so no see-through texture may be derived from
+ * it until the user has said which numbering the array is in.
  */
-export function deriveFinish(optTags: readonly number[] | null | undefined): Finish | null {
+export function deriveFinish(
+  optTags: readonly number[] | null | undefined,
+  awaitReview?: boolean | null,
+): Finish | null {
   if (!optTags || optTags.length === 0) return null;
   const present = new Set<Finish>();
-  for (const id of optTags) {
+  for (const id of displayOptTags(optTags, awaitReview)) {
     const f = FINISH_BY_TAG_ID[id];
     if (f) present.add(f);
   }

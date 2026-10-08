@@ -37,6 +37,19 @@ describe("deriveArrangement", () => {
     expect(deriveArrangement([19, 28])).toBe("gradient");
   });
 
+  // GH #1227 (Codex P2 r11): while the row's tags await numbering review, 28
+  // is DUAL_COLOR under the legacy reading and gradual_color_change under the
+  // spec one — both multi-color — and renders as the pre-v1.83 stripes; 27
+  // (legacy GRADIENT vs temperature_color_change) is not an arrangement under
+  // both readings, so it renders solid; 29 is a fixed point.
+  it("reads an unreviewed array only through ids both numberings agree on", () => {
+    expect(deriveArrangement([28], true)).toBe("coextruded");
+    expect(deriveArrangement([29], true)).toBe("coextruded");
+    expect(deriveArrangement([27], true)).toBe("solid");
+    expect(deriveArrangement([27], false)).toBe("solid"); // spec 27 is no arrangement either
+    expect(deriveArrangement([28], false)).toBe("gradient");
+  });
+
   it("returns 'coextruded' when both coextruded and gradient tags are present (coextruded wins)", () => {
     // A "coextruded gradient" is theoretically possible per OpenPrintTag
     // spec; the rendering UI can only pick one mode, so the more

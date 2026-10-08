@@ -19,6 +19,7 @@ import {
   OPT_SNAPSHOT_NUMBERING_KEY,
   optTagIdForString,
   parseOptTagsCell,
+  displayOptTags,
 } from "@/lib/optTagLegacy";
 
 /**
@@ -433,5 +434,37 @@ describe("parseOptTagsCell", () => {
       unknownTokens: ["bogus", "-1"],
       rejectReason: null,
     });
+  });
+});
+
+describe("displayOptTags — what a row's visuals may read while its tags await review (Codex P2 r11)", () => {
+  it("passes a verified row's array through untouched", () => {
+    expect(displayOptTags([20, 2, 28, 27], false)).toEqual([20, 2, 28, 27]);
+    expect(displayOptTags([20], null)).toEqual([20]);
+    expect(displayOptTags([20], undefined)).toEqual([20]);
+  });
+
+  it("keeps only ids that mean the same under both numberings", () => {
+    // 20 is METAL_FILL / transparent, 19 WOOD_FILL / translucent, 23
+    // PHOSPHORESCENT / glitter: a visual from either reading misrepresents
+    // the other. 16, 24 are fixed points; 30 exists only in the spec.
+    expect(displayOptTags([20, 16, 24, 23, 19], true)).toEqual([16, 24]);
+    expect(displayOptTags([30, 4], true)).toEqual([30, 4]);
+    expect(displayOptTags([2, 3], true)).toEqual([]);
+  });
+
+  it("renders the two-reading multi-color 28 as coextruded (29) — the pre-v1.83 stripes — and drops 27", () => {
+    expect(displayOptTags([28], true)).toEqual([29]);
+    expect(displayOptTags([28, 29], true)).toEqual([29]);
+    expect(displayOptTags([29, 28], true)).toEqual([29]);
+    // GRADIENT vs temperature_color_change: the readings disagree on whether
+    // it is an arrangement at all.
+    expect(displayOptTags([27], true)).toEqual([]);
+  });
+
+  it("tolerates nullish and malformed input", () => {
+    expect(displayOptTags(null, true)).toEqual([]);
+    expect(displayOptTags(undefined, false)).toEqual([]);
+    expect(displayOptTags(["x" as unknown as number, 16], true)).toEqual([16]);
   });
 });

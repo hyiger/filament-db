@@ -61,7 +61,7 @@ describe("renumberOptTags", () => {
       skipped: 0,
     });
     expect(first.dropped).toEqual([
-      { filamentId: expect.any(String), name: "Legacy Marble", tags: [9], at: NOW },
+      { filamentId: expect.any(String), name: "Legacy Marble", tags: [9], at: NOW, revisionUpdatedAt: OLD },
     ]);
 
     const marble = await byName("Legacy Marble");
@@ -432,17 +432,23 @@ describe("renumberOptTags", () => {
     expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 
-  it("a local and a remote notice for the same row coexist until the LWW step decides, then the loser's goes (Codex P2 r9)", async () => {
+  it("a local and a remote notice for the same row coexist until the LWW step decides; the local row's updatedAt then names the survivor (Codex P2 r9/r11)", async () => {
     const LATER = new Date("2026-10-08T13:00:00.000Z");
+    const REMOTE_REV = new Date("2026-03-01T00:00:00.000Z");
     // The local pass converts the LOCAL revision of a row both peers hold
-    // (pre-v1.36 import: link, no snapshot) — 9 FLEXIBLE drops.
+    // (pre-v1.36 import: link, no snapshot) — 9 FLEXIBLE drops. The record
+    // names the revision it describes by that revision's `updatedAt`.
     const { insertedId } = await col().insertOne({
       name: "Both Sides", vendor: "V", type: "PLA", optTags: [9, 2], syncId: "sync-both",
       settings: { openprinttag_slug: "both" }, updatedAt: OLD,
     });
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
+    expect((await readDroppedLegacyTags(db()))[0]).toMatchObject({ tags: [9], revisionUpdatedAt: OLD });
     // The remote pass converted a DIVERGENT remote revision, dropping 6 (HEAT_RESISTANT).
-    const remoteEntry = { filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [6], at: LATER };
+    const remoteEntry = {
+      filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [6], at: LATER,
+      revisionUpdatedAt: REMOTE_REV,
+    };
     await mergeDroppedLegacyTags(db(), [remoteEntry]);
     // Neither replaced the other; both are re-pointed at the local copy.
     let notices = await readDroppedLegacyTags(db());
@@ -453,24 +459,40 @@ describe("renumberOptTags", () => {
     await mergeDroppedLegacyTags(db(), [remoteEntry]);
     expect(await readDroppedLegacyTags(db())).toHaveLength(2);
 
-    // The local revision stood (it won LWW, or the timestamps tied): the
-    // remote notice described the revision LWW discarded.
-    expect(await reconcileMergedDroppedLegacyTags(db(), [remoteEntry], () => false)).toEqual({ remoteWon: 0, localWon: 1 });
+    // The local row still carries ITS revision's timestamp: the local revision
+    // stood (it won LWW), so the remote notice described the discarded one.
+    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 1, undecided: 0 });
     notices = await readDroppedLegacyTags(db());
     expect(notices.map((d) => d.tags)).toEqual([[9]]);
 
-    // The cycle REWROTE the local row with the remote revision: the local
-    // notice described a document that no longer exists anywhere.
+    // A pull copies the remote revision WITH its timestamp: the local notice
+    // described a document that no longer exists anywhere.
     await mergeDroppedLegacyTags(db(), [remoteEntry]);
-    expect(await reconcileMergedDroppedLegacyTags(db(), [remoteEntry], () => true)).toEqual({ remoteWon: 1, localWon: 0 });
+    await col().updateOne({ _id: insertedId }, { $set: { updatedAt: REMOTE_REV } });
+    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 1, prunedRemote: 0, undecided: 0 });
     notices = await readDroppedLegacyTags(db());
     expect(notices.map((d) => d.tags)).toEqual([[6]]);
+    // Idempotent on a later cycle: the surviving notice matches the held revision.
+    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 0 });
+    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
+
+    // Edited since (the row's timestamp matches neither revision): undecidable,
+    // both notices stay rather than one being guessed away.
+    const edited = await col().insertOne({
+      name: "Edited Since", vendor: "V", type: "PLA", optTags: [9, 2], syncId: "sync-edited",
+      settings: { openprinttag_slug: "ed" }, updatedAt: OLD,
+    });
+    await renumberOptTags(db(), NOW);
+    await mergeDroppedLegacyTags(db(), [{ ...remoteEntry, filamentId: "64b000000000000000000004", syncId: "sync-edited", name: "Edited Since" }]);
+    await col().updateOne({ _id: edited.insertedId }, { $set: { updatedAt: LATER } });
+    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 1 });
+    expect((await readDroppedLegacyTags(db())).filter((d) => d.name === "Edited Since")).toHaveLength(2);
 
     // A remote record for a row this database has not pulled yet is left alone.
-    const unpulled = { filamentId: "64b000000000000000000003", syncId: "sync-elsewhere", name: "Elsewhere", tags: [9], at: LATER };
+    const unpulled = { filamentId: "64b000000000000000000003", syncId: "sync-elsewhere", name: "Elsewhere", tags: [9], at: LATER, revisionUpdatedAt: LATER };
     await mergeDroppedLegacyTags(db(), [unpulled]);
-    expect(await reconcileMergedDroppedLegacyTags(db(), [unpulled], () => false)).toEqual({ remoteWon: 0, localWon: 0 });
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Both Sides", "Elsewhere"]);
+    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 1 });
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Both Sides", "Edited Since", "Edited Since", "Elsewhere"]);
   });
 
   it("two passes converting the same row concurrently leave exactly ONE drop record — the replacement is atomic (Codex P2 r10)", async () => {
@@ -616,8 +638,9 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(conv).toEqual({ outcome: "converted", tags: [20], dropped: [9] });
     const convRow = await col().findOne({ _id: insertedIds[0] });
     expect(convRow).toMatchObject({ optTags: [20], optTagsSpec: true, updatedAt: NOW, openprinttagSnapshot: { optTags: [20] } });
+    // The record names the revision the resolution WROTE (`updatedAt: now`).
     expect(await readDroppedLegacyTags(db())).toEqual([
-      { filamentId: String(insertedIds[0]), name: "Conv", tags: [9], at: NOW },
+      { filamentId: String(insertedIds[0]), name: "Conv", tags: [9], at: NOW, revisionUpdatedAt: NOW },
     ]);
 
     const keep = await resolveOptTagNumbering(db(), insertedIds[1], "keep", [12], NOW);

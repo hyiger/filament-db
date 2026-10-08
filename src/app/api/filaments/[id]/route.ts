@@ -193,18 +193,26 @@ export async function GET(
     // correct. Mirrors resolveFilament's secondaryColors block + the list
     // aggregation's $project ternary (GH #477).
     const rawVariants = await Filament.find({ parentId: id, _deletedAt: null })
-      .select("name color secondaryColors cost optTags")
+      .select("name color secondaryColors cost optTags optTagsSpec")
       .sort({ name: 1 })
       .lean();
     const parentOptTags = (filament.optTags ?? []) as number[];
     const parentSecondaryColors = (filament.secondaryColors ?? []) as string[];
-    const variants = rawVariants.map((v) => ({
+    const variants = rawVariants.map(({ optTagsSpec: _ownMarker, ...v }) => ({
       ...v,
       optTags: v.optTags && v.optTags.length > 0 ? v.optTags : parentOptTags,
       secondaryColors:
         v.secondaryColors && v.secondaryColors.length > 0
           ? v.secondaryColors
           : parentSecondaryColors,
+      // GH #1227 (Codex P2 r11): the variant chips derive finish + arrangement
+      // from the effective array above; its review state comes from the row
+      // that supplied it (own, else this parent). The marker itself stays
+      // server-side (`_ownMarker` is read through the raw doc, not emitted).
+      _optTagsAwaitReview: effectiveOptTagsAwaitReview(
+        { ...v, optTagsSpec: _ownMarker } as unknown as OptTagReviewRow,
+        filament as unknown as OptTagReviewRow,
+      ),
     }));
 
     // GH #607: whether THIS row carries its own OpenPrintTag link, computed

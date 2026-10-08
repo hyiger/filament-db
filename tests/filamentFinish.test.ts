@@ -70,4 +70,18 @@ describe("deriveFinish", () => {
     // Only matte present — it wins by default.
     expect(deriveFinish([16, 4, 13])).toBe("matte");
   });
+
+  // GH #1227 (Codex P2 r11): an unreviewed array has two readings. Legacy 20
+  // is METAL_FILL, so no see-through texture may be derived from it until the
+  // user has said which numbering the row is in; the fixed points still read.
+  it("derives only from ids both numberings agree on while the row awaits review", () => {
+    expect(deriveFinish([20], true)).toBeNull();
+    expect(deriveFinish([19], true)).toBeNull();
+    expect(deriveFinish([23], true)).toBeNull(); // glitter vs PHOSPHORESCENT
+    expect(deriveFinish([20, 16], true)).toBe("matte");
+    expect(deriveFinish([17, 24], true)).toBe("silk");
+    // A verified row is unchanged.
+    expect(deriveFinish([20], false)).toBe("transparent");
+    expect(deriveFinish([20], undefined)).toBe("transparent");
+  });
 });

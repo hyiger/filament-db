@@ -5,6 +5,7 @@ import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
+import { effectiveOptTagsAwaitReview, type OptTagReviewRow } from "@/lib/optTagLegacy";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { MAX_COMPARE_FILAMENTS } from "@/lib/compareSelection";
 
@@ -68,10 +69,20 @@ export async function GET(request: NextRequest) {
       : [];
     const parentById = new Map(parents.map((p) => [String(p._id), p]));
 
+    // GH #1227 (Codex P2 r11): the Compare swatch derives finish + arrangement
+    // from the EFFECTIVE `optTags` (the parent's when the own array is empty),
+    // so the review flag is computed from the row that supplies the array —
+    // the resolved doc carries the variant's OWN marker beside possibly
+    // inherited tags, which is the wrong pairing. Response-only.
     const resolved = filaments.map((f) => {
-      if (!f.parentId) return f;
-      const parent = parentById.get(String(f.parentId));
-      return parent ? resolveFilament(f, parent) : f;
+      const parent = f.parentId ? parentById.get(String(f.parentId)) : undefined;
+      const _optTagsAwaitReview = effectiveOptTagsAwaitReview(
+        f as unknown as OptTagReviewRow,
+        (parent ?? null) as unknown as OptTagReviewRow | null,
+      );
+      const doc = parent ? resolveFilament(f, parent) : f;
+      (doc as unknown as Record<string, unknown>)._optTagsAwaitReview = _optTagsAwaitReview;
+      return doc;
     });
 
     // Return in the same order the caller requested so the UI's columns
