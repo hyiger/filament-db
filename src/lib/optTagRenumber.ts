@@ -22,7 +22,7 @@
  * For every unmarked filament (`optTagsSpec: { $ne: true }` — trashed rows
  * included, they can be restored), `classifyOptTags` decides:
  *
- *  - `trivial` / `spec` → mark it. Nothing to translate.
+ *  - `trivial` → mark it. Nothing to translate (the remap would not change it).
  *  - `legacy` → translate with `remapLegacyOptTags`, mark it, bump
  *    `updatedAt` so the change propagates by LWW to a peer that has not run
  *    the pass. Legacy concepts with no spec equivalent are dropped and
@@ -32,7 +32,7 @@
  *    a record that then fails would mark the row settled with no trace of what
  *    it lost, and no later pass could reconstruct it. If the conversion is
  *    then skipped (concurrent edit), the just-written record is pulled back.
- *  - `ambiguous` / `inconsistent` → leave it unmarked. Data health lists it
+ *  - `ambiguous` → leave it unmarked. Data health lists it
  *    with both readings; `resolveOptTagNumbering` applies the user's answer.
  *
  * Every write is conditioned on the row still being unmarked and, for a
@@ -65,7 +65,7 @@ import {
   remapLegacyOptTags,
   sameOptTagSet,
   type OptTagClassifiable,
-  type OptTagVerdict,
+  SPEC_ONLY_IDS,
 } from "./optTagLegacy";
 
 export interface MinimalRenumberCollection {
@@ -122,18 +122,17 @@ export interface OptTagRenumberSummary {
   scanned: number;
   /** Legacy → spec, marked. */
   converted: number;
-  /** Already spec (or nothing to translate), marked. */
+  /** Nothing to translate, marked. */
   verified: number;
   /** Left unmarked for Data health. */
   ambiguous: number;
-  inconsistent: number;
   /** A conditional write matched nothing (concurrent edit) — next pass. */
   skipped: number;
   dropped: DroppedLegacyTags[];
 }
 
 function emptySummary(): OptTagRenumberSummary {
-  return { scanned: 0, converted: 0, verified: 0, ambiguous: 0, inconsistent: 0, skipped: 0, dropped: [] };
+  return { scanned: 0, converted: 0, verified: 0, ambiguous: 0, skipped: 0, dropped: [] };
 }
 
 /** `$set` fragment translating a legacy-numbered OPT snapshot, if the row has one. */
@@ -193,8 +192,8 @@ export async function renumberOptTags(
   for (const row of rows) {
     summary.scanned++;
     const verdict = classifyOptTags(row as OptTagClassifiable);
-    if (verdict.kind === "ambiguous" || verdict.kind === "inconsistent") {
-      summary[verdict.kind]++;
+    if (verdict.kind === "ambiguous") {
+      summary.ambiguous++;
       continue;
     }
 
@@ -247,7 +246,6 @@ export async function renumberOptTags(
       converted: summary.converted,
       verified: summary.verified,
       ambiguous: summary.ambiguous,
-      inconsistent: summary.inconsistent,
       skipped: summary.skipped,
     });
   }
@@ -260,7 +258,7 @@ export function describeRenumberSummary(s: OptTagRenumberSummary): string | null
   const parts = [
     `converted ${s.converted}`,
     `verified ${s.verified}`,
-    `awaiting review ${s.ambiguous + s.inconsistent}`,
+    `awaiting review ${s.ambiguous}`,
   ];
   if (s.skipped > 0) parts.push(`skipped ${s.skipped} (concurrent edit — next pass)`);
   if (s.dropped.length > 0) {
@@ -281,12 +279,20 @@ export interface PendingOptTagRow {
   vendor: string | null;
   type: string | null;
   trashed: boolean;
-  verdict: Extract<OptTagVerdict, { kind: "ambiguous" | "inconsistent" }>["kind"];
+  /** Always `ambiguous` — the only verdict that leaves a row for the user. */
+  verdict: "ambiguous";
   /**
    * The array equals what the historical backfill script wrote for this
    * name + type — likely entered in this app, shown as a hint, never decided.
    */
   matchesBackfill: boolean;
+  /**
+   * Ids in the array the pre-#1227 FORM could not have written (spec-only
+   * ids) — likely read from a tag or typed from the spec, shown as a hint,
+   * never decided: the pre-#1227 CSV importer could store them too (Codex P1
+   * r3 on PR #1228).
+   */
+  specOnlyIds: number[];
   /** The stored ids, verbatim order — echoed back as `expectedTags` on resolve. */
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
@@ -307,7 +313,7 @@ export async function scanUnverifiedOptTags(db: MinimalRenumberDb): Promise<Pend
   const out: PendingOptTagRow[] = [];
   for (const row of rows) {
     const verdict = classifyOptTags(row as OptTagClassifiable);
-    if (verdict.kind !== "ambiguous" && verdict.kind !== "inconsistent") continue;
+    if (verdict.kind !== "ambiguous") continue;
     const readings = describeOptTagReadings(row.optTags as unknown[]);
     out.push({
       filamentId: String(row._id),
@@ -316,7 +322,8 @@ export async function scanUnverifiedOptTags(db: MinimalRenumberDb): Promise<Pend
       type: typeof row.type === "string" ? row.type : null,
       trashed: row._deletedAt != null,
       verdict: verdict.kind,
-      matchesBackfill: verdict.kind === "ambiguous" && verdict.hint === "backfill-derivation",
+      matchesBackfill: verdict.hint === "backfill-derivation",
+      specOnlyIds: readings.stored.filter((id) => SPEC_ONLY_IDS.has(id)),
       ...readings,
     });
   }

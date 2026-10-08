@@ -2062,7 +2062,9 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
         // 18 was the app's MARBLE and is deprecated upstream → provably legacy →
         // remapped (18→57 imitates_marble, 2→20 transparent) and verified.
         ["Legacy Ids PLA", "Acme", "PLA", "#112233", "18, 2", ""],
-        // 30 contains_carbon never existed in the app table → provably spec.
+        // 30 contains_carbon never existed in the app's FORM, but its CSV
+        // importer stored any id → a hint, not proof: kept verbatim and left
+        // unverified for Data health (Codex P1 r3 on PR #1228).
         ["Spec Ids PC", "Prusament", "PC", "#112233", "31,12,4,30", ""],
       ]),
     );
@@ -2075,7 +2077,7 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(legacy.optTagsSpec).toBe(true);
     const spec = await Filament.findOne({ name: "Spec Ids PC" }).lean();
     expect(spec.optTags).toEqual([31, 12, 4, 30]);
-    expect(spec.optTagsSpec).toBe(true);
+    expect(spec.optTagsSpec).toBe(false);
   });
 
   it("CREATE variant inheriting the parent's tags is not pinned (empty === inherit)", async () => {

@@ -74,9 +74,11 @@ interface TagReviewRow {
   vendor: string | null;
   type: string | null;
   trashed: boolean;
-  verdict: "ambiguous" | "inconsistent";
+  verdict: "ambiguous";
   /** The array equals the old backfill script's output for this type — a hint, not a decision. */
   matchesBackfill: boolean;
+  /** Ids the pre-v1.83 form could not write (spec-only) — a hint toward "read from a tag", not a decision. */
+  specOnlyIds: number[];
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
   asSpec: number[];
@@ -735,43 +737,41 @@ export default function DataHealthPage() {
                 <p className="text-xs text-gray-500 mb-2">
                   {t("health.optTags.stored", { ids: r.stored.join(", ") })}
                 </p>
+                {/* Hints only — "likely", never decided for the user (Codex P1
+                    rounds 1 and 3 on PR #1228). The two are mutually exclusive:
+                    the backfill wrote legacy ids only. */}
                 {r.matchesBackfill && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
                     {t("health.optTags.backfillHint")}
                   </p>
                 )}
-                {r.verdict === "inconsistent" ? (
-                  <p className="text-sm text-gray-700 dark:text-gray-300">
-                    {t("health.optTags.inconsistent")}
+                {r.specOnlyIds.length > 0 && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                    {t("health.optTags.specOnlyHint", { tags: tagLabels(r.specOnlyIds) })}
                   </p>
-                ) : (
-                  <>
-                    <p className="text-sm text-gray-700 dark:text-gray-300">
-                      {t("health.optTags.ifLegacy", { tags: tagLabels(r.asLegacy.tags) })}
-                    </p>
-                    {r.asLegacy.dropped.length > 0 && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">
-                        {t("health.optTags.ifLegacyDropped", {
-                          tags: r.asLegacy.dropped.map((id) => legacyOptTagLabel(t, id)).join(", "),
-                        })}
-                      </p>
-                    )}
-                    <p className="text-sm text-gray-700 dark:text-gray-300">
-                      {t("health.optTags.ifSpec", { tags: tagLabels(r.asSpec) })}
-                    </p>
-                  </>
                 )}
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifLegacy", { tags: tagLabels(r.asLegacy.tags) })}
+                </p>
+                {r.asLegacy.dropped.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    {t("health.optTags.ifLegacyDropped", {
+                      tags: r.asLegacy.dropped.map((id) => legacyOptTagLabel(t, id)).join(", "),
+                    })}
+                  </p>
+                )}
+                <p className="text-sm text-gray-700 dark:text-gray-300">
+                  {t("health.optTags.ifSpec", { tags: tagLabels(r.asSpec) })}
+                </p>
                 <div className="flex gap-2 flex-wrap mt-3">
-                  {r.verdict !== "inconsistent" && (
-                    <button
-                      type="button"
-                      onClick={() => resolveTags(r, "convert")}
-                      disabled={busy}
-                      className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700"
-                    >
-                      {t("health.optTags.action.convert")}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => resolveTags(r, "convert")}
+                    disabled={busy}
+                    className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700"
+                  >
+                    {t("health.optTags.action.convert")}
+                  </button>
                   <button
                     type="button"
                     onClick={() => resolveTags(r, "keep")}

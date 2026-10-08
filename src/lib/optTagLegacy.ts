@@ -197,7 +197,13 @@ export const LEGACY_ONLY_IDS: ReadonlySet<number> = new Set(
   [...LEGACY_IDS].filter((id) => !SPEC_IDS.has(id)),
 );
 
-/** Spec ids the pre-#1227 app could never have written (30, 40–48, 50–70, 72–74). */
+/**
+ * Spec ids the pre-#1227 app's FORM could never have written (30, 40–48,
+ * 50–70, 72–74). NOT provenance: its CSV importer and schema stored any
+ * encodable integer, so a legacy-era row can carry a 30 beside a legacy 2
+ * (Codex P1 r3 on PR #1228). The classifier treats them as inert (the remap
+ * keeps them verbatim) and surfaces them only as a Data health HINT.
+ */
 export const SPEC_ONLY_IDS: ReadonlySet<number> = new Set(
   [...SPEC_IDS].filter((id) => !LEGACY_IDS.has(id)),
 );
@@ -379,50 +385,53 @@ export interface OptTagClassifiable {
 }
 
 export type OptTagVerdict =
-  /** Empty, or only fixed-point ids: the remap is a no-op either way. */
+  /** Empty, or only inert ids: the remap is a no-op either way. */
   | { kind: "trivial" }
   /** Provably the legacy numbering — remap it. */
   | { kind: "legacy"; reason: "legacy-only-id" | "opt-provenance" }
-  /** Provably NOT the legacy numbering — leave it alone. */
-  | { kind: "spec"; reason: "spec-only-id" }
   /**
-   * Both readings are consistent and nothing outside the array decides. The
-   * optional hint is shown to the user: the array equals what the historical
-   * backfill script wrote for this name + type, which makes "entered in this
-   * app" the likely answer — likely, not proven, so it stays the user's call.
+   * Both readings are consistent and nothing outside the array decides —
+   * which is every other case, since no content can prove the SPEC numbering.
+   * The optional hint is shown to the user and decides nothing:
+   * `spec-only-id` — the array carries an id the pre-#1227 FORM could not
+   * write (likely a vendor tag, or spec ids typed into a CSV);
+   * `backfill-derivation` — the array equals what the historical backfill
+   * script wrote for this name + type (likely entered in this app).
    */
-  | { kind: "ambiguous"; hint?: "backfill-derivation" }
-  /** Ids from both exclusive sets at once — no single numbering explains it. */
-  | { kind: "inconsistent" };
+  | { kind: "ambiguous"; hint?: "backfill-derivation" | "spec-only-id" };
 
 /**
- * An id the remap leaves untouched AND that proves nothing about the numbering:
- * a fixed point (same meaning in both tables), or an id in NEITHER table — the
- * pre-#1227 CSV importer and the schema accepted any non-negative integer, so
- * `99` sits in a legacy array as easily as in a spec one and reads as `tag 99`
- * either way. Only a SPEC-ONLY id is evidence of the spec numbering; "not in
- * the legacy table" is not (Codex P1 on PR #1228).
+ * An id the remap leaves untouched: a fixed point (same meaning in both
+ * tables), or any id outside the legacy table — a spec-only id or one in
+ * neither table. Such an id is identical under both readings, so it proves
+ * nothing about the array it sits in: the pre-#1227 CSV importer and schema
+ * accepted any non-negative integer, so a legacy-era `[2, 30]` or `[2, 99]` is
+ * as possible as a spec one (Codex P1 r2 + r3 on PR #1228). "Not in the legacy
+ * table" is never evidence of the spec numbering.
  */
 export function isInertOptTagId(id: number): boolean {
-  return FIXED_POINT_IDS.has(id) || (!LEGACY_IDS.has(id) && !SPEC_IDS.has(id));
+  return FIXED_POINT_IDS.has(id) || !LEGACY_IDS.has(id);
 }
 
 /**
  * Decide which numbering a stored `optTags` array is in.
  *
  * In order:
- *  1. Nothing usable, or only INERT ids — ids that mean the same in both
- *     numberings (4, 13, 16, 17, 24, 31, 71 — plus 29, whose legacy
- *     TRIPLE_COLOR IS the spec's coextruded) and ids in NEITHER table, which
- *     read as `tag N` under both — → `trivial`.
- *  2. A spec-only id (30, 40–48, 50–70, 72–74) → the pre-#1227 app could never
- *     have written it → `spec`. If it ALSO carries 18 → `inconsistent`. An id
- *     outside BOTH tables is NOT evidence (Codex P1 on PR #1228): the pre-#1227
- *     CSV importer and the schema accepted any non-negative integer, so a
- *     legacy `[2, 99]` is as possible as a spec one — treating the 99 as proof
- *     would freeze its 2 as antibacterial. Such an id is inert: it decides
- *     nothing and the remap keeps it verbatim.
- *  3. The legacy-only id 18 → `legacy`.
+ *  1. Nothing usable, or only INERT ids — ids the remap leaves untouched:
+ *     fixed points that mean the same in both numberings (4, 13, 16, 17, 24,
+ *     31, 71 — plus 29, whose legacy TRIPLE_COLOR IS the spec's coextruded)
+ *     and ids outside the legacy table (spec-only ids, ids in neither table)
+ *     — → `trivial`. Converting such an array is a no-op; nothing to decide.
+ *  2. NO content proves the SPEC numbering (Codex P1 r2 + r3 on PR #1228). The
+ *     pre-#1227 FORM could not write a spec-only id (30, 40–48, 50–70, 72–74)
+ *     or an id in neither table, but the pre-#1227 CSV importer and schema
+ *     stored any encodable integer, so a legacy-era `[2, 30]` or `[2, 99]` is
+ *     as possible as a spec one — taking the 30 or 99 as proof would freeze
+ *     the 2 as antibacterial. Such an id decides nothing about its
+ *     neighbours and rides through the remap verbatim.
+ *  3. The legacy-only id 18 (deprecated upstream) → `legacy`. A spec-only id
+ *     beside it is a stray the legacy importer let through and rides along —
+ *     there is no "inconsistent" array; every array has both readings.
  *  4. OpenPrintTag provenance: `openprinttagSnapshot.optTags` is what
  *     `mapToFilamentPayload` offered, in the legacy numbering by construction.
  *     If the stored array equals it, the importer or the re-sync wrote the
@@ -436,10 +445,14 @@ export function isInertOptTagId(id: number): boolean {
  *     the tag carries the SPEC id — those coincide only on the fixed points,
  *     which are trivial anyway. A collision needs two DIFFERENT concepts whose
  *     legacy and spec ids happen to match on one product.)
- *  5. Otherwise → `ambiguous`, with a `backfill-derivation` hint when the
- *     array equals what the historical backfill script wrote for this
- *     name + type. Equality is likely provenance, not proof — a vendor tag can
- *     carry the same small set — so it informs the user and decides nothing.
+ *  5. Otherwise → `ambiguous`, with a hint: `spec-only-id` when the array
+ *     carries an id the old form could not write (likely a vendor tag, or spec
+ *     ids typed into a CSV), else `backfill-derivation` when it equals what the
+ *     historical backfill script wrote for this name + type (likely entered in
+ *     this app). Likely is not proof — a vendor tag can carry the backfill's
+ *     small set, a legacy CSV can carry a 30 — so a hint informs the user and
+ *     decides nothing. (The two never both apply: the backfill wrote legacy
+ *     ids only.)
  */
 export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   const ids = usableIds(row.optTags);
@@ -447,11 +460,9 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
     return { kind: "trivial" };
   }
 
-  const hasSpecOnly = ids.some((id) => SPEC_ONLY_IDS.has(id));
-  const hasLegacyOnly = ids.some((id) => LEGACY_ONLY_IDS.has(id));
-  if (hasSpecOnly && hasLegacyOnly) return { kind: "inconsistent" };
-  if (hasSpecOnly) return { kind: "spec", reason: "spec-only-id" };
-  if (hasLegacyOnly) return { kind: "legacy", reason: "legacy-only-id" };
+  if (ids.some((id) => LEGACY_ONLY_IDS.has(id))) {
+    return { kind: "legacy", reason: "legacy-only-id" };
+  }
 
   const snapshotTags = row.openprinttagSnapshot?.optTags;
   if (Array.isArray(snapshotTags)) {
@@ -466,17 +477,19 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
     if (linked) return { kind: "legacy", reason: "opt-provenance" };
   }
 
+  if (ids.some((id) => SPEC_ONLY_IDS.has(id))) {
+    return { kind: "ambiguous", hint: "spec-only-id" };
+  }
   if (sameOptTagSet(ids, deriveLegacyBackfillTags(row.name, row.type))) {
     return { kind: "ambiguous", hint: "backfill-derivation" };
   }
-
   return { kind: "ambiguous" };
 }
 
 /**
  * True when a row's `optTags` must not be changed piecemeal: it carries no
- * `optTagsSpec: true` marker and its array is not trivially spec (an unmarked
- * legacy, ambiguous or inconsistent array). Shared by the PUT route — which
+ * `optTagsSpec: true` marker and its array is not trivial (an unmarked legacy
+ * or ambiguous array). Shared by the PUT route — which
  * refuses a changed array on such a row with 409 `opt_tags_pending_review`,
  * because ticking one spec-numbered box into a legacy array would have to be
  * stored as either all-legacy or all-spec and both lose a tag's meaning — and
@@ -490,8 +503,40 @@ export function optTagsAwaitReview(
   row: OptTagClassifiable & { optTagsSpec?: boolean | null },
 ): boolean {
   if (row.optTagsSpec === true) return false;
-  const kind = classifyOptTags(row).kind;
-  return kind !== "trivial" && kind !== "spec";
+  return classifyOptTags(row).kind !== "trivial";
+}
+
+/** The row-shape both gates below read. */
+export type OptTagReviewRow = OptTagClassifiable & { optTagsSpec?: boolean | null };
+
+/**
+ * The row whose `optTags` a reader actually sees: the variant's own when it is
+ * non-empty, else the parent's — resolveFilament's whole-array fallback (GH
+ * #477). A variant with an empty own array inherits its parent's review state
+ * along with its tags.
+ */
+export function optTagSourceRow<T extends { optTags?: readonly unknown[] | null }>(
+  own: T,
+  parent: T | null | undefined,
+): T {
+  if (Array.isArray(own.optTags) && own.optTags.length > 0) return own;
+  return parent ?? own;
+}
+
+/**
+ * Do the EFFECTIVE tags of `own` (its own, or the inherited ones) still await
+ * numbering review? The gate every OpenPrintTag OUTPUT takes — the `.bin`
+ * download route and the desktop NFC write — because an unreviewed array put
+ * on a tag is read by every other OpenPrintTag reader as spec ids: the app's
+ * old 2 "transparent" becomes "antibacterial" on the wire, the corruption this
+ * migration exists to stop (Codex P1 r3 on PR #1228). Refused, not omitted: a
+ * tag silently missing its tags looks fine until it is read.
+ */
+export function effectiveOptTagsAwaitReview(
+  own: OptTagReviewRow,
+  parent?: OptTagReviewRow | null,
+): boolean {
+  return optTagsAwaitReview(optTagSourceRow(own, parent));
 }
 
 /**
@@ -565,8 +610,7 @@ export interface ParsedOptTagsCell {
   unknownTokens: string[];
   /**
    * Set when the cell cannot be stored faithfully: it mixes tag NAMES (spec
-   * ids by definition) with bare numbers the classifier could not place in a
-   * numbering. One array carries one marker, so `transparent,2` would have to
+   * ids by definition) with bare numbers the classifier leaves ambiguous. One array carries one marker, so `transparent,2` would have to
    * land unverified as `[20, 2]` — and a later Convert on Data health would
    * remap the 20 as legacy METAL_FILL into 46, a metal tag nobody entered
    * (Codex P2 on PR #1228). The importer skips the row with this reason;
@@ -583,8 +627,9 @@ export interface ParsedOptTagsCell {
  * table) and bare NUMBERS. Numbers are the hazard: a pre-#1227 export wrote
  * legacy ids, a post-#1227 export of an unreviewed row writes bare ids too, and
  * neither says which numbering it is. They go through the same classifier the
- * startup pass uses — a provable legacy set is remapped, a provable spec set is
- * kept, and anything else is kept VERBATIM and flagged unverified — unless the
+ * startup pass uses — a provable legacy set is remapped, a set the remap would
+ * not change is kept as verified, and anything else is kept VERBATIM and
+ * flagged unverified — unless the
  * cell ALSO carries names, in which case it is rejected (`rejectReason`): the
  * names are known to be spec ids and the numbers are not known to be anything,
  * and a single array cannot record that split. Empty tokens are dropped BEFORE
@@ -620,7 +665,7 @@ export function parseOptTagsCell(
     const verdict = classifyOptTags({ optTags: numeric, name: ctx.name, type: ctx.type });
     if (verdict.kind === "legacy") {
       numericTags = remapLegacyOptTags(numeric).tags;
-    } else if (verdict.kind === "ambiguous" || verdict.kind === "inconsistent") {
+    } else if (verdict.kind === "ambiguous") {
       if (named.length > 0) {
         return {
           tags: [],

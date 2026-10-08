@@ -709,6 +709,20 @@ function FilamentDetail() {
         return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d", ntagSize };
       }
 
+      // GH #1227: an UNREVIEWED tag array must not go on the wire — the app's
+      // pre-v1.83 ids would be read as spec ids by every other OpenPrintTag
+      // reader, the corruption this migration stops (Codex P1 r3 on PR
+      // #1228). Refuse rather than omit: a tag silently missing "transparent"
+      // looks fine until it is read. The flag is server-computed from the row
+      // that SUPPLIES the effective array, so an inheriting variant reports
+      // its parent's state; the `.bin` download route makes the same refusal
+      // (409). The OpenTag3D path above carries no OpenPrintTag tag ids and is
+      // unaffected.
+      if (filament._optTagsAwaitReview) {
+        toast(t("detail.nfc.optTagsPendingReview"), "error");
+        return null;
+      }
+
       // Default / SLIX2 / blank → OpenPrintTag CBOR.
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,
@@ -1410,6 +1424,14 @@ function FilamentDetail() {
               <button
                 type="button"
                 onClick={() => {
+                  // GH #1227: the route answers 409 for an unreviewed tag array;
+                  // an anchor click would render that JSON as a page, so refuse
+                  // here with the same message the NFC write shows.
+                  if (filament._optTagsAwaitReview) {
+                    toast(t("detail.nfc.optTagsPendingReview"), "error");
+                    exportMenuRef.current?.removeAttribute("open");
+                    return;
+                  }
                   const a = document.createElement("a");
                   a.href = `/api/filaments/${filament._id}/openprinttag`;
                   a.download = "";

@@ -7,6 +7,7 @@ import "@/models/Nozzle";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
+import { effectiveOptTagsAwaitReview, type OptTagReviewRow } from "@/lib/optTagLegacy";
 
 export async function GET(
   request: NextRequest,
@@ -47,9 +48,37 @@ export async function GET(
     // Resolve inherited values if this is a variant
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let resolved: any = filament;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let parent: any = null;
     if (filament.parentId) {
-      const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null }).lean();
+      parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null }).lean();
       resolved = resolveFilament(filament, parent);
+    }
+
+    // GH #1227: never put an UNREVIEWED tag array on the wire. A row written
+    // before v1.83 whose numbering the startup pass could not prove still
+    // holds the app's old ids; encoded as OpenPrintTag ids they are read by
+    // every other reader with the spec's meaning (the old 2 "transparent"
+    // becomes "antibacterial") — the corruption this migration exists to stop
+    // (Codex P1 r3 on PR #1228). Refused, not omitted: a `.bin` silently
+    // missing its tags looks fine until it is read. The gate reads the row
+    // that SUPPLIES the effective array (resolveFilament's whole-array
+    // fallback), so an inheriting variant answers for its parent's state. The
+    // desktop write path makes the same refusal from `_optTagsAwaitReview`.
+    if (
+      effectiveOptTagsAwaitReview(
+        filament as unknown as OptTagReviewRow,
+        parent as OptTagReviewRow | null,
+      )
+    ) {
+      return NextResponse.json(
+        {
+          error: "opt_tags_pending_review",
+          message:
+            "This filament's tags were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed; written now they would be read as the wrong tags. Resolve them under Settings → Data health first.",
+        },
+        { status: 409 },
+      );
     }
 
     // #732: compute actual remaining weight from the SAME spool whose id we

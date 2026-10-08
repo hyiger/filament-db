@@ -34,24 +34,24 @@ describe("renumberOptTags", () => {
     await col().insertMany([
       // 18 (app MARBLE) is deprecated upstream → provably legacy. 9 FLEXIBLE drops.
       { name: "Legacy Marble", vendor: "V", type: "PLA", optTags: [18, 2, 9], updatedAt: OLD },
-      // Spec-only 30 → written by a vendor tag, not this app.
+      // Spec-only 30 is a HINT, not proof — the legacy CSV importer could store
+      // it beside a legacy 12 (Codex P1 r3) → ambiguous, listed with the hint.
       { name: "PC Blend CF", vendor: "Prusament", type: "PC", optTags: [31, 12, 4, 30], updatedAt: OLD },
       // Only fixed points → nothing to translate.
       { name: "Plain Abrasive", vendor: "V", type: "PLA", optTags: [4, 16], updatedAt: OLD },
       { name: "No Tags", vendor: "V", type: "PLA", optTags: [], updatedAt: OLD },
       // Valid under both readings, nothing outside the array → the user's call.
       { name: "Ambiguous Transparent", vendor: "V", type: "PETG", optTags: [2], updatedAt: OLD },
-      // Legacy-only + spec-only together → no single numbering explains it.
-      { name: "Inconsistent", vendor: "V", type: "PLA", optTags: [18, 30], updatedAt: OLD },
+      // 18 proves legacy; the spec-only 30 beside it is a stray that rides along.
+      { name: "Stray Thirty", vendor: "V", type: "PLA", optTags: [18, 30], updatedAt: OLD },
     ]);
 
     const first = await renumberOptTags(db(), NOW);
     expect(first).toMatchObject({
       scanned: 6,
-      converted: 1,
-      verified: 3,
-      ambiguous: 1,
-      inconsistent: 1,
+      converted: 2,
+      verified: 2,
+      ambiguous: 2,
       skipped: 0,
     });
     expect(first.dropped).toEqual([
@@ -65,8 +65,8 @@ describe("renumberOptTags", () => {
 
     const pc = await byName("PC Blend CF");
     expect(pc?.optTags).toEqual([31, 12, 4, 30]); // untouched
-    expect(pc?.optTagsSpec).toBe(true);
-    expect(pc?.updatedAt).toEqual(OLD); // only the marker changed — no LWW bump
+    expect(pc?.optTagsSpec).toBeUndefined(); // the user's call, on Data health with the spec-only hint
+    expect(pc?.updatedAt).toEqual(OLD);
 
     expect((await byName("Plain Abrasive"))?.optTagsSpec).toBe(true);
     expect((await byName("No Tags"))?.optTagsSpec).toBe(true);
@@ -74,11 +74,13 @@ describe("renumberOptTags", () => {
     const amb = await byName("Ambiguous Transparent");
     expect(amb?.optTags).toEqual([2]);
     expect(amb?.optTagsSpec).toBeUndefined();
-    expect((await byName("Inconsistent"))?.optTagsSpec).toBeUndefined();
+    const stray = await byName("Stray Thirty");
+    expect(stray?.optTags).toEqual([57, 30]); // imitates_marble; the 30 rides along verbatim
+    expect(stray?.optTagsSpec).toBe(true);
 
     // Idempotent: the second pass sees only the two unsettled rows and writes nothing.
     const second = await renumberOptTags(db(), new Date("2026-10-09T00:00:00.000Z"));
-    expect(second).toMatchObject({ scanned: 2, converted: 0, verified: 0, ambiguous: 1, inconsistent: 1 });
+    expect(second).toMatchObject({ scanned: 2, converted: 0, verified: 0, ambiguous: 2 });
     expect((await byName("Legacy Marble"))?.optTags).toEqual([57, 20]); // NOT [57, 46] — no double remap
 
     // The run is recorded with the drops.
@@ -106,7 +108,8 @@ describe("renumberOptTags", () => {
         name: "OPT Edited", vendor: "V", type: "PLA", optTags: [2, 17],
         settings: { openprinttag_slug: "v-ed" }, openprinttagSnapshot: { optTags: [17] },
       },
-      // Spec-decided row with a legacy snapshot: the snapshot is still translated.
+      // Trivial row (30 and 4 are both remap-invariant) with a legacy snapshot:
+      // the snapshot is still translated.
       {
         name: "Vendor Tag Linked", vendor: "V", type: "PC", optTags: [30, 4],
         settings: { openprinttag_slug: "v-pc" }, openprinttagSnapshot: { optTags: [2] },
@@ -114,7 +117,7 @@ describe("renumberOptTags", () => {
     ]);
 
     const s = await renumberOptTags(db(), NOW);
-    expect(s).toMatchObject({ scanned: 5, converted: 2, verified: 1, ambiguous: 2, inconsistent: 0 });
+    expect(s).toMatchObject({ scanned: 5, converted: 2, verified: 1, ambiguous: 2 });
 
     const imported = await byName("OPT Imported");
     expect(imported?.optTags).toEqual([17, 28]);
@@ -210,13 +213,14 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
   it("lists only the unsettled rows, with both readings, trashed flagged and purged excluded", async () => {
     await col().insertMany([
       { name: "Zed Ambiguous", vendor: "V", type: "TPU", optTags: [9, 4] },
-      { name: "Alpha Inconsistent", vendor: "V", type: "PLA", optTags: [18, 30], _deletedAt: new Date() },
+      // A spec-only id beside an ambiguous one: listed with the hint (Codex P1 r3).
+      { name: "Alpha Spec Hint", vendor: "V", type: "PLA", optTags: [2, 30], _deletedAt: new Date() },
       { name: "Purged", vendor: "V", type: "PLA", optTags: [2], _purged: true, _deletedAt: new Date() },
       { name: "Verified", vendor: "V", type: "PLA", optTags: [2], optTagsSpec: true },
       { name: "Trivial", vendor: "V", type: "PLA", optTags: [4] },
     ]);
     const pending = await scanUnverifiedOptTags(db());
-    expect(pending.map((p) => p.name)).toEqual(["Alpha Inconsistent", "Zed Ambiguous"]);
+    expect(pending.map((p) => p.name)).toEqual(["Alpha Spec Hint", "Zed Ambiguous"]);
     expect(pending[1]).toMatchObject({
       vendor: "V",
       type: "TPU",
@@ -226,7 +230,16 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
       asLegacy: { tags: [4], dropped: [9] },
       asSpec: [9, 4],
     });
-    expect(pending[0]).toMatchObject({ trashed: true, verdict: "inconsistent" });
+    expect(pending[1].specOnlyIds).toEqual([]);
+    expect(pending[0]).toMatchObject({
+      trashed: true,
+      verdict: "ambiguous",
+      matchesBackfill: false,
+      specOnlyIds: [30],
+      stored: [2, 30],
+      asLegacy: { tags: [20, 30], dropped: [] },
+      asSpec: [2, 30],
+    });
   });
 
   it("convert translates + marks (recording drops); keep marks as is; both translate the snapshot", async () => {

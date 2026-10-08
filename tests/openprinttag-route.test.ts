@@ -146,3 +146,63 @@ describe("GET /api/filaments/[id]/openprinttag — spool-scoped spool_uid (#732)
     expect(await decodedSpoolUid(res)).toBe("fa11bac0de");
   });
 });
+
+/**
+ * GH #1227 (Codex P1 r3 on PR #1228) — the download refuses an UNREVIEWED tag
+ * array: a row written before v1.83 whose numbering the startup pass could not
+ * prove still holds the app's old ids, and on the wire they would be read with
+ * the spec's meaning. The gate reads the row that supplies the effective array.
+ */
+describe("GET /api/filaments/[id]/openprinttag — unreviewed tag numbering is refused (GH #1227)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+  const col = () => mongoose.connection.collection("filaments");
+
+  beforeEach(async () => {
+    const mod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) mongoose.model("Filament", mod.default.schema);
+    Filament = mongoose.models.Filament;
+    await col().deleteMany({});
+  });
+
+  const get = (id: string) =>
+    openprinttag(new NextRequest(`http://localhost/api/filaments/${id}/openprinttag`), {
+      params: Promise.resolve({ id }),
+    });
+
+  it("409 opt_tags_pending_review for a pre-#1227 row awaiting review; 200 once it is settled", async () => {
+    // Raw insert: no marker, the ambiguous legacy/spec 2.
+    const { insertedId } = await col().insertOne({
+      name: "Legacy Transparent", vendor: "V", type: "PETG", optTags: [2],
+      instanceId: "abc123def0", _deletedAt: null,
+    });
+    const refused = await get(String(insertedId));
+    expect(refused.status).toBe(409);
+    expect((await refused.json()).error).toBe("opt_tags_pending_review");
+
+    // Settled (what Data health's Convert writes): verified spec ids go out.
+    await col().updateOne({ _id: insertedId }, { $set: { optTags: [20], optTagsSpec: true } });
+    const ok = await get(String(insertedId));
+    expect(ok.status).toBe(200);
+    const decoded = decodeOpenPrintTagBinary(new Uint8Array(await ok.arrayBuffer()));
+    expect(decoded.tagNames).toContain("transparent");
+  });
+
+  it("a variant with an empty own array answers for its PARENT's review state", async () => {
+    const { insertedId: parentId } = await col().insertOne({
+      name: "Legacy Parent", vendor: "V", type: "PLA", optTags: [2], _deletedAt: null,
+    });
+    const variant = await Filament.create({
+      name: "Legacy Variant", vendor: "V", type: "PLA", parentId, optTags: [], instanceId: "abc123def1",
+    });
+    expect((await get(String(variant._id))).status).toBe(409);
+
+    await col().updateOne({ _id: parentId }, { $set: { optTagsSpec: true } });
+    expect((await get(String(variant._id))).status).toBe(200);
+
+    // A non-empty own array (trivially spec here) wins over the parent's state.
+    await col().updateOne({ _id: parentId }, { $unset: { optTagsSpec: "" } });
+    await col().updateOne({ _id: variant._id }, { $set: { optTags: [16] } });
+    expect((await get(String(variant._id))).status).toBe(200);
+  });
+});

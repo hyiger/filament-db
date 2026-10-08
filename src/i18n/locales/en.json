@@ -2042,7 +2042,6 @@
   "health.optTags.ifLegacyDropped": "Removed on conversion (no OpenPrintTag equivalent): {tags}",
   "health.optTags.ifSpec": "If read from an NFC tag, they already mean: {tags}",
   "health.optTags.none": "nothing",
-  "health.optTags.inconsistent": "These ids cannot all belong to one numbering — fix the list by hand in the filament's Material tags, then keep it.",
   "health.optTags.trashed": "in trash",
   "health.optTags.action.convert": "Entered in this app — convert",
   "health.optTags.action.keep": "From an NFC tag — keep",
@@ -2054,5 +2053,7 @@
   "health.optTags.action.dismiss": "Dismiss",
   "health.optTags.dismissed": "Dismissed",
   "health.optTags.backfillHint": "Matches what the old backfill script wrote for this material type — these tags were most likely entered in this app.",
-  "edit.toast.optTagsPendingReview": "The tags could not be changed: they are awaiting OpenPrintTag numbering review under Settings → Data health."
+  "health.optTags.specOnlyHint": "Includes {tags} — an id the pre-v1.83 app's form could not write. These tags were most likely read from an NFC tag (or typed from the specification into a CSV).",
+  "edit.toast.optTagsPendingReview": "The tags could not be changed: they are awaiting OpenPrintTag numbering review under Settings → Data health.",
+  "detail.nfc.optTagsPendingReview": "Not written: this filament's tags are awaiting OpenPrintTag numbering review under Settings → Data health. Settle them there first — written now, the old numbering would land on the tag as OpenPrintTag ids."
 }

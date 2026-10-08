@@ -152,6 +152,15 @@ export interface FilamentDetail {
    *  Gates the "Check for updates" button so an inherited slug on a variant
    *  doesn't show a dead action. */
   _hasOwnOptLink?: boolean;
+  /**
+   * GH #1227 (response-only): the EFFECTIVE `optTags` — own, or the parent's
+   * when the own array is empty — still await OpenPrintTag numbering review.
+   * The detail page refuses Write NFC, the weight re-write and the `.bin`
+   * download for such a row; `GET …/openprinttag` answers 409 for the same
+   * reason. Computed from the row that supplies the array, so an inheriting
+   * variant reports its parent's state.
+   */
+  _optTagsAwaitReview?: boolean;
   /** GH #1103: this row has children in the TRASH. `_variants` is live-only,
    *  so a parent whose variants are all trashed reads as a standalone — and
    *  its "Convert to template" action vanished exactly when the restore route

@@ -42,7 +42,12 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
-import { sameOptTagSet, optTagsAwaitReview } from "@/lib/optTagLegacy";
+import {
+  sameOptTagSet,
+  optTagsAwaitReview,
+  effectiveOptTagsAwaitReview,
+  type OptTagReviewRow,
+} from "@/lib/optTagLegacy";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -136,6 +141,10 @@ export async function GET(
       transmissionDistance?: number | null; tdsUrl?: string | null;
       temperatures?: Record<string, number | null> | null;
     } | null = null;
+    // GH #1227: the parent row the `_optTagsAwaitReview` flag below reads when
+    // this variant's own `optTags` is empty (the array then comes from the
+    // parent, and so does its review state).
+    let parentForTags: OptTagReviewRow | null = null;
     if (filament.parentId) {
       if (raw) {
         // `inherits` rides the projection for GH #1066: the form adopts a
@@ -154,6 +163,11 @@ export async function GET(
               "tdsUrl temperatures",
           )
           .lean()) as typeof parentSummary;
+        parentForTags = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+          .select(
+            "optTags optTagsSpec name type settings.openprinttag_slug settings.openprinttag_uuid openprinttagSnapshot.optTags",
+          )
+          .lean()) as OptTagReviewRow | null;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
           .populate("compatibleNozzles")
@@ -164,6 +178,7 @@ export async function GET(
         if (parentDoc) {
           resolved = resolveFilament(filament, parentDoc);
           parentSummary = { _id: parentDoc._id, name: parentDoc.name };
+          parentForTags = parentDoc as unknown as OptTagReviewRow;
         }
       }
     }
@@ -213,6 +228,17 @@ export async function GET(
         _purged: { $ne: true },
       })) > 0;
 
+    // GH #1227: do the EFFECTIVE tags (own, or inherited when the own array is
+    // empty) still await numbering review? The detail page refuses Write NFC,
+    // the weight re-write and the `.bin` download on it (Codex P1 r3 on PR
+    // #1228) — computed from the row that SUPPLIES the array, the way
+    // resolveFilament's whole-array fallback picks it, so an inheriting
+    // variant reports its parent's state. Response-only, like the flags above.
+    const _optTagsAwaitReview = effectiveOptTagsAwaitReview(
+      filament as unknown as OptTagReviewRow,
+      parentForTags,
+    );
+
     if (parentSummary) {
       return NextResponse.json({
         ...resolved,
@@ -220,6 +246,7 @@ export async function GET(
         _parent: parentSummary,
         _hasOwnOptLink,
         _hasTrashedVariants,
+        _optTagsAwaitReview,
       });
     }
 
@@ -228,6 +255,7 @@ export async function GET(
       _variants: variants,
       _hasOwnOptLink,
       _hasTrashedVariants,
+      _optTagsAwaitReview,
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to fetch filament");

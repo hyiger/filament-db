@@ -2042,7 +2042,6 @@
   "health.optTags.ifLegacyDropped": "Bei der Umstellung entfernt (keine OpenPrintTag-Entsprechung): {tags}",
   "health.optTags.ifSpec": "Falls von einem NFC-Tag gelesen, bedeuten sie bereits: {tags}",
   "health.optTags.none": "nichts",
-  "health.optTags.inconsistent": "Diese IDs können nicht alle zu einer Nummerierung gehören — korrigieren Sie die Liste von Hand in den Material-Tags des Filaments und behalten Sie sie dann.",
   "health.optTags.trashed": "im Papierkorb",
   "health.optTags.action.convert": "In dieser App eingegeben — umstellen",
   "health.optTags.action.keep": "Von einem NFC-Tag — behalten",
@@ -2054,5 +2053,7 @@
   "health.optTags.action.dismiss": "Ausblenden",
   "health.optTags.dismissed": "Ausgeblendet",
   "health.optTags.backfillHint": "Entspricht dem, was das alte Backfill-Skript für diesen Materialtyp geschrieben hat — diese Tags wurden sehr wahrscheinlich in dieser App eingegeben.",
-  "edit.toast.optTagsPendingReview": "Die Tags konnten nicht geändert werden: sie warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung."
+  "health.optTags.specOnlyHint": "Enthält {tags} — eine ID, die das Formular der App vor v1.83 nicht schreiben konnte. Diese Tags wurden sehr wahrscheinlich von einem NFC-Tag gelesen (oder aus der Spezifikation in eine CSV eingetragen).",
+  "edit.toast.optTagsPendingReview": "Die Tags konnten nicht geändert werden: sie warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung.",
+  "detail.nfc.optTagsPendingReview": "Nicht geschrieben: Die Tags dieses Filaments warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung. Klären Sie sie dort zuerst — jetzt geschrieben, käme die alte Nummerierung als OpenPrintTag-IDs auf den Tag."
 }

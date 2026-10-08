@@ -950,6 +950,16 @@
               }
             }
           },
+          "409": {
+            "description": "opt_tags_pending_review \u2014 the filament's effective optTags (own, or inherited from the parent when the own array is empty) still await OpenPrintTag numbering review (GH #1227). Written now, the pre-v1.83 ids would land on the tag as OpenPrintTag ids, so the download is refused; settle the row under Settings \u2192 Data health (POST /api/opt-tag-review/{id}) first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "422": {
             "description": "No instance ID available to encode \u2014 neither the selected spool nor the filament carries one",
             "content": {
