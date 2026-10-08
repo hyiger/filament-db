@@ -113,8 +113,24 @@ describe("classifyOptTags", () => {
     // The live library's "PC Blend Carbon Fiber Black": spec-correct, 30 is spec-only.
     expect(classifyOptTags({ optTags: [31, 12, 4, 30] })).toEqual({ kind: "spec", reason: "spec-only-id" });
     expect(classifyOptTags({ optTags: [2, 60] })).toEqual({ kind: "spec", reason: "spec-only-id" });
-    // Beyond both tables is still "not written by the app".
-    expect(classifyOptTags({ optTags: [2, 99] })).toEqual({ kind: "spec", reason: "spec-only-id" });
+  });
+
+  it("an id outside BOTH tables is inert — it decides nothing (Codex P1 r2 on PR #1228)", () => {
+    // The pre-#1227 CSV importer and the schema accepted any non-negative
+    // integer, so a legacy row can carry 99 as easily as a spec one. Reading
+    // "not in the legacy table" as "spec" marked a legacy [2, 99] verified and
+    // froze its 2 (app transparent) as spec 2 (antibacterial).
+    expect(classifyOptTags({ optTags: [2, 99] })).toEqual({ kind: "ambiguous" });
+    expect(optTagsAwaitReview({ optTags: [2, 99] })).toBe(true);
+    // Alone, or beside fixed points, it is trivial: `tag 99` under both readings.
+    expect(classifyOptTags({ optTags: [99] })).toEqual({ kind: "trivial" });
+    expect(classifyOptTags({ optTags: [4, 99] })).toEqual({ kind: "trivial" });
+    // It never masks real evidence in either direction.
+    expect(classifyOptTags({ optTags: [18, 99] })).toEqual({ kind: "legacy", reason: "legacy-only-id" });
+    expect(classifyOptTags({ optTags: [99, 50] })).toEqual({ kind: "spec", reason: "spec-only-id" });
+    expect(classifyOptTags({ optTags: [18, 99, 50] })).toEqual({ kind: "inconsistent" });
+    // And the remap keeps it verbatim on a conversion.
+    expect(remapLegacyOptTags([2, 99])).toEqual({ tags: [20, 99], dropped: [] });
   });
 
   it("legacy: the deprecated id 18 proves the legacy numbering", () => {
@@ -197,6 +213,13 @@ describe("describeOptTagReadings / sameOptTagSet", () => {
       asLegacy: { tags: [20, 4], dropped: [9] },
       asSpec: [2, 9, 4],
     });
+    // An id the spec doesn't define stays visible in the spec reading (the
+    // page labels it "Tag 99"); only the legacy-only 18 is meaningless there.
+    expect(describeOptTagReadings([18, 2, 99])).toEqual({
+      stored: [18, 2, 99],
+      asLegacy: { tags: [LEGACY_TO_SPEC[18], 20, 99], dropped: [] },
+      asSpec: [2, 99],
+    });
   });
 
   it("sameOptTagSet is order-insensitive and ignores unusable entries", () => {
@@ -239,21 +262,23 @@ describe("optTagIdForString", () => {
 
 describe("parseOptTagsCell", () => {
   it("parses names (verified) and empty cells", () => {
-    expect(parseOptTagsCell("")).toEqual({ tags: [], verified: true, unknownTokens: [] });
+    expect(parseOptTagsCell("")).toEqual({ tags: [], verified: true, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("transparent, glitter, matte")).toEqual({
       tags: [20, 23, 16],
       verified: true,
       unknownTokens: [],
+      rejectReason: null,
     });
   });
 
   it("classifies bare ids: provable sets are remapped/kept, ambiguous ones are kept unverified", () => {
-    expect(parseOptTagsCell("18, 2", { name: "X", type: "PLA" })).toEqual({ tags: [57, 20], verified: true, unknownTokens: [] });
-    expect(parseOptTagsCell("31,12,4,30")).toEqual({ tags: [31, 12, 4, 30], verified: true, unknownTokens: [] });
+    expect(parseOptTagsCell("18, 2", { name: "X", type: "PLA" })).toEqual({ tags: [57, 20], verified: true, unknownTokens: [], rejectReason: null });
+    expect(parseOptTagsCell("31,12,4,30")).toEqual({ tags: [31, 12, 4, 30], verified: true, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("28,16", { name: "Tagged PLA", type: "PLA" })).toEqual({
       tags: [28, 16],
       verified: false,
       unknownTokens: [],
+      rejectReason: null,
     });
     // The historical backfill output is LIKELY legacy, not provably so: kept
     // verbatim and unverified, like any other ambiguous numeric set.
@@ -261,15 +286,40 @@ describe("parseOptTagsCell", () => {
       tags: [12, 15],
       verified: false,
       unknownTokens: [],
+      rejectReason: null,
     });
   });
 
+  it("refuses a cell that MIXES names with ambiguous bare ids (Codex P2 r2 on PR #1228)", () => {
+    // `transparent,2` stored unverified as [20, 2] would see its 20 — a spec id
+    // by construction — remapped as legacy METAL_FILL into 46 on a later
+    // Convert. One array carries one marker, so the row is refused instead.
+    const rejected = parseOptTagsCell("transparent, 2", { name: "X", type: "PLA" });
+    expect(rejected.tags).toEqual([]);
+    expect(rejected.verified).toBe(false);
+    expect(rejected.rejectReason).toMatch(/mixes tag names with numeric ids .*\(2\)/);
+    // The words that resolved to nothing are still reported alongside.
+    expect(parseOptTagsCell("transparent, bogus, 28")).toMatchObject({
+      tags: [],
+      unknownTokens: ["bogus"],
+      rejectReason: expect.stringContaining("(28)"),
+    });
+    // Names beside a PROVABLE numeric set are fine — 18 proves legacy, 30
+    // proves spec, 4 means the same either way.
+    expect(parseOptTagsCell("transparent, 18")).toEqual({ tags: [20, LEGACY_TO_SPEC[18]], verified: true, unknownTokens: [], rejectReason: null });
+    expect(parseOptTagsCell("transparent, 30")).toEqual({ tags: [20, 30], verified: true, unknownTokens: [], rejectReason: null });
+    expect(parseOptTagsCell("transparent, 4")).toEqual({ tags: [20, 4], verified: true, unknownTokens: [], rejectReason: null });
+    // Numbers alone stay the unverified-for-review path, as before.
+    expect(parseOptTagsCell("2, 99")).toEqual({ tags: [2, 99], verified: false, unknownTokens: [], rejectReason: null });
+  });
+
   it("drops empty tokens (no phantom tag 0), negatives and unknown words — and reports the words", () => {
-    expect(parseOptTagsCell("28,,16,")).toEqual({ tags: [28, 16], verified: false, unknownTokens: [] });
+    expect(parseOptTagsCell("28,,16,")).toEqual({ tags: [28, 16], verified: false, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("matte, bogus, -1, 30")).toEqual({
       tags: [16, 30],
       verified: true,
       unknownTokens: ["bogus", "-1"],
+      rejectReason: null,
     });
   });
 });

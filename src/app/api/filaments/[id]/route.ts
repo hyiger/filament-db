@@ -448,9 +448,21 @@ export async function PUT(
     // row whose stored array still awaits numbering review (no marker, and not
     // trivially spec; `stored` is lean, so a pre-#1227 row reads `undefined`
     // here, which is "unverified", not the schema default):
-    //   - the array comes back UNCHANGED: the edit form resubmits every
-    //     seeded field, so an unrelated edit (a note, a price) must not launder
-    //     an unreviewed legacy array into "verified" — write it as is, unmarked;
+    //   - the array comes back UNCHANGED (set-equal): the edit form resubmits
+    //     every seeded field, so an unrelated edit (a note, a price) must not
+    //     launder an unreviewed legacy array into "verified". The key is
+    //     DROPPED from the update, not written back: writing the same ids is a
+    //     no-op only while the stored array is still that array, and a Data
+    //     health resolution — or the startup pass, in this process or in the
+    //     Electron sync service's — can convert the row to spec ids and mark it
+    //     between this read and the write section below. Written back, the
+    //     stale legacy ids would land on a row now marked verified and read as
+    //     spec ids (legacy 2 "transparent" as spec 2 "antibacterial" — Codex P1
+    //     on PR #1228). Not written, the concurrent conversion stands under any
+    //     ordering, in-process or not, with no observed-state predicate on the
+    //     write. (The review route also takes this row's mutex, and the form
+    //     omits `optTags` entirely for a locked row, which covers the form
+    //     saved AFTER a conversion this read already sees.)
     //   - the array CHANGED: refused with 409. A legacy `[2]` (transparent)
     //     plus a newly ticked spec 16 would have to be stored as all-legacy or
     //     all-spec, and either reading permanently misfiles one tag (Codex P1
@@ -460,7 +472,9 @@ export async function PUT(
     if (Array.isArray(body.optTags) && stored) {
       if (!optTagsAwaitReview(stored)) {
         body.optTagsSpec = true;
-      } else if (!sameOptTagSet(body.optTags, stored.optTags)) {
+      } else if (sameOptTagSet(body.optTags, stored.optTags)) {
+        delete body.optTags;
+      } else {
         return NextResponse.json(
           {
             error: "opt_tags_pending_review",

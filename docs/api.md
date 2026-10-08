@@ -1106,6 +1106,12 @@ Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags
 
 Body: `{ "action": "convert" | "keep", "expectedTags": number[] }` — `expectedTags` is the `stored` array the caller was shown. Returns `{ "outcome": "converted", "tags": [...], "dropped": [...] }` or `{ "outcome": "kept", "tags": [...] }`. **409** `tags_changed` when the row no longer holds exactly `expectedTags` or is already verified; **404** when the filament is gone; **400** on a malformed id, action or array.
 
+The decision runs under the row's per-filament mutex (the same key `PUT /api/filaments/:id` holds for its write), and the PUT side **drops** an unchanged `optTags` array from its update when the row still awaits review rather than writing it back — so a conversion that lands while an edit is in flight (from this route, the startup pass, or the Electron sync service) is never overwritten with the stale pre-v1.83 ids. A changed array on such a row is refused with **409** `opt_tags_pending_review`. API clients editing an unreviewed row should settle it here first and re-read it before sending tags.
+
+### Classification rules (what the pass decides on its own)
+
+An array is settled without the user only when its ids PROVE a numbering: the legacy-only id 18 (deprecated upstream) proves the pre-v1.83 numbering; a spec-only id (30, 40–48, 50–70, 72–74) proves the spec's; an OpenPrintTag import whose snapshot equals the stored array is known to be legacy. Ids that mean the same in both numberings (4, 13, 16, 17, 24, 29, 31, 71) and ids defined in **neither** table are inert — they decide nothing (a legacy row can carry `99` as easily as a spec one, so `[2, 99]` stays ambiguous and `[99]` alone needs no conversion). Everything else is listed here for the user. The CSV importer applies the same rules to bare ids in a `Tags` cell and refuses a cell that mixes tag names with ids it cannot place.
+
 ---
 
 ## Prusament

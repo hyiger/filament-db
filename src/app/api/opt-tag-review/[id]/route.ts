@@ -8,6 +8,7 @@ import {
   type MinimalRenumberDb,
   type OptTagResolveAction,
 } from "@/lib/optTagRenumber";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * POST /api/opt-tag-review/{id}  (GH #1227)
@@ -24,6 +25,14 @@ import {
  * row still holding exactly that array (and still being unverified); anything
  * else is 409 `tags_changed` and the page re-scans — a tag edit in another tab
  * must not be overwritten by a decision made against the old list.
+ *
+ * The resolution runs under the row's per-filament mutex (`filamentLockKey`,
+ * the key `PUT /api/filaments/{id}`'s write section holds), so a tag write and
+ * a numbering decision on one row never interleave in-process. The PUT side
+ * additionally drops an unchanged unreviewed array from its update rather than
+ * writing it back, which is what protects a conversion made OUTSIDE this
+ * process (the Electron sync service runs the same pass against this
+ * database) — see the GH #1227 block in that route (Codex P1 on PR #1228).
  *
  * Mutating → `assertSameOriginRequest` (the #360 sweep).
  */
@@ -66,11 +75,13 @@ export async function POST(
     if (!db) {
       return NextResponse.json({ error: "Database unavailable" }, { status: 503 });
     }
-    const result = await resolveOptTagNumbering(
-      db as unknown as MinimalRenumberDb,
-      new mongoose.Types.ObjectId(id),
-      action as OptTagResolveAction,
-      expected as number[],
+    const result = await runExclusive(filamentLockKey(id), () =>
+      resolveOptTagNumbering(
+        db as unknown as MinimalRenumberDb,
+        new mongoose.Types.ObjectId(id),
+        action as OptTagResolveAction,
+        expected as number[],
+      ),
     );
     switch (result.outcome) {
       case "not_found":

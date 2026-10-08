@@ -1108,7 +1108,18 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         shrinkageZ: parseNum(form.shrinkageZ),
         shoreHardnessA: parseNum(form.shoreHardnessA),
         shoreHardnessD: parseNum(form.shoreHardnessD),
-        optTags: form.optTags,
+        // GH #1227: a row whose stored tags await numbering review has its tag
+        // controls locked, so the array cannot have changed here — and it must
+        // not be resubmitted either. The user may settle the row on Data health
+        // (converting its ids) while this form sits open; a save that echoed
+        // the seeded legacy ids onto the now-verified row would store them as
+        // spec ids. The server drops an unchanged unreviewed array from the
+        // update too, but it can only compare against what it reads — a form
+        // saved after the conversion sends legacy ids against a row the server
+        // already reads as verified, and it would stamp them as spec ids.
+        // Omitting the key makes a locked form a no-op on tags under every
+        // ordering (Codex P1 on PR #1228).
+        ...(tagsAwaitReview ? {} : { optTags: form.optTags }),
         tdsUrl: form.tdsUrl || null,
         inherits: form.inherits || null,
         parentId: form.parentId || null,

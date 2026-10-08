@@ -2108,6 +2108,41 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(variant.optTags).toEqual([22]);
   });
 
+  it("GH #1227: a Tags cell mixing names with ambiguous bare ids is refused as a row on CREATE (Codex P2 r2)", async () => {
+    const res = await upsertImportRows(
+      rows([["Mixed Tags PLA", "Acme", "PLA", "#112233", "transparent, 2", ""]]),
+    );
+    expect(res.created).toBe(0);
+    expect(res.skipped).toBe(1);
+    expect(res.skippedRows).toHaveLength(1);
+    expect(res.skippedRows[0].name).toBe("Mixed Tags PLA");
+    expect(res.skippedRows[0].reason).toMatch(/mixes tag names with numeric ids/);
+    expect(await Filament.findOne({ name: "Mixed Tags PLA" }).lean()).toBeNull();
+
+    // Names beside a PROVABLE numeric set import normally (18 proves legacy).
+    const ok = await upsertImportRows(
+      rows([["Mixed OK PLA", "Acme", "PLA", "#112233", "transparent, 18", ""]]),
+    );
+    expect(ok.created).toBe(1);
+    expect(ok.skipped).toBe(0);
+    const f = await Filament.findOne({ name: "Mixed OK PLA" }).lean();
+    expect(f.optTags).toEqual([20, 57]);
+    expect(f.optTagsSpec).toBe(true);
+  });
+
+  it("GH #1227: the same mixed cell on an UPDATE row is ignored, not fatal (the Tags column is create/resurrect only)", async () => {
+    await Filament.create({ name: "Mixed Update PLA", vendor: "Acme", type: "PLA", optTags: [16] });
+    const res = await upsertImportRows(
+      rows([["Mixed Update PLA", "Acme", "PLA", "#445566", "transparent, 2", ""]]),
+    );
+    expect(res.updated).toBe(1);
+    expect(res.skipped).toBe(0);
+    const f = await Filament.findOne({ name: "Mixed Update PLA" }).lean();
+    expect(f.color).toBe("#445566");
+    expect(f.optTags).toEqual([16]);
+    expect(f.optTagsSpec).toBe(true);
+  });
+
   it("UPDATE ignores the Tags column (create/resurrect only)", async () => {
     const f = await Filament.create({
       name: "Existing Tagged",

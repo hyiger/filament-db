@@ -396,15 +396,32 @@ export type OptTagVerdict =
   | { kind: "inconsistent" };
 
 /**
+ * An id the remap leaves untouched AND that proves nothing about the numbering:
+ * a fixed point (same meaning in both tables), or an id in NEITHER table — the
+ * pre-#1227 CSV importer and the schema accepted any non-negative integer, so
+ * `99` sits in a legacy array as easily as in a spec one and reads as `tag 99`
+ * either way. Only a SPEC-ONLY id is evidence of the spec numbering; "not in
+ * the legacy table" is not (Codex P1 on PR #1228).
+ */
+export function isInertOptTagId(id: number): boolean {
+  return FIXED_POINT_IDS.has(id) || (!LEGACY_IDS.has(id) && !SPEC_IDS.has(id));
+}
+
+/**
  * Decide which numbering a stored `optTags` array is in.
  *
  * In order:
- *  1. Nothing usable, or only ids that mean the same in both numberings
- *     (4, 13, 16, 17, 24, 31, 71 — plus 29, whose legacy TRIPLE_COLOR IS the
- *     spec's coextruded) → `trivial`.
- *  2. An id the legacy app could never have written (30, 40–48, 50–70, 72–74,
- *     or anything outside both tables) → the array was not written by the
- *     pre-#1227 app → `spec`. If it ALSO carries 18 → `inconsistent`.
+ *  1. Nothing usable, or only INERT ids — ids that mean the same in both
+ *     numberings (4, 13, 16, 17, 24, 31, 71 — plus 29, whose legacy
+ *     TRIPLE_COLOR IS the spec's coextruded) and ids in NEITHER table, which
+ *     read as `tag N` under both — → `trivial`.
+ *  2. A spec-only id (30, 40–48, 50–70, 72–74) → the pre-#1227 app could never
+ *     have written it → `spec`. If it ALSO carries 18 → `inconsistent`. An id
+ *     outside BOTH tables is NOT evidence (Codex P1 on PR #1228): the pre-#1227
+ *     CSV importer and the schema accepted any non-negative integer, so a
+ *     legacy `[2, 99]` is as possible as a spec one — treating the 99 as proof
+ *     would freeze its 2 as antibacterial. Such an id is inert: it decides
+ *     nothing and the remap keeps it verbatim.
  *  3. The legacy-only id 18 → `legacy`.
  *  4. OpenPrintTag provenance: `openprinttagSnapshot.optTags` is what
  *     `mapToFilamentPayload` offered, in the legacy numbering by construction.
@@ -426,14 +443,14 @@ export type OptTagVerdict =
  */
 export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   const ids = usableIds(row.optTags);
-  if (ids.length === 0 || ids.every((id) => FIXED_POINT_IDS.has(id))) {
+  if (ids.length === 0 || ids.every(isInertOptTagId)) {
     return { kind: "trivial" };
   }
 
-  const hasForeign = ids.some((id) => !LEGACY_IDS.has(id));
+  const hasSpecOnly = ids.some((id) => SPEC_ONLY_IDS.has(id));
   const hasLegacyOnly = ids.some((id) => LEGACY_ONLY_IDS.has(id));
-  if (hasForeign && hasLegacyOnly) return { kind: "inconsistent" };
-  if (hasForeign) return { kind: "spec", reason: "spec-only-id" };
+  if (hasSpecOnly && hasLegacyOnly) return { kind: "inconsistent" };
+  if (hasSpecOnly) return { kind: "spec", reason: "spec-only-id" };
   if (hasLegacyOnly) return { kind: "legacy", reason: "legacy-only-id" };
 
   const snapshotTags = row.openprinttagSnapshot?.optTags;
@@ -480,9 +497,11 @@ export function optTagsAwaitReview(
 /**
  * The two readings of an ambiguous array, for the Data health page: what the
  * tags become if they were entered in this app (legacy → spec, with what is
- * dropped) and what they already mean if they came from a tag. Spec ids only —
- * the page labels them through `optTag.<name>`; the dropped legacy concepts are
- * labelled through `optTagLegacy.<name>`.
+ * dropped) and what they already mean if they came from a tag. The spec
+ * reading keeps every id but the legacy-only 18 (meaningless as a spec id) — an
+ * id the spec doesn't define stays visible as `tag N` rather than vanishing
+ * from one reading. The page labels them through `optTag.<name>`; the dropped
+ * legacy concepts are labelled through `optTagLegacy.<name>`.
  */
 export function describeOptTagReadings(tags: readonly unknown[] | null | undefined): {
   stored: number[];
@@ -491,7 +510,7 @@ export function describeOptTagReadings(tags: readonly unknown[] | null | undefin
 } {
   const stored = usableIds(tags);
   const asLegacy = remapLegacyOptTags(stored);
-  return { stored, asLegacy, asSpec: stored.filter((id) => SPEC_IDS.has(id)) };
+  return { stored, asLegacy, asSpec: stored.filter((id) => !LEGACY_ONLY_IDS.has(id)) };
 }
 
 // ── Tag STRINGS → spec ids (the OPT database, CSV cells) ─────────────────────
@@ -544,6 +563,16 @@ export interface ParsedOptTagsCell {
   verified: boolean;
   /** Tokens that were neither a known name nor a usable id (dropped). */
   unknownTokens: string[];
+  /**
+   * Set when the cell cannot be stored faithfully: it mixes tag NAMES (spec
+   * ids by definition) with bare numbers the classifier could not place in a
+   * numbering. One array carries one marker, so `transparent,2` would have to
+   * land unverified as `[20, 2]` — and a later Convert on Data health would
+   * remap the 20 as legacy METAL_FILL into 46, a metal tag nobody entered
+   * (Codex P2 on PR #1228). The importer skips the row with this reason;
+   * `tags` is empty. Null otherwise.
+   */
+  rejectReason: string | null;
 }
 
 /**
@@ -555,9 +584,12 @@ export interface ParsedOptTagsCell {
  * legacy ids, a post-#1227 export of an unreviewed row writes bare ids too, and
  * neither says which numbering it is. They go through the same classifier the
  * startup pass uses — a provable legacy set is remapped, a provable spec set is
- * kept, and anything else is kept VERBATIM and flagged unverified. Empty
- * tokens are dropped BEFORE parsing so a trailing/double comma can't become
- * `Number("") === 0` and add a phantom tag 0.
+ * kept, and anything else is kept VERBATIM and flagged unverified — unless the
+ * cell ALSO carries names, in which case it is rejected (`rejectReason`): the
+ * names are known to be spec ids and the numbers are not known to be anything,
+ * and a single array cannot record that split. Empty tokens are dropped BEFORE
+ * parsing so a trailing/double comma can't become `Number("") === 0` and add a
+ * phantom tag 0.
  */
 export function parseOptTagsCell(
   cell: string,
@@ -586,8 +618,20 @@ export function parseOptTagsCell(
   let numericTags = numeric;
   if (numeric.length > 0) {
     const verdict = classifyOptTags({ optTags: numeric, name: ctx.name, type: ctx.type });
-    if (verdict.kind === "legacy") numericTags = remapLegacyOptTags(numeric).tags;
-    else if (verdict.kind === "ambiguous" || verdict.kind === "inconsistent") verified = false;
+    if (verdict.kind === "legacy") {
+      numericTags = remapLegacyOptTags(numeric).tags;
+    } else if (verdict.kind === "ambiguous" || verdict.kind === "inconsistent") {
+      if (named.length > 0) {
+        return {
+          tags: [],
+          verified: false,
+          unknownTokens,
+          rejectReason:
+            `Tags cell "${cell.trim()}" mixes tag names with numeric ids whose numbering cannot be determined (${numeric.join(", ")}) — use tag names only, or ids only`,
+        };
+      }
+      verified = false;
+    }
   }
-  return { tags: [...new Set([...named, ...numericTags])], verified, unknownTokens };
+  return { tags: [...new Set([...named, ...numericTags])], verified, unknownTokens, rejectReason: null };
 }

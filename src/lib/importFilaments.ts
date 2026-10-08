@@ -841,12 +841,22 @@ export async function upsertImportRows(
     // (what the exporter writes), legacy app names or bare ids; bare ids go
     // through the numbering classifier, and a set it cannot place lands the
     // row `optTagsSpec: false` for review on Data health — the importer does
-    // not guess any more than the startup pass does.
+    // not guess any more than the startup pass does. A cell that MIXES names
+    // with such bare ids has no faithful storage (one array, one marker:
+    // `transparent,2` stored unverified as [20, 2] would see its 20 remapped
+    // as legacy METAL_FILL on a later Convert — Codex P2 on PR #1228), so the
+    // row is skipped with the parser's reason on the paths that honour the
+    // cell; on UPDATE the cell is ignored anyway, so it cannot sink the row.
     if (row.optTags !== undefined) {
       const parsed = parseOptTagsCell(row.optTags == null ? "" : String(row.optTags), {
         name: row.name,
         type: row.type,
       });
+      if (parsed.rejectReason && !existing) {
+        skippedRows.push({ row: lineOf(rowIdx), name: row.name, reason: parsed.rejectReason });
+        skipped++;
+        return;
+      }
       doc.optTags = parsed.tags;
       doc.optTagsSpec = parsed.verified;
     }
