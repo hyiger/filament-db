@@ -1082,7 +1082,7 @@ Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags
 |--------|----------|-------------|
 | `GET` | `/api/opt-tag-review` | Runs the (idempotent) renumbering pass, then lists the rows it could not settle plus the legacy tags it had to drop from converted rows |
 | `POST` | `/api/opt-tag-review/:id` | Apply the user's answer for one row (same-origin guarded) |
-| `DELETE` | `/api/opt-tag-review/dropped` | Dismiss the removed-legacy-tags notice (same-origin guarded) |
+| `DELETE` | `/api/opt-tag-review/dropped` | Dismiss the removed-legacy-tags notice — body `{ "filamentIds": [...] }` removes only those records, no body clears all (same-origin guarded) |
 
 ### GET /api/opt-tag-review
 

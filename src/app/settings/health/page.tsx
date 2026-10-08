@@ -489,7 +489,14 @@ export default function DataHealthPage() {
   const dismissDropped = useCallback(async () => {
     setBusy(true);
     try {
-      const res = await fetch("/api/opt-tag-review/dropped", { method: "DELETE" });
+      // Only the records on screen: one appended since the page loaded belongs
+      // to a row already marked, so nothing could recreate its notice later
+      // (Codex P2 r7 on PR #1228). The refetch below shows it next.
+      const res = await fetch("/api/opt-tag-review/dropped", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filamentIds: droppedTags.map((d) => d.filamentId) }),
+      });
       if (!res.ok) {
         toast(t("health.actionFailed"), "error");
         return;
@@ -501,7 +508,7 @@ export default function DataHealthPage() {
     } finally {
       setBusy(false);
     }
-  }, [t, toast, loadTagReview]);
+  }, [t, toast, loadTagReview, droppedTags]);
 
   /** Comma-joined spec-tag labels, or the translated "nothing". */
   const tagLabels = (ids: number[]): string =>

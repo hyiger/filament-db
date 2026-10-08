@@ -116,4 +116,33 @@ describe("/api/opt-tag-review", () => {
     expect(ok.status).toBe(200);
     expect((await markers().findOne({ _id: "optTagRenumber" as never }))?.dropped).toEqual([]);
   });
+
+  it("DELETE /dropped with filamentIds removes only the displayed records (Codex P2 r7)", async () => {
+    await markers().insertOne({
+      _id: "optTagRenumber" as never,
+      dropped: [
+        { filamentId: "seen", name: "Seen", tags: [9], at: new Date() },
+        { filamentId: "later", name: "Appended after the page loaded", tags: [5], at: new Date() },
+      ],
+    });
+    const res = await DELETE(
+      new NextRequest("http://localhost:3456/api/opt-tag-review/dropped", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filamentIds: ["seen"] }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect((await markers().findOne({ _id: "optTagRenumber" as never }))?.dropped.map((d: { name: string }) => d.name)).toEqual([
+      "Appended after the page loaded",
+    ]);
+    const bad = await DELETE(
+      new NextRequest("http://localhost:3456/api/opt-tag-review/dropped", {
+        method: "DELETE",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filamentIds: [1] }),
+      }),
+    );
+    expect(bad.status).toBe(400);
+  });
 });

@@ -41,6 +41,7 @@ import {
 import {
   renumberOptTags,
   describeRenumberSummary,
+  mergeDroppedLegacyTags,
   type MinimalRenumberDb,
 } from "../src/lib/optTagRenumber";
 
@@ -640,6 +641,16 @@ export class SyncService extends EventEmitter {
         const renumber = await renumberOptTags(dbHandle as unknown as MinimalRenumberDb);
         const renumberLine = describeRenumberSummary(renumber);
         if (renumberLine) console.log(`[sync] ${side}: ${renumberLine}`);
+        // A legacy tag dropped by the REMOTE pass is recorded in the remote
+        // `_migrations`, which never syncs, while Data health reads only the
+        // local store — and the local pass will skip the now-marked row, so
+        // nothing could ever recreate the notice. Merge it into the local
+        // store here; `readDroppedLegacyTags` re-points the record at the
+        // local copy through `syncId` once the row has been pulled (Codex P2
+        // r7 on PR #1228).
+        if (side === "remote" && renumber.dropped.length > 0) {
+          await mergeDroppedLegacyTags(localDb as unknown as MinimalRenumberDb, renumber.dropped);
+        }
         // Re-check AFTER the zombie repair: the trim is a SEPARATE
         // destructive migration (creates indexes, rewrites names across five
         // collections) and must not resume into a database the user just

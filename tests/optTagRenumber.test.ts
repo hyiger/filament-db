@@ -9,6 +9,7 @@ import {
   dismissDroppedLegacyTags,
   OPT_TAG_RENUMBER_MARKER_ID,
   type MinimalRenumberDb,
+  mergeDroppedLegacyTags,
 } from "@/lib/optTagRenumber";
 
 /**
@@ -65,7 +66,10 @@ describe("renumberOptTags", () => {
     const marble = await byName("Legacy Marble");
     expect(marble?.optTags).toEqual([57, 20]); // imitates_marble, transparent
     expect(marble?.optTagsSpec).toBe(true);
-    expect(marble?.updatedAt).toEqual(NOW); // propagates by LWW
+    // The pass never touches updatedAt (Codex P1 r7): both hybrid peers run it
+    // before copying, so a synthetic timestamp could only let a stale document
+    // win LWW over the other side's genuinely newer edits.
+    expect(marble?.updatedAt).toEqual(OLD);
 
     const pc = await byName("PC Blend CF");
     expect(pc?.optTags).toEqual([31, 12, 4, 30]); // untouched
@@ -147,7 +151,7 @@ describe("renumberOptTags", () => {
     expect(linked?.optTags).toEqual([30, 4]);
     expect(linked?.optTagsSpec).toBe(true);
     expect(linked?.openprinttagSnapshot).toEqual({ optTags: [20], tagsNumbering: "spec" });
-    expect(linked?.updatedAt).toEqual(NOW); // the snapshot changed, so the peer should see it
+    expect(linked?.updatedAt).toEqual(OLD); // a per-peer rewrite, not an edit to propagate
   });
 
   it("includes trashed rows (they can be restored) and counts a lost conditional write as skipped", async () => {
@@ -364,6 +368,34 @@ describe("renumberOptTags", () => {
     expect(relinked?.optTags).toEqual([2]); // not remapped
     expect(relinked?.optTagsSpec).toBeUndefined();
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // spec snapshot: no proof
+  });
+
+  it("a drop recorded on the remote peer is merged, re-pointed at the local copy through syncId, and dismissable by what the page showed (Codex P2 r7)", async () => {
+    // The remote pass converted a remote-only row; its record carries the
+    // REMOTE _id, which resolves to nothing here, plus the row's syncId.
+    const remoteEntry = { filamentId: "64b000000000000000000001", syncId: "sync-remote-1", name: "Remote Only", tags: [9], at: NOW };
+    await mergeDroppedLegacyTags(db(), [remoteEntry]);
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ filamentId: remoteEntry.filamentId, syncId: "sync-remote-1" })]);
+    // Re-merging on the next cycle replaces, never stacks.
+    await mergeDroppedLegacyTags(db(), [{ ...remoteEntry, at: new Date("2026-10-08T13:00:00.000Z") }]);
+    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
+
+    // The row is pulled with a fresh local _id; the record follows it, persistently.
+    const { insertedId } = await col().insertOne({ name: "Remote Only", vendor: "V", type: "PLA", optTags: [20], optTagsSpec: true, syncId: "sync-remote-1" });
+    expect((await readDroppedLegacyTags(db()))[0].filamentId).toBe(String(insertedId));
+    const stored = await markers().findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID as never });
+    expect(stored?.dropped[0].filamentId).toBe(String(insertedId));
+
+    // Dismiss only what the page displayed: a record appended meanwhile survives.
+    await col().insertOne({ name: "Later", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "later" } });
+    const shown = (await readDroppedLegacyTags(db())).map((d) => d.filamentId);
+    expect(shown).toEqual([String(insertedId)]);
+    await renumberOptTags(db(), NOW); // appends "Later"'s drop after the page loaded
+    await dismissDroppedLegacyTags(db(), shown);
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Later"]);
+    // No list → everything (API callers that read the whole list themselves).
+    await dismissDroppedLegacyTags(db());
+    expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {

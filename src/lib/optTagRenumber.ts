@@ -23,9 +23,14 @@
  * included, they can be restored), `classifyOptTags` decides:
  *
  *  - `trivial` → mark it. Nothing to translate (the remap would not change it).
- *  - `legacy` → translate with `remapLegacyOptTags`, mark it, bump
- *    `updatedAt` so the change propagates by LWW to a peer that has not run
- *    the pass. Legacy concepts with no spec equivalent are dropped and
+ *  - `legacy` → translate with `remapLegacyOptTags` and mark it — WITHOUT
+ *    touching `updatedAt`. The rewrite is deterministic and every peer
+ *    performs it on its own copy before any copy (the sync service runs this
+ *    pass on both databases), so there is nothing to propagate; a synthetic
+ *    timestamp let whichever side converted LATER win the hybrid LWW with a
+ *    stale document over the other side's genuinely newer edits (Codex P1 r7
+ *    on PR #1228). Only a Data health resolution — a user action — stamps
+ *    `updatedAt`. Legacy concepts with no spec equivalent are dropped and
  *    RECORDED (in the `_migrations` document) so Data health can show the
  *    user what went away instead of losing it silently. The record is written
  *    BEFORE the conversion (Codex P2 on PR #1228): a conversion that lands and
@@ -113,12 +118,22 @@ export const UNVERIFIED_OPT_TAGS_FILTER: Readonly<Record<string, unknown>> = {
 const ROW_PROJECTION: Record<string, 1> = {
   ...Object.fromEntries(OPT_TAG_CLASSIFIER_PATHS.map((path) => [path, 1 as const])),
   vendor: 1,
+  syncId: 1,
   _deletedAt: 1,
   _purged: 1,
 };
 
 /** A legacy concept the conversion had to drop from one filament. */
 export interface DroppedLegacyTags {
+  /**
+   * The row's cross-peer identity, when it has one. A drop recorded on the
+   * REMOTE peer (its pass runs in the sync service) carries the remote `_id`
+   * in `filamentId`, which resolves to nothing locally — the sync copy mints a
+   * new `_id` on each side. `readDroppedLegacyTags` re-resolves such a record
+   * to the local row through this `syncId` once the row has been pulled
+   * (Codex P2 r7 on PR #1228).
+   */
+  syncId?: string | null;
   filamentId: string;
   name: string;
   /** LEGACY ids (label them through `optTagLegacy.<name>`). */
@@ -201,7 +216,28 @@ async function recordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): P
     { _id: OPT_TAG_RENUMBER_MARKER_ID },
     { $pull: { dropped: { filamentId: entry.filamentId } } },
   );
+  if (entry.syncId) {
+    // The same row recorded under another peer's `_id` (a merged remote drop).
+    await migrations.updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID },
+      { $pull: { dropped: { syncId: entry.syncId } } },
+    );
+  }
   await migrations.updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $push: { dropped: entry } }, { upsert: true });
+}
+
+/**
+ * Merge drop records produced by ANOTHER database's pass into this one — the
+ * sync service calls it with the remote pass's `dropped` so a conversion that
+ * happened on the remote peer (whose `_migrations` never syncs) still surfaces
+ * on the local Data health page (Codex P2 r7 on PR #1228). Idempotent per
+ * row, so re-merging on the next cycle replaces rather than stacks.
+ */
+export async function mergeDroppedLegacyTags(
+  db: MinimalRenumberDb,
+  entries: readonly DroppedLegacyTags[],
+): Promise<void> {
+  for (const entry of entries) await recordDropped(db, entry);
 }
 
 /** Undo `recordDropped` for a conversion that did not land (concurrent edit, or a write shown not to have landed). */
@@ -294,10 +330,10 @@ export async function renumberOptTags(
       const remapped = remapLegacyOptTags(stored);
       convertedTags = remapped.tags;
       $set.optTags = remapped.tags;
-      $set.updatedAt = now;
       if (remapped.dropped.length > 0) {
         droppedEntry = {
           filamentId: String(row._id),
+          syncId: typeof row.syncId === "string" ? row.syncId : null,
           name: typeof row.name === "string" ? row.name : "",
           tags: remapped.dropped,
           at: now,
@@ -305,11 +341,9 @@ export async function renumberOptTags(
         // Record first, convert second — see the module docblock.
         await recordDropped(db, droppedEntry);
       }
-    } else if (Object.keys(snapSet).length > 0) {
-      // Only the marker + a translated snapshot change: still a content change
-      // a peer should see.
-      $set.updatedAt = now;
     }
+    // No `updatedAt` on any of these writes — see the module docblock: the
+    // pass is a per-peer rewrite, not an edit to propagate.
 
     let res: unknown;
     try {
@@ -477,6 +511,7 @@ export async function resolveOptTagNumbering(
     if (remapped.dropped.length > 0) {
       droppedEntry = {
         filamentId: String(row._id),
+        syncId: typeof row.syncId === "string" ? row.syncId : null,
         name: typeof row.name === "string" ? row.name : "",
         tags: remapped.dropped,
         at: now,
@@ -512,20 +547,60 @@ export async function resolveOptTagNumbering(
   };
 }
 
-/** The recorded drops (for Data health), oldest first. */
+/**
+ * The recorded drops (for Data health), oldest first. A record merged from
+ * the remote peer carries the REMOTE `_id`; when a local row with the same
+ * `syncId` exists (the copy has been pulled), the record is re-pointed at it —
+ * persisted, so the page's link and a later dismiss by id both land.
+ */
 export async function readDroppedLegacyTags(db: MinimalRenumberDb): Promise<DroppedLegacyTags[]> {
-  const doc = await db.collection("_migrations").findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID });
+  const migrations = db.collection("_migrations");
+  const doc = await migrations.findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID });
   const list = (doc as { dropped?: unknown } | null)?.dropped;
   if (!Array.isArray(list)) return [];
-  return list.filter(
+  const entries = list.filter(
     (d): d is DroppedLegacyTags =>
       !!d && typeof d === "object" && typeof (d as DroppedLegacyTags).filamentId === "string",
   );
+
+  const syncIds = [...new Set(entries.map((d) => d.syncId).filter((s): s is string => typeof s === "string" && s !== ""))];
+  if (syncIds.length === 0) return entries;
+  const rows = await db
+    .collection("filaments")
+    .find({ syncId: { $in: syncIds } }, { projection: { _id: 1, syncId: 1 } })
+    .toArray();
+  const localIdBySyncId = new Map(rows.map((r) => [String(r.syncId), String(r._id)]));
+  for (const entry of entries) {
+    const localId = entry.syncId ? localIdBySyncId.get(entry.syncId) : undefined;
+    if (!localId || localId === entry.filamentId) continue;
+    await migrations.updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID, "dropped.filamentId": entry.filamentId },
+      { $set: { "dropped.$.filamentId": localId } },
+    );
+    entry.filamentId = localId;
+  }
+  return entries;
 }
 
-/** Clear the recorded drops once the user has read them. */
-export async function dismissDroppedLegacyTags(db: MinimalRenumberDb): Promise<void> {
-  await db
-    .collection("_migrations")
-    .updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $set: { dropped: [] } }, { upsert: true });
+/**
+ * Dismiss recorded drops once the user has read them. With `filamentIds`, only
+ * those records go (the ones the page displayed) — a record appended between
+ * the page load and the click belongs to a row that is already marked, so no
+ * later pass could recreate it (Codex P2 r7 on PR #1228). Without the list,
+ * everything is cleared (API callers that read the whole list themselves).
+ */
+export async function dismissDroppedLegacyTags(
+  db: MinimalRenumberDb,
+  filamentIds?: readonly string[],
+): Promise<void> {
+  const migrations = db.collection("_migrations");
+  if (filamentIds) {
+    if (filamentIds.length === 0) return;
+    await migrations.updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID },
+      { $pull: { dropped: { filamentId: { $in: [...filamentIds] } } } },
+    );
+    return;
+  }
+  await migrations.updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $set: { dropped: [] } }, { upsert: true });
 }

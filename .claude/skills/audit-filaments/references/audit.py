@@ -260,6 +260,11 @@ LOW_TEMP_TYPES = ("PCL", "FACILAN")
 # pre-#1227 app id 20 (METAL_FILL) is `transparent` on the wire.
 OPT_TAG_METAL_FILL_IDS = (46, 47, 48, 49, 50, 51, 52, 53, 54)
 OPT_TAG_METAL_FILL = 46
+# GH #1227: the pre-v1.83 app's METAL_FILL id. A row whose `optTagsSpec` is not
+# True may still be in that numbering (it awaits review on Data health), so the
+# density check reads it under both numberings (Codex P2 r7 on PR #1228). Spec
+# 20 is `transparent`, so this is consulted ONLY on an unverified row.
+LEGACY_OPT_TAG_METAL_FILL = 20
 DENSITY_CEILING = 2.5
 DENSITY_CEILING_FILLED = 12.0
 DENSITY_FLOOR = 0.7
@@ -2526,7 +2531,10 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
 
         # --- physical --------------------------------------------------------
         dens = num(r.get("density"))
-        metal_filled = any(t in OPT_TAG_METAL_FILL_IDS for t in (r.get("optTags") or []))
+        _tags = r.get("optTags") or []
+        _spec_verified = r.get("optTagsSpec") is True
+        metal_filled = (any(t in OPT_TAG_METAL_FILL_IDS for t in _tags)
+                        or (not _spec_verified and LEGACY_OPT_TAG_METAL_FILL in _tags))
         ceiling = DENSITY_CEILING_FILLED if metal_filled else DENSITY_CEILING
         _ftype = (r.get("type") or "")
         _foaming = bool(FOAMING_TYPE_RE.search(_ftype.upper())) if isinstance(_ftype, str) else False
@@ -2540,7 +2548,13 @@ def audit(records, abrasive, failed=None, listing_topology=None, degraded=None,
             # run) and puts the tag in ABRASIVE_OPT_TAGS — so the audit's own
             # highest-severity category would then report a soft foaming PLA as
             # exporting non-abrasive. A remedy that makes things worse.
-            if dens > ceiling and not metal_filled:
+            if dens > ceiling and not metal_filled and not _spec_verified:
+                # Unreviewed numbering: the right remedy is the review, not a tag
+                # the pending conversion may add on its own.
+                hint = (" — this row's tags await OpenPrintTag numbering review (Settings → Data "
+                        "health); settle that first, then add optTag 46 (contains_metal) if it "
+                        "really is metal-filled")
+            elif dens > ceiling and not metal_filled:
                 hint = (" — if this really is metal-filled, add optTag 46 (contains_metal), which also "
                         "corrects its abrasive classification")
             elif dens < floor and not _foaming:
