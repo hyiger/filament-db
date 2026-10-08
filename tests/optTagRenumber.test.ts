@@ -624,20 +624,33 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(await resolveOptTagNumbering(db(), insertedId, "convert", [12, 15], NOW, rescanned.hints)).toEqual({ outcome: "converted", tags: [62], dropped: [15] });
   });
 
-  it("dismisses only the records the page displayed; no list clears all (Codex P2 r7)", async () => {
+  it("dismisses only the EXACT records the page displayed — row and version; no list clears all (Codex P2 r7 + r16)", async () => {
     const { insertedIds } = await col().insertMany([
       { name: "Seen", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "s" } },
       { name: "Later", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } },
     ]);
     await resolveOptTagNumbering(db(), insertedIds[0], "convert", [18, 9], NOW);
-    const shown = (await readDroppedLegacyTags(db())).map((d) => d.filamentId);
-    expect(shown).toEqual([String(insertedIds[0])]);
+    const shown = (await readDroppedLegacyTags(db())).map((d) => ({ filamentId: d.filamentId, at: d.at }));
+    expect(shown).toEqual([{ filamentId: String(insertedIds[0]), at: NOW }]);
     // A record appended after the page loaded survives the dismissal.
     await resolveOptTagNumbering(db(), insertedIds[1], "convert", [18, 9], NOW);
     await dismissDroppedLegacyTags(db(), shown);
     expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Later"]);
     await dismissDroppedLegacyTags(db(), []); // nothing displayed → nothing removed
     expect(await readDroppedLegacyTags(db())).toHaveLength(1);
+
+    // A REPLACEMENT for the same row survives too (Codex P2 r16): the row is
+    // made reviewable again (a snapshot restore, a newer unverified hybrid
+    // revision) and converted once more AFTER the page loaded — the new
+    // record carries the same filamentId with a new `at`, and the stale
+    // page's dismissal names the version it saw.
+    const LATER = new Date("2026-10-08T13:00:00.000Z");
+    const stale = (await readDroppedLegacyTags(db())).map((d) => ({ filamentId: d.filamentId, at: d.at }));
+    await col().updateOne({ _id: insertedIds[1] }, { $set: { optTags: [9, 2] }, $unset: { optTagsSpec: "" } });
+    expect(await resolveOptTagNumbering(db(), insertedIds[1], "convert", [9, 2], LATER)).toMatchObject({ outcome: "converted", dropped: [9] });
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Later", at: LATER })]);
+    await dismissDroppedLegacyTags(db(), stale); // the version the page showed is gone already
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Later", at: LATER })]);
     // No list → everything (API callers that read the whole list themselves).
     await dismissDroppedLegacyTags(db());
     expect(await readDroppedLegacyTags(db())).toEqual([]);

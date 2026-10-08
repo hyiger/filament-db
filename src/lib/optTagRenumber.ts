@@ -596,24 +596,37 @@ export async function readDroppedLegacyTags(db: MinimalRenumberDb): Promise<Drop
   return list.filter(isDropRecord);
 }
 
+/** The identity of one displayed drop record: the row it names AND the version shown. */
+export interface DroppedLegacyTagsRef {
+  filamentId: string;
+  at: Date;
+}
+
 /**
- * Dismiss recorded drops once the user has read them. With `filamentIds`, only
- * those records go (the ones the page displayed) — a record appended between
- * the page load and the click belongs to a row that is already marked, so no
- * later pass could recreate it (Codex P2 r7 on PR #1228). Without the list,
+ * Dismiss recorded drops once the user has read them. With `records`, only
+ * those EXACT records go — matched on `filamentId` AND `at`, the version the
+ * page displayed: a record appended between the page load and the click
+ * survives (Codex P2 r7 on PR #1228), and so does a REPLACEMENT for the same
+ * row — a later conversion of the same filament (made reviewable again by a
+ * snapshot restore or a newer unverified hybrid revision) re-records under the
+ * same `filamentId` with a new `at`, and a dismissal keyed on the id alone
+ * pulled the notice the user never saw (Codex P2 r16). One `$pull` per record,
+ * with explicit `$eq` operators so the condition is unambiguously a query
+ * against each element, not a whole-document equality. Without `records`,
  * everything is cleared (API callers that read the whole list themselves).
  */
 export async function dismissDroppedLegacyTags(
   db: MinimalRenumberDb,
-  filamentIds?: readonly string[],
+  records?: readonly DroppedLegacyTagsRef[],
 ): Promise<void> {
   const migrations = db.collection("_migrations");
-  if (filamentIds) {
-    if (filamentIds.length === 0) return;
-    await migrations.updateOne(
-      { _id: OPT_TAG_RENUMBER_MARKER_ID },
-      { $pull: { dropped: { filamentId: { $in: [...filamentIds] } } } },
-    );
+  if (records) {
+    for (const r of records) {
+      await migrations.updateOne(
+        { _id: OPT_TAG_RENUMBER_MARKER_ID },
+        { $pull: { dropped: { filamentId: { $eq: r.filamentId }, at: { $eq: r.at } } } },
+      );
+    }
     return;
   }
   await migrations.updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $set: { dropped: [] } }, { upsert: true });

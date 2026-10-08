@@ -153,32 +153,50 @@ describe("/api/opt-tag-review", () => {
     expect((await markers().findOne({ _id: "optTagRenumber" as never }))?.dropped).toEqual([]);
   });
 
-  it("DELETE /dropped with filamentIds removes only the displayed records (Codex P2 r7)", async () => {
+  it("DELETE /dropped with records removes only the exact displayed records — row AND version (Codex P2 r7 + r16)", async () => {
+    const seenAt = new Date("2026-10-08T12:00:00.000Z");
+    const laterAt = new Date("2026-10-08T13:00:00.000Z");
     await markers().insertOne({
       _id: "optTagRenumber" as never,
       dropped: [
-        { filamentId: "seen", name: "Seen", tags: [9], at: new Date() },
-        { filamentId: "later", name: "Appended after the page loaded", tags: [5], at: new Date() },
+        { filamentId: "seen", name: "Seen", tags: [9], at: seenAt },
+        { filamentId: "later", name: "Appended after the page loaded", tags: [5], at: seenAt },
+        // The same row converted again after the page loaded: same id, new version.
+        { filamentId: "replaced", name: "Replaced since", tags: [6], at: laterAt },
       ],
     });
     const res = await DELETE(
       new NextRequest("http://localhost:3456/api/opt-tag-review/dropped", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filamentIds: ["seen"] }),
+        body: JSON.stringify({
+          records: [
+            { filamentId: "seen", at: seenAt.toISOString() },
+            { filamentId: "replaced", at: seenAt.toISOString() }, // the version the page saw, not the one stored
+          ],
+        }),
       }),
     );
     expect(res.status).toBe(200);
     expect((await markers().findOne({ _id: "optTagRenumber" as never }))?.dropped.map((d: { name: string }) => d.name)).toEqual([
       "Appended after the page loaded",
+      "Replaced since",
     ]);
-    const bad = await DELETE(
-      new NextRequest("http://localhost:3456/api/opt-tag-review/dropped", {
-        method: "DELETE",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filamentIds: [1] }),
-      }),
-    );
-    expect(bad.status).toBe(400);
+    for (const body of [
+      { records: [{ filamentId: 1, at: seenAt.toISOString() }] },
+      { records: [{ filamentId: "seen", at: "not a date" }] },
+      { records: [{ filamentId: "seen" }] },
+      { records: "seen" },
+      { filamentIds: ["seen"] }, // the pre-r16 shape is gone
+    ]) {
+      const bad = await DELETE(
+        new NextRequest("http://localhost:3456/api/opt-tag-review/dropped", {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+      );
+      expect(bad.status, JSON.stringify(body)).toBe(400);
+    }
   });
 });

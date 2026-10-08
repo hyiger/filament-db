@@ -552,13 +552,15 @@ export default function DataHealthPage() {
   const dismissDropped = useCallback(async () => {
     setBusy(true);
     try {
-      // Only the records on screen: one appended since the page loaded belongs
-      // to a row already marked, so nothing could recreate its notice later
-      // (Codex P2 r7 on PR #1228). The refetch below shows it next.
+      // Only the EXACT records on screen — each named by its row and the
+      // `at` the page displayed: one appended since the page loaded (Codex P2
+      // r7 on PR #1228) and a REPLACEMENT for the same row written since (a
+      // later conversion after a restore or a newer hybrid revision, Codex P2
+      // r16) both survive to be shown by the refetch below.
       const res = await fetch("/api/opt-tag-review/dropped", {
         method: "DELETE",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ filamentIds: droppedTags.map((d) => d.filamentId) }),
+        body: JSON.stringify({ records: droppedTags.map((d) => ({ filamentId: d.filamentId, at: d.at })) }),
       });
       if (!res.ok) {
         toast(t("health.actionFailed"), "error");

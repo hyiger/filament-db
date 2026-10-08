@@ -42,6 +42,7 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
+import { isEncodableOptTag } from "@/lib/openprinttag";
 import {
   sameOptTagSet,
   optTagsAwaitReview,
@@ -369,6 +370,20 @@ export async function PUT(
     // first-party writes tags positionally; refuse the shape outright.
     if (Object.keys(body).some((k) => k.startsWith("optTags."))) {
       return errorResponse("optTags must be sent as a whole array, not as an element path", 400);
+    }
+    // GH #1227 (Codex P2 r16 on PR #1228): a PRESENT `optTags` must be an
+    // array of tag ids. The schema's `sanitizeOptTags` setter turns any
+    // non-array (`null`, a string, a number) into `[]` and drops unusable
+    // elements, and a non-array skipped the numbering guard below (keyed off
+    // `Array.isArray`) — so `optTags: null` against an unreviewed legacy `[2]`
+    // erased the tags and left the row unmarked, which the next pass then read
+    // as trivially spec and verified: data loss certified as settled. An
+    // explicit `[]` is the honest way to clear tags and goes through the guard.
+    if (Object.prototype.hasOwnProperty.call(body, "optTags")) {
+      const tags = body.optTags;
+      if (!Array.isArray(tags) || !tags.every(isEncodableOptTag)) {
+        return errorResponse("optTags must be an array of non-negative integer tag ids", 400);
+      }
     }
 
     // GH #1072: enforce the GH #266 settings-bag caps on the generic PUT —

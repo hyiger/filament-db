@@ -157,6 +157,29 @@ describe("PUT /api/filaments/{id} — optTags numbering guard (GH #1227)", () =>
     expect(await col().findOne({ _id: verified._id })).toMatchObject({ optTags: [20], optTagsSpec: true });
   });
 
+  it("refuses a present non-array optTags, or a non-tag element, with 400 — the schema setter would erase the array unguarded (Codex P2 r16)", async () => {
+    const { insertedId } = await col().insertOne({
+      name: "Nulled", vendor: "V", type: "PLA", optTags: [2], _deletedAt: null,
+    });
+    for (const optTags of [null, "2", 2, { 0: 2 }, [2, "x"], [2, -1], [2, 1.5]]) {
+      const res = await put(String(insertedId), { name: "Nulled", vendor: "V", type: "PLA", optTags });
+      expect(res.status, JSON.stringify(optTags)).toBe(400);
+    }
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ optTags: [2] });
+    expect((await col().findOne({ _id: insertedId }))?.optTagsSpec).toBeUndefined();
+    // An explicit [] is the honest clear — and on an unreviewed row it is a
+    // CHANGED array, so it meets the guard like any other change.
+    const cleared = await put(String(insertedId), { name: "Nulled", vendor: "V", type: "PLA", optTags: [] });
+    expect(cleared.status).toBe(409);
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ optTags: [2] });
+    // On a verified row the same shapes are refused, and [] clears + stamps.
+    const verified = await Filament.create({ name: "Nulled Verified", vendor: "V", type: "PLA", optTags: [20] });
+    expect((await put(String(verified._id), { name: "Nulled Verified", vendor: "V", type: "PLA", optTags: null })).status).toBe(400);
+    expect(await col().findOne({ _id: verified._id })).toMatchObject({ optTags: [20], optTagsSpec: true });
+    expect((await put(String(verified._id), { name: "Nulled Verified", vendor: "V", type: "PLA", optTags: [] })).status).toBe(200);
+    expect(await col().findOne({ _id: verified._id })).toMatchObject({ optTags: [], optTagsSpec: true });
+  });
+
   it("ignores a client-sent optTagsSpec (server-owned)", async () => {
     const { insertedId } = await col().insertOne({
       name: "Forged", vendor: "V", type: "PETG", optTags: [2], _deletedAt: null,
