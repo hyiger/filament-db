@@ -441,12 +441,12 @@ describe("renumberOptTags", () => {
       settings: { openprinttag_slug: "both" }, updatedAt: OLD,
     });
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
-    // The remote pass converted a DIVERGENT remote revision, dropping 8 (HEAT_RESISTANT).
-    const remoteEntry = { filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [8], at: LATER };
+    // The remote pass converted a DIVERGENT remote revision, dropping 6 (HEAT_RESISTANT).
+    const remoteEntry = { filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [6], at: LATER };
     await mergeDroppedLegacyTags(db(), [remoteEntry]);
     // Neither replaced the other; both are re-pointed at the local copy.
     let notices = await readDroppedLegacyTags(db());
-    expect(notices.map((d) => d.tags)).toEqual([[9], [8]]);
+    expect(notices.map((d) => d.tags)).toEqual([[9], [6]]);
     expect(notices.map((d) => d.filamentId)).toEqual([String(insertedId), String(insertedId)]);
     expect(notices.map((d) => d.peer)).toEqual([undefined, "remote"]);
     // Re-merging the same remote record after the re-point still replaces, never stacks.
@@ -464,7 +464,7 @@ describe("renumberOptTags", () => {
     await mergeDroppedLegacyTags(db(), [remoteEntry]);
     expect(await reconcileMergedDroppedLegacyTags(db(), [remoteEntry], () => true)).toEqual({ remoteWon: 1, localWon: 0 });
     notices = await readDroppedLegacyTags(db());
-    expect(notices.map((d) => d.tags)).toEqual([[8]]);
+    expect(notices.map((d) => d.tags)).toEqual([[6]]);
 
     // A remote record for a row this database has not pulled yet is left alone.
     const unpulled = { filamentId: "64b000000000000000000003", syncId: "sync-elsewhere", name: "Elsewhere", tags: [9], at: LATER };

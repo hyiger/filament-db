@@ -3474,7 +3474,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       // Every row below is a pre-v1.36 OpenPrintTag import (link, no
       // snapshot) — the one shape that PROVES the legacy numbering, so each
       // side's pass converts its own copy. Local `[9, 2]` drops 9 (FLEXIBLE)
-      // and remote `[8, 2]` drops 8 (HEAT_RESISTANT); both become `[20]`, so
+      // and remote `[6, 2]` drops 6 (HEAT_RESISTANT); both become `[20]`, so
       // only the NOTICE tells the revisions apart.
       //
       // A: divergent unmarked revisions, local newer → local wins LWW.
@@ -3483,7 +3483,7 @@ describe("SyncService — v1.12 sync expansion", () => {
         settings: { openprinttag_slug: "dlw" }, syncId: "fil-dlw", _deletedAt: null, createdAt: now, updatedAt: later,
       });
       await remoteDb.collection("filaments").insertOne({
-        name: "DivergentLocalWins", vendor: "T", type: "PLA", optTags: [8, 2],
+        name: "DivergentLocalWins", vendor: "T", type: "PLA", optTags: [6, 2],
         settings: { openprinttag_slug: "dlw" }, syncId: "fil-dlw", _deletedAt: null, createdAt: now, updatedAt: now,
       });
       // B: same, remote newer → remote wins and is pulled over the local row.
@@ -3492,7 +3492,7 @@ describe("SyncService — v1.12 sync expansion", () => {
         settings: { openprinttag_slug: "drw" }, syncId: "fil-drw", _deletedAt: null, createdAt: now, updatedAt: now,
       });
       await remoteDb.collection("filaments").insertOne({
-        name: "DivergentRemoteWins", vendor: "T", type: "PLA", optTags: [8, 2],
+        name: "DivergentRemoteWins", vendor: "T", type: "PLA", optTags: [6, 2],
         settings: { openprinttag_slug: "drw" }, syncId: "fil-drw", _deletedAt: null, createdAt: now, updatedAt: later,
       });
       // C: remote-only — pulled fresh; its notice must follow the new local copy.
@@ -3516,12 +3516,12 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect((await localDb.collection("filaments").findOne({ syncId: "fil-drw" }))!.updatedAt).toEqual(later);
 
       // ONE notice per row, describing the revision the LOCAL database holds:
-      // A's local notice (9), B's remote notice (8), C's remote notice (9) —
+      // A's local notice (9), B's remote notice (6), C's remote notice (9) —
       // every one pointing at the local copy.
       const notices = await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb);
       expect(notices.map((n) => [n.name, n.tags, n.peer ?? "local"])).toEqual([
         ["DivergentLocalWins", [9], "local"],
-        ["DivergentRemoteWins", [8], "remote"],
+        ["DivergentRemoteWins", [6], "remote"],
         ["RemoteOnlyLegacy", [9], "remote"],
       ]);
       for (const n of notices) {
