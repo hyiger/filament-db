@@ -617,12 +617,19 @@ describe("GET /api/filaments — type/vendor filters pull in the family (#1108)"
 
   it("GH #1227 (Codex P2 r11): `_optTagsAwaitReview` reports the EFFECTIVE tags' review state; the marker never leaves the server", async () => {
     const raw = mongoose.connection.collection("filaments");
-    // Pre-v1.83 rows: no marker. Legacy 20 is METAL_FILL — the swatch must
-    // not read it as the spec's transparent until the user has decided.
-    const { insertedId: unmarkedParentId } = await raw.insertOne({
-      name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20], _deletedAt: null,
-    });
-    await raw.insertOne({ name: "Unmarked Inert", vendor: "QA", type: "PLA", optTags: [16, 4], _deletedAt: null });
+    // Pre-v1.83 rows: schema-shaped documents MINUS the marker — written
+    // through Mongoose (materialised arrays, a unique `instanceId`) and then
+    // stripped of `optTagsSpec`. Two bare raw inserts collide on the
+    // partial-unique `instanceId` index (CI on PR #1228). Legacy 20 is
+    // METAL_FILL — the swatch must not read it as the spec's transparent
+    // until the user has decided.
+    const unmarked = async (doc: Record<string, unknown>) => {
+      const created = await Filament.create(doc);
+      await raw.updateOne({ _id: created._id }, { $unset: { optTagsSpec: "" } });
+      return created._id;
+    };
+    const unmarkedParentId = await unmarked({ name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20] });
+    await unmarked({ name: "Unmarked Inert", vendor: "QA", type: "PLA", optTags: [16, 4] });
     // A variant with an EMPTY own array inherits the parent's tags AND its review state.
     await Filament.create({ name: "Inheriting Child", vendor: "QA", type: "PLA", parentId: unmarkedParentId });
     // Every row written since v1.83 is verified (schema default).

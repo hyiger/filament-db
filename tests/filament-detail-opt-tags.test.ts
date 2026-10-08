@@ -26,26 +26,35 @@ describe("GET /api/filaments/{id} — _optTagsAwaitReview (GH #1227)", () => {
     const res = await GET(new NextRequest(`http://localhost:3456/api/filaments/${id}`), {
       params: Promise.resolve({ id }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status, JSON.stringify(await res.clone().json())).toBe(200);
     return res.json();
   };
 
-  it("an unmarked legacy-shaped row awaits review; a row written since v1.83 does not", async () => {
-    const { insertedId } = await raw().insertOne({
-      name: "Unmarked", vendor: "QA", type: "PLA", optTags: [20], _deletedAt: null,
-    });
-    const verified = await Filament.create({ name: "Verified", vendor: "QA", type: "PLA", optTags: [20] });
-    const inert = await raw().insertOne({ name: "Inert", vendor: "QA", type: "PLA", optTags: [16], _deletedAt: null });
+  /**
+   * A pre-v1.83 row is a schema-shaped document MINUS the marker: write it
+   * through Mongoose (array fields materialised, a unique `instanceId`, the
+   * timestamps) and strip `optTagsSpec` with a raw update. A bare raw insert
+   * is not that row — it lacks every array the schema materialises, and two
+   * of them collide on the partial-unique `instanceId` index (CI on PR #1228).
+   */
+  const createUnmarked = async (doc: Record<string, unknown>) => {
+    const created = await Filament.create(doc);
+    await raw().updateOne({ _id: created._id }, { $unset: { optTagsSpec: "" } });
+    return created._id as mongoose.Types.ObjectId;
+  };
 
-    expect((await get(String(insertedId)))._optTagsAwaitReview).toBe(true);
+  it("an unmarked legacy-shaped row awaits review; a row written since v1.83 does not", async () => {
+    const unmarkedId = await createUnmarked({ name: "Unmarked", vendor: "QA", type: "PLA", optTags: [20] });
+    const verified = await Filament.create({ name: "Verified", vendor: "QA", type: "PLA", optTags: [20] });
+    const inertId = await createUnmarked({ name: "Inert", vendor: "QA", type: "PLA", optTags: [16] });
+
+    expect((await get(String(unmarkedId)))._optTagsAwaitReview).toBe(true);
     expect((await get(String(verified._id)))._optTagsAwaitReview).toBe(false);
-    expect((await get(String(inert.insertedId)))._optTagsAwaitReview).toBe(false);
+    expect((await get(String(inertId)))._optTagsAwaitReview).toBe(false);
   });
 
   it("a variant with an empty own array answers for its parent — on its own page and in the parent's _variants", async () => {
-    const { insertedId: parentId } = await raw().insertOne({
-      name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20], _deletedAt: null,
-    });
+    const parentId = await createUnmarked({ name: "Unmarked Parent", vendor: "QA", type: "PLA", optTags: [20] });
     const child = await Filament.create({ name: "Child", vendor: "QA", type: "PLA", parentId });
     const own = await Filament.create({ name: "Own Tags", vendor: "QA", type: "PLA", parentId, optTags: [16] });
 
