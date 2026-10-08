@@ -22,14 +22,16 @@
  *    classifier are reproducible. Nothing may add to it.
  *  - {@link LEGACY_TO_SPEC} maps each legacy id to the spec id with the same
  *    meaning, or to `null` when the concept has NO spec tag and is dropped.
- *  - {@link classifyOptTags} decides which numbering a stored array is in — or
- *    refuses to, which is the important case. The ids 0–17, 19–29, 31–39, 49
- *    and 71 exist in BOTH numberings, so an array made only of those is
- *    genuinely ambiguous unless something OUTSIDE the array proves its origin.
- *    The proofs accepted here are structural, never plausibility ("a TPU
- *    tagged high_temperature is unlikely" is a guess, and a guess here
- *    silently rewrites a user's data). Everything unproven is reported on the
- *    Data health page for the user to decide.
+ *  - {@link classifyOptTags} decides whether a stored array NEEDS a decision —
+ *    which is the important case. The ids 0–17, 19–29, 31–39, 49 and 71 exist
+ *    in BOTH numberings, so an array made only of those is genuinely
+ *    ambiguous, and nothing stored proves its origin: twelve review rounds on
+ *    PR #1228 took every candidate proof apart (backfill equality, spec-only
+ *    ids, the deprecated 18, pre-v1.83 snapshot equality, a bare OPT link).
+ *    Plausibility is never a proof ("a TPU tagged high_temperature is
+ *    unlikely" is a guess, and a guess here silently rewrites a user's data).
+ *    Every non-trivial array is reported on the Data health page for the
+ *    user to decide, with the candidates above as HINTS.
  *  - {@link deriveLegacyBackfillTags} is the historical `computeTags` from
  *    `scripts/backfill-all-fields.ts`, ported byte-for-byte. A stored array that
  *    equals what that script would have produced for the row's name + type is
@@ -208,9 +210,10 @@ export function snapshotIsSpecNumbered(snapshot: Record<string, unknown> | null 
  * Every document path `classifyOptTags` / `optTagsAwaitReview` read. A caller
  * that PROJECTS the row (the renumber pass, the PUT and GET routes) must
  * include all of them — a snapshot projected without its numbering marker
- * comes back looking like a pre-v1.83 one and is read as legacy proof, which
- * is exactly what CI caught on PR #1228 (the spec-marked "Linked After" row
- * was converted). Build projections from this list, never by hand.
+ * comes back looking like a pre-v1.83 one and earns the `opt-provenance`
+ * hint (and, while equality still counted as proof, a conversion: CI caught
+ * exactly that on PR #1228, the spec-marked "Linked After" row). Build
+ * projections from this list, never by hand.
  */
 export const OPT_TAG_CLASSIFIER_PATHS: readonly string[] = [
   "optTags",
@@ -436,6 +439,11 @@ export interface OptTagClassifiable {
 
 /**
  * Hints shown beside an ambiguous row. Each says "likely", none decides:
+ *  - `opt-provenance` — a pre-v1.83 OPT snapshot whose `optTags` equal the
+ *    array, or a link with no snapshot object (likely imported from the OPT
+ *    database; the link route / re-sync store a snapshot without touching the
+ *    array, and a bare slug rides the slicer round-trip and the share import —
+ *    see rule 4 of `classifyOptTags`);
  *  - `legacy-only-id` — the array carries 18, the pre-#1227 app's MARBLE
  *    (an older spec defined 18 too, so a vendor tag could carry it);
  *  - `spec-only-id` — the array carries an id the pre-#1227 FORM could not
@@ -446,17 +454,16 @@ export interface OptTagClassifiable {
  *    tag can carry the same small set).
  * Several can apply at once (`[18]` on a "Marble PLA" matches the backfill).
  */
-export type OptTagHint = "legacy-only-id" | "spec-only-id" | "backfill-derivation";
+export type OptTagHint = "opt-provenance" | "legacy-only-id" | "spec-only-id" | "backfill-derivation";
 
 export type OptTagVerdict =
-  /** Empty, or only inert ids: the remap is a no-op either way. */
+  /** Only ids that mean the same under both numberings — nothing to decide. */
   | { kind: "trivial" }
-  /** Provably the legacy numbering (OpenPrintTag provenance) — remap it. */
-  | { kind: "legacy"; reason: "opt-provenance" }
   /**
    * Both readings are consistent and nothing outside the array decides —
-   * which is every case without OPT provenance, since no CONTENT proves
-   * either numbering. `hints` (possibly empty) inform the user.
+   * which is every other case, since no stored CONTENT proves either
+   * numbering. `hints` (possibly empty) inform the user; the pass never acts
+   * on them.
    */
   | { kind: "ambiguous"; hints: OptTagHint[] };
 
@@ -494,35 +501,37 @@ export function isInertOptTagId(id: number): boolean {
  *     pre-#1227 row created from a vendor tag written against it could carry
  *     18, and the old decoder kept every encodable id. A hint, nothing more —
  *     and there is no "inconsistent" array; every array has both readings.
- *  4. OpenPrintTag provenance — the ONLY proof of the legacy numbering: a
- *     snapshot written BEFORE the enum was
- *     corrected (no `tagsNumbering: "spec"` entry) holds what the old
- *     `mapToFilamentPayload` offered, in the legacy numbering by construction.
- *     If the stored array equals its `optTags`, the importer or the re-sync
- *     wrote the stored array → `legacy`. A snapshot written SINCE (marked
- *     spec) is in the spec numbering and proves nothing about a legacy origin
- *     — a stored spec `[2]` linked after upgrading to a material whose spec
- *     snapshot is also `[2]` must stay the user's call (Codex P1 r4 on PR
- *     #1228). A pre-upgrade snapshot WITHOUT an `optTags` entry means the
- *     material offered no tags, so the stored array is not the importer's —
- *     nothing to conclude. A slug/uuid link with NO snapshot object at all
- *     predates snapshots (v1.36); only that importer could have created it
- *     (the link route, v1.52, always writes one) → `legacy`.
- *     A snapshot that DIFFERS proves nothing: the user may have edited the tags
- *     in the (legacy) form, or linked an NFC-created (spec) row afterwards.
- *     (Why the EQUAL case is safe where a vendor row was linked later: the OPT
- *     database and the vendor tag describe the same product with the same
- *     concepts, and the old importer mapped each concept to its LEGACY id while
- *     the tag carries the SPEC id — those coincide only on the fixed points,
- *     which are trivial anyway. A collision needs two DIFFERENT concepts whose
- *     legacy and spec ids happen to match on one product.)
+ *  4. OpenPrintTag provenance is a HINT, not proof (Codex P1 r12 on PR
+ *     #1228 closed the last "proof"). A snapshot written BEFORE v1.83 holds
+ *     what the old `mapToFilamentPayload` offered, in the legacy numbering by
+ *     construction — but equality with the stored array does NOT prove the
+ *     importer wrote the array: the link route (v1.52) and the re-sync store
+ *     the snapshot WITHOUT touching field values, so a vendor-NFC row with
+ *     spec `[2]` (antibacterial) linked before the upgrade to a material whose
+ *     legacy-mapped tags were `[2]` (transparent) reads equal and would have
+ *     been remapped to 20. A link with no snapshot object at all is not proof
+ *     either: `settings.openprinttag_slug` is an ordinary settings-bag key —
+ *     the slicer bundle exports the bag verbatim, the fork's sync-back writes
+ *     unknown keys into it (a preset duplicated in the slicer onto another
+ *     filament smears the slug across), and the share importer copies the bag
+ *     while the snapshot is deny-listed — so a spec row can carry a bare slug.
+ *     Either shape is reported as the `opt-provenance` hint ("most likely
+ *     imported from the OpenPrintTag database"), and Data health offers a
+ *     one-click bulk conversion for exactly those rows. A snapshot written
+ *     SINCE v1.83 carries `tagsNumbering: "spec"` (`OPT_SNAPSHOT_NUMBERING_KEY`)
+ *     and hints nothing (Codex P1 r4: a stored spec `[2]` linked after
+ *     upgrading to a material whose spec snapshot is also `[2]` must not read
+ *     as imported); a pre-v1.83 snapshot WITHOUT an `optTags` entry (the
+ *     material offered no tags) hints nothing; a DIFFERING snapshot hints
+ *     nothing (edited in the legacy form, or an NFC-created row linked later).
  *  5. Otherwise → `ambiguous`, with zero or more HINTS (`OptTagHint`):
- *     `legacy-only-id` when the array carries 18, `spec-only-id` when it
- *     carries an id the old form could not write, `backfill-derivation` when
- *     it equals what the historical backfill script wrote for this name +
- *     type. Likely is not proof — a vendor tag can carry the backfill's small
- *     set or an older spec's 18, a legacy CSV can carry a 30 — so a hint
- *     informs the user and decides nothing.
+ *     `opt-provenance` as above, `legacy-only-id` when the array carries 18,
+ *     `spec-only-id` when it carries an id the old form could not write,
+ *     `backfill-derivation` when it equals what the historical backfill script
+ *     wrote for this name + type. Likely is not proof — a vendor tag can carry
+ *     the backfill's small set or an older spec's 18, a legacy CSV can carry
+ *     a 30 — so a hint informs the user and decides nothing. THE PASS NEVER
+ *     CONVERTS: every non-trivial unmarked row is the user's call.
  */
 export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   const ids = usableIds(row.optTags);
@@ -530,10 +539,11 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
     return { kind: "trivial" };
   }
 
+  const hints: OptTagHint[] = [];
   const snapshot = row.openprinttagSnapshot;
   if (snapshot && typeof snapshot === "object") {
-    // Only a PRE-upgrade snapshot (legacy by construction) is provenance; a
-    // snapshot that says it is spec-numbered decides nothing, and so does a
+    // Only a PRE-upgrade snapshot (legacy by construction) hints at an import;
+    // a snapshot that says it is spec-numbered hints nothing, and so does a
     // pre-upgrade one without an `optTags` entry (the material offered none).
     const snapshotTags = snapshot.optTags;
     if (
@@ -541,17 +551,15 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
       Array.isArray(snapshotTags) &&
       sameOptTagSet(ids, snapshotTags)
     ) {
-      return { kind: "legacy", reason: "opt-provenance" };
+      hints.push("opt-provenance");
     }
   } else {
     const settings = row.settings ?? {};
     const linked =
       typeof settings.openprinttag_slug === "string" && settings.openprinttag_slug !== "" ||
       typeof settings.openprinttag_uuid === "string" && settings.openprinttag_uuid !== "";
-    if (linked) return { kind: "legacy", reason: "opt-provenance" };
+    if (linked) hints.push("opt-provenance");
   }
-
-  const hints: OptTagHint[] = [];
   if (ids.some((id) => LEGACY_ONLY_IDS.has(id))) hints.push("legacy-only-id");
   if (ids.some((id) => SPEC_ONLY_IDS.has(id))) hints.push("spec-only-id");
   if (sameOptTagSet(ids, deriveLegacyBackfillTags(row.name, row.type))) hints.push("backfill-derivation");

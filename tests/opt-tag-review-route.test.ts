@@ -7,9 +7,10 @@ import { DELETE } from "@/app/api/opt-tag-review/dropped/route";
 
 /**
  * GH #1227 — the Data health surface for optTags whose numbering the startup
- * pass could not prove. The helpers' branches are pinned in
- * tests/optTagRenumber.test.ts; these pin the HTTP contract and that the GET
- * settles decisive rows before listing.
+ * pass could not settle (every non-trivial array — no stored content proves a
+ * numbering). The helpers' branches are pinned in tests/optTagRenumber.test.ts;
+ * these pin the HTTP contract and that the GET marks trivial rows before
+ * listing.
  */
 describe("/api/opt-tag-review", () => {
   const col = () => mongoose.connection.collection("filaments");
@@ -30,30 +31,41 @@ describe("/api/opt-tag-review", () => {
     await markers().deleteMany({});
   });
 
-  it("GET settles decisive rows first, then lists the pending ones with both readings and the recorded drops", async () => {
+  it("GET marks trivial rows first, then lists the pending ones with both readings, hints and the recorded drops", async () => {
     await col().insertMany([
-      // Decisive through OPT provenance (a link with no snapshot predates
-      // snapshots); 18 alone would only be a hint (Codex P1 r6).
-      { name: "Legacy", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "legacy" } },
+      // OPT provenance (a link with no snapshot) and the deprecated 18 are both
+      // HINTS (Codex P1 r6 + r12) — listed, never converted by the GET's pass.
+      { name: "Linked", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "linked" } },
       { name: "Pending", vendor: "V", type: "PETG", optTags: [2] },
       { name: "Trivial", vendor: "V", type: "PLA", optTags: [4] },
     ]);
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.pending).toHaveLength(1);
+    expect(body.pending.map((r: { name: string }) => r.name)).toEqual(["Linked", "Pending"]);
     expect(body.pending[0]).toMatchObject({
+      name: "Linked",
+      verdict: "ambiguous",
+      matchesOptProvenance: true,
+      legacyOnlyIds: [18],
+      specOnlyIds: [],
+      stored: [18, 9],
+      asLegacy: { tags: [57], dropped: [9] },
+      asSpec: [18, 9],
+    });
+    expect(body.pending[1]).toMatchObject({
       name: "Pending",
       verdict: "ambiguous",
+      matchesOptProvenance: false,
       stored: [2],
       asLegacy: { tags: [20], dropped: [] },
       asSpec: [2],
     });
-    // The decisive row was converted by the GET's pass, and its drop recorded.
-    const legacy = await col().findOne({ name: "Legacy" });
-    expect(legacy?.optTags).toEqual([57]);
-    expect(legacy?.optTagsSpec).toBe(true);
-    expect(body.dropped).toEqual([expect.objectContaining({ name: "Legacy", tags: [9] })]);
+    // Nothing was converted, so nothing was dropped.
+    expect(await col().findOne({ name: "Linked" })).toMatchObject({ optTags: [18, 9] });
+    expect((await col().findOne({ name: "Linked" }))?.optTagsSpec).toBeUndefined();
+    expect(body.dropped).toEqual([]);
+    // The trivial row was marked by the GET's pass.
     expect((await col().findOne({ name: "Trivial" }))?.optTagsSpec).toBe(true);
   });
 

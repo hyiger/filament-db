@@ -11,16 +11,17 @@ import {
 /**
  * GET /api/opt-tag-review  (GH #1227)
  *
- * Data health: every filament whose stored `optTags` the startup renumbering
- * pass could not place in a numbering (ids valid under BOTH the pre-#1227 app
- * table and the OpenPrintTag spec, with nothing outside the array to decide),
- * with both readings pre-computed, plus the legacy tags the pass had to drop
- * from the rows it DID convert.
+ * Data health: every filament whose stored `optTags` the startup pass could
+ * not settle — every array with an id that means different things under the
+ * pre-#1227 app table and the OpenPrintTag spec, since no stored content
+ * proves either numbering — with both readings and the hints pre-computed,
+ * plus the legacy tags earlier conversions (this route's POST) had to drop.
  *
- * Runs the (idempotent, per-row) pass first, so a decisive row that arrived
- * after startup — a share import, a row synced down from a peer — is settled
- * here rather than listed as pending until the next restart. This is the same
- * pass `dbConnect` runs; it writes only marker bits and provable translations.
+ * Runs the (idempotent, per-row) pass first, so a trivially-spec row that
+ * arrived after startup — a share import, a row synced down from a peer — is
+ * marked here rather than listed as pending until the next restart. This is
+ * the same pass `dbConnect` runs; it writes only marker bits (and translates a
+ * marked row's legacy-numbered OPT snapshot). It never converts an array.
  *
  * Sibling of `/api/name-conflicts` and `/api/abrasive-nozzles`: no
  * `assertSameOriginRequest` on a GET (the #360 sweep covers mutating verbs);

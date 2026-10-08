@@ -161,10 +161,11 @@ describe("classifyOptTags", () => {
       kind: "ambiguous",
       hints: ["legacy-only-id", "backfill-derivation"],
     });
-    // Provenance still decides: a pre-v1.83 snapshot equal to the array.
+    // Provenance does not decide either (Codex P1 r12): a pre-v1.83 snapshot
+    // equal to the array is one more hint beside the 18.
     expect(classifyOptTags({ optTags: [18, 2], openprinttagSnapshot: { optTags: [2, 18] } })).toEqual({
-      kind: "legacy",
-      reason: "opt-provenance",
+      kind: "ambiguous",
+      hints: ["opt-provenance", "legacy-only-id"],
     });
   });
 
@@ -173,20 +174,35 @@ describe("classifyOptTags", () => {
     expect(remapLegacyOptTags([18, 30])).toEqual({ tags: [LEGACY_TO_SPEC[18], 30], dropped: [] });
   });
 
-  it("legacy: OPT provenance — a PRE-v1.83 snapshot equal to the stored array, or a link with no snapshot at all", () => {
-    // No `tagsNumbering: "spec"` entry → written by the pre-#1227 importer /
-    // re-sync in the legacy numbering; equality means it wrote the stored array.
+  it("OPT provenance is a HINT, never proof: a PRE-v1.83 snapshot equal to the array, or a link with no snapshot (Codex P1 r12 on PR #1228)", () => {
+    // A snapshot without `tagsNumbering: "spec"` was written by the pre-#1227
+    // importer / re-sync in the legacy numbering — but the link route (v1.52)
+    // and the re-sync store it WITHOUT touching field values, so a vendor-NFC
+    // row with spec [2] (antibacterial) linked before the upgrade to a material
+    // whose legacy-mapped tags were [2] (transparent) reads equal too. Reading
+    // equality as proof remapped that row to 20.
     expect(
       classifyOptTags({ optTags: [2, 17], openprinttagSnapshot: { optTags: [17, 2] } }),
-    ).toEqual({ kind: "legacy", reason: "opt-provenance" });
-    // A link with NO snapshot object predates snapshots (v1.36): only that
-    // importer could have created it (the link route, v1.52, always writes one).
+    ).toEqual({ kind: "ambiguous", hints: ["opt-provenance"] });
+    // A link with NO snapshot object is not proof either: the slug is an
+    // ordinary settings-bag key that rides the slicer bundle, the fork's
+    // sync-back and the share import (which copies the bag but not the
+    // snapshot), so a spec row can carry a bare slug.
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_slug: "x-pla" } }),
-    ).toEqual({ kind: "legacy", reason: "opt-provenance" });
+    ).toEqual({ kind: "ambiguous", hints: ["opt-provenance"] });
+    expect(
+      classifyOptTags({ optTags: [2], settings: { openprinttag_uuid: "u" } }),
+    ).toEqual({ kind: "ambiguous", hints: ["opt-provenance"] });
+    // The hint stacks with the others, provenance first.
+    expect(
+      classifyOptTags({ optTags: [2, 30], settings: { openprinttag_slug: "x" } }),
+    ).toEqual({ kind: "ambiguous", hints: ["opt-provenance", "spec-only-id"] });
+    // An empty slug is no link.
+    expect(classifyOptTags({ optTags: [2], settings: { openprinttag_slug: "" } })).toEqual({ kind: "ambiguous", hints: [] });
   });
 
-  it("ambiguous: a snapshot written since v1.83 is spec-numbered and proves nothing; a tag-less one proves nothing either (Codex P1 r4)", () => {
+  it("ambiguous WITHOUT the hint: a snapshot written since v1.83 is spec-numbered; a tag-less one offered no tags (Codex P1 r4)", () => {
     // Linked AFTER upgrading: buildOptSnapshot wrote spec ids and said so. A
     // stored spec [2] (antibacterial — an NFC-created row) equal to it must
     // not be read as the legacy importer's work and remapped to 20.
@@ -198,13 +214,13 @@ describe("classifyOptTags", () => {
       }),
     ).toEqual({ kind: "ambiguous", hints: [] });
     // A pre-v1.83 snapshot with no optTags entry: the material offered no
-    // tags, so the stored array did not come from the importer.
+    // tags, so the stored array did not come from the importer — not even a hint.
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_uuid: "u" }, openprinttagSnapshot: { color: "#000000" } }),
     ).toEqual({ kind: "ambiguous", hints: [] });
   });
 
-  it("ambiguous: a snapshot that DIFFERS proves nothing (edited in the legacy form, or an NFC row linked later)", () => {
+  it("ambiguous WITHOUT the hint: a snapshot that DIFFERS (edited in the legacy form, or an NFC row linked later)", () => {
     expect(
       classifyOptTags({ optTags: [2, 17], openprinttagSnapshot: { optTags: [17] }, settings: { openprinttag_slug: "s" } }),
     ).toEqual({ kind: "ambiguous", hints: [] });
@@ -227,11 +243,11 @@ describe("classifyOptTags", () => {
     });
   });
 
-  it("optTagsAwaitReview: unmarked legacy/ambiguous arrays wait; marked and trivial ones don't", () => {
+  it("optTagsAwaitReview: unmarked ambiguous arrays wait; marked and trivial ones don't", () => {
     expect(optTagsAwaitReview({ optTags: [2] })).toBe(true);
     expect(optTagsAwaitReview({ optTags: [18, 2] })).toBe(true); // ambiguous (18 is a hint)
     expect(optTagsAwaitReview({ optTags: [18, 30] })).toBe(true);
-    expect(optTagsAwaitReview({ optTags: [18], openprinttagSnapshot: { optTags: [18] } })).toBe(true); // legacy, pass not run yet
+    expect(optTagsAwaitReview({ optTags: [18], openprinttagSnapshot: { optTags: [18] } })).toBe(true); // provenance is a hint only
     expect(optTagsAwaitReview({ optTags: [2], optTagsSpec: true })).toBe(false);
     expect(optTagsAwaitReview({ optTags: [] })).toBe(false);
     expect(optTagsAwaitReview({ optTags: [4, 16] })).toBe(false);
@@ -248,12 +264,15 @@ describe("classifyOptTags", () => {
     expect(classifyOptTags({ optTags: [12], name: "Prusament PLA Blend", type: "PLA" })).toEqual({ kind: "ambiguous", hints: [] });
   });
 
-  it("does not misread an already-converted array as legacy again (the double-remap hazard)", () => {
-    // [2] converted → [20]; [27] → [28]; [12] → [62]. None of these may come
-    // back as `legacy` on content alone — a second pass over a converted row
-    // (a peer that synced it down unmarked) must at worst ask, never remap.
-    for (const converted of [[20], [28], [62], [19, 23]]) {
-      expect(classifyOptTags({ optTags: converted }).kind, JSON.stringify(converted)).not.toBe("legacy");
+  it("never settles a converted array as legacy again (the double-remap hazard): every verdict is trivial or ambiguous", () => {
+    // [2] converted → [20]; [27] → [28]; [12] → [62]. A second pass over a
+    // converted row (a peer that synced it down unmarked) must at worst ASK,
+    // never remap — and since no content proves either numbering, the
+    // classifier has no verdict that converts. [62] is inert (outside the
+    // legacy table) → trivial; the rest are the user's call.
+    expect(classifyOptTags({ optTags: [62] })).toEqual({ kind: "trivial" });
+    for (const converted of [[20], [28], [19, 23]]) {
+      expect(classifyOptTags({ optTags: converted }), JSON.stringify(converted)).toEqual({ kind: "ambiguous", hints: [] });
     }
   });
 });

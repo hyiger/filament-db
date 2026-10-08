@@ -9,14 +9,15 @@ import {
   dismissDroppedLegacyTags,
   OPT_TAG_RENUMBER_MARKER_ID,
   type MinimalRenumberDb,
-  mergeDroppedLegacyTags,
-  reconcileMergedDroppedLegacyTags,
 } from "@/lib/optTagRenumber";
 
 /**
- * GH #1227 — the pass that brings stored `optTags` onto the OpenPrintTag spec
- * numbering. Raw inserts throughout: these are the states the pre-#1227 app
- * (and vendor NFC reads) actually produced, with no `optTagsSpec` marker.
+ * GH #1227 — the pass that marks stored `optTags` already on the OpenPrintTag
+ * spec numbering (and converts NOTHING — no stored content proves the legacy
+ * numbering; see the classifier's docblock), plus the Data health resolution
+ * that applies the user's answer. Raw inserts throughout: these are the states
+ * the pre-#1227 app (and vendor NFC reads) actually produced, with no
+ * `optTagsSpec` marker.
  */
 describe("renumberOptTags", () => {
   const db = () => mongoose.connection.db as unknown as MinimalRenumberDb;
@@ -32,10 +33,12 @@ describe("renumberOptTags", () => {
 
   const byName = (n: string) => col().findOne({ name: n });
 
-  it("converts provably-legacy rows, marks spec/trivial rows, leaves ambiguous rows unmarked — and is idempotent", async () => {
+  it("marks trivially-spec rows, leaves every other row unmarked — converts nothing — and is idempotent", async () => {
     await col().insertMany([
-      // OPT provenance: a pre-v1.83 snapshot equal to the array → provably
-      // legacy (18 alone is only a hint since Codex P1 r6). 9 FLEXIBLE drops.
+      // OPT provenance (a pre-v1.83 snapshot equal to the array) is a HINT
+      // since Codex P1 r12: the link route stores a snapshot without touching
+      // the array, so an NFC-created row linked before the upgrade reads the
+      // same. The user converts it on Data health; the pass does not.
       {
         name: "Legacy Marble", vendor: "V", type: "PLA", optTags: [18, 2, 9], updatedAt: OLD,
         settings: { openprinttag_slug: "marble" }, openprinttagSnapshot: { optTags: [9, 2, 18] },
@@ -53,72 +56,70 @@ describe("renumberOptTags", () => {
     ]);
 
     const first = await renumberOptTags(db(), NOW);
-    expect(first).toMatchObject({
-      scanned: 6,
-      converted: 1,
-      verified: 2,
-      ambiguous: 3,
-      skipped: 0,
-    });
-    expect(first.dropped).toEqual([
-      { filamentId: expect.any(String), name: "Legacy Marble", tags: [9], at: NOW, revisionUpdatedAt: OLD },
-    ]);
+    expect(first).toEqual({ scanned: 6, verified: 2, ambiguous: 4, skipped: 0 });
 
     const marble = await byName("Legacy Marble");
-    expect(marble?.optTags).toEqual([57, 20]); // imitates_marble, transparent
-    expect(marble?.optTagsSpec).toBe(true);
-    // The pass never touches updatedAt (Codex P1 r7): both hybrid peers run it
-    // before copying, so a synthetic timestamp could only let a stale document
-    // win LWW over the other side's genuinely newer edits.
+    expect(marble?.optTags).toEqual([18, 2, 9]); // untouched — the user's call, with the provenance hint
+    expect(marble?.optTagsSpec).toBeUndefined();
+    expect(marble?.openprinttagSnapshot).toEqual({ optTags: [9, 2, 18] }); // waits with the row
     expect(marble?.updatedAt).toEqual(OLD);
+    const pending = await scanUnverifiedOptTags(db());
+    expect(pending.find((r) => r.name === "Legacy Marble")).toMatchObject({
+      matchesOptProvenance: true,
+      legacyOnlyIds: [18],
+      asLegacy: { tags: [57, 20], dropped: [9] },
+    });
 
     const pc = await byName("PC Blend CF");
     expect(pc?.optTags).toEqual([31, 12, 4, 30]); // untouched
     expect(pc?.optTagsSpec).toBeUndefined(); // the user's call, on Data health with the spec-only hint
-    expect(pc?.updatedAt).toEqual(OLD);
+    expect(pending.find((r) => r.name === "PC Blend CF")).toMatchObject({ matchesOptProvenance: false, specOnlyIds: [30] });
 
-    expect((await byName("Plain Abrasive"))?.optTagsSpec).toBe(true);
-    expect((await byName("No Tags"))?.optTagsSpec).toBe(true);
+    // The pass never touches updatedAt (Codex P1 r7): both hybrid peers run it
+    // before copying, so a synthetic timestamp could only let a stale document
+    // win LWW over the other side's genuinely newer edits.
+    expect(await byName("Plain Abrasive")).toMatchObject({ optTags: [4, 16], optTagsSpec: true, updatedAt: OLD });
+    expect(await byName("No Tags")).toMatchObject({ optTags: [], optTagsSpec: true, updatedAt: OLD });
 
-    const amb = await byName("Ambiguous Transparent");
-    expect(amb?.optTags).toEqual([2]);
-    expect(amb?.optTagsSpec).toBeUndefined();
-    const twoHints = await byName("Two Hints");
-    expect(twoHints?.optTags).toEqual([18, 30]); // untouched, unmarked
-    expect(twoHints?.optTagsSpec).toBeUndefined();
+    expect(await byName("Ambiguous Transparent")).toMatchObject({ optTags: [2] });
+    expect((await byName("Ambiguous Transparent"))?.optTagsSpec).toBeUndefined();
+    expect(await byName("Two Hints")).toMatchObject({ optTags: [18, 30] });
+    expect((await byName("Two Hints"))?.optTagsSpec).toBeUndefined();
 
-    // Idempotent: the second pass sees only the three unsettled rows and writes nothing.
+    // Idempotent: the second pass sees only the four unsettled rows and writes nothing.
     const second = await renumberOptTags(db(), new Date("2026-10-09T00:00:00.000Z"));
-    expect(second).toMatchObject({ scanned: 3, converted: 0, verified: 0, ambiguous: 3 });
-    expect((await byName("Legacy Marble"))?.optTags).toEqual([57, 20]); // NOT [57, 46] — no double remap
+    expect(second).toEqual({ scanned: 4, verified: 0, ambiguous: 4, skipped: 0 });
+    expect((await byName("Legacy Marble"))?.optTags).toEqual([18, 2, 9]);
 
-    // The run is recorded with the drops.
+    // The run is recorded; the pass never drops anything, so there is no record of drops.
     const marker = await markers().findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID as never });
-    expect(marker?.lastRun).toMatchObject({ scanned: 3 });
-    expect(marker?.dropped).toHaveLength(1);
-    expect(marker?.dropped[0]).toMatchObject({ name: "Legacy Marble", tags: [9] });
+    expect(marker?.lastRun).toMatchObject({ scanned: 4 });
+    expect(marker?.dropped).toBeUndefined();
+    expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 
-  it("uses OpenPrintTag provenance as proof, surfaces a backfill-derivation match as a hint only, and translates the snapshot", async () => {
+  it("OpenPrintTag provenance is a hint, never a conversion; a trivial row's legacy snapshot is still translated", async () => {
     await col().insertMany([
-      // Imported from the OPT database: the snapshot (legacy by construction)
-      // equals the stored array → the importer wrote the array.
+      // Imported from the OPT database before v1.83: the snapshot (legacy by
+      // construction) equals the stored array. LIKELY the importer wrote the
+      // array — but a vendor-NFC row linked before the upgrade reads the same.
       {
         name: "OPT Imported", vendor: "V", type: "PLA", optTags: [17, 27],
         settings: { openprinttag_slug: "v-pla" }, openprinttagSnapshot: { optTags: [27, 17], density: 1.24 },
       },
-      // Pre-snapshot (v1.36) import: slug, no snapshot array.
+      // Pre-snapshot (v1.36) import shape: slug, no snapshot object. A bare slug
+      // also rides the slicer round-trip and the share import, so: a hint.
       { name: "OPT Old Import", vendor: "V", type: "PLA", optTags: [3], settings: { openprinttag_slug: "v-old" } },
       // The backfill script's exact output for this name + type — likely legacy,
       // but a vendor tag could carry the same set, so NOT converted (Codex P1).
       { name: "Prusament PLA Galaxy Black", vendor: "Prusament", type: "PLA", optTags: [12, 15] },
-      // Snapshot DIFFERS → edited in the legacy form, or an NFC row linked later: ambiguous.
+      // Snapshot DIFFERS → edited in the legacy form, or an NFC row linked later: no hint.
       {
         name: "OPT Edited", vendor: "V", type: "PLA", optTags: [2, 17],
         settings: { openprinttag_slug: "v-ed" }, openprinttagSnapshot: { optTags: [17] },
       },
       // Trivial row (30 and 4 are both remap-invariant) with a legacy snapshot:
-      // the snapshot is still translated.
+      // marked, and the snapshot is translated.
       {
         name: "Vendor Tag Linked", vendor: "V", type: "PC", optTags: [30, 4], updatedAt: OLD,
         settings: { openprinttag_slug: "v-pc" }, openprinttagSnapshot: { optTags: [2] },
@@ -126,194 +127,104 @@ describe("renumberOptTags", () => {
     ]);
 
     const s = await renumberOptTags(db(), NOW);
-    expect(s).toMatchObject({ scanned: 5, converted: 2, verified: 1, ambiguous: 2 });
+    expect(s).toEqual({ scanned: 5, verified: 1, ambiguous: 4, skipped: 0 });
 
     const imported = await byName("OPT Imported");
-    expect(imported?.optTags).toEqual([17, 28]);
-    // The legacy snapshot is translated AND stamped so it is never translated twice.
-    expect(imported?.openprinttagSnapshot).toEqual({ optTags: [28, 17], density: 1.24, tagsNumbering: "spec" });
-    expect((await byName("OPT Old Import"))?.optTags).toEqual([19]);
+    expect(imported?.optTags).toEqual([17, 27]); // untouched
+    expect(imported?.optTagsSpec).toBeUndefined();
+    expect(imported?.openprinttagSnapshot).toEqual({ optTags: [27, 17], density: 1.24 }); // waits with the row
+    expect((await byName("OPT Old Import"))?.optTags).toEqual([3]);
     const galaxy = await byName("Prusament PLA Galaxy Black");
     expect(galaxy?.optTags).toEqual([12, 15]); // untouched, unmarked — Data health with the hint
     expect(galaxy?.optTagsSpec).toBeUndefined();
+
     const pending = await scanUnverifiedOptTags(db());
+    expect(pending.map((r) => [r.name, r.matchesOptProvenance, r.matchesBackfill])).toEqual([
+      ["OPT Edited", false, false],
+      ["OPT Imported", true, false],
+      ["OPT Old Import", true, false],
+      ["Prusament PLA Galaxy Black", false, true],
+    ]);
     expect(pending.find((r) => r.name === "Prusament PLA Galaxy Black")).toMatchObject({
       verdict: "ambiguous",
-      matchesBackfill: true,
       asLegacy: { tags: [62], dropped: [15] },
     });
-    expect(pending.find((r) => r.name === "OPT Edited")?.matchesBackfill).toBe(false);
-    expect(s.dropped).toEqual([]);
-    const edited = await byName("OPT Edited");
-    expect(edited?.optTags).toEqual([2, 17]);
-    expect(edited?.optTagsSpec).toBeUndefined();
-    expect(edited?.openprinttagSnapshot).toEqual({ optTags: [17] }); // waits for the user's answer
+
     const linked = await byName("Vendor Tag Linked");
     expect(linked?.optTags).toEqual([30, 4]);
     expect(linked?.optTagsSpec).toBe(true);
+    // The legacy snapshot is translated AND stamped so it is never translated twice.
     expect(linked?.openprinttagSnapshot).toEqual({ optTags: [20], tagsNumbering: "spec" });
     expect(linked?.updatedAt).toEqual(OLD); // a per-peer rewrite, not an edit to propagate
+
+    // The conversion the USER asks for (the bulk "imported from OpenPrintTag"
+    // action is this per row) translates the snapshot alongside the array.
+    expect(await resolveOptTagNumbering(db(), imported!._id, "convert", [17, 27], NOW)).toEqual({
+      outcome: "converted",
+      tags: [17, 28],
+      dropped: [],
+    });
+    expect(await byName("OPT Imported")).toMatchObject({
+      optTags: [17, 28],
+      optTagsSpec: true,
+      updatedAt: NOW,
+      openprinttagSnapshot: { optTags: [28, 17], density: 1.24, tagsNumbering: "spec" },
+    });
   });
 
-  it("includes trashed rows (they can be restored) and counts a lost conditional write as skipped", async () => {
+  it("includes trashed rows (they can be restored)", async () => {
     await col().insertMany([
-      // Pre-v1.36 import (link, no snapshot) → provably legacy.
-      { name: "Trashed Legacy", vendor: "V", type: "PLA", optTags: [18], _deletedAt: OLD, settings: { openprinttag_slug: "t" } },
+      { name: "Trashed Trivial", vendor: "V", type: "PLA", optTags: [4], _deletedAt: OLD },
+      { name: "Trashed Pending", vendor: "V", type: "PLA", optTags: [18], _deletedAt: OLD, settings: { openprinttag_slug: "t" } },
     ]);
-    const s = await renumberOptTags(db(), NOW);
-    expect(s).toMatchObject({ scanned: 1, converted: 1 });
-    expect((await byName("Trashed Legacy"))?.optTags).toEqual([57]);
-
-    // A write whose exact-array condition no longer matches (an edit landed
-    // between read and write) is a skip, not a conversion, and leaves the
-    // flag's settle condition false so the next connect revisits the row.
-    // 9 FLEXIBLE drops on conversion, so a drop record WOULD be written.
-    await col().insertOne({ name: "Raced", vendor: "V", type: "PLA", optTags: [18, 2, 9], settings: { openprinttag_slug: "r" } });
-    const real = mongoose.connection.db!;
-    const racing: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        type Filter = Record<string, unknown>;
-        type Opts = { projection?: Record<string, unknown> };
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            // Simulate the concurrent edit: change the array first, then run the real write.
-            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { optTags: [18, 2, 9, 16] } });
-            return c.updateOne(filter, update, options);
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    const raced = await renumberOptTags(racing, NOW);
-    expect(raced).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
-    const row = await byName("Raced");
-    expect(row?.optTags).toEqual([18, 2, 9, 16]); // the edit survived, untouched
-    expect(row?.optTagsSpec).toBeUndefined();
-    // No drop was recorded for a conversion that did not land (the pre-write
-    // record is pulled back on a skip).
-    expect(await readDroppedLegacyTags(db())).toEqual([]);
-    // The next pass picks it up — and records the drop exactly once.
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, converted: 1, skipped: 0 });
-    expect((await byName("Raced"))?.optTags).toEqual([57, 20, 16]);
-    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Raced", tags: [9] })]);
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 2, verified: 1, ambiguous: 1, skipped: 0 });
+    expect(await byName("Trashed Trivial")).toMatchObject({ optTags: [4], optTagsSpec: true, _deletedAt: OLD });
+    expect(await byName("Trashed Pending")).toMatchObject({ optTags: [18], _deletedAt: OLD });
+    expect((await byName("Trashed Pending"))?.optTagsSpec).toBeUndefined();
+    expect(await scanUnverifiedOptTags(db())).toEqual([
+      expect.objectContaining({ name: "Trashed Pending", trashed: true, matchesOptProvenance: true, legacyOnlyIds: [18] }),
+    ]);
   });
 
-  it("a snapshot written since v1.83 is not legacy proof, and a translated snapshot is never translated twice (Codex P1 r4)", async () => {
+  it("a snapshot written since v1.83 hints nothing; a translated snapshot is never translated twice (Codex P1 r4)", async () => {
     await col().insertMany([
       // An NFC-created spec [2] LINKED after upgrading: the link route's
-      // snapshot equals it and says it is spec-numbered → the user's call.
+      // snapshot equals it and says it is spec-numbered → no provenance hint.
       {
         name: "Linked After", vendor: "V", type: "PLA", optTags: [2],
         settings: { openprinttag_slug: "l" }, openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
       },
-      // A legacy snapshot equal to the array (decisive): translated and stamped.
+      // A legacy snapshot equal to the array: the hint, and nothing more.
       {
         name: "Legacy Snap", vendor: "V", type: "PLA", optTags: [18, 2],
         settings: { openprinttag_slug: "m" }, openprinttagSnapshot: { optTags: [18, 2] },
       },
     ]);
-    const s = await renumberOptTags(db(), NOW);
-    expect(s).toMatchObject({ scanned: 2, converted: 1, ambiguous: 1 });
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 2, verified: 0, ambiguous: 2, skipped: 0 });
     const after = await byName("Linked After");
     expect(after?.optTags).toEqual([2]); // NOT remapped to 20
     expect(after?.optTagsSpec).toBeUndefined();
-    expect((await byName("Legacy Snap"))?.openprinttagSnapshot).toEqual({ optTags: [57, 20], tagsNumbering: "spec" });
+    const snap = await byName("Legacy Snap");
+    expect(snap?.openprinttagSnapshot).toEqual({ optTags: [18, 2] }); // untouched until the user decides
+    expect((await scanUnverifiedOptTags(db())).map((r) => [r.name, r.matchesOptProvenance])).toEqual([
+      ["Legacy Snap", true],
+      ["Linked After", false],
+    ]);
 
-    // Keep on Data health runs the snapshot step again — the marker stops a
-    // second translation of an already-spec snapshot.
-    const r = await resolveOptTagNumbering(db(), after!._id, "keep", [2], NOW);
-    expect(r.outcome).toBe("kept");
+    // Convert translates the legacy snapshot and stamps it.
+    expect(await resolveOptTagNumbering(db(), snap!._id, "convert", [18, 2], NOW)).toEqual({
+      outcome: "converted",
+      tags: [57, 20],
+      dropped: [],
+    });
+    expect((await byName("Legacy Snap"))?.openprinttagSnapshot).toEqual({ optTags: [57, 20], tagsNumbering: "spec" });
+    // Keep runs the snapshot step too — the marker stops a second translation
+    // of an already-spec snapshot.
+    expect(await resolveOptTagNumbering(db(), after!._id, "keep", [2], NOW)).toEqual({ outcome: "kept", tags: [2] });
     expect((await byName("Linked After"))?.openprinttagSnapshot).toEqual({ optTags: [2], tagsNumbering: "spec" });
   });
 
-  it("a conversion write that THROWS pulls back its pre-written drop record; a retry records it exactly once (Codex P2 r4)", async () => {
-    await col().insertOne({ name: "Throws", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "th" } }); // 9 FLEXIBLE drops
-    const real = mongoose.connection.db!;
-    let throwOnce = true;
-    type Filter = Record<string, unknown>;
-    type Opts = { projection?: Record<string, unknown> };
-    const failing: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            if (throwOnce) {
-              throwOnce = false;
-              throw new Error("socket closed");
-            }
-            return c.updateOne(filter, update, options);
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    await expect(renumberOptTags(failing, NOW)).rejects.toThrow("socket closed");
-    expect(await readDroppedLegacyTags(db())).toEqual([]); // pulled back
-    const throwsId = (await byName("Throws"))!._id;
-    expect((await byName("Throws"))?.optTagsSpec).toBeUndefined();
-
-    // A stale record the cleanup could not remove (database gone) is REPLACED
-    // by the retry, not stacked beside a second notice.
-    await markers().updateOne(
-      { _id: OPT_TAG_RENUMBER_MARKER_ID as never },
-      // The driver's typed $push wants the array's element type declared; this is a raw fixture write.
-      { $push: { dropped: { filamentId: String(throwsId), name: "Throws", tags: [9], at: OLD } } } as never,
-      { upsert: true },
-    );
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
-    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Throws", tags: [9], at: NOW })]);
-
-    // The manual resolution path cleans up the same way.
-    await col().insertOne({ name: "Throws Manual", vendor: "V", type: "TPU", optTags: [9, 2] });
-    const manualId = (await byName("Throws Manual"))!._id;
-    throwOnce = true;
-    await expect(resolveOptTagNumbering(failing, manualId, "convert", [9, 2], NOW)).rejects.toThrow("socket closed");
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws"]);
-    expect(await resolveOptTagNumbering(db(), manualId, "convert", [9, 2], NOW)).toMatchObject({
-      outcome: "converted",
-      dropped: [9],
-    });
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws", "Throws Manual"]);
-
-    // ACK LOST (Codex P2 r5): the write COMMITS but the driver throws before
-    // the acknowledgement arrives. The record must SURVIVE — the pass never
-    // revisits a marked row, so pulling it would hide the removed tags for good.
-    await col().insertOne({ name: "Ack Lost", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "ack" } });
-    let ackLostOnce = true;
-    const ackLost: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            const res = await c.updateOne(filter, update, options);
-            if (ackLostOnce) {
-              ackLostOnce = false;
-              throw new Error("connection reset before ack");
-            }
-            return res;
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    await expect(renumberOptTags(ackLost, NOW)).rejects.toThrow("connection reset before ack");
-    const ack = await byName("Ack Lost");
-    expect(ack?.optTags).toEqual([57]); // the write landed
-    expect(ack?.optTagsSpec).toBe(true);
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws", "Throws Manual", "Ack Lost"]);
-    // Nothing left to convert, and the record stays exactly once.
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 0 });
-    expect((await readDroppedLegacyTags(db())).filter((d) => d.name === "Ack Lost")).toHaveLength(1);
-  });
-
-  it("skips a row whose classifier inputs changed between the read and the write — marker or array alike (Codex P1 r6)", async () => {
+  it("skips a row whose classifier inputs changed between the read and the write — array, snapshot or container alike (Codex P1 r6/r10)", async () => {
     // Read as trivial [4]; replaced with an ambiguous legacy [2] before the
     // write lands (another desktop, the sync service). Pinning only the id and
     // marker would have stamped the [2] as verified spec = antibacterial.
@@ -321,7 +232,7 @@ describe("renumberOptTags", () => {
     const real = mongoose.connection.db!;
     type Filter = Record<string, unknown>;
     type Opts = { projection?: Record<string, unknown> };
-    const swapping: MinimalRenumberDb = {
+    const interposing = (before: (id: unknown) => Promise<unknown>): MinimalRenumberDb => ({
       collection: (name) => {
         const c = real.collection(name);
         if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
@@ -329,224 +240,67 @@ describe("renumberOptTags", () => {
           find: (f: Filter, o?: Opts) => c.find(f, o),
           findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
           updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { optTags: [2] } });
+            await before((filter as { _id: unknown })._id);
             return c.updateOne(filter, update, options);
           },
         } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
       },
-    };
-    expect(await renumberOptTags(swapping, NOW)).toMatchObject({ scanned: 1, verified: 0, skipped: 1 });
+    });
+    const swapping = interposing((id) => real.collection("filaments").updateOne({ _id: id as never }, { $set: { optTags: [2] } }));
+    expect(await renumberOptTags(swapping, NOW)).toEqual({ scanned: 1, verified: 0, ambiguous: 0, skipped: 1 });
     const swapped = await byName("Swapped");
     expect(swapped?.optTags).toEqual([2]);
     expect(swapped?.optTagsSpec).toBeUndefined(); // reclassified next pass: ambiguous → Data health
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1, skipped: 0 });
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 1, verified: 0, ambiguous: 1, skipped: 0 });
 
-    // A legacy verdict justified by a snapshot is skipped when the snapshot it
-    // rested on is replaced (here: re-linked to a spec-marked one).
+    // The snapshot is pinned too: a trivial row whose legacy snapshot the pass
+    // would translate is re-linked to a spec-marked snapshot between the read
+    // and the write. Writing the stale translation would turn a spec [2] into [20].
     await col().deleteMany({ name: "Swapped" }); // isolate the next sub-scenario's counts
     await col().insertOne({
-      name: "Relinked", vendor: "V", type: "PLA", optTags: [2],
+      name: "Relinked", vendor: "V", type: "PLA", optTags: [4],
       settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
     });
-    const relinking: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            await c.updateOne(
-              { _id: (filter as { _id: unknown })._id as never },
-              { $set: { "settings.openprinttag_slug": "b", openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } },
-            );
-            return c.updateOne(filter, update, options);
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    expect(await renumberOptTags(relinking, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
-    const relinked = await byName("Relinked");
-    expect(relinked?.optTags).toEqual([2]); // not remapped
-    expect(relinked?.optTagsSpec).toBeUndefined();
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // spec snapshot: no proof
+    const relinking = interposing((id) =>
+      real.collection("filaments").updateOne(
+        { _id: id as never },
+        { $set: { "settings.openprinttag_slug": "b", openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } },
+      ),
+    );
+    expect(await renumberOptTags(relinking, NOW)).toEqual({ scanned: 1, verified: 0, ambiguous: 0, skipped: 1 });
+    expect(await byName("Relinked")).toMatchObject({ optTags: [4], openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } }); // intact
+    expect((await byName("Relinked"))?.optTagsSpec).toBeUndefined();
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 1, verified: 1, ambiguous: 0, skipped: 0 });
+    expect(await byName("Relinked")).toMatchObject({ optTagsSpec: true, openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } }); // never re-translated
 
-    // The snapshot CONTAINER is pinned too (Codex P1 r10): a linked row with
-    // NO snapshot object is a legacy proof (pre-v1.36 import), while a
-    // snapshot object WITHOUT an `optTags` entry proves nothing — and both
-    // satisfy the children's `$exists: false` pins. A whole-document copy
-    // landing between the read and the write with a tag-less pre-upgrade
-    // snapshot must not let the stale verdict convert a now-ambiguous array.
+    // The snapshot CONTAINER is pinned too (Codex P1 r10): a row read with NO
+    // snapshot object gains one (a whole-document copy landing in between).
+    // Both shapes satisfy the children's `$exists: false` pins; only the
+    // container pin tells them apart.
     await col().deleteMany({ name: "Relinked" });
-    await col().insertOne({
-      name: "Snapshot Gained", vendor: "V", type: "PLA", optTags: [2], settings: { openprinttag_slug: "g" },
-    });
-    const gaining: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            await c.updateOne(
-              { _id: (filter as { _id: unknown })._id as never },
-              { $set: { openprinttagSnapshot: { density: 1.24 } } }, // pre-v1.83 shape, no optTags
-            );
-            return c.updateOne(filter, update, options);
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    expect(await renumberOptTags(gaining, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
-    expect(await byName("Snapshot Gained")).toMatchObject({ optTags: [2], openprinttagSnapshot: { density: 1.24 } });
+    await col().insertOne({ name: "Snapshot Gained", vendor: "V", type: "PLA", optTags: [4], settings: { openprinttag_slug: "g" } });
+    const gaining = interposing((id) =>
+      real.collection("filaments").updateOne({ _id: id as never }, { $set: { openprinttagSnapshot: { optTags: [2] } } }),
+    );
+    expect(await renumberOptTags(gaining, NOW)).toEqual({ scanned: 1, verified: 0, ambiguous: 0, skipped: 1 });
+    expect(await byName("Snapshot Gained")).toMatchObject({ optTags: [4], openprinttagSnapshot: { optTags: [2] } }); // untouched
     expect((await byName("Snapshot Gained"))?.optTagsSpec).toBeUndefined();
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // the user's call now
+    // The next pass reads the row as it now stands and translates the snapshot it actually saw.
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 1, verified: 1, ambiguous: 0, skipped: 0 });
+    expect(await byName("Snapshot Gained")).toMatchObject({ optTagsSpec: true, openprinttagSnapshot: { optTags: [20], tagsNumbering: "spec" } });
   });
 
-  it("a drop recorded on the remote peer is merged, re-pointed at the local copy through syncId, and dismissable by what the page showed (Codex P2 r7)", async () => {
-    // The remote pass converted a remote-only row; its record carries the
-    // REMOTE _id, which resolves to nothing here, plus the row's syncId.
-    const remoteEntry = { filamentId: "64b000000000000000000001", syncId: "sync-remote-1", name: "Remote Only", tags: [9], at: NOW };
-    await mergeDroppedLegacyTags(db(), [remoteEntry]);
-    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ filamentId: remoteEntry.filamentId, syncId: "sync-remote-1" })]);
-    // Re-merging on the next cycle replaces, never stacks.
-    await mergeDroppedLegacyTags(db(), [{ ...remoteEntry, at: new Date("2026-10-08T13:00:00.000Z") }]);
-    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
-
-    // The row is pulled with a fresh local _id; the record follows it, persistently.
-    const { insertedId } = await col().insertOne({ name: "Remote Only", vendor: "V", type: "PLA", optTags: [20], optTagsSpec: true, syncId: "sync-remote-1" });
-    expect((await readDroppedLegacyTags(db()))[0].filamentId).toBe(String(insertedId));
-    const stored = await markers().findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID as never });
-    expect(stored?.dropped[0].filamentId).toBe(String(insertedId));
-
-    // Dismiss only what the page displayed: a record appended meanwhile survives.
-    await col().insertOne({ name: "Later", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "later" } });
-    const shown = (await readDroppedLegacyTags(db())).map((d) => d.filamentId);
-    expect(shown).toEqual([String(insertedId)]);
-    await renumberOptTags(db(), NOW); // appends "Later"'s drop after the page loaded
-    await dismissDroppedLegacyTags(db(), shown);
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Later"]);
-    // No list → everything (API callers that read the whole list themselves).
-    await dismissDroppedLegacyTags(db());
-    expect(await readDroppedLegacyTags(db())).toEqual([]);
-  });
-
-  it("a local and a remote notice for the same row coexist until the LWW step decides; the local row's updatedAt then names the survivor (Codex P2 r9/r11)", async () => {
-    const LATER = new Date("2026-10-08T13:00:00.000Z");
-    const REMOTE_REV = new Date("2026-03-01T00:00:00.000Z");
-    // The local pass converts the LOCAL revision of a row both peers hold
-    // (pre-v1.36 import: link, no snapshot) — 9 FLEXIBLE drops. The record
-    // names the revision it describes by that revision's `updatedAt`.
-    const { insertedId } = await col().insertOne({
-      name: "Both Sides", vendor: "V", type: "PLA", optTags: [9, 2], syncId: "sync-both",
-      settings: { openprinttag_slug: "both" }, updatedAt: OLD,
-    });
-    expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
-    expect((await readDroppedLegacyTags(db()))[0]).toMatchObject({ tags: [9], revisionUpdatedAt: OLD });
-    // The remote pass converted a DIVERGENT remote revision, dropping 6 (HEAT_RESISTANT).
-    const remoteEntry = {
-      filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [6], at: LATER,
-      revisionUpdatedAt: REMOTE_REV,
-    };
-    await mergeDroppedLegacyTags(db(), [remoteEntry]);
-    // Neither replaced the other; both are re-pointed at the local copy.
-    let notices = await readDroppedLegacyTags(db());
-    expect(notices.map((d) => d.tags)).toEqual([[9], [6]]);
-    expect(notices.map((d) => d.filamentId)).toEqual([String(insertedId), String(insertedId)]);
-    expect(notices.map((d) => d.peer)).toEqual([undefined, "remote"]);
-    // Re-merging the same remote record after the re-point still replaces, never stacks.
-    await mergeDroppedLegacyTags(db(), [remoteEntry]);
-    expect(await readDroppedLegacyTags(db())).toHaveLength(2);
-
-    // The local row still carries ITS revision's timestamp: the local revision
-    // stood (it won LWW), so the remote notice described the discarded one.
-    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 1, undecided: 0 });
-    notices = await readDroppedLegacyTags(db());
-    expect(notices.map((d) => d.tags)).toEqual([[9]]);
-
-    // A pull copies the remote revision WITH its timestamp: the local notice
-    // described a document that no longer exists anywhere.
-    await mergeDroppedLegacyTags(db(), [remoteEntry]);
-    await col().updateOne({ _id: insertedId }, { $set: { updatedAt: REMOTE_REV } });
-    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 1, prunedRemote: 0, undecided: 0 });
-    notices = await readDroppedLegacyTags(db());
-    expect(notices.map((d) => d.tags)).toEqual([[6]]);
-    // Idempotent on a later cycle: the surviving notice matches the held revision.
-    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 0 });
-    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
-
-    // Edited since (the row's timestamp matches neither revision): undecidable,
-    // both notices stay rather than one being guessed away.
-    const edited = await col().insertOne({
-      name: "Edited Since", vendor: "V", type: "PLA", optTags: [9, 2], syncId: "sync-edited",
-      settings: { openprinttag_slug: "ed" }, updatedAt: OLD,
-    });
-    await renumberOptTags(db(), NOW);
-    await mergeDroppedLegacyTags(db(), [{ ...remoteEntry, filamentId: "64b000000000000000000004", syncId: "sync-edited", name: "Edited Since" }]);
-    await col().updateOne({ _id: edited.insertedId }, { $set: { updatedAt: LATER } });
-    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 1 });
-    expect((await readDroppedLegacyTags(db())).filter((d) => d.name === "Edited Since")).toHaveLength(2);
-
-    // A remote record for a row this database has not pulled yet is left alone.
-    const unpulled = { filamentId: "64b000000000000000000003", syncId: "sync-elsewhere", name: "Elsewhere", tags: [9], at: LATER, revisionUpdatedAt: LATER };
-    await mergeDroppedLegacyTags(db(), [unpulled]);
-    expect(await reconcileMergedDroppedLegacyTags(db())).toEqual({ prunedLocal: 0, prunedRemote: 0, undecided: 1 });
-    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Both Sides", "Edited Since", "Edited Since", "Elsewhere"]);
-  });
-
-  it("two passes converting the same row concurrently leave exactly ONE drop record — the replacement is atomic (Codex P2 r10)", async () => {
-    await col().insertOne({ name: "Twice", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "tw" } });
-    // Both read the row unmarked; each records (an atomic replace, so the
-    // second supersedes the first instead of stacking beside it); one
-    // conversion lands, the other's conditional write matches nothing and
-    // reconciles as "landed" — keeping the single record that remains.
-    const [a, b] = await Promise.all([
-      renumberOptTags(db(), NOW),
-      renumberOptTags(db(), new Date("2026-10-08T12:00:00.001Z")),
-    ]);
-    expect(a.converted + b.converted).toBe(1);
-    expect(await byName("Twice")).toMatchObject({ optTags: [57], optTagsSpec: true });
-    const notices = await readDroppedLegacyTags(db());
-    expect(notices).toHaveLength(1);
-    expect(notices[0]).toMatchObject({ name: "Twice", tags: [9] });
-  });
-
-  it("an unmatched write that lost to a COMPETING identical conversion keeps the one remaining drop record (Codex P2 r8)", async () => {
-    // A records, B records (replacing A's), A converts, B's conditional write
-    // matches nothing. Pulling B's record here would leave the converted row
-    // with no notice at all.
-    await col().insertOne({ name: "Competing", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "c" } });
-    const real = mongoose.connection.db!;
-    type Filter = Record<string, unknown>;
-    type Opts = { projection?: Record<string, unknown> };
-    const competing: MinimalRenumberDb = {
-      collection: (name) => {
-        const c = real.collection(name);
-        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-        return {
-          find: (f: Filter, o?: Opts) => c.find(f, o),
-          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
-          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
-            // Competitor A lands the identical conversion first …
-            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, update as never);
-            // … so B's conditional write (unmarked rows only) matches nothing.
-            return c.updateOne(filter, update, options);
-          },
-        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
-      },
-    };
-    expect(await renumberOptTags(competing, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
-    expect(await byName("Competing")).toMatchObject({ optTags: [57], optTagsSpec: true });
-    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Competing", tags: [9] })]);
-  });
-
-  it("describeRenumberSummary is quiet when nothing was scanned", async () => {
+  it("describeRenumberSummary is quiet when nothing was scanned and never reports a conversion", async () => {
     expect(describeRenumberSummary(await renumberOptTags(db(), NOW))).toBeNull();
-    await col().insertOne({ name: "L", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } });
+    await col().insertMany([
+      { name: "T", vendor: "V", type: "PLA", optTags: [4] },
+      { name: "L", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } },
+    ]);
     const line = describeRenumberSummary(await renumberOptTags(db(), NOW));
-    expect(line).toContain("converted 1");
-    expect(line).toContain("L [9]");
+    expect(line).toContain("verified 1");
+    expect(line).toContain("awaiting review 1");
+    expect(line).not.toContain("converted");
+    expect(line).not.toContain("skipped");
   });
 });
 
@@ -577,6 +331,7 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
       type: "TPU",
       trashed: false,
       verdict: "ambiguous",
+      matchesOptProvenance: false,
       stored: [9, 4],
       asLegacy: { tags: [4], dropped: [9] },
       asSpec: [9, 4],
@@ -586,6 +341,7 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(pending[0]).toMatchObject({
       trashed: true,
       verdict: "ambiguous",
+      matchesOptProvenance: false,
       matchesBackfill: false,
       specOnlyIds: [30],
       legacyOnlyIds: [],
@@ -638,9 +394,8 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(conv).toEqual({ outcome: "converted", tags: [20], dropped: [9] });
     const convRow = await col().findOne({ _id: insertedIds[0] });
     expect(convRow).toMatchObject({ optTags: [20], optTagsSpec: true, updatedAt: NOW, openprinttagSnapshot: { optTags: [20] } });
-    // The record names the revision the resolution WROTE (`updatedAt: now`).
     expect(await readDroppedLegacyTags(db())).toEqual([
-      { filamentId: String(insertedIds[0]), name: "Conv", tags: [9], at: NOW, revisionUpdatedAt: NOW },
+      { filamentId: String(insertedIds[0]), name: "Conv", tags: [9], at: NOW },
     ]);
 
     const keep = await resolveOptTagNumbering(db(), insertedIds[1], "keep", [12], NOW);
@@ -661,5 +416,138 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect((await col().findOne({ _id: insertedIds[0] }))?.optTags).toEqual([2, 16]); // untouched
     expect(await resolveOptTagNumbering(db(), insertedIds[1], "keep", [2], NOW)).toEqual({ outcome: "changed" });
     expect(await resolveOptTagNumbering(db(), new mongoose.Types.ObjectId(), "keep", [], NOW)).toEqual({ outcome: "not_found" });
+  });
+
+  type Filter = Record<string, unknown>;
+  type Opts = { projection?: Record<string, unknown> };
+  /** A `filaments` collection whose `updateOne` runs `around` first; everything else is real. */
+  const wrapping = (around: (filter: Filter, update: Filter) => Promise<unknown>): MinimalRenumberDb => {
+    const real = mongoose.connection.db!;
+    return {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            await around(filter, update);
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+  };
+  const byName = (n: string) => col().findOne({ name: n });
+  const OLD = new Date("2026-01-01T00:00:00.000Z");
+
+  it("a conversion write that THROWS pulls back its pre-written drop record; a retry records it exactly once (Codex P2 r4)", async () => {
+    const { insertedId } = await col().insertOne({ name: "Throws", vendor: "V", type: "TPU", optTags: [9, 2] }); // 9 FLEXIBLE drops
+    let throwOnce = true;
+    const failing = wrapping(async () => {
+      if (throwOnce) {
+        throwOnce = false;
+        throw new Error("socket closed");
+      }
+    });
+    await expect(resolveOptTagNumbering(failing, insertedId, "convert", [9, 2], NOW)).rejects.toThrow("socket closed");
+    expect(await readDroppedLegacyTags(db())).toEqual([]); // pulled back
+    expect((await byName("Throws"))?.optTagsSpec).toBeUndefined();
+
+    // A stale record the cleanup could not remove (database gone) is REPLACED
+    // by the retry, not stacked beside a second notice.
+    await markers().updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID as never },
+      // The driver's typed $push wants the array's element type declared; this is a raw fixture write.
+      { $push: { dropped: { filamentId: String(insertedId), name: "Throws", tags: [9], at: OLD } } } as never,
+      { upsert: true },
+    );
+    expect(await resolveOptTagNumbering(db(), insertedId, "convert", [9, 2], NOW)).toMatchObject({ outcome: "converted", dropped: [9] });
+    expect(await readDroppedLegacyTags(db())).toEqual([{ filamentId: String(insertedId), name: "Throws", tags: [9], at: NOW }]);
+  });
+
+  it("an ACK-LOST conversion keeps its drop record — the write committed (Codex P2 r5)", async () => {
+    // The write COMMITS but the driver throws before the acknowledgement
+    // arrives. The record must SURVIVE — nothing revisits a marked row, so
+    // pulling it would hide the removed tags for good.
+    const { insertedId } = await col().insertOne({ name: "Ack Lost", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "ack" } });
+    const real = mongoose.connection.db!;
+    let ackLostOnce = true;
+    const ackLost: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            const res = await c.updateOne(filter, update, options);
+            if (ackLostOnce) {
+              ackLostOnce = false;
+              throw new Error("connection reset before ack");
+            }
+            return res;
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    await expect(resolveOptTagNumbering(ackLost, insertedId, "convert", [18, 9], NOW)).rejects.toThrow("connection reset before ack");
+    expect(await byName("Ack Lost")).toMatchObject({ optTags: [57], optTagsSpec: true }); // the write landed
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Ack Lost", tags: [9] })]);
+    // The retry finds the row settled and leaves the one record alone.
+    expect(await resolveOptTagNumbering(db(), insertedId, "convert", [18, 9], NOW)).toEqual({ outcome: "changed" });
+    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
+  });
+
+  it("two concurrent conversions of one row leave exactly ONE drop record — the replacement is atomic (Codex P2 r10)", async () => {
+    const { insertedId } = await col().insertOne({ name: "Twice", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "tw" } });
+    // Both read the row unmarked; each records (an atomic replace, so the
+    // second supersedes the first instead of stacking beside it); one
+    // conversion lands, the other's conditional write matches nothing and
+    // reconciles as "landed" — keeping the single record that remains.
+    const [a, b] = await Promise.all([
+      resolveOptTagNumbering(db(), insertedId, "convert", [18, 9], NOW),
+      resolveOptTagNumbering(db(), insertedId, "convert", [18, 9], new Date("2026-10-08T12:00:00.001Z")),
+    ]);
+    expect([a.outcome, b.outcome].sort()).toEqual(["changed", "converted"]);
+    expect(await byName("Twice")).toMatchObject({ optTags: [57], optTagsSpec: true });
+    const notices = await readDroppedLegacyTags(db());
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ name: "Twice", tags: [9] });
+  });
+
+  it("an unmatched write that lost to a COMPETING identical conversion keeps the one remaining drop record (Codex P2 r8)", async () => {
+    // A records, B records (replacing A's), A converts, B's conditional write
+    // matches nothing. Pulling B's record here would leave the converted row
+    // with no notice at all.
+    const { insertedId } = await col().insertOne({ name: "Competing", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "c" } });
+    const real = mongoose.connection.db!;
+    const competing = wrapping(async (filter, update) => {
+      // Competitor A lands the identical conversion first …
+      await real.collection("filaments").updateOne({ _id: (filter as { _id: unknown })._id as never }, update as never);
+      // … so B's conditional write (unmarked rows only) matches nothing.
+    });
+    expect(await resolveOptTagNumbering(competing, insertedId, "convert", [18, 9], NOW)).toEqual({ outcome: "changed" });
+    expect(await byName("Competing")).toMatchObject({ optTags: [57], optTagsSpec: true });
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Competing", tags: [9] })]);
+  });
+
+  it("dismisses only the records the page displayed; no list clears all (Codex P2 r7)", async () => {
+    const { insertedIds } = await col().insertMany([
+      { name: "Seen", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "s" } },
+      { name: "Later", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } },
+    ]);
+    await resolveOptTagNumbering(db(), insertedIds[0], "convert", [18, 9], NOW);
+    const shown = (await readDroppedLegacyTags(db())).map((d) => d.filamentId);
+    expect(shown).toEqual([String(insertedIds[0])]);
+    // A record appended after the page loaded survives the dismissal.
+    await resolveOptTagNumbering(db(), insertedIds[1], "convert", [18, 9], NOW);
+    await dismissDroppedLegacyTags(db(), shown);
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Later"]);
+    await dismissDroppedLegacyTags(db(), []); // nothing displayed → nothing removed
+    expect(await readDroppedLegacyTags(db())).toHaveLength(1);
+    // No list → everything (API callers that read the whole list themselves).
+    await dismissDroppedLegacyTags(db());
+    expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 });

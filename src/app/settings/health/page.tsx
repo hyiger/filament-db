@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
@@ -75,6 +75,13 @@ interface TagReviewRow {
   type: string | null;
   trashed: boolean;
   verdict: "ambiguous";
+  /**
+   * Linked to the OpenPrintTag database with a pre-v1.83 snapshot equal to the
+   * array, or linked with no snapshot at all — a hint toward "imported from
+   * OpenPrintTag", not a decision (the link route stores a snapshot without
+   * touching the array). The bulk action below targets exactly these rows.
+   */
+  matchesOptProvenance: boolean;
   /** The array equals the old backfill script's output for this type — a hint, not a decision. */
   matchesBackfill: boolean;
   /** Ids the pre-v1.83 form could not write (spec-only) — a hint toward "read from a tag", not a decision. */
@@ -486,6 +493,53 @@ export default function DataHealthPage() {
     [t, toast, loadTagReview, loadAbrasive],
   );
 
+  // GH #1227: the one bulk action — every pending row whose OpenPrintTag
+  // provenance hints at an import. Still a HINT (Codex P1 r12 on PR #1228:
+  // the link route stores a snapshot without touching the array, and a bare
+  // slug rides the slicer round-trip and the share import), so it is
+  // confirm-gated and runs through the SAME per-row conditional write as the
+  // single-row button: a row whose tags changed under us is counted and
+  // reported, never overwritten, and the list is refreshed either way.
+  const optRows = useMemo(() => tagReview.filter((r) => r.matchesOptProvenance), [tagReview]);
+  const convertAllOpt = useCallback(async () => {
+    if (optRows.length === 0) return;
+    const ok = await confirm({
+      title: t("health.optTags.convertAllOpt.title"),
+      message: t("health.optTags.convertAllOpt.confirm", { count: optRows.length }),
+      confirmLabel: t("health.optTags.action.convertAllOpt", { count: optRows.length }),
+    });
+    if (!ok) return;
+    setBusy(true);
+    let converted = 0;
+    let changed = 0;
+    let failed = 0;
+    try {
+      // Sequential on purpose: each POST takes the row's per-filament mutex,
+      // and a burst of parallel requests buys nothing on a single-process server.
+      for (const row of optRows) {
+        try {
+          const res = await fetch(`/api/opt-tag-review/${row.filamentId}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "convert", expectedTags: row.stored }),
+          });
+          if (res.ok) converted++;
+          else if (res.status === 409) changed++;
+          else failed++;
+        } catch {
+          failed++;
+        }
+      }
+      if (failed > 0) toast(t("health.actionFailed"), "error");
+      else if (changed > 0) toast(t("health.optTags.convertedSome", { converted, changed }), "info");
+      else toast(t("health.optTags.convertedMany", { count: converted }), "success");
+      await loadTagReview();
+      await loadAbrasive();
+    } finally {
+      setBusy(false);
+    }
+  }, [optRows, confirm, t, toast, loadTagReview, loadAbrasive]);
+
   const dismissDropped = useCallback(async () => {
     setBusy(true);
     try {
@@ -719,6 +773,21 @@ export default function DataHealthPage() {
         <section className="mt-8">
           <h2 className="text-lg font-semibold mb-1">{t("health.optTags.title")}</h2>
           <p className="text-sm text-gray-500 mb-3">{t("health.optTags.subtitle")}</p>
+          {optRows.length > 0 && (
+            <div className="mb-3 flex items-start gap-3 flex-wrap rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/20 p-3">
+              <p className="text-xs text-gray-600 dark:text-gray-400 flex-1 min-w-[12rem]">
+                {t("health.optTags.convertAllOpt.hint", { count: optRows.length })}
+              </p>
+              <button
+                type="button"
+                onClick={convertAllOpt}
+                disabled={busy}
+                className="px-3 py-1 text-sm rounded bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700"
+              >
+                {t("health.optTags.action.convertAllOpt", { count: optRows.length })}
+              </button>
+            </div>
+          )}
           <div className="space-y-3">
             {tagReview.map((r) => (
               <div
@@ -747,7 +816,12 @@ export default function DataHealthPage() {
                   {t("health.optTags.stored", { ids: r.stored.join(", ") })}
                 </p>
                 {/* Hints only — "likely", never decided for the user (Codex P1
-                    rounds 1, 3 and 6 on PR #1228). Several can apply at once. */}
+                    rounds 1, 3, 6 and 12 on PR #1228). Several can apply at once. */}
+                {r.matchesOptProvenance && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                    {t("health.optTags.optProvenanceHint")}
+                  </p>
+                )}
                 {r.matchesBackfill && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
                     {t("health.optTags.backfillHint")}

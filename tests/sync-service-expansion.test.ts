@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { MongoMemoryServer } from "mongodb-memory-server";
 import { MongoClient, ObjectId } from "mongodb";
 import { SyncService } from "../electron/sync-service";
-import { readDroppedLegacyTags, type MinimalRenumberDb } from "../src/lib/optTagRenumber";
+import { readDroppedLegacyTags, resolveOptTagNumbering, type MinimalRenumberDb } from "../src/lib/optTagRenumber";
 
 /**
  * Coverage for the v1.12 sync expansion (P1 audit follow-up):
@@ -3461,8 +3461,8 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  describe("optTags renumber on both sync sides + drop-notice reconciliation (GH #1227)", () => {
-    it("converts provably-legacy rows on BOTH databases before copying, then keeps the LWW winner's drop notice", async () => {
+  describe("optTags renumber on both sync sides (GH #1227)", () => {
+    it("marks trivially-spec rows on BOTH databases before copying, converts nothing, and carries a Data health conversion across", async () => {
       const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
       // `_migrations` is not cleared between tests; start from an empty notice store.
@@ -3471,74 +3471,62 @@ describe("SyncService — v1.12 sync expansion", () => {
       }
       const now = new Date();
       const later = new Date(now.getTime() + 5000);
-      // Every row below is a pre-v1.36 OpenPrintTag import (link, no
-      // snapshot) — the one shape that PROVES the legacy numbering, so each
-      // side's pass converts its own copy. Local `[9, 2]` drops 9 (FLEXIBLE)
-      // and remote `[6, 2]` drops 6 (HEAT_RESISTANT); both become `[20]`, so
-      // only the NOTICE tells the revisions apart.
-      //
-      // A: divergent unmarked revisions, local newer → local wins LWW.
+      const afterSync = new Date(now.getTime() + 10_000);
+      // A: trivially spec on both sides, DIVERGENT unmarked revisions (local
+      // `[4]` newer than remote `[4, 16]`). Each side's pass marks its own
+      // copy without stamping `updatedAt`, so LWW still sees the ORIGINAL
+      // timestamps and keeps the local revision.
       await localDb.collection("filaments").insertOne({
-        name: "DivergentLocalWins", vendor: "T", type: "PLA", optTags: [9, 2],
-        settings: { openprinttag_slug: "dlw" }, syncId: "fil-dlw", _deletedAt: null, createdAt: now, updatedAt: later,
+        name: "TrivialBoth", vendor: "T", type: "PLA", optTags: [4],
+        syncId: "fil-triv", _deletedAt: null, createdAt: now, updatedAt: later,
       });
       await remoteDb.collection("filaments").insertOne({
-        name: "DivergentLocalWins", vendor: "T", type: "PLA", optTags: [6, 2],
-        settings: { openprinttag_slug: "dlw" }, syncId: "fil-dlw", _deletedAt: null, createdAt: now, updatedAt: now,
+        name: "TrivialBoth", vendor: "T", type: "PLA", optTags: [4, 16],
+        syncId: "fil-triv", _deletedAt: null, createdAt: now, updatedAt: now,
       });
-      // B: same, remote newer → remote wins and is pulled over the local row.
-      await localDb.collection("filaments").insertOne({
-        name: "DivergentRemoteWins", vendor: "T", type: "PLA", optTags: [9, 2],
-        settings: { openprinttag_slug: "drw" }, syncId: "fil-drw", _deletedAt: null, createdAt: now, updatedAt: now,
-      });
-      await remoteDb.collection("filaments").insertOne({
-        name: "DivergentRemoteWins", vendor: "T", type: "PLA", optTags: [6, 2],
-        settings: { openprinttag_slug: "drw" }, syncId: "fil-drw", _deletedAt: null, createdAt: now, updatedAt: later,
-      });
-      // C: remote-only, and WITHOUT a syncId (a legacy row the sync never
-      // touched) — the remote pass must see one backfilled before it records
-      // the drop (Codex P2 r11), or the notice could never follow the pulled
-      // local copy.
-      await remoteDb.collection("filaments").insertOne({
-        name: "RemoteOnlyLegacy", vendor: "T", type: "PLA", optTags: [18, 9],
-        settings: { openprinttag_slug: "rol" }, _deletedAt: null, createdAt: now, updatedAt: now,
-      });
+      // B: a pre-v1.36-style OpenPrintTag import (link, no snapshot) on both
+      // sides — the shape that USED to count as proof of the legacy numbering.
+      // It is a hint now (Codex P1 r12): neither pass converts it.
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("filaments").insertOne({
+          name: "PendingBoth", vendor: "T", type: "PLA", optTags: [9, 2],
+          settings: { openprinttag_slug: "pb" }, syncId: "fil-pend", _deletedAt: null, createdAt: now, updatedAt: now,
+        });
+      }
 
       sync = makeSync();
       await sync.sync();
 
-      // Converted on both sides and marked; a marked row never converts twice.
       for (const dbh of [localDb, remoteDb]) {
-        expect(await dbh.collection("filaments").findOne({ syncId: "fil-dlw" })).toMatchObject({ optTags: [20], optTagsSpec: true });
-        expect(await dbh.collection("filaments").findOne({ syncId: "fil-drw" })).toMatchObject({ optTags: [20], optTagsSpec: true });
-        expect(await dbh.collection("filaments").findOne({ name: "RemoteOnlyLegacy" })).toMatchObject({ optTags: [57], optTagsSpec: true });
-      }
-      // C got its cross-peer identity before the pass recorded its drop.
-      expect(typeof (await remoteDb.collection("filaments").findOne({ name: "RemoteOnlyLegacy" }))!.syncId).toBe("string");
-      // The pass never stamps updatedAt, so LWW saw the ORIGINAL timestamps:
-      // A kept the local revision, B took the remote one.
-      expect((await localDb.collection("filaments").findOne({ syncId: "fil-dlw" }))!.updatedAt).toEqual(later);
-      expect((await localDb.collection("filaments").findOne({ syncId: "fil-drw" }))!.updatedAt).toEqual(later);
-
-      // ONE notice per row, describing the revision the LOCAL database holds:
-      // A's local notice (9), B's remote notice (6), C's remote notice (9) —
-      // every one pointing at the local copy, and each naming the revision it
-      // describes by that revision's timestamp.
-      const notices = await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb);
-      expect(notices.map((n) => n.revisionUpdatedAt)).toEqual([later, later, now]);
-      expect(notices.map((n) => [n.name, n.tags, n.peer ?? "local"])).toEqual([
-        ["DivergentLocalWins", [9], "local"],
-        ["DivergentRemoteWins", [6], "remote"],
-        ["RemoteOnlyLegacy", [9], "remote"],
-      ]);
-      for (const n of notices) {
-        const localRow = await localDb.collection("filaments").findOne({ name: n.name }, { projection: { _id: 1 } });
-        expect(n.filamentId).toBe(String(localRow!._id));
+        expect(await dbh.collection("filaments").findOne({ syncId: "fil-triv" })).toMatchObject({ optTags: [4], optTagsSpec: true, updatedAt: later });
+        const pending = await dbh.collection("filaments").findOne({ syncId: "fil-pend" });
+        expect(pending).toMatchObject({ optTags: [9, 2] }); // untouched on both sides
+        expect(pending!.optTagsSpec).toBeUndefined();
+        // The pass drops nothing, so neither side has a notice.
+        expect(await readDroppedLegacyTags(dbh as unknown as MinimalRenumberDb)).toEqual([]);
       }
 
-      // Idempotent: a second cycle finds every row marked and changes nothing.
+      // The user converts B on Data health (locally). The resolution stamps
+      // `updatedAt`, so the next cycle carries the conversion AND the marker to
+      // the remote like any other edit; the drop notice stays where the
+      // decision was made.
+      const localPending = await localDb.collection("filaments").findOne({ syncId: "fil-pend" });
+      expect(await resolveOptTagNumbering(localDb as unknown as MinimalRenumberDb, localPending!._id, "convert", [9, 2], afterSync)).toEqual({
+        outcome: "converted",
+        tags: [20],
+        dropped: [9],
+      });
       await sync.sync();
-      expect(await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb)).toHaveLength(3);
+      expect(await remoteDb.collection("filaments").findOne({ syncId: "fil-pend" })).toMatchObject({ optTags: [20], optTagsSpec: true, updatedAt: afterSync });
+      expect(await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb)).toEqual([
+        expect.objectContaining({ name: "PendingBoth", tags: [9], filamentId: String(localPending!._id) }),
+      ]);
+      expect(await readDroppedLegacyTags(remoteDb as unknown as MinimalRenumberDb)).toEqual([]);
+
+      // Idempotent: a third cycle finds every row marked and changes nothing.
+      await sync.sync();
+      expect(await remoteDb.collection("filaments").findOne({ syncId: "fil-pend" })).toMatchObject({ optTags: [20], optTagsSpec: true });
+      expect(await readDroppedLegacyTags(localDb as unknown as MinimalRenumberDb)).toHaveLength(1);
     });
   });
 });

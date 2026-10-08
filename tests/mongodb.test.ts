@@ -1038,13 +1038,14 @@ describe("optTagRenumber migration (GH #1227)", () => {
     return cached;
   }
 
-  it("translates provably-legacy optTags, marks the rest, leaves ambiguous rows for Data health, and settles", async () => {
+  it("marks trivially-spec optTags, converts nothing, leaves every other row for Data health, and settles", async () => {
     await dbConnect();
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
     // Raw inserts — pre-#1227 rows carry no marker.
     await Filament.collection.insertMany([
-      // A link with no snapshot (pre-v1.36 import) proves legacy; 18 alone is a hint.
-      { name: "RenumLegacy", vendor: "T", type: "PLA", optTags: [18, 2], settings: { openprinttag_slug: "renum" } },
+      // A link with no snapshot (the pre-v1.36 import shape) is a HINT, not
+      // proof (Codex P1 r12) — the pass leaves it to Data health like 18 itself.
+      { name: "RenumLinked", vendor: "T", type: "PLA", optTags: [18, 2], settings: { openprinttag_slug: "renum" } },
       { name: "RenumSpec", vendor: "T", type: "PC", optTags: [31, 30] },     // inert ids: nothing to translate
       { name: "RenumAmbiguous", vendor: "T", type: "PETG", optTags: [2] },   // both readings valid
     ]);
@@ -1053,8 +1054,8 @@ describe("optTagRenumber migration (GH #1227)", () => {
     await dbConnect();
 
     const byName = async (n: string) => Filament.collection.findOne({ name: n });
-    expect((await byName("RenumLegacy"))!.optTags).toEqual([57, 20]);
-    expect((await byName("RenumLegacy"))!.optTagsSpec).toBe(true);
+    expect((await byName("RenumLinked"))!.optTags).toEqual([18, 2]); // untouched — the user's call
+    expect((await byName("RenumLinked"))!.optTagsSpec).toBeUndefined();
     expect((await byName("RenumSpec"))!.optTags).toEqual([31, 30]);
     expect((await byName("RenumSpec"))!.optTagsSpec).toBe(true);
     expect((await byName("RenumAmbiguous"))!.optTags).toEqual([2]);
@@ -1062,16 +1063,17 @@ describe("optTagRenumber migration (GH #1227)", () => {
     // Unsettled USER decisions do not keep the flag false.
     expect(cached.migrations.optTagRenumber).toBe(true);
 
-    // Idempotent across restarts: a converted row is never remapped again.
+    // Idempotent across restarts: nothing is ever remapped by the pass.
     resetMigrations();
     await dbConnect();
-    expect((await byName("RenumLegacy"))!.optTags).toEqual([57, 20]);
+    expect((await byName("RenumLinked"))!.optTags).toEqual([18, 2]);
+    expect((await byName("RenumLinked"))!.optTagsSpec).toBeUndefined();
 
     // A new document written through the schema is marked by default.
     const fresh = await Filament.create({ name: "RenumFresh", vendor: "T", type: "PLA", optTags: [20] });
     expect((await Filament.collection.findOne({ _id: fresh._id }))!.optTagsSpec).toBe(true);
 
-    await Filament.collection.deleteMany({ name: { $in: ["RenumLegacy", "RenumSpec", "RenumAmbiguous", "RenumFresh"] } });
+    await Filament.collection.deleteMany({ name: { $in: ["RenumLinked", "RenumSpec", "RenumAmbiguous", "RenumFresh"] } });
     await mongoose.connection.db!.collection("_migrations").deleteMany({ _id: "optTagRenumber" as never });
   });
 
