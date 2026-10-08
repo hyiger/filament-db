@@ -221,6 +221,25 @@ describe("renumberOptTags", () => {
     expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Schema Linked", tags: [9] })]);
   });
 
+  it("a non-document snapshot container is never translated — the pass marks and Data health resolves around it (Codex P2 r17)", async () => {
+    // The schema path is Mixed and snapshot restore accepts any shape, so an
+    // array can sit where the snapshot object belongs. `$set` of a named
+    // child into an array is rejected by MongoDB; before the fix one such row
+    // made the pass throw on every connect and the resolution answer 500.
+    await col().insertMany([
+      { name: "Array Trivial", vendor: "V", type: "PLA", optTags: [4], openprinttagSnapshot: [], settings: {} },
+      { name: "Array Linked", vendor: "V", type: "PLA", optTags: [18, 9], openprinttagSnapshot: ["x"], settings: { openprinttag_slug: "s" } },
+    ]);
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 2, verified: 1, ambiguous: 1, skipped: 0 });
+    expect(await byName("Array Trivial")).toMatchObject({ optTags: [4], optTagsSpec: true, openprinttagSnapshot: [] }); // untouched container
+    const linked = (await byName("Array Linked"))!;
+    expect(linked.optTagsSpec).toBeUndefined();
+    const shown = (await scanUnverifiedOptTags(db())).find((r) => r.name === "Array Linked")!;
+    expect(shown.hints).toEqual(["opt-provenance", "legacy-only-id"]); // the link alone hints
+    expect(await resolveOptTagNumbering(db(), linked._id, "convert", [18, 9], NOW, shown.hints)).toEqual({ outcome: "converted", tags: [57], dropped: [9] });
+    expect(await byName("Array Linked")).toMatchObject({ optTags: [57], optTagsSpec: true, openprinttagSnapshot: ["x"] });
+  });
+
   it("a snapshot written since v1.83 hints nothing; a translated snapshot is never translated twice (Codex P1 r4)", async () => {
     await col().insertMany([
       // An NFC-created spec [2] LINKED after upgrading: the link route's

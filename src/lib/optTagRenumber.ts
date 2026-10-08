@@ -83,6 +83,7 @@
 import {
   classifyOptTags,
   describeOptTagReadings,
+  isSnapshotDocument,
   remapLegacyOptTags,
   sameOptTagSet,
   type OptTagClassifiable,
@@ -180,10 +181,16 @@ function emptySummary(): OptTagRenumberSummary {
  * one, and stamping it `tagsNumbering: "spec"` so it is never translated
  * twice. A snapshot that already says it is spec-numbered (written by a
  * post-v1.83 link/re-sync/import) is left alone (Codex P1 r4 on PR #1228).
+ * The container must be a DOCUMENT: the schema path is `Mixed` and snapshot
+ * restore accepts any shape, so an ARRAY can be stored there, and `typeof`
+ * calls it an object — MongoDB rejects `$set` of a named child into an array,
+ * so one malformed row made the pass throw on every connect, Data health
+ * answer 500 and the sync cycle abort (Codex P2 r17). A non-document is read
+ * as "no snapshot object" everywhere (classifier + pin) and never written.
  */
 function snapshotRemapSet(row: Record<string, unknown>): Record<string, unknown> {
   const snapshot = row.openprinttagSnapshot as Record<string, unknown> | null | undefined;
-  if (!snapshot || typeof snapshot !== "object" || snapshotIsSpecNumbered(snapshot)) return {};
+  if (!isSnapshotDocument(snapshot) || snapshotIsSpecNumbered(snapshot)) return {};
   const set: Record<string, unknown> = {
     [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: OPT_SNAPSHOT_SPEC_NUMBERING,
   };

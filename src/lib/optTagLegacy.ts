@@ -522,7 +522,8 @@ export function isInertOptTagId(id: number): boolean {
  *     spec `[2]` (antibacterial) linked before the upgrade to a material whose
  *     legacy-mapped tags were `[2]` (transparent) reads equal and would have
  *     been remapped to 20. A link with no snapshot object at all is not proof
- *     either: `settings.openprinttag_slug` is an ordinary settings-bag key —
+ *     either (a non-document container — an array a restore let through — is
+ *     read the same way, and is never translated): `settings.openprinttag_slug` is an ordinary settings-bag key —
  *     the slicer bundle exports the bag verbatim, the fork's sync-back writes
  *     unknown keys into it (a preset duplicated in the slicer onto another
  *     filament smears the slug across), and the share importer copies the bag
@@ -545,6 +546,17 @@ export function isInertOptTagId(id: number): boolean {
  *     a 30 — so a hint informs the user and decides nothing. THE PASS NEVER
  *     CONVERTS: every non-trivial unmarked row is the user's call.
  */
+/**
+ * The OPT snapshot container as a DOCUMENT. The schema path is `Mixed` and
+ * snapshot restore accepts any shape, so an array can be stored there; it is
+ * read as "no snapshot object" by the classifier, the resolution's `$set`
+ * (which must never address a named child inside an array — MongoDB rejects
+ * it, Codex P2 r17 on PR #1228) and the conditional-write pin alike.
+ */
+export function isSnapshotDocument(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
   const ids = usableIds(row.optTags);
   if (ids.length === 0 || ids.every(isInertOptTagId)) {
@@ -553,7 +565,7 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
 
   const hints: OptTagHint[] = [];
   const snapshot = row.openprinttagSnapshot;
-  if (snapshot && typeof snapshot === "object") {
+  if (isSnapshotDocument(snapshot)) {
     // Only a PRE-upgrade snapshot (legacy by construction) hints at an import;
     // a snapshot that says it is spec-numbered hints nothing, and so does a
     // pre-upgrade one without an `optTags` entry (the material offered none).

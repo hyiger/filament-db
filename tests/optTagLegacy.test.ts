@@ -22,6 +22,7 @@ import {
   displayOptTags,
   OPT_TAG_HINTS,
   isOptTagHint,
+  isSnapshotDocument,
 } from "@/lib/optTagLegacy";
 
 /**
@@ -220,6 +221,20 @@ describe("classifyOptTags", () => {
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_uuid: "u" }, openprinttagSnapshot: { color: "#000000" } }),
     ).toEqual({ kind: "ambiguous", hints: [] });
+  });
+
+  it("a non-document snapshot container (an array a restore let through) reads as no snapshot object (Codex P2 r17)", () => {
+    expect(isSnapshotDocument({ optTags: [2] })).toBe(true);
+    expect(isSnapshotDocument(null)).toBe(false);
+    expect(isSnapshotDocument(undefined)).toBe(false);
+    expect(isSnapshotDocument([])).toBe(false);
+    expect(isSnapshotDocument("x")).toBe(false);
+    // Linked with an array where the snapshot should be: the link alone hints.
+    expect(
+      classifyOptTags({ optTags: [2], settings: { openprinttag_slug: "s" }, openprinttagSnapshot: [] as never }),
+    ).toEqual({ kind: "ambiguous", hints: ["opt-provenance"] });
+    expect(classifyOptTags({ optTags: [2], openprinttagSnapshot: ["x"] as never })).toEqual({ kind: "ambiguous", hints: [] });
+    expect(classifyOptTags({ optTags: [4], openprinttagSnapshot: [] as never })).toEqual({ kind: "trivial" });
   });
 
   it("ambiguous WITHOUT the hint: a snapshot that DIFFERS (edited in the legacy form, or an NFC row linked later)", () => {
