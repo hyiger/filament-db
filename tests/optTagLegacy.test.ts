@@ -20,6 +20,8 @@ import {
   optTagIdForString,
   parseOptTagsCell,
   displayOptTags,
+  OPT_TAG_HINTS,
+  isOptTagHint,
 } from "@/lib/optTagLegacy";
 
 /**
@@ -274,6 +276,16 @@ describe("classifyOptTags", () => {
     for (const converted of [[20], [28], [19, 23]]) {
       expect(classifyOptTags({ optTags: converted }), JSON.stringify(converted)).toEqual({ kind: "ambiguous", hints: [] });
     }
+  });
+});
+
+describe("OPT_TAG_HINTS / isOptTagHint (the echo the review route validates)", () => {
+  it("lists every hint the classifier can emit, and nothing else passes", () => {
+    expect([...OPT_TAG_HINTS].sort()).toEqual(["backfill-derivation", "legacy-only-id", "opt-provenance", "spec-only-id"]);
+    for (const h of OPT_TAG_HINTS) expect(isOptTagHint(h)).toBe(true);
+    expect(isOptTagHint("legacy")).toBe(false);
+    expect(isOptTagHint(2)).toBe(false);
+    expect(isOptTagHint(undefined)).toBe(false);
   });
 });
 

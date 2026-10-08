@@ -76,6 +76,12 @@ interface TagReviewRow {
   trashed: boolean;
   verdict: "ambiguous";
   /**
+   * The classifier hints as displayed — echoed back on resolve so a decision
+   * (above all the bulk one, which selects rows BY a hint) is refused when the
+   * row's provenance changed between the scan and the click (Codex P2 r14).
+   */
+  hints: string[];
+  /**
    * Linked to the OpenPrintTag database with a pre-v1.83 snapshot equal to the
    * array, or linked with no snapshot at all — a hint toward "imported from
    * OpenPrintTag", not a decision (the link route stores a snapshot without
@@ -458,8 +464,9 @@ export default function DataHealthPage() {
   );
 
   // GH #1227: the user's answer for one pending row. The server conditions the
-  // write on the exact array the page showed; a 409 means the tags changed
-  // under us (another tab, a sync), so re-scan rather than retry.
+  // write on the exact array the page showed AND on the hints it showed (the
+  // evidence the decision rested on); a 409 means the tags or the provenance
+  // changed under us (another tab, a sync), so re-scan rather than retry.
   const resolveTags = useCallback(
     async (row: TagReviewRow, action: "convert" | "keep") => {
       setBusy(true);
@@ -467,7 +474,7 @@ export default function DataHealthPage() {
         const res = await fetch(`/api/opt-tag-review/${row.filamentId}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action, expectedTags: row.stored }),
+          body: JSON.stringify({ action, expectedTags: row.stored, expectedHints: row.hints }),
         });
         if (res.status === 409) {
           toast(t("health.optTags.changed"), "error");
@@ -498,8 +505,10 @@ export default function DataHealthPage() {
   // the link route stores a snapshot without touching the array, and a bare
   // slug rides the slicer round-trip and the share import), so it is
   // confirm-gated and runs through the SAME per-row conditional write as the
-  // single-row button: a row whose tags changed under us is counted and
-  // reported, never overwritten, and the list is refreshed either way.
+  // single-row button, echoing the displayed hints: a row whose tags OR
+  // provenance changed under us (a re-link between the scan and the click
+  // takes the hint away while the array stays, Codex P2 r14) is counted and
+  // reported, never converted, and the list is refreshed either way.
   const optRows = useMemo(() => tagReview.filter((r) => r.matchesOptProvenance), [tagReview]);
   const convertAllOpt = useCallback(async () => {
     if (optRows.length === 0) return;
@@ -521,7 +530,7 @@ export default function DataHealthPage() {
           const res = await fetch(`/api/opt-tag-review/${row.filamentId}`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ action: "convert", expectedTags: row.stored }),
+            body: JSON.stringify({ action: "convert", expectedTags: row.stored, expectedHints: row.hints }),
           });
           if (res.ok) converted++;
           else if (res.status === 409) changed++;

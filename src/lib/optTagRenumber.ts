@@ -86,6 +86,7 @@ import {
   remapLegacyOptTags,
   sameOptTagSet,
   type OptTagClassifiable,
+  type OptTagHint,
   SPEC_ONLY_IDS,
   LEGACY_ONLY_IDS,
   OPT_SNAPSHOT_NUMBERING_KEY,
@@ -226,6 +227,14 @@ function observedClassifierInputs(row: Record<string, unknown>): Record<string, 
     "settings.openprinttag_slug": pin(settings?.openprinttag_slug),
     "settings.openprinttag_uuid": pin(settings?.openprinttag_uuid),
   };
+}
+
+function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
+  const sa = new Set(a);
+  const sb = new Set(b);
+  if (sa.size !== sb.size) return false;
+  for (const v of sa) if (!sb.has(v)) return false;
+  return true;
 }
 
 function matched(res: unknown): boolean {
@@ -397,6 +406,17 @@ export interface PendingOptTagRow {
   /** Always `ambiguous` — the only verdict that leaves a row for the user. */
   verdict: "ambiguous";
   /**
+   * The classifier's hints for this row, as displayed. The page echoes them
+   * back as `expectedHints` on resolve, and the resolution refuses when they
+   * no longer hold (Codex P2 r14 on PR #1228): the bulk "imported from
+   * OpenPrintTag" action selects rows BY the `opt-provenance` hint, and a
+   * re-link or a sync between the scan and the click can replace the legacy
+   * snapshot with a spec-marked one while leaving the array unchanged — the
+   * array pin alone would still accept the convert. The booleans below are
+   * the same information, pre-split for the card.
+   */
+  hints: OptTagHint[];
+  /**
    * OpenPrintTag provenance: a pre-v1.83 snapshot whose `optTags` equal the
    * stored array, or a link with no snapshot object — likely imported from
    * the OPT database, shown as a hint, never decided (the link route and the
@@ -452,6 +472,7 @@ export async function scanUnverifiedOptTags(db: MinimalRenumberDb): Promise<Pend
       type: typeof row.type === "string" ? row.type : null,
       trashed: row._deletedAt != null,
       verdict: verdict.kind,
+      hints: [...verdict.hints],
       matchesOptProvenance: verdict.hints.includes("opt-provenance"),
       matchesBackfill: verdict.hints.includes("backfill-derivation"),
       specOnlyIds: readings.stored.filter((id) => SPEC_ONLY_IDS.has(id)),
@@ -482,6 +503,17 @@ export type OptTagResolveResult =
  * READ, and a snapshot re-linked under it (now spec-marked) would otherwise be
  * overwritten with a stale legacy remap (Codex P2 r8 on PR #1228).
  *
+ * `expectedHints`, when the caller sends them, are the classifier hints the
+ * page DISPLAYED; the decision is refused as `changed` when the row as read no
+ * longer carries exactly that set (Codex P2 r14). The array pin covers an
+ * edit to the tags; this covers the evidence the user decided ON — the bulk
+ * "imported from OpenPrintTag" action selects rows by the `opt-provenance`
+ * hint, and a re-link or a sync between the scan and the click can swap the
+ * legacy snapshot for a spec-marked one while the array stays `[2]`: the pin
+ * then matches the NEW state, so without this check the convert would still
+ * land on a row that no longer qualifies. Checked against the same read the
+ * write is pinned to, so it cannot pass on one state and write under another.
+ *
  *  - `convert`: the tags were entered in this app → translate legacy → spec.
  *  - `keep`: the tags came from a vendor tag → already spec, just mark them.
  *
@@ -493,6 +525,7 @@ export async function resolveOptTagNumbering(
   action: OptTagResolveAction,
   expectedTags: readonly number[],
   now: Date = new Date(),
+  expectedHints?: readonly string[],
 ): Promise<OptTagResolveResult> {
   const filaments = db.collection("filaments");
   const row = await filaments.findOne({ _id: filamentId }, { projection: ROW_PROJECTION });
@@ -500,6 +533,11 @@ export async function resolveOptTagNumbering(
   if (row.optTagsSpec === true) return { outcome: "changed" };
   const stored = Array.isArray(row.optTags) ? (row.optTags as unknown[]) : [];
   if (!sameOptTagSet(stored, expectedTags)) return { outcome: "changed" };
+  if (expectedHints) {
+    const verdict = classifyOptTags(row as OptTagClassifiable);
+    const current: readonly string[] = verdict.kind === "ambiguous" ? verdict.hints : [];
+    if (!sameStringSet(current, expectedHints)) return { outcome: "changed" };
+  }
 
   const $set: Record<string, unknown> = { optTagsSpec: true, updatedAt: now, ...snapshotRemapSet(row) };
   let remapped: { tags: number[]; dropped: number[] } | null = null;

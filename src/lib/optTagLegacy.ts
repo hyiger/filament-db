@@ -456,6 +456,18 @@ export interface OptTagClassifiable {
  */
 export type OptTagHint = "opt-provenance" | "legacy-only-id" | "spec-only-id" | "backfill-derivation";
 
+/** Every hint, as a value — the review route validates an echoed `expectedHints` against it. */
+export const OPT_TAG_HINTS: readonly OptTagHint[] = [
+  "opt-provenance",
+  "legacy-only-id",
+  "spec-only-id",
+  "backfill-derivation",
+];
+
+export function isOptTagHint(value: unknown): value is OptTagHint {
+  return typeof value === "string" && (OPT_TAG_HINTS as readonly string[]).includes(value);
+}
+
 export type OptTagVerdict =
   /** Only ids that mean the same under both numberings — nothing to decide. */
   | { kind: "trivial" }

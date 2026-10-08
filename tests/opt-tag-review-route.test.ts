@@ -50,6 +50,7 @@ describe("/api/opt-tag-review", () => {
     expect(body.pending[0]).toMatchObject({
       name: "Linked",
       verdict: "ambiguous",
+      hints: ["opt-provenance", "legacy-only-id"],
       matchesOptProvenance: true,
       legacyOnlyIds: [18],
       specOnlyIds: [],
@@ -60,6 +61,7 @@ describe("/api/opt-tag-review", () => {
     expect(body.pending[1]).toMatchObject({
       name: "Pending",
       verdict: "ambiguous",
+      hints: [],
       matchesOptProvenance: false,
       stored: [2],
       asLegacy: { tags: [20], dropped: [] },
@@ -100,13 +102,31 @@ describe("/api/opt-tag-review", () => {
     expect(gone.status).toBe(404);
   });
 
-  it("POST validates id, action, expectedTags and JSON, and rejects cross-site callers", async () => {
+  it("POST is 409 tags_changed when the echoed hints no longer hold (Codex P2 r14), and accepts them when they do", async () => {
+    const { insertedId } = await col().insertOne({
+      name: "Relinked", vendor: "V", type: "PLA", optTags: [2],
+      settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
+    });
+    // The page saw the opt-provenance hint; a re-link then spec-marks the snapshot.
+    await col().updateOne({ _id: insertedId }, { $set: { openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } });
+    const stale = await post(String(insertedId), { action: "convert", expectedTags: [2], expectedHints: ["opt-provenance"] });
+    expect(stale.status).toBe(409);
+    expect((await stale.json()).error).toBe("tags_changed");
+    expect((await col().findOne({ _id: insertedId }))?.optTags).toEqual([2]);
+    const fresh = await post(String(insertedId), { action: "convert", expectedTags: [2], expectedHints: [] });
+    expect(fresh.status).toBe(200);
+    expect(await fresh.json()).toEqual({ outcome: "converted", tags: [20], dropped: [] });
+  });
+
+  it("POST validates id, action, expectedTags, expectedHints and JSON, and rejects cross-site callers", async () => {
     const { insertedId } = await col().insertOne({ name: "D", vendor: "V", type: "PLA", optTags: [2] });
     const id = String(insertedId);
     expect((await post("not-an-id", { action: "keep", expectedTags: [2] })).status).toBe(400);
     expect((await post(id, { action: "guess", expectedTags: [2] })).status).toBe(400);
     expect((await post(id, { action: "keep", expectedTags: [-1] })).status).toBe(400);
     expect((await post(id, { action: "keep" })).status).toBe(400);
+    expect((await post(id, { action: "keep", expectedTags: [2], expectedHints: ["bogus"] })).status).toBe(400);
+    expect((await post(id, { action: "keep", expectedTags: [2], expectedHints: "opt-provenance" })).status).toBe(400);
     expect((await post(id, "{not json")).status).toBe(400);
     expect(
       (await post(id, { action: "keep", expectedTags: [2] }, { "sec-fetch-site": "cross-site" })).status,

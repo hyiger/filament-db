@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isEncodableOptTag } from "@/lib/openprinttag";
+import { isOptTagHint } from "@/lib/optTagLegacy";
 import {
   resolveOptTagNumbering,
   type MinimalRenumberDb,
@@ -14,7 +15,8 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
  * POST /api/opt-tag-review/{id}  (GH #1227)
  *
  * The user's answer for one filament Data health listed as awaiting numbering
- * review. Body: `{ action: "convert" | "keep", expectedTags: number[] }`.
+ * review. Body: `{ action: "convert" | "keep", expectedTags: number[],
+ * expectedHints?: OptTagHint[] }`.
  *
  *  - `convert` — the tags were entered in this app (or imported from the OPT
  *    database) → translate from the pre-#1227 numbering to the spec's.
@@ -25,6 +27,11 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
  * row still holding exactly that array (and still being unverified); anything
  * else is 409 `tags_changed` and the page re-scans — a tag edit in another tab
  * must not be overwritten by a decision made against the old list.
+ * `expectedHints`, when sent, are the classifier hints the page displayed for
+ * the row; the decision is likewise 409 when the row no longer carries exactly
+ * them (Codex P2 r14 on PR #1228) — the bulk "imported from OpenPrintTag"
+ * action selects rows BY a hint, and a re-link or a sync between the scan and
+ * the click can take the hint away while leaving the array unchanged.
  *
  * The resolution runs under the row's per-filament mutex (`filamentLockKey`,
  * the key `PUT /api/filaments/{id}`'s write section holds), so a tag write and
@@ -68,6 +75,13 @@ export async function POST(
       { status: 400 },
     );
   }
+  const expectedHints = (body as { expectedHints?: unknown }).expectedHints;
+  if (expectedHints !== undefined && (!Array.isArray(expectedHints) || !expectedHints.every(isOptTagHint))) {
+    return NextResponse.json(
+      { error: "expectedHints must be an array of known hint names" },
+      { status: 400 },
+    );
+  }
 
   try {
     await dbConnect();
@@ -81,6 +95,8 @@ export async function POST(
         new mongoose.Types.ObjectId(id),
         action as OptTagResolveAction,
         expected as number[],
+        undefined,
+        expectedHints as string[] | undefined,
       ),
     );
     switch (result.outcome) {
@@ -91,7 +107,7 @@ export async function POST(
           {
             error: "tags_changed",
             message:
-              "This filament's tags changed since the scan, or are already verified. Re-scan and review again.",
+              "This filament's tags or their provenance changed since the scan, or the tags are already verified. Re-scan and review again.",
           },
           { status: 409 },
         );

@@ -442,6 +442,34 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
     expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 
+  it("refuses when the hints the page showed no longer hold — a re-link between the scan and the click (Codex P2 r14)", async () => {
+    // Listed with the `opt-provenance` hint (a legacy snapshot equal to the
+    // array), which is what the bulk "imported from OpenPrintTag" action
+    // selects on. Before the click, a re-link swaps the snapshot for a
+    // spec-marked one: the array is still [2], so the array pin matches, and
+    // the write pins the NEW snapshot — only the echoed hints catch it.
+    const { insertedId } = await col().insertOne({
+      name: "Relinked Hint", vendor: "V", type: "PLA", optTags: [2],
+      settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
+    });
+    const shown = (await scanUnverifiedOptTags(db())).find((r) => r.name === "Relinked Hint")!;
+    expect(shown.hints).toEqual(["opt-provenance"]);
+    expect(shown.matchesOptProvenance).toBe(true);
+    await col().updateOne({ _id: insertedId }, { $set: { openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } });
+    expect(await resolveOptTagNumbering(db(), insertedId, "convert", [2], NOW, shown.hints)).toEqual({ outcome: "changed" });
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({ optTags: [2], openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } });
+    expect((await col().findOne({ _id: insertedId }))?.optTagsSpec).toBeUndefined();
+    // A fresh scan shows no hint; a decision made against THAT applies.
+    const rescanned = (await scanUnverifiedOptTags(db())).find((r) => r.name === "Relinked Hint")!;
+    expect(rescanned.hints).toEqual([]);
+    expect(await resolveOptTagNumbering(db(), insertedId, "convert", [2], NOW, rescanned.hints)).toEqual({ outcome: "converted", tags: [20], dropped: [] });
+    // Order within the set does not matter; an omitted echo (an older caller) is not checked.
+    const { insertedId: twoHints } = await col().insertOne({ name: "Two Hints", vendor: "V", type: "PLA", optTags: [18, 30], settings: { openprinttag_slug: "t" } });
+    expect(await resolveOptTagNumbering(db(), twoHints, "keep", [18, 30], NOW, ["spec-only-id", "legacy-only-id", "opt-provenance"])).toEqual({ outcome: "kept", tags: [18, 30] });
+    const { insertedId: unchecked } = await col().insertOne({ name: "Unchecked", vendor: "V", type: "PLA", optTags: [2], settings: { openprinttag_slug: "u" } });
+    expect(await resolveOptTagNumbering(db(), unchecked, "keep", [2], NOW)).toEqual({ outcome: "kept", tags: [2] });
+  });
+
   it("refuses when the row changed since the scan, is already verified, or is gone", async () => {
     const { insertedIds } = await col().insertMany([
       { name: "Edited", vendor: "V", type: "PLA", optTags: [2, 16] },
