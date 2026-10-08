@@ -208,7 +208,15 @@ function snapshotRemapSet(row: Record<string, unknown>): Record<string, unknown>
  * snapshot or a link since the read must not match either.
  */
 function observedClassifierInputs(row: Record<string, unknown>): Record<string, unknown> {
-  const snapshot = row.openprinttagSnapshot as Record<string, unknown> | null | undefined;
+  // Child pins only for a DOCUMENT container (Codex P2 r18 on PR #1228): a
+  // dotted predicate traverses array elements, so for a restored
+  // `openprinttagSnapshot: [{ optTags: [2] }]` the classifier rightly reads
+  // "no snapshot object" while `"openprinttagSnapshot.optTags": {$exists:
+  // false}` is FALSE (MongoDB finds `optTags` inside the element) — the write
+  // never matched, the pass skipped the row on every connect and every
+  // resolution answered `tags_changed`. The container pin (`$type: "array"`)
+  // already fixes a non-document shape exactly.
+  const snapshot = isSnapshotDocument(row.openprinttagSnapshot) ? row.openprinttagSnapshot : null;
   const settings = row.settings as Record<string, unknown> | null | undefined;
   const pin = (value: unknown): unknown => (value === undefined ? { $exists: false } : value);
   // The snapshot CONTAINER is pinned by presence and type, not only its
@@ -235,8 +243,12 @@ function observedClassifierInputs(row: Record<string, unknown>): Record<string, 
     name: pin(row.name),
     type: pin(row.type),
     openprinttagSnapshot: pinContainer(row.openprinttagSnapshot),
-    "openprinttagSnapshot.optTags": pin(snapshot?.optTags),
-    [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: pin(snapshot?.[OPT_SNAPSHOT_NUMBERING_KEY]),
+    ...(snapshot
+      ? {
+          "openprinttagSnapshot.optTags": pin(snapshot.optTags),
+          [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: pin(snapshot[OPT_SNAPSHOT_NUMBERING_KEY]),
+        }
+      : {}),
     "settings.openprinttag_slug": pin(settings?.openprinttag_slug),
     "settings.openprinttag_uuid": pin(settings?.openprinttag_uuid),
   };
