@@ -398,6 +398,35 @@ describe("renumberOptTags", () => {
     expect(await readDroppedLegacyTags(db())).toEqual([]);
   });
 
+  it("an unmatched write that lost to a COMPETING identical conversion keeps the one remaining drop record (Codex P2 r8)", async () => {
+    // A records, B records (replacing A's), A converts, B's conditional write
+    // matches nothing. Pulling B's record here would leave the converted row
+    // with no notice at all.
+    await col().insertOne({ name: "Competing", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "c" } });
+    const real = mongoose.connection.db!;
+    type Filter = Record<string, unknown>;
+    type Opts = { projection?: Record<string, unknown> };
+    const competing: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            // Competitor A lands the identical conversion first …
+            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, update as never);
+            // … so B's conditional write (unmarked rows only) matches nothing.
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    expect(await renumberOptTags(competing, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
+    expect(await byName("Competing")).toMatchObject({ optTags: [57], optTagsSpec: true });
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Competing", tags: [9] })]);
+  });
+
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {
     expect(describeRenumberSummary(await renumberOptTags(db(), NOW))).toBeNull();
     await col().insertOne({ name: "L", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } });
@@ -450,6 +479,40 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
       asLegacy: { tags: [20, 30], dropped: [] },
       asSpec: [2, 30],
     });
+  });
+
+  it("refuses when the snapshot or link changed under it, so a re-linked spec snapshot is never overwritten with a stale remap (Codex P2 r8)", async () => {
+    const { insertedId } = await col().insertOne({
+      name: "Relink Manual", vendor: "V", type: "PLA", optTags: [2],
+      settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
+    });
+    const real = mongoose.connection.db!;
+    type Filter = Record<string, unknown>;
+    type Opts = { projection?: Record<string, unknown> };
+    const relinking: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            // The link route re-links the row between the read and the write.
+            await c.updateOne(
+              { _id: (filter as { _id: unknown })._id as never },
+              { $set: { "settings.openprinttag_slug": "b", openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } },
+            );
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    expect(await resolveOptTagNumbering(relinking, insertedId, "convert", [2], NOW)).toEqual({ outcome: "changed" });
+    expect(await col().findOne({ _id: insertedId })).toMatchObject({
+      optTags: [2],
+      openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" }, // intact, not remapped to [20]
+    });
+    expect((await col().findOne({ _id: insertedId }))?.optTagsSpec).toBeUndefined();
   });
 
   it("convert translates + marks (recording drops); keep marks as is; both translate the snapshot", async () => {

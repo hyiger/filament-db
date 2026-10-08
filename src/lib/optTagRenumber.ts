@@ -251,13 +251,17 @@ async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags):
 }
 
 /**
- * A conversion write THREW. That is an UNKNOWN outcome, not a failed one:
- * MongoDB may have committed the update and lost the acknowledgement on the
- * way back (Codex P2 r5 on PR #1228). Re-read the row to decide what becomes
- * of the drop record written before the attempt:
+ * A conversion write did not succeed as expected — it THREW, or it matched
+ * nothing. Neither tells us the row is unconverted: a thrown write may have
+ * committed and lost its acknowledgement (Codex P2 r5 on PR #1228), and an
+ * unmatched one may have lost to a COMPETING pass that landed the identical
+ * conversion first and marked the row (two Data health requests, or the sync
+ * service overlapping the web process — Codex P2 r8). In the second case the
+ * record this call wrote replaced the competitor's, so it is the only notice
+ * left. Re-read the row to decide what becomes of it:
  *  - the row is marked AND holds exactly the array this conversion would have
- *    written → it landed; the record stays (the pass never revisits a marked
- *    row, so this is the record's only chance to survive);
+ *    written → a conversion landed; the record stays (the pass never revisits
+ *    a marked row, so this is the record's only chance to survive);
  *  - the row is still unmarked → it did not land; pull the record;
  *  - the re-read fails too, or the row is gone → keep the record. A kept
  *    record for a conversion that never landed is REPLACED, not duplicated,
@@ -265,7 +269,7 @@ async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags):
  *    and the Data health notice is dismissable — a stale notice is the cheaper
  *    error, a lost one is silent data loss.
  */
-async function reconcileDropRecordAfterThrow(
+async function reconcileDropRecord(
   db: MinimalRenumberDb,
   filaments: MinimalRenumberCollection,
   id: unknown,
@@ -353,12 +357,17 @@ export async function renumberOptTags(
       // reconcile the pre-written drop record against the row, then the
       // failure propagates as before.
       if (droppedEntry) {
-        await reconcileDropRecordAfterThrow(db, filaments, row._id, convertedTags ?? [], droppedEntry);
+        await reconcileDropRecord(db, filaments, row._id, convertedTags ?? [], droppedEntry);
       }
       throw err;
     }
     if (!matched(res)) {
-      if (droppedEntry) await unrecordDropped(db, droppedEntry);
+      // The row no longer looks like what was classified — or a competing
+      // pass converted it to the same array first. Reconciled, not pulled
+      // (Codex P2 r8 on PR #1228).
+      if (droppedEntry) {
+        await reconcileDropRecord(db, filaments, row._id, convertedTags ?? [], droppedEntry);
+      }
       summary.skipped++;
       continue;
     }
@@ -481,7 +490,11 @@ export type OptTagResolveResult =
  * Apply the user's answer for one pending row. `expectedTags` is the array the
  * user was shown; the write is conditioned on the row still holding exactly it
  * (and still being unmarked), so an edit made in another tab since the scan is
- * reported as `changed` instead of being overwritten.
+ * reported as `changed` instead of being overwritten. It is ALSO conditioned
+ * on the snapshot and link state exactly as read (`observedClassifierInputs`,
+ * the same pin the pass uses): the `$set` translates the snapshot that was
+ * READ, and a snapshot re-linked under it (now spec-marked) would otherwise be
+ * overwritten with a stale legacy remap (Codex P2 r8 on PR #1228).
  *
  *  - `convert`: the tags were entered in this app → translate legacy → spec.
  *  - `keep`: the tags came from a vendor tag → already spec, just mark them.
@@ -523,18 +536,22 @@ export async function resolveOptTagNumbering(
   let res: unknown;
   try {
     res = await filaments.updateOne(
-      { _id: row._id, optTags: stored, ...UNVERIFIED_OPT_TAGS_FILTER },
+      { _id: row._id, ...UNVERIFIED_OPT_TAGS_FILTER, ...observedClassifierInputs(row) },
       { $set },
     );
   } catch (err) {
     // Same reconciliation as the pass (Codex P2 r4 + r5 on PR #1228).
     if (droppedEntry) {
-      await reconcileDropRecordAfterThrow(db, filaments, row._id, remapped?.tags ?? [], droppedEntry);
+      await reconcileDropRecord(db, filaments, row._id, remapped?.tags ?? [], droppedEntry);
     }
     throw err;
   }
   if (!matched(res)) {
-    if (droppedEntry) await unrecordDropped(db, droppedEntry);
+    // Same reconciliation as the pass (Codex P2 r8): a competing conversion
+    // may have landed first, and this record is then the only notice left.
+    if (droppedEntry) {
+      await reconcileDropRecord(db, filaments, row._id, remapped?.tags ?? [], droppedEntry);
+    }
     return { outcome: "changed" };
   }
 
