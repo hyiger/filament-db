@@ -42,6 +42,8 @@ import {
   renumberOptTags,
   describeRenumberSummary,
   mergeDroppedLegacyTags,
+  reconcileMergedDroppedLegacyTags,
+  type DroppedLegacyTags,
   type MinimalRenumberDb,
 } from "../src/lib/optTagRenumber";
 
@@ -580,6 +582,9 @@ export class SyncService extends EventEmitter {
       // because trimming would collide is reported and the cycle continues,
       // since that pair needs a human either way. A THROWN failure is
       // different and aborts, for the reason in the loop below.
+      // GH #1227: the REMOTE pass's drop records, kept for the reconciliation
+      // that runs after the filament LWW step (see there).
+      const remoteDroppedLegacyTags: DroppedLegacyTags[] = [];
       for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
         if (this.aborted) break;
         // A THROW here aborts the cycle. Swallowing it and syncing anyway is
@@ -645,11 +650,18 @@ export class SyncService extends EventEmitter {
         // `_migrations`, which never syncs, while Data health reads only the
         // local store — and the local pass will skip the now-marked row, so
         // nothing could ever recreate the notice. Merge it into the local
-        // store here; `readDroppedLegacyTags` re-points the record at the
-        // local copy through `syncId` once the row has been pulled (Codex P2
-        // r7 on PR #1228).
+        // store here, DURABLY and before any copy (a cycle that dies later
+        // must not lose it); `readDroppedLegacyTags` re-points the record at
+        // the local copy through `syncId` once the row has been pulled (Codex
+        // P2 r7 on PR #1228). Merged as `peer: "remote"`, beside — never in
+        // place of — a local record for the same row: when both peers
+        // converted DIVERGENT unmarked revisions of one filament, each notice
+        // is true of its own revision, and which one the local database ends
+        // up holding is decided only by the filament LWW step below. The
+        // loser's notice is pruned there (Codex P2 r9).
         if (side === "remote" && renumber.dropped.length > 0) {
           await mergeDroppedLegacyTags(localDb as unknown as MinimalRenumberDb, renumber.dropped);
+          remoteDroppedLegacyTags.push(...renumber.dropped);
         }
         // Re-check AFTER the zombie repair: the trim is a SEPARATE
         // destructive migration (creates indexes, rewrites names across five
@@ -962,6 +974,40 @@ export class SyncService extends EventEmitter {
             conflictedCollections.has("filaments"),
           ),
       ));
+
+      // GH #1227: now that LWW has picked a revision for every paired
+      // filament, keep ONE drop notice per row — the one describing the
+      // revision the LOCAL database holds (Codex P2 r9 on PR #1228). A local
+      // row this cycle REWROTE (its `updatedAt` differs from the pre-sync
+      // snapshot, or it was not in the snapshot — a fresh pull) now carries
+      // the remote revision, so the local pass's notice described a document
+      // that no longer exists anywhere; an untouched local row kept its own
+      // revision (it won, or the timestamps tied and nothing was copied), so
+      // the remote pass's notice is the stale one. Only when the collection
+      // SETTLED: after an errored or held-back sync nothing was decided and
+      // both notices stay (dismissable) — the remote pass has already marked
+      // its rows, so it could never re-report them. Best-effort, like the
+      // repair passes: a failure here leaves two notices, never none.
+      if (remoteDroppedLegacyTags.length > 0 && !this.aborted && !collectionErrored("filaments")) {
+        try {
+          const kept = await reconcileMergedDroppedLegacyTags(
+            localDb as unknown as MinimalRenumberDb,
+            remoteDroppedLegacyTags,
+            (row) => {
+              const before = localFilamentSnapshot.get(String(row._id));
+              if (before === undefined) return true; // inserted by this cycle's pull
+              return (SyncService.readUpdatedAt(row as Document) ?? null) !== before;
+            },
+          );
+          if (kept.remoteWon + kept.localWon > 0) {
+            console.log(
+              `[sync] GH #1227: reconciled dropped-tag notices after LWW — remote revision kept on ${kept.remoteWon}, local on ${kept.localWon}`,
+            );
+          }
+        } catch (err) {
+          console.error("[sync] dropped-tag notice reconciliation failed (best-effort):", err);
+        }
+      }
 
       // GH #1021: the LWW copy is itself an ingestion boundary — a pre-#1022
       // peer can push a NEWER doc carrying the stamped machine condition

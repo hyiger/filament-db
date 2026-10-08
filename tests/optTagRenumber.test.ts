@@ -10,6 +10,7 @@ import {
   OPT_TAG_RENUMBER_MARKER_ID,
   type MinimalRenumberDb,
   mergeDroppedLegacyTags,
+  reconcileMergedDroppedLegacyTags,
 } from "@/lib/optTagRenumber";
 
 /**
@@ -119,7 +120,7 @@ describe("renumberOptTags", () => {
       // Trivial row (30 and 4 are both remap-invariant) with a legacy snapshot:
       // the snapshot is still translated.
       {
-        name: "Vendor Tag Linked", vendor: "V", type: "PC", optTags: [30, 4],
+        name: "Vendor Tag Linked", vendor: "V", type: "PC", optTags: [30, 4], updatedAt: OLD,
         settings: { openprinttag_slug: "v-pc" }, openprinttagSnapshot: { optTags: [2] },
       },
     ]);
@@ -342,6 +343,7 @@ describe("renumberOptTags", () => {
 
     // A legacy verdict justified by a snapshot is skipped when the snapshot it
     // rested on is replaced (here: re-linked to a spec-marked one).
+    await col().deleteMany({ name: "Swapped" }); // isolate the next sub-scenario's counts
     await col().insertOne({
       name: "Relinked", vendor: "V", type: "PLA", optTags: [2],
       settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
@@ -368,6 +370,38 @@ describe("renumberOptTags", () => {
     expect(relinked?.optTags).toEqual([2]); // not remapped
     expect(relinked?.optTagsSpec).toBeUndefined();
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // spec snapshot: no proof
+
+    // The snapshot CONTAINER is pinned too (Codex P1 r10): a linked row with
+    // NO snapshot object is a legacy proof (pre-v1.36 import), while a
+    // snapshot object WITHOUT an `optTags` entry proves nothing — and both
+    // satisfy the children's `$exists: false` pins. A whole-document copy
+    // landing between the read and the write with a tag-less pre-upgrade
+    // snapshot must not let the stale verdict convert a now-ambiguous array.
+    await col().deleteMany({ name: "Relinked" });
+    await col().insertOne({
+      name: "Snapshot Gained", vendor: "V", type: "PLA", optTags: [2], settings: { openprinttag_slug: "g" },
+    });
+    const gaining: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            await c.updateOne(
+              { _id: (filter as { _id: unknown })._id as never },
+              { $set: { openprinttagSnapshot: { density: 1.24 } } }, // pre-v1.83 shape, no optTags
+            );
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    expect(await renumberOptTags(gaining, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
+    expect(await byName("Snapshot Gained")).toMatchObject({ optTags: [2], openprinttagSnapshot: { density: 1.24 } });
+    expect((await byName("Snapshot Gained"))?.optTagsSpec).toBeUndefined();
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // the user's call now
   });
 
   it("a drop recorded on the remote peer is merged, re-pointed at the local copy through syncId, and dismissable by what the page showed (Codex P2 r7)", async () => {
@@ -396,6 +430,64 @@ describe("renumberOptTags", () => {
     // No list → everything (API callers that read the whole list themselves).
     await dismissDroppedLegacyTags(db());
     expect(await readDroppedLegacyTags(db())).toEqual([]);
+  });
+
+  it("a local and a remote notice for the same row coexist until the LWW step decides, then the loser's goes (Codex P2 r9)", async () => {
+    const LATER = new Date("2026-10-08T13:00:00.000Z");
+    // The local pass converts the LOCAL revision of a row both peers hold
+    // (pre-v1.36 import: link, no snapshot) — 9 FLEXIBLE drops.
+    const { insertedId } = await col().insertOne({
+      name: "Both Sides", vendor: "V", type: "PLA", optTags: [9, 2], syncId: "sync-both",
+      settings: { openprinttag_slug: "both" }, updatedAt: OLD,
+    });
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
+    // The remote pass converted a DIVERGENT remote revision, dropping 8 (HEAT_RESISTANT).
+    const remoteEntry = { filamentId: "64b000000000000000000002", syncId: "sync-both", name: "Both Sides", tags: [8], at: LATER };
+    await mergeDroppedLegacyTags(db(), [remoteEntry]);
+    // Neither replaced the other; both are re-pointed at the local copy.
+    let notices = await readDroppedLegacyTags(db());
+    expect(notices.map((d) => d.tags)).toEqual([[9], [8]]);
+    expect(notices.map((d) => d.filamentId)).toEqual([String(insertedId), String(insertedId)]);
+    expect(notices.map((d) => d.peer)).toEqual([undefined, "remote"]);
+    // Re-merging the same remote record after the re-point still replaces, never stacks.
+    await mergeDroppedLegacyTags(db(), [remoteEntry]);
+    expect(await readDroppedLegacyTags(db())).toHaveLength(2);
+
+    // The local revision stood (it won LWW, or the timestamps tied): the
+    // remote notice described the revision LWW discarded.
+    expect(await reconcileMergedDroppedLegacyTags(db(), [remoteEntry], () => false)).toEqual({ remoteWon: 0, localWon: 1 });
+    notices = await readDroppedLegacyTags(db());
+    expect(notices.map((d) => d.tags)).toEqual([[9]]);
+
+    // The cycle REWROTE the local row with the remote revision: the local
+    // notice described a document that no longer exists anywhere.
+    await mergeDroppedLegacyTags(db(), [remoteEntry]);
+    expect(await reconcileMergedDroppedLegacyTags(db(), [remoteEntry], () => true)).toEqual({ remoteWon: 1, localWon: 0 });
+    notices = await readDroppedLegacyTags(db());
+    expect(notices.map((d) => d.tags)).toEqual([[8]]);
+
+    // A remote record for a row this database has not pulled yet is left alone.
+    const unpulled = { filamentId: "64b000000000000000000003", syncId: "sync-elsewhere", name: "Elsewhere", tags: [9], at: LATER };
+    await mergeDroppedLegacyTags(db(), [unpulled]);
+    expect(await reconcileMergedDroppedLegacyTags(db(), [unpulled], () => false)).toEqual({ remoteWon: 0, localWon: 0 });
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Both Sides", "Elsewhere"]);
+  });
+
+  it("two passes converting the same row concurrently leave exactly ONE drop record — the replacement is atomic (Codex P2 r10)", async () => {
+    await col().insertOne({ name: "Twice", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "tw" } });
+    // Both read the row unmarked; each records (an atomic replace, so the
+    // second supersedes the first instead of stacking beside it); one
+    // conversion lands, the other's conditional write matches nothing and
+    // reconciles as "landed" — keeping the single record that remains.
+    const [a, b] = await Promise.all([
+      renumberOptTags(db(), NOW),
+      renumberOptTags(db(), new Date("2026-10-08T12:00:00.001Z")),
+    ]);
+    expect(a.converted + b.converted).toBe(1);
+    expect(await byName("Twice")).toMatchObject({ optTags: [57], optTagsSpec: true });
+    const notices = await readDroppedLegacyTags(db());
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toMatchObject({ name: "Twice", tags: [9] });
   });
 
   it("an unmatched write that lost to a COMPETING identical conversion keeps the one remaining drop record (Codex P2 r8)", async () => {
