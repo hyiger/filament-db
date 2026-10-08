@@ -56,6 +56,8 @@ describe("buildOptSnapshot", () => {
   it("captures every OPT-offered managed field, dot-free, skipping null/empty", () => {
     const snap = buildOptSnapshot(payload());
     expect(snap).toEqual({
+      // GH #1227: every snapshot built now says its optTags are spec ids.
+      tagsNumbering: "spec",
       color: "#3d3e3d",
       density: 1.24,
       temperatures_nozzle: 225,
@@ -596,6 +598,10 @@ describe("buildOptLinkUpdate (Issue #753)", () => {
     expect(snap.density).toBe(1.24);
     expect(snap.temperatures_nozzle).toBe(225);
     expect(snap.color).toBe("#3d3e3d");
+    // GH #1227 (Codex P1 r4): a snapshot written by the link route must say it
+    // is spec-numbered, or the renumbering classifier would read equality with
+    // it as legacy provenance.
+    expect(snap.tagsNumbering).toBe("spec");
   });
 
   it("tolerates a payload without a settings bag", () => {

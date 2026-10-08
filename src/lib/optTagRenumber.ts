@@ -41,14 +41,16 @@
  * revisited on the next pass (the #1021 posture).
  *
  * `openprinttagSnapshot.optTags` — what the OPT importer/re-sync last offered —
- * is in the legacy numbering by construction on every unmarked row, so it is
- * translated whenever the row is marked (by the pass OR by a Data health
- * resolution, whichever marks it). Residual: a row whose snapshot was
- * refreshed by a post-upgrade re-import BEFORE this pass first ran (only
- * possible if the pass failed transiently on first connect and an OPT import
- * ran in that window) would have a spec-numbered snapshot translated once
- * more; the snapshot only steers the re-sync dialog's adopt/conflict labels,
- * where the user still decides, so this is stated rather than guarded.
+ * is in the legacy numbering when the snapshot predates v1.83 (it then has no
+ * `tagsNumbering` entry), so such a snapshot is translated AND stamped
+ * `tagsNumbering: "spec"` whenever the row is marked (by the pass OR by a Data
+ * health resolution, whichever marks it); a snapshot already marked spec is
+ * never touched, so no snapshot is translated twice (Codex P1 r4 on PR
+ * #1228). Residual: a post-upgrade re-import/link/re-sync that lands BEFORE
+ * this pass first runs (only possible if the pass failed transiently on first
+ * connect) replaces a legacy snapshot with a marked spec one, so that row
+ * loses its provenance proof and goes to Data health instead of converting on
+ * its own — never a wrong conversion.
  *
  * ## Driver-level, on purpose
  *
@@ -66,6 +68,9 @@ import {
   sameOptTagSet,
   type OptTagClassifiable,
   SPEC_ONLY_IDS,
+  OPT_SNAPSHOT_NUMBERING_KEY,
+  OPT_SNAPSHOT_SPEC_NUMBERING,
+  snapshotIsSpecNumbered,
 } from "./optTagLegacy";
 
 export interface MinimalRenumberCollection {
@@ -135,11 +140,22 @@ function emptySummary(): OptTagRenumberSummary {
   return { scanned: 0, converted: 0, verified: 0, ambiguous: 0, skipped: 0, dropped: [] };
 }
 
-/** `$set` fragment translating a legacy-numbered OPT snapshot, if the row has one. */
+/**
+ * `$set` fragment translating a LEGACY-numbered OPT snapshot, if the row has
+ * one, and stamping it `tagsNumbering: "spec"` so it is never translated
+ * twice. A snapshot that already says it is spec-numbered (written by a
+ * post-v1.83 link/re-sync/import) is left alone (Codex P1 r4 on PR #1228).
+ */
 function snapshotRemapSet(row: Record<string, unknown>): Record<string, unknown> {
-  const snap = (row.openprinttagSnapshot as { optTags?: unknown } | null | undefined)?.optTags;
-  if (!Array.isArray(snap)) return {};
-  return { "openprinttagSnapshot.optTags": remapLegacyOptTags(snap).tags };
+  const snapshot = row.openprinttagSnapshot as Record<string, unknown> | null | undefined;
+  if (!snapshot || typeof snapshot !== "object" || snapshotIsSpecNumbered(snapshot)) return {};
+  const set: Record<string, unknown> = {
+    [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: OPT_SNAPSHOT_SPEC_NUMBERING,
+  };
+  if (Array.isArray(snapshot.optTags)) {
+    set["openprinttagSnapshot.optTags"] = remapLegacyOptTags(snapshot.optTags).tags;
+  }
+  return set;
 }
 
 function matched(res: unknown): boolean {
@@ -149,14 +165,23 @@ function matched(res: unknown): boolean {
   return n === undefined || n > 0;
 }
 
-/** Record one row's dropped legacy concepts — written BEFORE the row is converted. */
+/**
+ * Record one row's dropped legacy concepts — written BEFORE the row is
+ * converted. Idempotent per filament: an earlier record for the same row is
+ * replaced, not stacked, so a retry after a conversion write that threw (and
+ * whose cleanup below may have failed too, e.g. the database went away) cannot
+ * leave two notices for one conversion (Codex P2 r4 on PR #1228).
+ */
 async function recordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): Promise<void> {
-  await db
-    .collection("_migrations")
-    .updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $push: { dropped: entry } }, { upsert: true });
+  const migrations = db.collection("_migrations");
+  await migrations.updateOne(
+    { _id: OPT_TAG_RENUMBER_MARKER_ID },
+    { $pull: { dropped: { filamentId: entry.filamentId } } },
+  );
+  await migrations.updateOne({ _id: OPT_TAG_RENUMBER_MARKER_ID }, { $push: { dropped: entry } }, { upsert: true });
 }
 
-/** Undo `recordDropped` for a conversion that did not land (concurrent edit). */
+/** Undo `recordDropped` for a conversion that did not land (concurrent edit, or a write that threw). */
 async function unrecordDropped(db: MinimalRenumberDb, entry: DroppedLegacyTags): Promise<void> {
   await db
     .collection("_migrations")
@@ -226,7 +251,16 @@ export async function renumberOptTags(
       $set.updatedAt = now;
     }
 
-    const res = await filaments.updateOne(filter, { $set });
+    let res: unknown;
+    try {
+      res = await filaments.updateOne(filter, { $set });
+    } catch (err) {
+      // A conversion that never landed must not leave its pre-written drop
+      // record behind (Codex P2 r4 on PR #1228): best-effort cleanup, then
+      // the failure propagates as before.
+      if (droppedEntry) await unrecordDropped(db, droppedEntry).catch(() => undefined);
+      throw err;
+    }
     if (!matched(res)) {
       if (droppedEntry) await unrecordDropped(db, droppedEntry);
       summary.skipped++;
@@ -382,10 +416,18 @@ export async function resolveOptTagNumbering(
       await recordDropped(db, droppedEntry);
     }
   }
-  const res = await filaments.updateOne(
-    { _id: row._id, optTags: stored, ...UNVERIFIED_OPT_TAGS_FILTER },
-    { $set },
-  );
+  let res: unknown;
+  try {
+    res = await filaments.updateOne(
+      { _id: row._id, optTags: stored, ...UNVERIFIED_OPT_TAGS_FILTER },
+      { $set },
+    );
+  } catch (err) {
+    // Same cleanup as the pass: no drop record may outlive a conversion that
+    // never landed (Codex P2 r4 on PR #1228).
+    if (droppedEntry) await unrecordDropped(db, droppedEntry).catch(() => undefined);
+    throw err;
+  }
   if (!matched(res)) {
     if (droppedEntry) await unrecordDropped(db, droppedEntry);
     return { outcome: "changed" };

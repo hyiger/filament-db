@@ -121,7 +121,8 @@ describe("renumberOptTags", () => {
 
     const imported = await byName("OPT Imported");
     expect(imported?.optTags).toEqual([17, 28]);
-    expect(imported?.openprinttagSnapshot).toEqual({ optTags: [28, 17], density: 1.24 });
+    // The legacy snapshot is translated AND stamped so it is never translated twice.
+    expect(imported?.openprinttagSnapshot).toEqual({ optTags: [28, 17], density: 1.24, tagsNumbering: "spec" });
     expect((await byName("OPT Old Import"))?.optTags).toEqual([19]);
     const galaxy = await byName("Prusament PLA Galaxy Black");
     expect(galaxy?.optTags).toEqual([12, 15]); // untouched, unmarked — Data health with the hint
@@ -141,7 +142,7 @@ describe("renumberOptTags", () => {
     const linked = await byName("Vendor Tag Linked");
     expect(linked?.optTags).toEqual([30, 4]);
     expect(linked?.optTagsSpec).toBe(true);
-    expect(linked?.openprinttagSnapshot).toEqual({ optTags: [20] });
+    expect(linked?.openprinttagSnapshot).toEqual({ optTags: [20], tagsNumbering: "spec" });
     expect(linked?.updatedAt).toEqual(NOW); // the snapshot changed, so the peer should see it
   });
 
@@ -188,6 +189,86 @@ describe("renumberOptTags", () => {
     expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, converted: 1, skipped: 0 });
     expect((await byName("Raced"))?.optTags).toEqual([57, 20, 16]);
     expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Raced", tags: [9] })]);
+  });
+
+  it("a snapshot written since v1.83 is not legacy proof, and a translated snapshot is never translated twice (Codex P1 r4)", async () => {
+    await col().insertMany([
+      // An NFC-created spec [2] LINKED after upgrading: the link route's
+      // snapshot equals it and says it is spec-numbered → the user's call.
+      {
+        name: "Linked After", vendor: "V", type: "PLA", optTags: [2],
+        settings: { openprinttag_slug: "l" }, openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
+      },
+      // A legacy snapshot on a decisive row: translated and stamped.
+      {
+        name: "Legacy Snap", vendor: "V", type: "PLA", optTags: [18],
+        settings: { openprinttag_slug: "m" }, openprinttagSnapshot: { optTags: [18, 2] },
+      },
+    ]);
+    const s = await renumberOptTags(db(), NOW);
+    expect(s).toMatchObject({ scanned: 2, converted: 1, ambiguous: 1 });
+    const after = await byName("Linked After");
+    expect(after?.optTags).toEqual([2]); // NOT remapped to 20
+    expect(after?.optTagsSpec).toBeUndefined();
+    expect((await byName("Legacy Snap"))?.openprinttagSnapshot).toEqual({ optTags: [57, 20], tagsNumbering: "spec" });
+
+    // Keep on Data health runs the snapshot step again — the marker stops a
+    // second translation of an already-spec snapshot.
+    const r = await resolveOptTagNumbering(db(), after!._id, "keep", [2], NOW);
+    expect(r.outcome).toBe("kept");
+    expect((await byName("Linked After"))?.openprinttagSnapshot).toEqual({ optTags: [2], tagsNumbering: "spec" });
+  });
+
+  it("a conversion write that THROWS pulls back its pre-written drop record; a retry records it exactly once (Codex P2 r4)", async () => {
+    await col().insertOne({ name: "Throws", vendor: "V", type: "PLA", optTags: [18, 9] }); // 9 FLEXIBLE drops
+    const real = mongoose.connection.db!;
+    let throwOnce = true;
+    type Filter = Record<string, unknown>;
+    type Opts = { projection?: Record<string, unknown> };
+    const failing: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            if (throwOnce) {
+              throwOnce = false;
+              throw new Error("socket closed");
+            }
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    await expect(renumberOptTags(failing, NOW)).rejects.toThrow("socket closed");
+    expect(await readDroppedLegacyTags(db())).toEqual([]); // pulled back
+    const throwsId = (await byName("Throws"))!._id;
+    expect((await byName("Throws"))?.optTagsSpec).toBeUndefined();
+
+    // A stale record the cleanup could not remove (database gone) is REPLACED
+    // by the retry, not stacked beside a second notice.
+    await markers().updateOne(
+      { _id: OPT_TAG_RENUMBER_MARKER_ID as never },
+      // The driver's typed $push wants the array's element type declared; this is a raw fixture write.
+      { $push: { dropped: { filamentId: String(throwsId), name: "Throws", tags: [9], at: OLD } } } as never,
+      { upsert: true },
+    );
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ converted: 1 });
+    expect(await readDroppedLegacyTags(db())).toEqual([expect.objectContaining({ name: "Throws", tags: [9], at: NOW })]);
+
+    // The manual resolution path cleans up the same way.
+    await col().insertOne({ name: "Throws Manual", vendor: "V", type: "TPU", optTags: [9, 2] });
+    const manualId = (await byName("Throws Manual"))!._id;
+    throwOnce = true;
+    await expect(resolveOptTagNumbering(failing, manualId, "convert", [9, 2], NOW)).rejects.toThrow("socket closed");
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws"]);
+    expect(await resolveOptTagNumbering(db(), manualId, "convert", [9, 2], NOW)).toMatchObject({
+      outcome: "converted",
+      dropped: [9],
+    });
+    expect((await readDroppedLegacyTags(db())).map((d) => d.name)).toEqual(["Throws", "Throws Manual"]);
   });
 
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {

@@ -175,6 +175,26 @@ export const LEGACY_TO_SPEC: Readonly<Record<number, number | null>> = {
   [LEGACY_OPT_TAG.HIGH_SPEED]: OPT_TAG.HIGH_SPEED,
 };
 
+/**
+ * The `openprinttagSnapshot` entry that says which numbering the snapshot's
+ * `optTags` are in. Every snapshot built since the enum was corrected (every
+ * link, re-sync and OPT import go through `buildOptSnapshot`) carries
+ * `tagsNumbering: "spec"`; a snapshot WITHOUT it was written by the pre-#1227
+ * app in the legacy numbering. The classifier needs the distinction (Codex P1
+ * r4 on PR #1228): a stored spec `[2]` linked after upgrading to a material
+ * whose spec snapshot is also `[2]` would otherwise read as "the legacy
+ * importer wrote this" and be remapped to 20. The renumber pass stamps the
+ * marker when it translates a legacy snapshot, so no snapshot is translated
+ * twice.
+ */
+export const OPT_SNAPSHOT_NUMBERING_KEY = "tagsNumbering";
+export const OPT_SNAPSHOT_SPEC_NUMBERING = "spec";
+
+/** True when a snapshot object says its `optTags` are already spec ids. */
+export function snapshotIsSpecNumbered(snapshot: Record<string, unknown> | null | undefined): boolean {
+  return !!snapshot && snapshot[OPT_SNAPSHOT_NUMBERING_KEY] === OPT_SNAPSHOT_SPEC_NUMBERING;
+}
+
 /** Every id the pre-#1227 app could have written. */
 export const LEGACY_IDS: ReadonlySet<number> = new Set(
   Object.keys(LEGACY_TO_SPEC).map(Number),
@@ -432,11 +452,19 @@ export function isInertOptTagId(id: number): boolean {
  *  3. The legacy-only id 18 (deprecated upstream) → `legacy`. A spec-only id
  *     beside it is a stray the legacy importer let through and rides along —
  *     there is no "inconsistent" array; every array has both readings.
- *  4. OpenPrintTag provenance: `openprinttagSnapshot.optTags` is what
+ *  4. OpenPrintTag provenance: a snapshot written BEFORE the enum was
+ *     corrected (no `tagsNumbering: "spec"` entry) holds what the old
  *     `mapToFilamentPayload` offered, in the legacy numbering by construction.
- *     If the stored array equals it, the importer or the re-sync wrote the
- *     stored array → `legacy`. A slug/uuid link with NO snapshot array predates
- *     snapshots (v1.36) — only the OPT importer could create it → `legacy`.
+ *     If the stored array equals its `optTags`, the importer or the re-sync
+ *     wrote the stored array → `legacy`. A snapshot written SINCE (marked
+ *     spec) is in the spec numbering and proves nothing about a legacy origin
+ *     — a stored spec `[2]` linked after upgrading to a material whose spec
+ *     snapshot is also `[2]` must stay the user's call (Codex P1 r4 on PR
+ *     #1228). A pre-upgrade snapshot WITHOUT an `optTags` entry means the
+ *     material offered no tags, so the stored array is not the importer's —
+ *     nothing to conclude. A slug/uuid link with NO snapshot object at all
+ *     predates snapshots (v1.36); only that importer could have created it
+ *     (the link route, v1.52, always writes one) → `legacy`.
  *     A snapshot that DIFFERS proves nothing: the user may have edited the tags
  *     in the (legacy) form, or linked an NFC-created (spec) row afterwards.
  *     (Why the EQUAL case is safe where a vendor row was linked later: the OPT
@@ -464,9 +492,17 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
     return { kind: "legacy", reason: "legacy-only-id" };
   }
 
-  const snapshotTags = row.openprinttagSnapshot?.optTags;
-  if (Array.isArray(snapshotTags)) {
-    if (sameOptTagSet(ids, snapshotTags)) {
+  const snapshot = row.openprinttagSnapshot;
+  if (snapshot && typeof snapshot === "object") {
+    // Only a PRE-upgrade snapshot (legacy by construction) is provenance; a
+    // snapshot that says it is spec-numbered decides nothing, and so does a
+    // pre-upgrade one without an `optTags` entry (the material offered none).
+    const snapshotTags = snapshot.optTags;
+    if (
+      !snapshotIsSpecNumbered(snapshot) &&
+      Array.isArray(snapshotTags) &&
+      sameOptTagSet(ids, snapshotTags)
+    ) {
       return { kind: "legacy", reason: "opt-provenance" };
     }
   } else {

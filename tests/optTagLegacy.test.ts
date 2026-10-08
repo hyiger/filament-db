@@ -155,16 +155,35 @@ describe("classifyOptTags", () => {
     expect(remapLegacyOptTags([18, 30])).toEqual({ tags: [LEGACY_TO_SPEC[18], 30], dropped: [] });
   });
 
-  it("legacy: OPT provenance — a snapshot equal to the stored array, or a link with no snapshot", () => {
+  it("legacy: OPT provenance — a PRE-v1.83 snapshot equal to the stored array, or a link with no snapshot at all", () => {
+    // No `tagsNumbering: "spec"` entry → written by the pre-#1227 importer /
+    // re-sync in the legacy numbering; equality means it wrote the stored array.
     expect(
       classifyOptTags({ optTags: [2, 17], openprinttagSnapshot: { optTags: [17, 2] } }),
     ).toEqual({ kind: "legacy", reason: "opt-provenance" });
+    // A link with NO snapshot object predates snapshots (v1.36): only that
+    // importer could have created it (the link route, v1.52, always writes one).
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_slug: "x-pla" } }),
     ).toEqual({ kind: "legacy", reason: "opt-provenance" });
+  });
+
+  it("ambiguous: a snapshot written since v1.83 is spec-numbered and proves nothing; a tag-less one proves nothing either (Codex P1 r4)", () => {
+    // Linked AFTER upgrading: buildOptSnapshot wrote spec ids and said so. A
+    // stored spec [2] (antibacterial — an NFC-created row) equal to it must
+    // not be read as the legacy importer's work and remapped to 20.
+    expect(
+      classifyOptTags({
+        optTags: [2],
+        settings: { openprinttag_slug: "s" },
+        openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
+      }),
+    ).toEqual({ kind: "ambiguous" });
+    // A pre-v1.83 snapshot with no optTags entry: the material offered no
+    // tags, so the stored array did not come from the importer.
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_uuid: "u" }, openprinttagSnapshot: { color: "#000000" } }),
-    ).toEqual({ kind: "legacy", reason: "opt-provenance" });
+    ).toEqual({ kind: "ambiguous" });
   });
 
   it("ambiguous: a snapshot that DIFFERS proves nothing (edited in the legacy form, or an NFC row linked later)", () => {
