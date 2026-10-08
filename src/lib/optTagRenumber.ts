@@ -83,6 +83,7 @@
 import {
   classifyOptTags,
   describeOptTagReadings,
+  isDocumentContainer,
   isSnapshotDocument,
   remapLegacyOptTags,
   sameOptTagSet,
@@ -139,14 +140,21 @@ export const UNVERIFIED_OPT_TAGS_FILTER: Readonly<Record<string, unknown>> = {
  * every schema-shaped trivial row was skipped on every pass, and every Data
  * health decision answered `tags_changed`. The raw-insert test fixtures (field
  * truly absent) hid it; CI caught it the moment a fixture was written through
- * Mongoose (PR #1228). The snapshot is a small flat object, so projecting it
- * whole costs nothing; the settings bag is NOT projected whole (it can be
- * large) — its two link keys are pinned as children, which is exact for both
- * the `{}` default and an absent bag.
+ * Mongoose (PR #1228). The same goes for the `settings` bag (Codex P2 r19):
+ * a `null` bag vanishes from a child-path projection and an ARRAY bag (the
+ * path is `Mixed`; restore accepts it) defeats a child `$exists: false` pin,
+ * because dotted predicates traverse array elements — so the bag is projected
+ * whole too and its container shape is pinned. Only the pass (over the
+ * unmarked rows, a one-time set) and a single-row resolution read this
+ * projection, so the bag's size is not a concern here; the classification-only
+ * readers (the PUT and GET routes) keep the child paths.
  */
 const ROW_PROJECTION: Record<string, 1> = {
   ...Object.fromEntries(
-    OPT_TAG_CLASSIFIER_PATHS.map((path) => [path.startsWith("openprinttagSnapshot.") ? "openprinttagSnapshot" : path, 1 as const]),
+    OPT_TAG_CLASSIFIER_PATHS.map((path) => [
+      path.startsWith("openprinttagSnapshot.") ? "openprinttagSnapshot" : path.startsWith("settings.") ? "settings" : path,
+      1 as const,
+    ]),
   ),
   vendor: 1,
   _deletedAt: 1,
@@ -217,7 +225,9 @@ function observedClassifierInputs(row: Record<string, unknown>): Record<string, 
   // resolution answered `tags_changed`. The container pin (`$type: "array"`)
   // already fixes a non-document shape exactly.
   const snapshot = isSnapshotDocument(row.openprinttagSnapshot) ? row.openprinttagSnapshot : null;
-  const settings = row.settings as Record<string, unknown> | null | undefined;
+  // The settings bag is pinned the same way (Codex P2 r19): its container
+  // shape always, its two link keys only when it is a document.
+  const settings = isDocumentContainer(row.settings) ? row.settings : null;
   const pin = (value: unknown): unknown => (value === undefined ? { $exists: false } : value);
   // The snapshot CONTAINER is pinned by presence and type, not only its
   // children (Codex P1 r10 on PR #1228): `classifyOptTags` reads "no snapshot
@@ -249,8 +259,13 @@ function observedClassifierInputs(row: Record<string, unknown>): Record<string, 
           [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: pin(snapshot[OPT_SNAPSHOT_NUMBERING_KEY]),
         }
       : {}),
-    "settings.openprinttag_slug": pin(settings?.openprinttag_slug),
-    "settings.openprinttag_uuid": pin(settings?.openprinttag_uuid),
+    settings: pinContainer(row.settings),
+    ...(settings
+      ? {
+          "settings.openprinttag_slug": pin(settings.openprinttag_slug),
+          "settings.openprinttag_uuid": pin(settings.openprinttag_uuid),
+        }
+      : {}),
   };
 }
 

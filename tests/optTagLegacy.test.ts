@@ -23,6 +23,7 @@ import {
   OPT_TAG_HINTS,
   isOptTagHint,
   isSnapshotDocument,
+  isDocumentContainer,
 } from "@/lib/optTagLegacy";
 
 /**
@@ -235,6 +236,12 @@ describe("classifyOptTags", () => {
     ).toEqual({ kind: "ambiguous", hints: ["opt-provenance"] });
     expect(classifyOptTags({ optTags: [2], openprinttagSnapshot: ["x"] as never })).toEqual({ kind: "ambiguous", hints: [] });
     expect(classifyOptTags({ optTags: [4], openprinttagSnapshot: [] as never })).toEqual({ kind: "trivial" });
+    // The same for the settings bag (Codex P2 r19): an array is not a bag, so a
+    // slug inside one of its elements is not a link.
+    expect(isDocumentContainer({})).toBe(true);
+    expect(isDocumentContainer([{ openprinttag_slug: "s" }])).toBe(false);
+    expect(classifyOptTags({ optTags: [2], settings: [{ openprinttag_slug: "s" }] as never })).toEqual({ kind: "ambiguous", hints: [] });
+    expect(classifyOptTags({ optTags: [2], settings: null })).toEqual({ kind: "ambiguous", hints: [] });
   });
 
   it("ambiguous WITHOUT the hint: a snapshot that DIFFERS (edited in the legacy form, or an NFC row linked later)", () => {

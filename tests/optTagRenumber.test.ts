@@ -248,6 +248,31 @@ describe("renumberOptTags", () => {
     expect(await byName("Array Linked")).toMatchObject({ optTags: [57], optTagsSpec: true, openprinttagSnapshot: linkedContainer });
   });
 
+  it("a non-document or null settings bag is pinned by shape, never by its children — the pass marks and Data health resolves around it (Codex P2 r19)", async () => {
+    // `settings` is Mixed and restore accepts any shape. An ARRAY bag whose
+    // element carries a link key defeats a child `$exists: false` pin (dotted
+    // predicates traverse elements), and a `null` bag vanishes from a
+    // child-path projection — either left the row unmatched forever.
+    const arrayBag = [{ openprinttag_slug: "s" }];
+    await col().insertMany([
+      { name: "Array Bag Trivial", vendor: "V", type: "PLA", optTags: [4], settings: arrayBag, openprinttagSnapshot: null },
+      { name: "Array Bag Pending", vendor: "V", type: "PLA", optTags: [18, 9], settings: arrayBag, openprinttagSnapshot: null },
+      { name: "Null Bag Trivial", vendor: "V", type: "PLA", optTags: [16], settings: null, openprinttagSnapshot: null },
+      { name: "No Bag Trivial", vendor: "V", type: "PLA", optTags: [31] },
+    ]);
+    expect(await renumberOptTags(db(), NOW)).toEqual({ scanned: 4, verified: 3, ambiguous: 1, skipped: 0 });
+    expect(await byName("Array Bag Trivial")).toMatchObject({ optTags: [4], optTagsSpec: true, settings: arrayBag });
+    expect(await byName("Null Bag Trivial")).toMatchObject({ optTags: [16], optTagsSpec: true, settings: null });
+    expect(await byName("No Bag Trivial")).toMatchObject({ optTags: [31], optTagsSpec: true });
+    const pending = (await byName("Array Bag Pending"))!;
+    expect(pending.optTagsSpec).toBeUndefined();
+    // An array is not a bag, so the slug inside it is not a link: no provenance hint.
+    const shown = (await scanUnverifiedOptTags(db())).find((r) => r.name === "Array Bag Pending")!;
+    expect(shown.hints).toEqual(["legacy-only-id"]);
+    expect(await resolveOptTagNumbering(db(), pending._id, "convert", [18, 9], NOW, shown.hints)).toEqual({ outcome: "converted", tags: [57], dropped: [9] });
+    expect(await byName("Array Bag Pending")).toMatchObject({ optTags: [57], optTagsSpec: true, settings: arrayBag });
+  });
+
   it("a snapshot written since v1.83 hints nothing; a translated snapshot is never translated twice (Codex P1 r4)", async () => {
     await col().insertMany([
       // An NFC-created spec [2] LINKED after upgrading: the link route's

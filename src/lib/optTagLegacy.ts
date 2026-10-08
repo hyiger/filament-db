@@ -554,6 +554,21 @@ export function isInertOptTagId(id: number): boolean {
  * it, Codex P2 r17 on PR #1228) and the conditional-write pin alike.
  */
 export function isSnapshotDocument(value: unknown): value is Record<string, unknown> {
+  return isDocumentContainer(value);
+}
+
+/**
+ * A Mixed-path container read as a DOCUMENT (an object that is not an array).
+ * Both `openprinttagSnapshot` and the `settings` bag are `Mixed`, and snapshot
+ * restore accepts any shape for either, so an array can be stored where a
+ * document belongs. A non-document container is read as "nothing there" by the
+ * classifier and the conditional-write pins alike — MongoDB's dotted
+ * predicates traverse ARRAY ELEMENTS, so a child pin of `$exists: false`
+ * against `[{ openprinttag_slug: "s" }]` is false and the write never matches
+ * (Codex P2 r18 + r19 on PR #1228); only the container's own `$type` pin can
+ * fix such a shape.
+ */
+export function isDocumentContainer(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
@@ -578,7 +593,7 @@ export function classifyOptTags(row: OptTagClassifiable): OptTagVerdict {
       hints.push("opt-provenance");
     }
   } else {
-    const settings = row.settings ?? {};
+    const settings = isDocumentContainer(row.settings) ? row.settings : {};
     const linked =
       typeof settings.openprinttag_slug === "string" && settings.openprinttag_slug !== "" ||
       typeof settings.openprinttag_uuid === "string" && settings.openprinttag_uuid !== "";
