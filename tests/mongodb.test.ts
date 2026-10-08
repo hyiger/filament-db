@@ -1043,8 +1043,9 @@ describe("optTagRenumber migration (GH #1227)", () => {
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
     // Raw inserts — pre-#1227 rows carry no marker.
     await Filament.collection.insertMany([
-      { name: "RenumLegacy", vendor: "T", type: "PLA", optTags: [18, 2] },   // 18 proves legacy
-      { name: "RenumSpec", vendor: "T", type: "PC", optTags: [31, 30] },     // 30 proves spec
+      // A link with no snapshot (pre-v1.36 import) proves legacy; 18 alone is a hint.
+      { name: "RenumLegacy", vendor: "T", type: "PLA", optTags: [18, 2], settings: { openprinttag_slug: "renum" } },
+      { name: "RenumSpec", vendor: "T", type: "PC", optTags: [31, 30] },     // inert ids: nothing to translate
       { name: "RenumAmbiguous", vendor: "T", type: "PETG", optTags: [2] },   // both readings valid
     ]);
 

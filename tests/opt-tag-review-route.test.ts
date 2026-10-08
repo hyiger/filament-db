@@ -32,7 +32,9 @@ describe("/api/opt-tag-review", () => {
 
   it("GET settles decisive rows first, then lists the pending ones with both readings and the recorded drops", async () => {
     await col().insertMany([
-      { name: "Legacy", vendor: "V", type: "PLA", optTags: [18, 9] },
+      // Decisive through OPT provenance (a link with no snapshot predates
+      // snapshots); 18 alone would only be a hint (Codex P1 r6).
+      { name: "Legacy", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "legacy" } },
       { name: "Pending", vendor: "V", type: "PETG", optTags: [2] },
       { name: "Trivial", vendor: "V", type: "PLA", optTags: [4] },
     ]);

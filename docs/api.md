@@ -1092,7 +1092,7 @@ Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags
     {
       "filamentId": "…", "name": "Overture PETG Transparent", "vendor": "Overture", "type": "PETG",
       "trashed": false, "verdict": "ambiguous",
-      "matchesBackfill": false, "specOnlyIds": [],
+      "matchesBackfill": false, "specOnlyIds": [], "legacyOnlyIds": [],
       "stored": [2],
       "asLegacy": { "tags": [20], "dropped": [] },
       "asSpec": [2]
@@ -1104,7 +1104,7 @@ Since v1.83 (GH #1227) `optTags` ids are the OpenPrintTag specification's [`tags
 }
 ```
 
-`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is always `ambiguous` (both readings are consistent — no array is inconsistent; a spec-only id beside the legacy-only 18 is a stray that rides through the conversion verbatim). `matchesBackfill` (the array equals the old backfill script's output for the row's type → likely entered in the app) and `specOnlyIds` (ids the pre-v1.83 form could not write → likely read from a tag) are hints for the user, never decisions. `dropped` entries carry LEGACY ids.
+`stored` is the array exactly as persisted; `asLegacy` is what it becomes if the tags were entered in the app (pre-v1.83 numbering → spec, with the legacy ids that have no spec equivalent listed under `dropped`); `asSpec` is what it already means if the tags were read from a vendor's NFC tag. `verdict` is always `ambiguous` (both readings are consistent — no array is inconsistent; a spec-only id beside the legacy-only 18 is a stray that rides through the conversion verbatim). `matchesBackfill` (the array equals the old backfill script's output for the row's type → likely entered in the app), `specOnlyIds` (ids the pre-v1.83 form could not write → likely read from a tag) and `legacyOnlyIds` (the deprecated 18 → likely entered in the app) are hints for the user, never decisions. `dropped` entries carry LEGACY ids.
 
 ### POST /api/opt-tag-review/:id
 
@@ -1114,7 +1114,7 @@ The decision runs under the row's per-filament mutex (the same key `PUT /api/fil
 
 ### Classification rules (what the pass decides on its own)
 
-An array is settled without the user only when its ids PROVE a numbering, and only the pre-v1.83 numbering can be proven from content: the legacy-only id 18 (deprecated upstream), or an OpenPrintTag snapshot written before v1.83 whose `optTags` equal the stored array (every snapshot written since — by a link, a re-sync or an import — is spec-numbered and carries `tagsNumbering: "spec"`, so equality with it decides nothing). Nothing proves the spec numbering — the pre-v1.83 form could not write a spec-only id (30, 40–48, 50–70, 72–74) or an id in neither table, but the pre-v1.83 CSV importer and schema stored any integer, so `[2, 30]` and `[2, 99]` stay ambiguous (the 30 or 99 decides nothing about the 2; it is shown as a hint). Ids the conversion would leave untouched — the fixed points (4, 13, 16, 17, 24, 29, 31, 71) and every id outside the legacy table — are inert, so an array made only of those needs no decision (`[30]`, `[31, 30, 4]`, `[99]`). Everything else is listed here for the user. The CSV importer applies the same rules to bare ids in a `Tags` cell and refuses a cell that mixes tag names with ids it cannot place.
+An array is settled without the user only when something PROVES its numbering, and no CONTENT does — not even the deprecated id 18 (the pre-v1.83 app's marble tag; an older specification defined 18 too, so a vendor tag could carry it): the only proof is OpenPrintTag provenance, an OpenPrintTag snapshot written before v1.83 whose `optTags` equal the stored array, or a link with no snapshot at all (a pre-v1.36 import) (every snapshot written since — by a link, a re-sync or an import — is spec-numbered and carries `tagsNumbering: "spec"`, so equality with it decides nothing). Nothing proves the spec numbering — the pre-v1.83 form could not write a spec-only id (30, 40–48, 50–70, 72–74) or an id in neither table, but the pre-v1.83 CSV importer and schema stored any integer, so `[2, 30]` and `[2, 99]` stay ambiguous (the 30 or 99 decides nothing about the 2; it is shown as a hint). Ids the conversion would leave untouched — the fixed points (4, 13, 16, 17, 24, 29, 31, 71) and every id outside the legacy table — are inert, so an array made only of those needs no decision (`[30]`, `[31, 30, 4]`, `[99]`). Everything else is listed here for the user. The CSV importer applies the same rules to bare ids in a `Tags` cell and refuses a cell that mixes tag names with ids it cannot place.
 
 ---
 

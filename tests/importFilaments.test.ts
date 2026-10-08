@@ -2055,12 +2055,12 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(f.optTagsSpec).toBe(false);
   });
 
-  it("GH #1227: spec NAMES in the Tags cell are verified; a legacy-only id proves the legacy numbering", async () => {
+  it("GH #1227: spec NAMES in the Tags cell are verified; bare ids are never proof", async () => {
     const res = await upsertImportRows(
       rows([
         ["Named Tags PLA", "Acme", "PLA", "#112233", "coextruded, matte, sparkle", ""],
-        // 18 was the app's MARBLE and is deprecated upstream → provably legacy →
-        // remapped (18→57 imitates_marble, 2→20 transparent) and verified.
+        // 18 was the app's MARBLE, but an older spec defined 18 too, so it is a
+        // hint, not proof (Codex P1 r6): kept verbatim, unverified for review.
         ["Legacy Ids PLA", "Acme", "PLA", "#112233", "18, 2", ""],
         // 30 contains_carbon never existed in the app's FORM, but its CSV
         // importer stored any id → a hint, not proof: kept verbatim and left
@@ -2073,8 +2073,8 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(named.optTags).toEqual([29, 16, 23]);
     expect(named.optTagsSpec).toBe(true);
     const legacy = await Filament.findOne({ name: "Legacy Ids PLA" }).lean();
-    expect(legacy.optTags).toEqual([57, 20]);
-    expect(legacy.optTagsSpec).toBe(true);
+    expect(legacy.optTags).toEqual([18, 2]);
+    expect(legacy.optTagsSpec).toBe(false);
     const spec = await Filament.findOne({ name: "Spec Ids PC" }).lean();
     expect(spec.optTags).toEqual([31, 12, 4, 30]);
     expect(spec.optTagsSpec).toBe(false);
@@ -2121,14 +2121,14 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     expect(res.skippedRows[0].reason).toMatch(/mixes tag names with numeric ids/);
     expect(await Filament.findOne({ name: "Mixed Tags PLA" }).lean()).toBeNull();
 
-    // Names beside a PROVABLE numeric set import normally (18 proves legacy).
+    // Names beside an INERT numeric set import normally (4 means the same either way).
     const ok = await upsertImportRows(
-      rows([["Mixed OK PLA", "Acme", "PLA", "#112233", "transparent, 18", ""]]),
+      rows([["Mixed OK PLA", "Acme", "PLA", "#112233", "transparent, 4", ""]]),
     );
     expect(ok.created).toBe(1);
     expect(ok.skipped).toBe(0);
     const f = await Filament.findOne({ name: "Mixed OK PLA" }).lean();
-    expect(f.optTags).toEqual([20, 57]);
+    expect(f.optTags).toEqual([20, 4]);
     expect(f.optTagsSpec).toBe(true);
   });
 

@@ -35,10 +35,14 @@
  *  - `ambiguous` → leave it unmarked. Data health lists it
  *    with both readings; `resolveOptTagNumbering` applies the user's answer.
  *
- * Every write is conditioned on the row still being unmarked and, for a
- * conversion, on `optTags` still holding the exact array that was classified —
- * a concurrent edit makes the write match nothing and the row is simply
- * revisited on the next pass (the #1021 posture).
+ * Every write is conditioned on the row still being unmarked AND on every
+ * classifier input exactly as it was read — `optTags`, the snapshot's
+ * `optTags` and numbering marker, the link settings (`observedClassifierInputs`)
+ * — so a row another desktop or the sync service replaced between the read
+ * and the write matches nothing and is simply reclassified on the next pass
+ * (the #1021 posture). Pinning only the array, and only for conversions,
+ * let a row read as trivial `[4]` and replaced with legacy `[2]` be marked
+ * verified (Codex P1 r6 on PR #1228).
  *
  * `openprinttagSnapshot.optTags` — what the OPT importer/re-sync last offered —
  * is in the legacy numbering when the snapshot predates v1.83 (it then has no
@@ -68,6 +72,7 @@ import {
   sameOptTagSet,
   type OptTagClassifiable,
   SPEC_ONLY_IDS,
+  LEGACY_ONLY_IDS,
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
   OPT_TAG_CLASSIFIER_PATHS,
@@ -154,6 +159,26 @@ function snapshotRemapSet(row: Record<string, unknown>): Record<string, unknown>
     set["openprinttagSnapshot.optTags"] = remapLegacyOptTags(snapshot.optTags).tags;
   }
   return set;
+}
+
+/**
+ * The exact classifier inputs this pass observed, as a filter fragment: the
+ * conditional write below matches only a row that still looks exactly like
+ * what was classified (Codex P1 r6 on PR #1228). An absent field pins
+ * "absent" — `undefined` is not a valid query value, and a row that GAINED a
+ * snapshot or a link since the read must not match either.
+ */
+function observedClassifierInputs(row: Record<string, unknown>): Record<string, unknown> {
+  const snapshot = row.openprinttagSnapshot as Record<string, unknown> | null | undefined;
+  const settings = row.settings as Record<string, unknown> | null | undefined;
+  const pin = (value: unknown): unknown => (value === undefined ? { $exists: false } : value);
+  return {
+    optTags: pin(row.optTags),
+    "openprinttagSnapshot.optTags": pin(snapshot?.optTags),
+    [`openprinttagSnapshot.${OPT_SNAPSHOT_NUMBERING_KEY}`]: pin(snapshot?.[OPT_SNAPSHOT_NUMBERING_KEY]),
+    "settings.openprinttag_slug": pin(settings?.openprinttag_slug),
+    "settings.openprinttag_uuid": pin(settings?.openprinttag_uuid),
+  };
 }
 
 function matched(res: unknown): boolean {
@@ -254,7 +279,11 @@ export async function renumberOptTags(
       continue;
     }
 
-    const filter: Record<string, unknown> = { _id: row._id, ...UNVERIFIED_OPT_TAGS_FILTER };
+    const filter: Record<string, unknown> = {
+      _id: row._id,
+      ...UNVERIFIED_OPT_TAGS_FILTER,
+      ...observedClassifierInputs(row),
+    };
     const snapSet = snapshotRemapSet(row);
     const $set: Record<string, unknown> = { optTagsSpec: true, ...snapSet };
     let droppedEntry: DroppedLegacyTags | null = null;
@@ -264,9 +293,6 @@ export async function renumberOptTags(
       const stored = Array.isArray(row.optTags) ? (row.optTags as unknown[]) : [];
       const remapped = remapLegacyOptTags(stored);
       convertedTags = remapped.tags;
-      // Exact-array condition: a concurrent edit of the tags makes this match
-      // nothing, and the row is reclassified on the next pass.
-      filter.optTags = stored;
       $set.optTags = remapped.tags;
       $set.updatedAt = now;
       if (remapped.dropped.length > 0) {
@@ -363,6 +389,12 @@ export interface PendingOptTagRow {
    * r3 on PR #1228).
    */
   specOnlyIds: number[];
+  /**
+   * Ids the current spec does not define but the pre-#1227 app did (18, its
+   * MARBLE) — likely entered in this app, shown as a hint, never decided: an
+   * older spec defined 18 and a vendor tag could carry it (Codex P1 r6).
+   */
+  legacyOnlyIds: number[];
   /** The stored ids, verbatim order — echoed back as `expectedTags` on resolve. */
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
@@ -392,8 +424,9 @@ export async function scanUnverifiedOptTags(db: MinimalRenumberDb): Promise<Pend
       type: typeof row.type === "string" ? row.type : null,
       trashed: row._deletedAt != null,
       verdict: verdict.kind,
-      matchesBackfill: verdict.hint === "backfill-derivation",
+      matchesBackfill: verdict.hints.includes("backfill-derivation"),
       specOnlyIds: readings.stored.filter((id) => SPEC_ONLY_IDS.has(id)),
+      legacyOnlyIds: readings.stored.filter((id) => LEGACY_ONLY_IDS.has(id)),
       ...readings,
     });
   }

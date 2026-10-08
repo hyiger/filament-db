@@ -32,8 +32,12 @@ describe("renumberOptTags", () => {
 
   it("converts provably-legacy rows, marks spec/trivial rows, leaves ambiguous rows unmarked — and is idempotent", async () => {
     await col().insertMany([
-      // 18 (app MARBLE) is deprecated upstream → provably legacy. 9 FLEXIBLE drops.
-      { name: "Legacy Marble", vendor: "V", type: "PLA", optTags: [18, 2, 9], updatedAt: OLD },
+      // OPT provenance: a pre-v1.83 snapshot equal to the array → provably
+      // legacy (18 alone is only a hint since Codex P1 r6). 9 FLEXIBLE drops.
+      {
+        name: "Legacy Marble", vendor: "V", type: "PLA", optTags: [18, 2, 9], updatedAt: OLD,
+        settings: { openprinttag_slug: "marble" }, openprinttagSnapshot: { optTags: [9, 2, 18] },
+      },
       // Spec-only 30 is a HINT, not proof — the legacy CSV importer could store
       // it beside a legacy 12 (Codex P1 r3) → ambiguous, listed with the hint.
       { name: "PC Blend CF", vendor: "Prusament", type: "PC", optTags: [31, 12, 4, 30], updatedAt: OLD },
@@ -42,16 +46,16 @@ describe("renumberOptTags", () => {
       { name: "No Tags", vendor: "V", type: "PLA", optTags: [], updatedAt: OLD },
       // Valid under both readings, nothing outside the array → the user's call.
       { name: "Ambiguous Transparent", vendor: "V", type: "PETG", optTags: [2], updatedAt: OLD },
-      // 18 proves legacy; the spec-only 30 beside it is a stray that rides along.
-      { name: "Stray Thirty", vendor: "V", type: "PLA", optTags: [18, 30], updatedAt: OLD },
+      // 18 and a spec-only 30: two hints, no proof → the user's call.
+      { name: "Two Hints", vendor: "V", type: "PLA", optTags: [18, 30], updatedAt: OLD },
     ]);
 
     const first = await renumberOptTags(db(), NOW);
     expect(first).toMatchObject({
       scanned: 6,
-      converted: 2,
+      converted: 1,
       verified: 2,
-      ambiguous: 2,
+      ambiguous: 3,
       skipped: 0,
     });
     expect(first.dropped).toEqual([
@@ -74,18 +78,18 @@ describe("renumberOptTags", () => {
     const amb = await byName("Ambiguous Transparent");
     expect(amb?.optTags).toEqual([2]);
     expect(amb?.optTagsSpec).toBeUndefined();
-    const stray = await byName("Stray Thirty");
-    expect(stray?.optTags).toEqual([57, 30]); // imitates_marble; the 30 rides along verbatim
-    expect(stray?.optTagsSpec).toBe(true);
+    const twoHints = await byName("Two Hints");
+    expect(twoHints?.optTags).toEqual([18, 30]); // untouched, unmarked
+    expect(twoHints?.optTagsSpec).toBeUndefined();
 
-    // Idempotent: the second pass sees only the two unsettled rows and writes nothing.
+    // Idempotent: the second pass sees only the three unsettled rows and writes nothing.
     const second = await renumberOptTags(db(), new Date("2026-10-09T00:00:00.000Z"));
-    expect(second).toMatchObject({ scanned: 2, converted: 0, verified: 0, ambiguous: 2 });
+    expect(second).toMatchObject({ scanned: 3, converted: 0, verified: 0, ambiguous: 3 });
     expect((await byName("Legacy Marble"))?.optTags).toEqual([57, 20]); // NOT [57, 46] — no double remap
 
     // The run is recorded with the drops.
     const marker = await markers().findOne({ _id: OPT_TAG_RENUMBER_MARKER_ID as never });
-    expect(marker?.lastRun).toMatchObject({ scanned: 2 });
+    expect(marker?.lastRun).toMatchObject({ scanned: 3 });
     expect(marker?.dropped).toHaveLength(1);
     expect(marker?.dropped[0]).toMatchObject({ name: "Legacy Marble", tags: [9] });
   });
@@ -148,7 +152,8 @@ describe("renumberOptTags", () => {
 
   it("includes trashed rows (they can be restored) and counts a lost conditional write as skipped", async () => {
     await col().insertMany([
-      { name: "Trashed Legacy", vendor: "V", type: "PLA", optTags: [18], _deletedAt: OLD },
+      // Pre-v1.36 import (link, no snapshot) → provably legacy.
+      { name: "Trashed Legacy", vendor: "V", type: "PLA", optTags: [18], _deletedAt: OLD, settings: { openprinttag_slug: "t" } },
     ]);
     const s = await renumberOptTags(db(), NOW);
     expect(s).toMatchObject({ scanned: 1, converted: 1 });
@@ -158,7 +163,7 @@ describe("renumberOptTags", () => {
     // between read and write) is a skip, not a conversion, and leaves the
     // flag's settle condition false so the next connect revisits the row.
     // 9 FLEXIBLE drops on conversion, so a drop record WOULD be written.
-    await col().insertOne({ name: "Raced", vendor: "V", type: "PLA", optTags: [18, 2, 9] });
+    await col().insertOne({ name: "Raced", vendor: "V", type: "PLA", optTags: [18, 2, 9], settings: { openprinttag_slug: "r" } });
     const real = mongoose.connection.db!;
     const racing: MinimalRenumberDb = {
       collection: (name) => {
@@ -199,9 +204,9 @@ describe("renumberOptTags", () => {
         name: "Linked After", vendor: "V", type: "PLA", optTags: [2],
         settings: { openprinttag_slug: "l" }, openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
       },
-      // A legacy snapshot on a decisive row: translated and stamped.
+      // A legacy snapshot equal to the array (decisive): translated and stamped.
       {
-        name: "Legacy Snap", vendor: "V", type: "PLA", optTags: [18],
+        name: "Legacy Snap", vendor: "V", type: "PLA", optTags: [18, 2],
         settings: { openprinttag_slug: "m" }, openprinttagSnapshot: { optTags: [18, 2] },
       },
     ]);
@@ -220,7 +225,7 @@ describe("renumberOptTags", () => {
   });
 
   it("a conversion write that THROWS pulls back its pre-written drop record; a retry records it exactly once (Codex P2 r4)", async () => {
-    await col().insertOne({ name: "Throws", vendor: "V", type: "PLA", optTags: [18, 9] }); // 9 FLEXIBLE drops
+    await col().insertOne({ name: "Throws", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "th" } }); // 9 FLEXIBLE drops
     const real = mongoose.connection.db!;
     let throwOnce = true;
     type Filter = Record<string, unknown>;
@@ -273,7 +278,7 @@ describe("renumberOptTags", () => {
     // ACK LOST (Codex P2 r5): the write COMMITS but the driver throws before
     // the acknowledgement arrives. The record must SURVIVE — the pass never
     // revisits a marked row, so pulling it would hide the removed tags for good.
-    await col().insertOne({ name: "Ack Lost", vendor: "V", type: "PLA", optTags: [18, 9] });
+    await col().insertOne({ name: "Ack Lost", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "ack" } });
     let ackLostOnce = true;
     const ackLost: MinimalRenumberDb = {
       collection: (name) => {
@@ -303,9 +308,67 @@ describe("renumberOptTags", () => {
     expect((await readDroppedLegacyTags(db())).filter((d) => d.name === "Ack Lost")).toHaveLength(1);
   });
 
+  it("skips a row whose classifier inputs changed between the read and the write — marker or array alike (Codex P1 r6)", async () => {
+    // Read as trivial [4]; replaced with an ambiguous legacy [2] before the
+    // write lands (another desktop, the sync service). Pinning only the id and
+    // marker would have stamped the [2] as verified spec = antibacterial.
+    await col().insertOne({ name: "Swapped", vendor: "V", type: "PLA", optTags: [4] });
+    const real = mongoose.connection.db!;
+    type Filter = Record<string, unknown>;
+    type Opts = { projection?: Record<string, unknown> };
+    const swapping: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            await c.updateOne({ _id: (filter as { _id: unknown })._id as never }, { $set: { optTags: [2] } });
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    expect(await renumberOptTags(swapping, NOW)).toMatchObject({ scanned: 1, verified: 0, skipped: 1 });
+    const swapped = await byName("Swapped");
+    expect(swapped?.optTags).toEqual([2]);
+    expect(swapped?.optTagsSpec).toBeUndefined(); // reclassified next pass: ambiguous → Data health
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1, skipped: 0 });
+
+    // A legacy verdict justified by a snapshot is skipped when the snapshot it
+    // rested on is replaced (here: re-linked to a spec-marked one).
+    await col().insertOne({
+      name: "Relinked", vendor: "V", type: "PLA", optTags: [2],
+      settings: { openprinttag_slug: "a" }, openprinttagSnapshot: { optTags: [2] },
+    });
+    const relinking: MinimalRenumberDb = {
+      collection: (name) => {
+        const c = real.collection(name);
+        if (name !== "filaments") return c as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+        return {
+          find: (f: Filter, o?: Opts) => c.find(f, o),
+          findOne: (f: Filter, o?: Opts) => c.findOne(f, o),
+          updateOne: async (filter: Filter, update: Filter, options?: { upsert?: boolean }) => {
+            await c.updateOne(
+              { _id: (filter as { _id: unknown })._id as never },
+              { $set: { "settings.openprinttag_slug": "b", openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" } } },
+            );
+            return c.updateOne(filter, update, options);
+          },
+        } as unknown as ReturnType<MinimalRenumberDb["collection"]>;
+      },
+    };
+    expect(await renumberOptTags(relinking, NOW)).toMatchObject({ scanned: 1, converted: 0, skipped: 1 });
+    const relinked = await byName("Relinked");
+    expect(relinked?.optTags).toEqual([2]); // not remapped
+    expect(relinked?.optTagsSpec).toBeUndefined();
+    expect(await renumberOptTags(db(), NOW)).toMatchObject({ scanned: 1, ambiguous: 1 }); // spec snapshot: no proof
+  });
+
   it("describeRenumberSummary is quiet when nothing was scanned", async () => {
     expect(describeRenumberSummary(await renumberOptTags(db(), NOW))).toBeNull();
-    await col().insertOne({ name: "L", vendor: "V", type: "PLA", optTags: [18, 9] });
+    await col().insertOne({ name: "L", vendor: "V", type: "PLA", optTags: [18, 9], settings: { openprinttag_slug: "l" } });
     const line = describeRenumberSummary(await renumberOptTags(db(), NOW));
     expect(line).toContain("converted 1");
     expect(line).toContain("L [9]");
@@ -344,11 +407,13 @@ describe("scanUnverifiedOptTags + resolveOptTagNumbering (Data health)", () => {
       asSpec: [9, 4],
     });
     expect(pending[1].specOnlyIds).toEqual([]);
+    expect(pending[1].legacyOnlyIds).toEqual([]);
     expect(pending[0]).toMatchObject({
       trashed: true,
       verdict: "ambiguous",
       matchesBackfill: false,
       specOnlyIds: [30],
+      legacyOnlyIds: [],
       stored: [2, 30],
       asLegacy: { tags: [20, 30], dropped: [] },
       asSpec: [2, 30],

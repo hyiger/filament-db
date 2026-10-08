@@ -2055,6 +2055,7 @@
   "health.optTags.dismissed": "Ausgeblendet",
   "health.optTags.backfillHint": "Entspricht dem, was das alte Backfill-Skript für diesen Materialtyp geschrieben hat — diese Tags wurden sehr wahrscheinlich in dieser App eingegeben.",
   "health.optTags.specOnlyHint": "Enthält {tags} — eine ID, die das Formular der App vor v1.83 nicht schreiben konnte. Diese Tags wurden sehr wahrscheinlich von einem NFC-Tag gelesen (oder aus der Spezifikation in eine CSV eingetragen).",
+  "health.optTags.legacyOnlyHint": "Enthält ID {ids}, die die OpenPrintTag-Spezifikation ausgemustert hat und die die App vor v1.83 für Marmor verwendete — diese Tags wurden sehr wahrscheinlich in dieser App eingegeben (ein Herstellertag nach einer älteren Spezifikation könnte sie ebenfalls enthalten).",
   "edit.toast.optTagsPendingReview": "Die Tags konnten nicht geändert werden: sie warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung.",
   "detail.nfc.optTagsPendingReview": "Nicht geschrieben: Die Tags dieses Filaments warten unter Einstellungen → Datenzustand auf die Prüfung der OpenPrintTag-Nummerierung. Klären Sie sie dort zuerst — jetzt geschrieben, käme die alte Nummerierung als OpenPrintTag-IDs auf den Tag."
 }

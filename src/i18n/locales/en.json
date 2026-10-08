@@ -2055,6 +2055,7 @@
   "health.optTags.dismissed": "Dismissed",
   "health.optTags.backfillHint": "Matches what the old backfill script wrote for this material type — these tags were most likely entered in this app.",
   "health.optTags.specOnlyHint": "Includes {tags} — an id the pre-v1.83 app's form could not write. These tags were most likely read from an NFC tag (or typed from the specification into a CSV).",
+  "health.optTags.legacyOnlyHint": "Includes id {ids}, which the OpenPrintTag specification has deprecated and the pre-v1.83 app used for marble — these tags were most likely entered in this app (a vendor tag written against an older specification could also carry it).",
   "edit.toast.optTagsPendingReview": "The tags could not be changed: they are awaiting OpenPrintTag numbering review under Settings → Data health.",
   "detail.nfc.optTagsPendingReview": "Not written: this filament's tags are awaiting OpenPrintTag numbering review under Settings → Data health. Settle them there first — written now, the old numbering would land on the tag as OpenPrintTag ids."
 }

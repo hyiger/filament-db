@@ -117,15 +117,15 @@ describe("classifyOptTags", () => {
     // is spec-only — but the pre-#1227 CSV importer and schema stored any
     // integer, so a legacy-era [2, 30] is possible too. Listed for the user
     // with the hint; never remapped, never marked on content alone.
-    expect(classifyOptTags({ optTags: [31, 12, 4, 30] })).toEqual({ kind: "ambiguous", hint: "spec-only-id" });
-    expect(classifyOptTags({ optTags: [2, 60] })).toEqual({ kind: "ambiguous", hint: "spec-only-id" });
+    expect(classifyOptTags({ optTags: [31, 12, 4, 30] })).toEqual({ kind: "ambiguous", hints: ["spec-only-id"] });
+    expect(classifyOptTags({ optTags: [2, 60] })).toEqual({ kind: "ambiguous", hints: ["spec-only-id"] });
     expect(optTagsAwaitReview({ optTags: [31, 12, 4, 30] })).toBe(true);
     // Alone, or beside fixed points, a spec-only id is inert: the remap keeps it.
     expect(classifyOptTags({ optTags: [30] })).toEqual({ kind: "trivial" });
     expect(classifyOptTags({ optTags: [31, 30, 4] })).toEqual({ kind: "trivial" });
     // The spec-only hint takes precedence over the backfill one, which can
     // never apply at the same time anyway (the backfill wrote legacy ids only).
-    expect(classifyOptTags({ optTags: [9, 30], type: "TPU" })).toEqual({ kind: "ambiguous", hint: "spec-only-id" });
+    expect(classifyOptTags({ optTags: [9, 30], type: "TPU" })).toEqual({ kind: "ambiguous", hints: ["spec-only-id"] });
   });
 
   it("an id outside BOTH tables is inert — it decides nothing (Codex P1 r2 on PR #1228)", () => {
@@ -133,27 +133,42 @@ describe("classifyOptTags", () => {
     // integer, so a legacy row can carry 99 as easily as a spec one. Reading
     // "not in the legacy table" as "spec" marked a legacy [2, 99] verified and
     // froze its 2 (app transparent) as spec 2 (antibacterial).
-    expect(classifyOptTags({ optTags: [2, 99] })).toEqual({ kind: "ambiguous" });
+    expect(classifyOptTags({ optTags: [2, 99] })).toEqual({ kind: "ambiguous", hints: [] });
     expect(optTagsAwaitReview({ optTags: [2, 99] })).toBe(true);
     // Alone, or beside fixed points, it is trivial: `tag 99` under both readings.
     expect(classifyOptTags({ optTags: [99] })).toEqual({ kind: "trivial" });
     expect(classifyOptTags({ optTags: [4, 99] })).toEqual({ kind: "trivial" });
-    // It never masks real evidence, and beside another inert id it stays trivial.
-    expect(classifyOptTags({ optTags: [18, 99] })).toEqual({ kind: "legacy", reason: "legacy-only-id" });
+    // Beside another inert id it stays trivial; beside 18 it adds nothing to the hint.
+    expect(classifyOptTags({ optTags: [18, 99] })).toEqual({ kind: "ambiguous", hints: ["legacy-only-id"] });
     expect(classifyOptTags({ optTags: [99, 50] })).toEqual({ kind: "trivial" });
-    expect(classifyOptTags({ optTags: [18, 99, 50] })).toEqual({ kind: "legacy", reason: "legacy-only-id" });
+    expect(classifyOptTags({ optTags: [18, 99, 50] })).toEqual({ kind: "ambiguous", hints: ["legacy-only-id", "spec-only-id"] });
     // And the remap keeps it verbatim on a conversion.
     expect(remapLegacyOptTags([2, 99])).toEqual({ tags: [20, 99], dropped: [] });
   });
 
-  it("legacy: the deprecated id 18 proves the legacy numbering", () => {
-    expect(classifyOptTags({ optTags: [18, 2] })).toEqual({ kind: "legacy", reason: "legacy-only-id" });
+  it("the deprecated id 18 is a HINT toward the legacy numbering, not proof (Codex P1 r6 on PR #1228)", () => {
+    // An older spec defined 18, so a pre-#1227 row created from a vendor tag
+    // could carry it, and the old decoder kept every encodable id. Deciding
+    // "legacy" here would rewrite a vendor's 18 into 57 imitates_marble.
+    expect(classifyOptTags({ optTags: [18, 2] })).toEqual({ kind: "ambiguous", hints: ["legacy-only-id"] });
+    expect(classifyOptTags({ optTags: [18] })).toEqual({ kind: "ambiguous", hints: ["legacy-only-id"] });
+    // Hints stack: what the old backfill wrote for "Marble PLA" (PLA's inherent
+    // tags + MARBLE 18) carries both the legacy-only and the backfill hint.
+    const marble = deriveLegacyBackfillTags("Marble PLA", "PLA");
+    expect(marble).toContain(18);
+    expect(classifyOptTags({ optTags: marble, name: "Marble PLA", type: "PLA" })).toEqual({
+      kind: "ambiguous",
+      hints: ["legacy-only-id", "backfill-derivation"],
+    });
+    // Provenance still decides: a pre-v1.83 snapshot equal to the array.
+    expect(classifyOptTags({ optTags: [18, 2], openprinttagSnapshot: { optTags: [2, 18] } })).toEqual({
+      kind: "legacy",
+      reason: "opt-provenance",
+    });
   });
 
-  it("no array is inconsistent: a spec-only id beside 18 is a stray that rides along", () => {
-    // 18 proves the legacy numbering; 30 could only have come through the
-    // legacy CSV importer. It is kept verbatim by the conversion.
-    expect(classifyOptTags({ optTags: [18, 30] })).toEqual({ kind: "legacy", reason: "legacy-only-id" });
+  it("no array is inconsistent: 18 and a spec-only id in one array are two hints, and the remap keeps the 30", () => {
+    expect(classifyOptTags({ optTags: [18, 30] })).toEqual({ kind: "ambiguous", hints: ["legacy-only-id", "spec-only-id"] });
     expect(remapLegacyOptTags([18, 30])).toEqual({ tags: [LEGACY_TO_SPEC[18], 30], dropped: [] });
   });
 
@@ -180,41 +195,42 @@ describe("classifyOptTags", () => {
         settings: { openprinttag_slug: "s" },
         openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
       }),
-    ).toEqual({ kind: "ambiguous" });
+    ).toEqual({ kind: "ambiguous", hints: [] });
     // A pre-v1.83 snapshot with no optTags entry: the material offered no
     // tags, so the stored array did not come from the importer.
     expect(
       classifyOptTags({ optTags: [2], settings: { openprinttag_uuid: "u" }, openprinttagSnapshot: { color: "#000000" } }),
-    ).toEqual({ kind: "ambiguous" });
+    ).toEqual({ kind: "ambiguous", hints: [] });
   });
 
   it("ambiguous: a snapshot that DIFFERS proves nothing (edited in the legacy form, or an NFC row linked later)", () => {
     expect(
       classifyOptTags({ optTags: [2, 17], openprinttagSnapshot: { optTags: [17] }, settings: { openprinttag_slug: "s" } }),
-    ).toEqual({ kind: "ambiguous" });
+    ).toEqual({ kind: "ambiguous", hints: [] });
   });
 
   it("ambiguous WITH A HINT when equal to the historical backfill derivation — likely, never proof", () => {
     expect(
       classifyOptTags({ optTags: [15, 12], name: "Prusament PLA Galaxy Black", type: "PLA" }),
-    ).toEqual({ kind: "ambiguous", hint: "backfill-derivation" });
+    ).toEqual({ kind: "ambiguous", hints: ["backfill-derivation"] });
     // A different type breaks the match — plain ambiguous.
     expect(
       classifyOptTags({ optTags: [15, 12], name: "Prusament PLA Galaxy Black", type: "PETG" }),
-    ).toEqual({ kind: "ambiguous" });
+    ).toEqual({ kind: "ambiguous", hints: [] });
     // Codex P1 (PR #1228): a vendor NFC TPU tagged spec 9 high_temperature
     // matches the script's TPU [9] FLEXIBLE exactly. Deciding "legacy" here
     // would drop a real spec tag and mark the row verified with no review.
     expect(classifyOptTags({ optTags: [9], type: "TPU" })).toEqual({
       kind: "ambiguous",
-      hint: "backfill-derivation",
+      hints: ["backfill-derivation"],
     });
   });
 
   it("optTagsAwaitReview: unmarked legacy/ambiguous arrays wait; marked and trivial ones don't", () => {
     expect(optTagsAwaitReview({ optTags: [2] })).toBe(true);
-    expect(optTagsAwaitReview({ optTags: [18, 2] })).toBe(true); // legacy, pass not run yet
-    expect(optTagsAwaitReview({ optTags: [18, 30] })).toBe(true); // legacy with a stray, pass not run yet
+    expect(optTagsAwaitReview({ optTags: [18, 2] })).toBe(true); // ambiguous (18 is a hint)
+    expect(optTagsAwaitReview({ optTags: [18, 30] })).toBe(true);
+    expect(optTagsAwaitReview({ optTags: [18], openprinttagSnapshot: { optTags: [18] } })).toBe(true); // legacy, pass not run yet
     expect(optTagsAwaitReview({ optTags: [2], optTagsSpec: true })).toBe(false);
     expect(optTagsAwaitReview({ optTags: [] })).toBe(false);
     expect(optTagsAwaitReview({ optTags: [4, 16] })).toBe(false);
@@ -224,11 +240,11 @@ describe("classifyOptTags", () => {
   it("ambiguous: ids valid under both numberings with nothing outside the array to decide", () => {
     // App "transparent" vs spec "antibacterial"; app "flexible" vs spec "high_temperature";
     // app "dual_color" vs spec "gradual_color_change". Plausibility is not a proof.
-    expect(classifyOptTags({ optTags: [2] })).toEqual({ kind: "ambiguous" });
-    expect(classifyOptTags({ optTags: [9], type: "PETG", name: "Flexi" })).toEqual({ kind: "ambiguous" });
-    expect(classifyOptTags({ optTags: [28], color: null } as never)).toEqual({ kind: "ambiguous" });
+    expect(classifyOptTags({ optTags: [2] })).toEqual({ kind: "ambiguous", hints: [] });
+    expect(classifyOptTags({ optTags: [9], type: "PETG", name: "Flexi" })).toEqual({ kind: "ambiguous", hints: [] });
+    expect(classifyOptTags({ optTags: [28], color: null } as never)).toEqual({ kind: "ambiguous", hints: [] });
     // The spec-numbered Prusament "PLA Blend" tag [12] reads the same way.
-    expect(classifyOptTags({ optTags: [12], name: "Prusament PLA Blend", type: "PLA" })).toEqual({ kind: "ambiguous" });
+    expect(classifyOptTags({ optTags: [12], name: "Prusament PLA Blend", type: "PLA" })).toEqual({ kind: "ambiguous", hints: [] });
   });
 
   it("does not misread an already-converted array as legacy again (the double-remap hazard)", () => {
@@ -258,13 +274,13 @@ describe("OPT_TAG_CLASSIFIER_PATHS (what a projecting caller must select)", () =
       settings: { openprinttag_slug: "s", other: "x" },
       openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec", density: 1.24 },
     };
-    expect(classifyOptTags(full)).toEqual({ kind: "ambiguous" });
+    expect(classifyOptTags(full)).toEqual({ kind: "ambiguous", hints: [] });
     const projected = {
       optTags: full.optTags, name: full.name, type: full.type,
       settings: { openprinttag_slug: "s" },
       openprinttagSnapshot: { optTags: [2], tagsNumbering: "spec" },
     };
-    expect(classifyOptTags(projected)).toEqual({ kind: "ambiguous" });
+    expect(classifyOptTags(projected)).toEqual({ kind: "ambiguous", hints: [] });
   });
 });
 
@@ -292,12 +308,13 @@ describe("describeOptTagReadings / sameOptTagSet", () => {
       asLegacy: { tags: [20, 4], dropped: [9] },
       asSpec: [2, 9, 4],
     });
-    // An id the spec doesn't define stays visible in the spec reading (the
-    // page labels it "Tag 99"); only the legacy-only 18 is meaningless there.
+    // An id the spec doesn't define (99, the deprecated 18) stays visible in
+    // the spec reading — the page labels it "Tag N" (Codex P1 r6: 18 can be a
+    // vendor tag's, so it is not meaningless there).
     expect(describeOptTagReadings([18, 2, 99])).toEqual({
       stored: [18, 2, 99],
       asLegacy: { tags: [LEGACY_TO_SPEC[18], 20, 99], dropped: [] },
-      asSpec: [2, 99],
+      asSpec: [18, 2, 99],
     });
   });
 
@@ -350,8 +367,9 @@ describe("parseOptTagsCell", () => {
     });
   });
 
-  it("classifies bare ids: provable sets are remapped/kept, ambiguous ones are kept unverified", () => {
-    expect(parseOptTagsCell("18, 2", { name: "X", type: "PLA" })).toEqual({ tags: [57, 20], verified: true, unknownTokens: [], rejectReason: null });
+  it("classifies bare ids: inert sets are kept verified, everything else is kept unverified (a cell carries no provenance)", () => {
+    // 18 is a hint, not proof (Codex P1 r6): kept verbatim, unverified.
+    expect(parseOptTagsCell("18, 2", { name: "X", type: "PLA" })).toEqual({ tags: [18, 2], verified: false, unknownTokens: [], rejectReason: null });
     // A spec-only id is a hint, not proof (Codex P1 r3): kept verbatim, unverified.
     expect(parseOptTagsCell("31,12,4,30")).toEqual({ tags: [31, 12, 4, 30], verified: false, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("30, 4")).toEqual({ tags: [30, 4], verified: true, unknownTokens: [], rejectReason: null });
@@ -385,9 +403,9 @@ describe("parseOptTagsCell", () => {
       unknownTokens: ["bogus"],
       rejectReason: expect.stringContaining("(28)"),
     });
-    // Names beside a PROVABLE numeric set are fine — 18 proves legacy, 30
-    // proves spec, 4 means the same either way.
-    expect(parseOptTagsCell("transparent, 18")).toEqual({ tags: [20, LEGACY_TO_SPEC[18]], verified: true, unknownTokens: [], rejectReason: null });
+    // Names beside an INERT numeric set are fine — 30 and 4 mean the same under
+    // both readings. 18 is only a hint, so beside a name it is a mixed cell.
+    expect(parseOptTagsCell("transparent, 18").rejectReason).toMatch(/mixes tag names/);
     expect(parseOptTagsCell("transparent, 30")).toEqual({ tags: [20, 30], verified: true, unknownTokens: [], rejectReason: null });
     expect(parseOptTagsCell("transparent, 4")).toEqual({ tags: [20, 4], verified: true, unknownTokens: [], rejectReason: null });
     // Numbers alone stay the unverified-for-review path, as before.

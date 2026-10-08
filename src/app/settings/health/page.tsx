@@ -79,6 +79,8 @@ interface TagReviewRow {
   matchesBackfill: boolean;
   /** Ids the pre-v1.83 form could not write (spec-only) — a hint toward "read from a tag", not a decision. */
   specOnlyIds: number[];
+  /** The deprecated 18 the pre-v1.83 app used for marble — a hint toward "entered in this app", not a decision. */
+  legacyOnlyIds: number[];
   stored: number[];
   asLegacy: { tags: number[]; dropped: number[] };
   asSpec: number[];
@@ -738,8 +740,7 @@ export default function DataHealthPage() {
                   {t("health.optTags.stored", { ids: r.stored.join(", ") })}
                 </p>
                 {/* Hints only — "likely", never decided for the user (Codex P1
-                    rounds 1 and 3 on PR #1228). The two are mutually exclusive:
-                    the backfill wrote legacy ids only. */}
+                    rounds 1, 3 and 6 on PR #1228). Several can apply at once. */}
                 {r.matchesBackfill && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
                     {t("health.optTags.backfillHint")}
@@ -748,6 +749,11 @@ export default function DataHealthPage() {
                 {r.specOnlyIds.length > 0 && (
                   <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
                     {t("health.optTags.specOnlyHint", { tags: tagLabels(r.specOnlyIds) })}
+                  </p>
+                )}
+                {r.legacyOnlyIds.length > 0 && (
+                  <p className="text-xs text-gray-600 dark:text-gray-400 mb-2">
+                    {t("health.optTags.legacyOnlyHint", { ids: r.legacyOnlyIds.join(", ") })}
                   </p>
                 )}
                 <p className="text-sm text-gray-700 dark:text-gray-300">
