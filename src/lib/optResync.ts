@@ -33,7 +33,12 @@
  */
 
 import { INHERITABLE_FIELDS } from "@/lib/resolveFilament";
-import { OPT_SNAPSHOT_NUMBERING_KEY, OPT_SNAPSHOT_SPEC_NUMBERING } from "@/lib/optTagLegacy";
+import {
+  OPT_SNAPSHOT_NUMBERING_KEY,
+  OPT_SNAPSHOT_SPEC_NUMBERING,
+  optTagsAwaitReview,
+  type OptTagReviewRow,
+} from "@/lib/optTagLegacy";
 
 /** A flattened, comparable field value. */
 export type OptValue = string | number | string[] | null;
@@ -484,6 +489,12 @@ export function pruneOptPayloadAgainstParent(
   for (const field of PRUNE_ARRAY_FIELDS) {
     const v = pruned[field];
     if (!Array.isArray(v) || v.length === 0) continue;
+    // GH #1227: optTags compare by VALUE, which says nothing about numbering.
+    // The payload holds spec ids (the OPT mapper); a parent still awaiting
+    // numbering review may hold legacy ids, so an equal-looking array is not
+    // the same tags. Keep the variant's own array, or the parent's later
+    // review would decide what the variant's tags mean.
+    if (field === "optTags" && optTagsAwaitReview(parentEffective as OptTagReviewRow)) continue;
     // GH #928: use the case-folding compare for hex-color fields — a variant's
     // secondaryColors that differ from the parent's only by case (#AABBCC vs
     // #aabbcc) should still prune to inherit. valuesEqualForField is a no-op for

@@ -276,6 +276,23 @@ export interface IFilament extends Document {
   updatedAt: Date;
 }
 
+/**
+ * GH #1227: the `optTagsSpec` default — true for a NEW document, nothing for
+ * one LOADED from the database.
+ *
+ * Mongoose also fills a plain default into a loaded document when the field
+ * is absent, and the next save() writes it. A pre-v1.83 row (no marker, its
+ * legacy tag ids still awaiting review) read through findOne()/findById() and
+ * saved for an unrelated reason — a print job, a usage log, a trash restore,
+ * a spool import — was therefore stamped as verified with its ids
+ * unconverted, and dropped out of Data health. Returning undefined for a
+ * loaded document leaves the field absent, in memory and on save, so only the
+ * review pass or a Data health decision settles the row.
+ */
+function optTagsSpecDefault(this: { isNew: boolean } | undefined): true | undefined {
+  return this?.isNew === false ? undefined : true;
+}
+
 const FilamentSchema = new Schema<IFilament>(
   {
     // GH #1116: `trim: true` makes the stored name the identity key every
@@ -521,7 +538,8 @@ const FilamentSchema = new Schema<IFilament>(
     // routes, the importers, the OPT importer — because they all write spec
     // ids now. The paths that revive OLD arrays (snapshot restore, the Atlas
     // and share importers) set it explicitly from the source row instead.
-    optTagsSpec: { type: Boolean, default: true },
+    // The default applies to NEW documents only — see optTagsSpecDefault.
+    optTagsSpec: { type: Boolean, default: optTagsSpecDefault },
     _deletedAt: { type: Date, default: null },
     _purged: { type: Boolean, default: false, index: true },
   },

@@ -78,12 +78,11 @@ describe("pruneParentEqualPrefill", () => {
   });
 
   it("prunes optTags on set-equality regardless of order", () => {
-    expect(
-      pruneParentEqualPrefill({ optTags: [28, 3, 27] }, { optTags: [3, 27, 28] }),
-    ).toEqual({});
-    expect(
-      pruneParentEqualPrefill({ optTags: [28, 3] }, { optTags: [3, 27, 28] }),
-    ).toEqual({ optTags: [28, 3] });
+    // GH #1227: a reviewed parent — under one still awaiting numbering review
+    // the ids are kept (see tests/optTagsPruneNumbering.test.ts).
+    const parent = { optTags: [3, 27, 28], optTagsSpec: true };
+    expect(pruneParentEqualPrefill({ optTags: [28, 3, 27] }, parent)).toEqual({});
+    expect(pruneParentEqualPrefill({ optTags: [28, 3] }, parent)).toEqual({ optTags: [28, 3] });
   });
 
   it("prunes secondaryColors POSITIONALLY, case-folded — slots are ordered (Codex P2 #1183)", () => {

@@ -9,7 +9,7 @@ import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { firstVariantGateInfo } from "@/lib/firstVariantGate";
 import { trimmedNameFilter } from "@/lib/trimmedNameLookup";
-import { parseOptTagsCell } from "./optTagLegacy";
+import { optTagsAwaitReview, parseOptTagsCell, type OptTagReviewRow } from "./optTagLegacy";
 
 export interface ImportRow {
   name?: string;
@@ -518,7 +518,21 @@ export function pruneInheritedCreateDoc(
   // GH #954: optTags inherits as a WHOLE array too (empty === inherit), so a
   // create/resurrect variant whose exported (resolved) tags equal the parent's
   // must reset to [] rather than pin them — same rule as secondaryColors.
-  if (Array.isArray(out.optTags) && out.optTags.length > 0) {
+  // GH #1227: but only when both arrays are in the same numbering STATE.
+  // Equal values say nothing about numbering: an unverified cell
+  // (optTagsSpec false) pruned under a reviewed parent would silently take
+  // the parent's spec reading, and a verified cell pruned under a parent
+  // still awaiting review would take whatever that review decides. Both
+  // reviewed → the same spec tags. Both unreviewed → the flattened variant of
+  // one old export (#954): it inherits the parent's array AND its review, so
+  // one decision settles the family.
+  const incomingVerified = out.optTagsSpec !== false;
+  const parentVerified = !optTagsAwaitReview(parent as OptTagReviewRow);
+  if (
+    Array.isArray(out.optTags) &&
+    out.optTags.length > 0 &&
+    incomingVerified === parentVerified
+  ) {
     const parentArr: unknown[] = Array.isArray(parent.optTags) ? parent.optTags : [];
     const incoming = out.optTags as unknown[];
     if (
@@ -603,7 +617,7 @@ export async function upsertImportRows(
     "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
     "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
     "shoreHardnessA shoreHardnessD shrinkageXY shrinkageZ minPrintSpeed " +
-    "maxPrintSpeed spoolType tdsUrl inherits temperatures secondaryColors optTags";
+    "maxPrintSpeed spoolType tdsUrl inherits temperatures secondaryColors optTags optTagsSpec";
 
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
     .select(INHERITANCE_PROJECTION)
