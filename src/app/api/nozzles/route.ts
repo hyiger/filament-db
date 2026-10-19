@@ -6,7 +6,13 @@ import {
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  dbUnavailableResponse,
+  getErrorMessage,
+  errorResponse,
+  errorResponseFromCaught,
+  handleDuplicateKeyError,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { validateNozzlePrinterAssignment } from "@/lib/nozzlePrinterAssignment";
 
@@ -48,7 +54,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(enriched);
   } catch (err) {
-    return errorResponse("Failed to fetch nozzles", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Failed to fetch nozzles", 500, getErrorMessage(err))
+    );
   }
 }
 

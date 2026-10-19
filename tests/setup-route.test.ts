@@ -62,7 +62,19 @@ describe("POST /api/setup", () => {
     const body = await res.json();
     expect(body.error).toBeTruthy();
     expect(body.error).not.toContain("secret");
+    // GH #1231: classified for the setup page's translated hint.
+    expect(body).toMatchObject({ kind: "unreachable", atlas: false });
   }, 20000);
+
+  // GH #1231: the driver rejects some strings in its constructor; that
+  // used to escape the try as an unhandled 500 with the raw message.
+  it("classifies a string the driver's constructor rejects as invalid-uri", async () => {
+    const res = await POST(req({ mongodbUri: "mongodb://user:secret@127.0.0.1:1/db?tls=maybe" }));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.kind).toBe("invalid-uri");
+    expect(body.error).not.toContain("secret");
+  });
 
   it("returns success for a reachable mongodb URI (real ping)", async () => {
     const res = await POST(req({ mongodbUri: process.env.MONGODB_URI }));

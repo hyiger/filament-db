@@ -2,6 +2,9 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import DbErrorHint from "@/components/DbErrorHint";
+import { dbErrorFromBody, isDbErrorKind, type DbErrorInfo } from "@/lib/dbErrorKinds";
+import { useIsElectron } from "@/hooks/useIsElectron";
 
 interface RemoteFilament {
   _id: string;
@@ -22,10 +25,20 @@ type Step = "connect" | "select" | "confirm" | "importing";
 
 export default function ImportAtlasDialog({ onClose, onImported }: Props) {
   const { t } = useTranslation();
+  const isElectron = useIsElectron();
   const [step, setStep] = useState<Step>("connect");
   const [uri, setUri] = useState("");
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState("");
+  // GH #1231: a classified connection failure, tied to the error text it
+  // explains so a later error can't inherit it. On the connect step it is
+  // the SOURCE cluster (`detail` = its raw message); on the import step it
+  // is this server's own database (the db_unavailable 503, no raw text).
+  const [errorHint, setErrorHint] = useState<{
+    info: DbErrorInfo;
+    forError: string;
+    detail?: string;
+  } | null>(null);
   const [filaments, setFilaments] = useState<RemoteFilament[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [importProgress, setImportProgress] = useState("");
@@ -124,7 +137,13 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       const data = await res.json();
       if (ac.signal.aborted) return;
       if (!res.ok) {
-        setError(data.error || t("atlas.import.connectionFailed"));
+        const message = data.error || t("atlas.import.connectionFailed");
+        setError(message);
+        setErrorHint(
+          isDbErrorKind(data.kind)
+            ? { info: { kind: data.kind, atlas: data.atlas === true }, forError: message, detail: message }
+            : null,
+        );
         return;
       }
       setFilaments(data.filaments || []);
@@ -172,7 +191,10 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       const data = await res.json();
       if (ac.signal.aborted) return;
       if (!res.ok) {
-        setError(data.error || t("atlas.import.importFailed"));
+        const message = data.error || t("atlas.import.importFailed");
+        setError(message);
+        const local = dbErrorFromBody(data);
+        setErrorHint(local ? { info: local, forError: message } : null);
         setImportProgress("");
         setStep("select");
         return;
@@ -238,7 +260,17 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 />
                 {error && (
                   <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded text-sm text-red-600 dark:text-red-300 mb-3">
-                    {error}
+                    {errorHint && errorHint.forError === error ? (
+                      // The server connected to the source cluster, so
+                      // the access-list advice names the server's address.
+                      <DbErrorHint
+                        info={errorHint.info}
+                        surface={isElectron ? "desktop" : "server"}
+                        detail={errorHint.detail}
+                      />
+                    ) : (
+                      error
+                    )}
                   </div>
                 )}
               </>
@@ -262,7 +294,15 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 </div>
                 {error && (
                   <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded text-sm text-red-600 dark:text-red-300 mb-3">
-                    {error}
+                    {errorHint && errorHint.forError === error ? (
+                      // GH #1231: this server's own database is unreachable.
+                      <>
+                        <p className="font-semibold mb-1">{t("db.error.heading")}</p>
+                        <DbErrorHint info={errorHint.info} surface={isElectron ? "desktop" : "server"} />
+                      </>
+                    ) : (
+                      error
+                    )}
                   </div>
                 )}
                 <ul className="space-y-1 max-h-[50vh] overflow-y-auto">

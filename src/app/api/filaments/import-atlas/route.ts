@@ -5,6 +5,8 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId } from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
+import { classifyMongoConnectionError, redactMongoUri } from "@/lib/mongoConnectionError";
+import { dbUnavailableResponse } from "@/lib/apiErrorHandler";
 import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
 import Printer from "@/models/Printer";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
@@ -100,12 +102,14 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const client = new MongoClient(uri, {
-    serverSelectionTimeoutMS: 10000,
-    connectTimeoutMS: 10000,
-  });
-
+  // GH #1231: constructed inside the try, so a string the driver rejects
+  // gets the redacted, classified answer rather than an unhandled 500.
+  let client: MongoClient | undefined;
   try {
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 10000,
+      connectTimeoutMS: 10000,
+    });
     await client.connect();
 
     // Parse database name from connection string, default to "filament-db"
@@ -584,7 +588,7 @@ export async function POST(request: NextRequest) {
       if (imported === 0 && failures.length > 0) {
         // Nothing landed: answer as the whole request failing, as a
         // single-row import always did.
-        const safe = failures[0].replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+        const safe = redactMongoUri(failures[0]);
         return NextResponse.json({ error: safe }, { status: 500 });
       }
       errors.push(...failures);
@@ -618,11 +622,22 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ filaments });
   } catch (err) {
+    // GH #1231: THIS server's own database failing is the app-wide 503, not
+    // a problem with the Atlas source the user is importing from.
+    const unavailable = dbUnavailableResponse(err);
+    if (unavailable) return unavailable;
     const message = err instanceof Error ? err.message : "Connection failed";
     // Sanitize: don't leak the full connection string back
-    const safe = message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
-    return NextResponse.json({ error: safe }, { status: 500 });
+    const safe = redactMongoUri(message);
+    // GH #1231: classify a failure to reach the SOURCE cluster so the dialog
+    // can explain it (an Atlas IP Access List entry, most often). An
+    // unexplained failure keeps the bare message, as before.
+    const { kind, atlas } = classifyMongoConnectionError(err, { uri });
+    return NextResponse.json(
+      kind === "unknown" ? { error: safe } : { error: safe, kind, atlas },
+      { status: 500 },
+    );
   } finally {
-    await client.close();
+    await client?.close();
   }
 }

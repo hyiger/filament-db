@@ -16,7 +16,14 @@ import { listLanIpv4 } from "../src/lib/getLanIp";
 import { isNtagSizeName, type NtagSizeName } from "../src/lib/ntagVersion";
 import { startMdnsAdvertisement, stopMdnsAdvertisement } from "./mdns-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
-import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
+import {
+  SyncService,
+  SyncStatus,
+  getDbNameFromUri,
+  connectionErrorInfo,
+  type ConnectionFallback,
+} from "./sync-service";
+import { redactMongoUri } from "../src/lib/mongoConnectionError";
 import { initAutoUpdater } from "./auto-updater";
 import { assertTrustedSender, validateMongoUri } from "./ipc-security";
 import { shouldApplyAppCsp } from "./csp-scope";
@@ -144,7 +151,7 @@ let nfcService: NfcService | null = null;
  *  createWindow), so the `mainWindow?.webContents.send(...)` short-
  *  circuits and the renderer never learns. Stash the notice so the
  *  did-finish-load handler can replay it. Cleared once delivered. */
-let pendingFallbackNotice: { intended: string; actual: string } | null = null;
+let pendingFallbackNotice: ConnectionFallback | null = null;
 /** Guards initNfc() so the deferred init runs only once even though it's
  * wired to every window's "show" event (macOS dock-reopen creates a new
  * window each time). */
@@ -790,19 +797,29 @@ async function resolveMongoUri(): Promise<string | null> {
         console.warn("Failed to stop embedded MongoDB after Atlas switch (leaving it running):", stopErr);
       }
       return atlasUri;
-    } catch {
-      console.log("Atlas unreachable, falling back to local MongoDB...");
+    } catch (err) {
+      // GH #1231: keep WHY. This catch used to discard the error, so the
+      // pill could only say "Offline — local data", and the log held a fixed
+      // string with nothing for support to go on.
+      const reason = connectionErrorInfo(err, atlasUri);
+      console.log(
+        `Atlas unreachable (${reason.kind}: ${reason.detail}), falling back to local MongoDB...`,
+      );
       const localUri = await startLocalMongo();
       store.set("mongodbUri", localUri);
 
       // Start sync so it'll push/pull once Atlas is reachable
-      initSyncService(localUri, atlasUri);
+      const fallbackSync = initSyncService(localUri, atlasUri);
 
       // GH #505: at cold-boot this runs BEFORE createWindow, so mainWindow
       // is null and the `?.` short-circuits silently — the renderer would
       // show the Atlas pill green while DB I/O targets local mongod. Stash
       // for replay on did-finish-load.
-      const notice = { intended: "atlas", actual: "local-fallback" };
+      const notice: ConnectionFallback = { intended: "atlas", actual: "local-fallback", reason };
+      // GH #1231: also on the sync status, which a renderer reads on every
+      // mount. The event below fires once, so a reload used to forget the
+      // fallback and hide the running fallback sync's errors with it.
+      fallbackSync.setConnectionFallback(notice);
       if (mainWindow && !mainWindow.webContents.isDestroyed()) {
         mainWindow.webContents.send("connection-mode-fallback", notice);
       } else {
@@ -821,7 +838,7 @@ async function resolveMongoUri(): Promise<string | null> {
   return store.get("mongodbUri") as string || null;
 }
 
-function initSyncService(localUri: string, atlasUri: string) {
+function initSyncService(localUri: string, atlasUri: string): SyncService {
   if (syncService) {
     syncService.destroy();
   }
@@ -846,6 +863,7 @@ function initSyncService(localUri: string, atlasUri: string) {
 
   // Start periodic sync (every 5 minutes)
   syncService.startPeriodicSync();
+  return syncService;
 }
 
 // ── IPC handlers ──
@@ -1136,20 +1154,29 @@ ipcMain.handle("test-connection", async (event, uri: string) => {
   if (reason) return { success: false, error: reason };
 
   const { MongoClient } = await import("mongodb");
-  const client = new MongoClient(uri, {
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000,
-  });
+  // GH #1231: constructed INSIDE the try. The constructor is where most
+  // malformed strings fail (e.g. a port on a mongodb+srv:// host), and
+  // outside the try that rejected the IPC call with the raw, unredacted
+  // driver message instead of an invalid-uri hint.
+  let client: import("mongodb").MongoClient | undefined;
   try {
+    client = new MongoClient(uri, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+    });
     await client.connect();
     await client.db().command({ ping: 1 });
     return { success: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Connection failed";
-    const safe = message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
-    return { success: false, error: safe };
+    // GH #1231: `kind`/`atlas` let the setup and Settings pages show a
+    // translated hint; `error` stays the raw text (redacted) for the
+    // "Technical details" line. The user typed this URI, so the raw text
+    // reveals nothing they don't already have.
+    const { kind, atlas } = connectionErrorInfo(err, uri);
+    return { success: false, error: redactMongoUri(message), kind, atlas };
   } finally {
-    await client.close().catch(() => {});
+    await client?.close().catch(() => {});
   }
 });
 
@@ -1172,6 +1199,8 @@ ipcMain.handle("get-sync-status", (event) => {
       // GH #1164: mode switches destroy the service, so the field resets
       // with it — an absent list must not read as a stale one.
       nameConflicts: [],
+      connectionError: null,
+      fallback: null,
   };
 });
 
@@ -1202,14 +1231,13 @@ ipcMain.handle("check-atlas-connectivity", async (event) => {
     if (!atlasUri) return { connected: false };
     const tempSync = new SyncService("", atlasUri);
     try {
-      const connected = await tempSync.checkAtlasConnectivity();
-      return { connected };
+      // GH #1231: `{connected, error?}` — the reason rides along.
+      return await tempSync.checkAtlasConnectivity();
     } finally {
       tempSync.destroy();
     }
   }
-  const connected = await syncService.checkAtlasConnectivity();
-  return { connected };
+  return syncService.checkAtlasConnectivity();
 });
 
 // NFC IPC handlers

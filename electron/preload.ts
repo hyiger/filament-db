@@ -1,5 +1,21 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
+// Forwarding types only — the canonical contract is SyncStatus in
+// electron/sync-service.ts and ElectronAPI in src/types/electron.d.ts.
+interface DbConnectionErrorInfo {
+  kind: string;
+  atlas: boolean;
+  side?: "local" | "remote";
+  detail: string;
+}
+
+interface ConnectionModeFallback {
+  intended: string;
+  actual: string;
+  /** GH #1231: why Atlas couldn't be reached. */
+  reason?: DbConnectionErrorInfo | null;
+}
+
 interface SyncStatus {
   // GH #369: "partial" means at least one collection failed while at
   // least one succeeded in the same cycle. Distinct from "error".
@@ -7,11 +23,11 @@ interface SyncStatus {
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
-}
-
-interface ConnectionModeFallback {
-  intended: string;
-  actual: string;
+  /** GH #1164: side-tagged trim-collision conflicts (shape in electron.d.ts). */
+  nameConflicts?: unknown[];
+  /** GH #1231 */
+  connectionError?: DbConnectionErrorInfo | null;
+  fallback?: ConnectionModeFallback | null;
 }
 
 interface NfcStatus {

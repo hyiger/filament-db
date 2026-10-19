@@ -16,6 +16,7 @@ import {
   TEMPLATE_NO_SPOOLS_BODY,
 } from "@/lib/spoolTemplateGuard";
 import {
+  dbUnavailableResponse,
   errorResponseFromCaught,
   handleDuplicateKeyError,
   isDuplicateKeyError,
@@ -126,6 +127,8 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
   } catch (err) {
+    const unavailable = dbUnavailableResponse(err);
+    if (unavailable) return unavailable;
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: "Database connection failed", detail: message }, { status: 500 });
   }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MongoClient } from "mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
+import { classifyMongoConnectionError, redactMongoUri } from "@/lib/mongoConnectionError";
 
 export async function POST(request: NextRequest) {
   // GH #252: this route makes the server open an outbound MongoDB
@@ -37,20 +38,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const client = new MongoClient(mongodbUri, {
-    serverSelectionTimeoutMS: 5000,
-    connectTimeoutMS: 5000,
-  });
-
+  // GH #1231: constructed inside the try, so a string the driver rejects
+  // gets the redacted, classified answer rather than an unhandled 500.
+  let client: MongoClient | undefined;
   try {
+    client = new MongoClient(mongodbUri, {
+      serverSelectionTimeoutMS: 5000,
+      connectTimeoutMS: 5000,
+    });
     await client.connect();
     await client.db().command({ ping: 1 });
     return NextResponse.json({ success: true, message: "Connection successful" });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Connection failed";
-    const safe = message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
-    return NextResponse.json({ error: safe }, { status: 400 });
+    // GH #1231: `kind`/`atlas` let the setup page show a translated hint.
+    // `error` stays the raw text (redacted) for its details line; the caller
+    // supplied this URI, so it reveals nothing they don't already have.
+    const { kind, atlas } = classifyMongoConnectionError(err, { uri: mongodbUri });
+    return NextResponse.json({ error: redactMongoUri(message), kind, atlas }, { status: 400 });
   } finally {
-    await client.close().catch(() => {});
+    await client?.close().catch(() => {});
   }
 }

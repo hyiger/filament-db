@@ -9,7 +9,15 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import Location from "@/models/Location";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
+import {
+  getErrorMessage,
+  errorResponse,
+  errorResponseFromCaught,
+  handleDuplicateKeyError,
+  assertActiveRefs,
+  assertActiveSpoolLocation,
+  dbUnavailableResponse,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, stripServerOwnedFields } from "@/lib/requestGuard";
 import {
   validateSettingsBag,
@@ -69,7 +77,10 @@ export async function GET(request: NextRequest) {
   try {
     await dbConnect();
   } catch (err) {
-    return errorResponse("Database connection failed", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
   }
 
   try {
@@ -336,7 +347,10 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
   } catch (err) {
-    return errorResponse("Database connection failed", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

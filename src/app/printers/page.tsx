@@ -6,6 +6,8 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { nozzleTypeLabel } from "@/lib/nozzleTypes";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 interface Nozzle {
   _id: string;
@@ -33,6 +35,7 @@ interface Printer {
 export default function PrintersPage() {
   const [printers, setPrinters] = useState<Printer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
@@ -44,20 +47,27 @@ export default function PrintersPage() {
     try {
       const res = await fetch("/api/printers", { signal });
       if (!res.ok) {
-        toast(t("printers.loadError"), "error");
+        // GH #1231: a persistent panel that says why, not a toast
+        // followed by the "nothing here yet" empty state.
+        const failure = await describeLoadFailure(res, signal);
+        if (signal?.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
         return;
       }
       const data = await res.json();
       setPrinters(data);
+      setLoadFailure(null);
       setSelected(new Set());
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast(t("printers.loadError"), "error");
+      const failure = await describeLoadFailure(null, signal);
+      if (signal?.aborted) return;
+      setLoadFailure(failure);
       setLoading(false);
     }
-  }, [toast, t]);
+  }, []);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -172,6 +182,12 @@ export default function PrintersPage() {
 
       {loading ? (
         <p className="text-gray-500">{t("printers.loading")}</p>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("printers.loadError")}
+          onRetry={() => fetchPrinters()}
+        />
       ) : printers.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-gray-500 mb-4">{t("printers.empty")}</p>

@@ -8,6 +8,8 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import { deriveArrangement } from "@/lib/filamentColors";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 interface TrashedFilament {
   _id: string;
@@ -31,6 +33,7 @@ export default function TrashPage() {
   const confirm = useConfirm();
   const [items, setItems] = useState<TrashedFilament[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
 
   const fetchTrash = useCallback(
@@ -39,20 +42,27 @@ export default function TrashPage() {
       try {
         const res = await fetch("/api/filaments/trash", { signal });
         if (!res.ok) {
-          toast(t("trash.loadError"), "error");
+          // GH #1231: a persistent panel that says why, not a toast
+          // followed by the "nothing here yet" empty state.
+          const failure = await describeLoadFailure(res, signal);
+          if (signal?.aborted) return;
+          setLoadFailure(failure);
           setLoading(false);
           return;
         }
         const data = await res.json();
         setItems(data);
+        setLoadFailure(null);
         setLoading(false);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        toast(t("trash.loadError"), "error");
+        const failure = await describeLoadFailure(null, signal);
+        if (signal?.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
       }
     },
-    [toast, t],
+    [],
   );
 
   useEffect(() => {
@@ -291,6 +301,12 @@ export default function TrashPage() {
 
       {loading ? (
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("trash.loadError")}
+          onRetry={() => fetchTrash()}
+        />
       ) : items.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-sm text-gray-500 mb-3">{t("trash.empty")}</p>

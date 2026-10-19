@@ -67,6 +67,8 @@ import {
   inStockPredicate,
   isLowStock,
 } from "@/lib/homeListVisibility";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 type Filament = FilamentSummary;
 
@@ -266,6 +268,7 @@ export default function Home() {
   // and only a few places that need the whole fetch read this directly.
   const [fetchedFilaments, setFetchedFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [typeFilter, setTypeFilter] = useState("");
@@ -556,19 +559,27 @@ export default function Home() {
     try {
       const res = await fetch(`/api/filaments?${params}`, { signal: controller.signal });
       if (!res.ok) {
-        toast(t("filaments.loadError"), "error");
+        // GH #1231: a persistent panel that says why, in place of a toast
+        // followed by "No filaments found." (the API's own explanation used
+        // to be thrown away right here).
+        const failure = await describeLoadFailure(res, controller.signal);
+        if (controller.signal.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
         return;
       }
       const data = await res.json();
       setFetchedFilaments(data);
+      setLoadFailure(null);
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast(t("filaments.loadError"), "error");
+      const failure = await describeLoadFailure(null, controller.signal);
+      if (controller.signal.aborted) return;
+      setLoadFailure(failure);
       setLoading(false);
     }
-  }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
+  }, [debouncedSearch, typeFilter, vendorFilter]);
 
   // The type + vendor dropdown options come from dedicated distinct-value
   // endpoints, NOT from the list response — deriving them from a list fetch
@@ -1946,6 +1957,12 @@ export default function Home() {
             </div>
           ))}
         </SkeletonRegion>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("filaments.loadError")}
+          onRetry={() => fetchFilaments()}
+        />
       ) : fetchedFilaments.length === 0 ? (
         // The FETCH decides "no filaments at all" — a color facet that
         // matches nothing is a no-match, not an empty library.

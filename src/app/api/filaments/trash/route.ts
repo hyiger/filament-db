@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { dbUnavailableResponse, getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { optTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /**
@@ -88,6 +88,9 @@ export async function GET() {
     }
     return NextResponse.json(trashed);
   } catch (err) {
-    return errorResponse("Failed to list trash", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Failed to list trash", 500, getErrorMessage(err))
+    );
   }
 }

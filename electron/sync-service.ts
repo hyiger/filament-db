@@ -43,6 +43,11 @@ import {
   describeRenumberSummary,
   type MinimalRenumberDb,
 } from "../src/lib/optTagRenumber";
+import {
+  classifyMongoConnectionError,
+  redactMongoUri,
+} from "../src/lib/mongoConnectionError";
+import type { DbConnectionErrorInfo } from "../src/lib/dbErrorKinds";
 
 /** GH #1021: one pending legacy-condition transit clear — direction,
  * syncId, the observed condition + updatedAt (the conditional-write filter),
@@ -231,8 +236,40 @@ export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
 
   // Redact LAST, over the WHOLE string: the notice quotes user-typed entity
   // names, and the body may carry a connection string.
-  return full.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+  return redactMongoUri(full);
 }
+
+/**
+ * GH #1231: classify a failed connect for the renderer, which translates
+ * `kind` into a hint and shows `detail` under "Technical details". Atlas-ness
+ * is decided from the resolved server addresses when the error has them,
+ * else from the connection string that was used.
+ */
+export function connectionErrorInfo(
+  err: unknown,
+  uri: string,
+  side?: "local" | "remote",
+): DbConnectionErrorInfo {
+  const { kind, atlas, detail } = classifyMongoConnectionError(err, { uri });
+  return side ? { kind, atlas, side, detail } : { kind, atlas, detail };
+}
+
+/**
+ * GH #1231: pure-Atlas mode fell back to the local database at startup
+ * because Atlas couldn't be reached. Carried on the sync status (not only in
+ * the one-shot `connection-mode-fallback` event) so a renderer reload still
+ * knows, and still knows why.
+ */
+export interface ConnectionFallback {
+  intended: string;
+  actual: string;
+  reason: DbConnectionErrorInfo | null;
+}
+
+/** GH #1231: the Atlas reachability probe's answer, with the reason. */
+export type AtlasConnectivity =
+  | { connected: true }
+  | { connected: false; error: DbConnectionErrorInfo };
 
 /**
  * GH #1164: a trim-collision conflict the SYNC pass found, tagged with the
@@ -263,6 +300,16 @@ export interface SyncStatus {
    * gating still runs off `conflictedNames`, untouched.
    */
   nameConflicts: SyncNameConflict[];
+  /**
+   * GH #1231: why the last cycle could not CONNECT, classified, and which
+   * database it was (hybrid talks to two). Null once a cycle connects. Only
+   * the connect phase is classified: a failure later in the cycle keeps its
+   * per-collection message in `error`, which stays the raw (redacted) text
+   * either way.
+   */
+  connectionError: DbConnectionErrorInfo | null;
+  /** GH #1231: set by main.ts when pure-Atlas mode fell back to local. */
+  fallback: ConnectionFallback | null;
 }
 
 interface SyncResult {
@@ -324,6 +371,8 @@ export class SyncService extends EventEmitter {
     error: null,
     progress: null,
     nameConflicts: [],
+    connectionError: null,
+    fallback: null,
   };
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
@@ -354,22 +403,30 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Test if Atlas is reachable.
+   * Test if Atlas is reachable, and if not, why (GH #1231: the atlas-mode
+   * pill used to get a bare boolean and could only say "No connection").
    */
-  async checkAtlasConnectivity(): Promise<boolean> {
-    const client = new MongoClient(this.atlasUri, {
-      serverSelectionTimeoutMS: 5000,
-      connectTimeoutMS: 5000,
-    });
+  async checkAtlasConnectivity(): Promise<AtlasConnectivity> {
+    // Constructed inside the try, so a malformed URI is classified too.
+    let client: MongoClient | undefined;
     try {
+      client = new MongoClient(this.atlasUri, {
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 5000,
+      });
       await client.connect();
       await client.db(getDbNameFromUri(this.atlasUri)).command({ ping: 1 });
-      return true;
-    } catch {
-      return false;
+      return { connected: true };
+    } catch (err) {
+      return { connected: false, error: connectionErrorInfo(err, this.atlasUri) };
     } finally {
-      await client.close();
+      await client?.close();
     }
+  }
+
+  /** GH #1231: record (or clear) the startup Atlas-to-local fallback. */
+  setConnectionFallback(fallback: ConnectionFallback | null) {
+    this.updateStatus({ fallback });
   }
 
   /**
@@ -397,9 +454,17 @@ export class SyncService extends EventEmitter {
     if (this.syncing) return [];
     this.syncing = true;
     this.aborted = false; // fresh cycle — clear any prior abort (#823)
-    this.updateStatus({ state: "syncing", error: null, progress: "Connecting to Atlas..." });
+    this.updateStatus({
+      state: "syncing",
+      error: null,
+      connectionError: null,
+      progress: "Connecting to the local database...",
+    });
 
-    const local = new MongoClient(this.localUri);
+    // GH #1231: the local client used to take the driver's 30 s default
+    // while the pill read "Connecting to Atlas...". The embedded mongod
+    // answers in milliseconds when it is up at all.
+    const local = new MongoClient(this.localUri, { serverSelectionTimeoutMS: 10000 });
     const remote = new MongoClient(this.atlasUri, {
       serverSelectionTimeoutMS: 10000,
       connectTimeoutMS: 10000,
@@ -493,9 +558,16 @@ export class SyncService extends EventEmitter {
       ),
     ];
 
+    // GH #1231: which client's connect() is in flight, so a failure names
+    // the database it belongs to. Hybrid talks to two, and only the remote
+    // one can be an Atlas access-list problem.
+    let connecting: "local" | "remote" | null = "local";
     try {
       await local.connect();
+      connecting = "remote";
+      this.updateStatus({ progress: "Connecting to Atlas..." });
       await remote.connect();
+      connecting = null;
 
       const localDb = local.db(getDbNameFromUri(this.localUri));
       const remoteDb = remote.db(getDbNameFromUri(this.atlasUri));
@@ -1188,9 +1260,24 @@ export class SyncService extends EventEmitter {
       return results;
     } catch (err) {
       const safe = wrapSyncErrorMessage(err, getDbNameFromUri(this.atlasUri));
+      const connectionError = connecting
+        ? connectionErrorInfo(
+            err,
+            connecting === "local" ? this.localUri : this.atlasUri,
+            connecting,
+          )
+        : null;
+      if (connectionError) {
+        // The kind is what support needs from a community install's log;
+        // the wrapped message alone was the raw TLS text.
+        console.error(
+          `[sync] Could not connect to the ${connecting} database (${connectionError.kind}): ${connectionError.detail}`,
+        );
+      }
       this.updateStatus({
         state: "error",
         error: safe,
+        connectionError,
         progress: null,
         // A cycle can die anywhere after the trim passes — the remote nozzle
         // read, any collection copy — and the end-of-cycle rescan never runs.

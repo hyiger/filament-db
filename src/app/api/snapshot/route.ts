@@ -7,7 +7,12 @@ import dbConnect, {
   RestoreCleanupInvalidationError,
 } from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { checkContentLength } from "@/lib/apiErrorHandler";
+import {
+  checkContentLength,
+  dbUnavailableResponse,
+  errorResponse,
+  getErrorMessage,
+} from "@/lib/apiErrorHandler";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
@@ -193,7 +198,16 @@ export async function GET(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
 
-  await dbConnect();
+  // GH #1231: this used to be the one dbConnect with no catch at all, so an
+  // unreachable database surfaced as Next's bare 500.
+  try {
+    await dbConnect();
+  } catch (err) {
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
+  }
 
   const [
     filaments,
@@ -295,7 +309,14 @@ export async function POST(request: NextRequest) {
 }
 
 async function restoreSnapshot(request: NextRequest) {
-  await dbConnect();
+  try {
+    await dbConnect();
+  } catch (err) {
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
+  }
 
   let snapshot: {
     version?: number;
