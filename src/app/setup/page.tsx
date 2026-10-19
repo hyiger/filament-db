@@ -3,6 +3,22 @@
 import { useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
+import DbErrorHint from "@/components/DbErrorHint";
+import { isDbErrorKind, type DbErrorInfo } from "@/lib/dbErrorKinds";
+
+/** GH #1231: a classified connection-test failure, tied to the exact error
+ *  text it explains so a later, different error can't inherit the hint. */
+interface ErrorHint {
+  info: DbErrorInfo;
+  forError: string;
+}
+
+/** The hint for a failed connection test, or null when the failure isn't
+ *  one the classifier could name (the raw message is then shown alone). */
+function hintFrom(result: { kind?: unknown; atlas?: unknown }, error: string): ErrorHint | null {
+  if (!isDbErrorKind(result.kind) || result.kind === "unknown") return null;
+  return { info: { kind: result.kind, atlas: result.atlas === true }, forError: error };
+}
 
 type ConnectionMode = "atlas" | "offline" | "hybrid" | "";
 
@@ -12,6 +28,7 @@ export default function SetupPage() {
   const [mongoUri, setMongoUri] = useState("");
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [errorHint, setErrorHint] = useState<ErrorHint | null>(null);
   const [success, setSuccess] = useState("");
   const isElectron = useIsElectron();
   const [showUri, setShowUri] = useState(false);
@@ -31,7 +48,9 @@ export default function SetupPage() {
         // Electron: test via IPC (main process has full MongoDB driver)
         const result = await window.electronAPI.testConnection(mongoUri);
         if (!result.success) {
-          setError(result.error || t("setup.connectionFailed"));
+          const message = result.error || t("setup.connectionFailed");
+          setError(message);
+          setErrorHint(hintFrom(result, message));
           setTesting(false);
           return;
         }
@@ -68,7 +87,9 @@ export default function SetupPage() {
         }
 
         if (!res.ok) {
-          setError(data.error || t("setup.connectionFailed"));
+          const message = data.error || t("setup.connectionFailed");
+          setError(message);
+          setErrorHint(hintFrom(data, message));
           setTesting(false);
           return;
         }
@@ -309,7 +330,17 @@ export default function SetupPage() {
 
           {error && (
             <div className="p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300">
-              {error}
+              {errorHint && errorHint.forError === error ? (
+                // GH #1231: the explanation, with the raw driver text under
+                // "Technical details". The web flow tests from the server.
+                <DbErrorHint
+                  info={errorHint.info}
+                  surface={isElectron ? "desktop" : "server"}
+                  detail={error}
+                />
+              ) : (
+                error
+              )}
             </div>
           )}
 

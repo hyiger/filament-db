@@ -4,7 +4,15 @@ interface ElectronAPI {
   saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; numberFormat?: string; ntagDefaultSize?: string; exposeToLan?: boolean }) => Promise<{ success: boolean }>;
   getLanInfo: () => Promise<{ ips: string[]; port: number }>;
   resetConfig: () => Promise<{ success: boolean }>;
-  testConnection: (uri: string) => Promise<{ success: boolean; error?: string }>;
+  /** GH #1231: on failure, `kind`/`atlas` classify it for a translated
+   *  hint and `error` is the raw driver text with connection strings
+   *  redacted. */
+  testConnection: (uri: string) => Promise<{
+    success: boolean;
+    error?: string;
+    kind?: import("@/lib/dbErrorKinds").DbErrorKind;
+    atlas?: boolean;
+  }>;
 
   // Sync
   getSyncStatus: () => Promise<{
@@ -26,9 +34,23 @@ interface ElectronAPI {
       active: boolean;
       side: "local" | "remote";
     }>;
+    /** GH #1231: why the last cycle couldn't connect, and to which side.
+     *  Keep in lockstep with SyncStatus in electron/sync-service.ts. */
+    connectionError?: import("@/lib/dbErrorKinds").DbConnectionErrorInfo | null;
+    /** GH #1231: pure-Atlas mode fell back to local at startup, and why. */
+    fallback?: {
+      intended: string;
+      actual: string;
+      reason: import("@/lib/dbErrorKinds").DbConnectionErrorInfo | null;
+    } | null;
   }>;
   triggerSync: () => Promise<{ results?: unknown[]; error?: string }>;
-  checkAtlasConnectivity: () => Promise<{ connected: boolean }>;
+  /** GH #1231: `error` says why when `connected` is false (absent when no
+   *  Atlas URI is configured). */
+  checkAtlasConnectivity: () => Promise<{
+    connected: boolean;
+    error?: import("@/lib/dbErrorKinds").DbConnectionErrorInfo;
+  }>;
   // GH #369: "partial" added — at least one collection synced, at least
   // one failed. Must stay in lockstep with the getSyncStatus return type
   // above; runtime emits this state, so the callback must accept it.
@@ -49,8 +71,22 @@ interface ElectronAPI {
       active: boolean;
       side: "local" | "remote";
     }>;
+    /** GH #1231: why the last cycle couldn't connect, and to which side.
+     *  Keep in lockstep with SyncStatus in electron/sync-service.ts. */
+    connectionError?: import("@/lib/dbErrorKinds").DbConnectionErrorInfo | null;
+    /** GH #1231: pure-Atlas mode fell back to local at startup, and why. */
+    fallback?: {
+      intended: string;
+      actual: string;
+      reason: import("@/lib/dbErrorKinds").DbConnectionErrorInfo | null;
+    } | null;
   }) => void) => () => void;
-  onConnectionModeFallback: (cb: (info: { intended: string; actual: string }) => void) => () => void;
+  onConnectionModeFallback: (cb: (info: {
+    intended: string;
+    actual: string;
+    /** GH #1231: why Atlas couldn't be reached. */
+    reason?: import("@/lib/dbErrorKinds").DbConnectionErrorInfo | null;
+  }) => void) => () => void;
   /** Fires after a hybrid-mode sync cycle completes (success or no-op).
    *  Used by data-listing pages to refetch without waiting for navigation. */
   onSyncComplete: (cb: () => void) => () => void;

@@ -12,7 +12,9 @@ import {
   isClientInputError,
   isClientInputErrorMessage,
   MAX_UPLOAD_SIZE,
+  dbUnavailableResponse,
 } from "@/lib/apiErrorHandler";
+import { DbUnavailableError } from "@/lib/mongoConnectionError";
 
 describe("getErrorMessage", () => {
   it("extracts message from Error instances", () => {
@@ -160,6 +162,57 @@ describe("errorResponseFromCaught", () => {
   it("honours an explicit fallbackStatus override", async () => {
     const res = errorResponseFromCaught(new Error("upstream blew up"), "TDS extraction failed", 502);
     expect(res.status).toBe(502);
+  });
+});
+
+describe("dbUnavailableResponse / the DB-outage 503 (GH #1231)", () => {
+  const outage = () =>
+    new DbUnavailableError({ kind: "ip-not-allowed", atlas: true }, "Most often the IP Access List.", {
+      cause: new Error("TLSV1_ALERT_INTERNAL_ERROR for mongodb+srv://u:secret@cluster0.abcde.mongodb.net"),
+    });
+
+  it("answers 503 with the code, kind and hint — never the raw driver text", async () => {
+    const res = dbUnavailableResponse(outage())!;
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body).toEqual({
+      error: "Database unavailable",
+      code: "db_unavailable",
+      kind: "ip-not-allowed",
+      atlas: true,
+      hint: "Most often the IP Access List.",
+    });
+    expect(JSON.stringify(body)).not.toContain("secret");
+  });
+
+  it("is null for any other error, so the caller falls through", () => {
+    expect(dbUnavailableResponse(new Error("ECONNREFUSED"))).toBeNull();
+    expect(dbUnavailableResponse(Object.assign(new Error("x"), { name: "MongoServerSelectionError" }))).toBeNull();
+    expect(dbUnavailableResponse("nope")).toBeNull();
+  });
+
+  it("errorResponseFromCaught maps the outage to 503", async () => {
+    const res = errorResponseFromCaught(outage(), "Failed to update filament");
+    expect(res.status).toBe(503);
+    expect((await res.json()).code).toBe("db_unavailable");
+  });
+
+  it("a hint that happens to read like client input is still the outage", async () => {
+    const err = new DbUnavailableError({ kind: "auth-failed", atlas: false }, "Field must be a valid thing");
+    expect(errorResponseFromCaught(err, "x").status).toBe(503);
+  });
+
+  it("a driver network error from MID-request is not reclassified (partial-write safety)", async () => {
+    const midRequest = Object.assign(new Error("connection reset"), { name: "MongoNetworkError" });
+    const res = errorResponseFromCaught(midRequest, "Failed to record print job");
+    expect(res.status).toBe(500);
+  });
+});
+
+describe("errorResponse detail redaction (GH #1231)", () => {
+  it("never echoes a connection string in detail", async () => {
+    const res = errorResponse("Failed", 500, "could not reach mongodb+srv://u:hunter2@cluster0.abcde.mongodb.net/db");
+    expect(await res.json()).toEqual({ error: "Failed", detail: "could not reach mongodb://***" });
   });
 });
 

@@ -15,10 +15,34 @@ import {
   describeRenumberSummary,
   type MinimalRenumberDb,
 } from "./optTagRenumber";
+import { notConfiguredError, toDbUnavailableError } from "./dbErrorText";
+import type { DbUnavailableError } from "./mongoConnectionError";
 
 /** GH #1116: how long to wait before re-attempting a trim pass that still
  *  has active conflicts. Bounds the cost of keeping the migration unsettled. */
 const TRIM_RETRY_INTERVAL_MS = 60_000;
+
+/** GH #1231: server-selection timeout for the app's own connection, applied
+ *  only when MONGODB_URI doesn't set `serverSelectionTimeoutMS` itself (an
+ *  option passed to `connect` would override the URI's). The driver default
+ *  is 30 s, which an unreachable database made every page wait before it
+ *  could even say so. 10 s matches the desktop sync's Atlas client; retryable
+ *  reads and writes still cover a typical replica-set election. */
+const DEFAULT_SERVER_SELECTION_TIMEOUT_MS = 10_000;
+
+/** GH #1231: how long a classified connect failure is replayed to later
+ *  callers instead of attempting a new connection. A failed attempt costs a
+ *  full server-selection timeout, and a page issues several requests at
+ *  once, so without this each one waited it out in turn. Short enough that
+ *  fixing the cause (an Atlas IP Access List entry) recovers within seconds. */
+const CONNECT_FAILURE_REPLAY_MS = 5_000;
+
+/** The options `dbConnect` passes to `mongoose.connect` for `uri`. */
+export function connectOptionsFor(uri: string): { serverSelectionTimeoutMS?: number } {
+  return /[?&]serverselectiontimeoutms=/i.test(uri)
+    ? {}
+    : { serverSelectionTimeoutMS: DEFAULT_SERVER_SELECTION_TIMEOUT_MS };
+}
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -28,6 +52,9 @@ interface MongooseCache {
    *  can't both execute the migration block (the nozzle-split pass would mint
    *  duplicate clones). Null when no run is in progress. */
   migrationsPromise: Promise<void> | null;
+  /** GH #1231: the last classified connect failure, replayed for
+   *  `CONNECT_FAILURE_REPLAY_MS` to callers using the same URI. */
+  lastFailure: { error: DbUnavailableError; at: number; uri: string } | null;
   /** GH #1116: epoch ms before which the (unsettled) trim pass is skipped.
    *  The migration block re-enters on every connect once any flag is false,
    *  and the trim pass is five regex scans — without this it would run per
@@ -114,9 +141,10 @@ export default async function dbConnect() {
   const MONGODB_URI = process.env.MONGODB_URI;
 
   if (!MONGODB_URI) {
-    throw new Error(
-      "Please define the MONGODB_URI environment variable in .env.local"
-    );
+    // GH #1231: a typed error, so API routes answer 503 with a hint that
+    // names MONGODB_URI. The old text pointed at .env.local, which means
+    // nothing to a Docker user.
+    throw notConfiguredError();
   }
 
   const cached: MongooseCache = global.mongoose ?? {
@@ -124,6 +152,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
+    lastFailure: null,
     trimRetryAt: 0,
     migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, optTagRenumber: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false },
   };
@@ -140,6 +169,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
+    cached.lastFailure = null;
     cached.trimRetryAt = 0;
     cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, optTagRenumber: false, legacyNozzleConditions: false, amsSlotFilamentIds: false, trimEntityNames: false };
   }
@@ -177,11 +207,40 @@ export default async function dbConnect() {
 
   if (!cached.conn) {
     if (!cached.promise) {
-      cached.uri = MONGODB_URI;
-      cached.promise = mongoose.connect(MONGODB_URI).catch((err) => {
-        cached.promise = null;
-        throw err;
-      });
+      const recent = cached.lastFailure;
+      if (
+        recent &&
+        recent.uri === MONGODB_URI &&
+        Date.now() - recent.at < CONNECT_FAILURE_REPLAY_MS
+      ) {
+        throw recent.error;
+      }
+      const uri = MONGODB_URI;
+      cached.uri = uri;
+      cached.promise = mongoose.connect(uri, connectOptionsFor(uri)).then(
+        (connected) => {
+          cached.lastFailure = null;
+          return connected;
+        },
+        (err) => {
+          cached.promise = null;
+          // GH #1231: replace the driver's error, whose message is raw TLS
+          // or socket text (and can echo part of a mis-escaped password as
+          // a host name), with a typed error carrying a plain-English hint.
+          // Routes put `getErrorMessage(err)` in their response, so this is
+          // what every API caller now sees. The raw error stays on `cause`
+          // and goes to the server log, once per attempt.
+          const { error, logLine } = toDbUnavailableError(err, uri);
+          console.error(logLine);
+          // Replay only a failure the classifier could name: those are the
+          // slow ones (a server selection waiting out its timeout). An
+          // unexplained failure is retried on the next request.
+          if (error.kind !== "unknown") {
+            cached.lastFailure = { error, at: Date.now(), uri };
+          }
+          throw error;
+        },
+      );
     }
     cached.conn = await cached.promise;
   }

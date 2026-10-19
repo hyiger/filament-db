@@ -8,6 +8,8 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
 import dynamic from "next/dynamic";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 // Loaded on demand — the dialog pulls in the TSPL emitter + qrcode preview,
 // which the locations list doesn't need until a print is requested.
@@ -50,6 +52,7 @@ interface LocationInUse {
 export default function LocationsPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   /** The last "location is still in use" refusal, rendered as a persistent
@@ -73,21 +76,28 @@ export default function LocationsPage() {
       try {
         const res = await fetch("/api/locations?stats=true", { signal });
         if (!res.ok) {
-          toast(t("locations.loadError"), "error");
+          // GH #1231: a persistent panel that says why, not a toast
+          // followed by the "nothing here yet" empty state.
+          const failure = await describeLoadFailure(res, signal);
+          if (signal?.aborted) return;
+          setLoadFailure(failure);
           setLoading(false);
           return;
         }
         const data = await res.json();
         setLocations(data);
+        setLoadFailure(null);
         setSelected(new Set());
         setLoading(false);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        toast(t("locations.loadError"), "error");
+        const failure = await describeLoadFailure(null, signal);
+        if (signal?.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
       }
     },
-    [toast, t],
+    [],
   );
 
   useEffect(() => {
@@ -285,6 +295,12 @@ export default function LocationsPage() {
 
       {loading ? (
         <p className="text-gray-500">{t("locations.loading")}</p>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("locations.loadError")}
+          onRetry={() => fetchLocations()}
+        />
       ) : locations.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-gray-500 mb-4">{t("locations.empty")}</p>

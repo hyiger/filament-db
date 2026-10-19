@@ -13,14 +13,23 @@ import {
 } from "@/lib/spoolSlots";
 import Nozzle from "@/models/Nozzle";
 import BedType from "@/models/BedType";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  getErrorMessage,
+  errorResponse,
+  errorResponseFromCaught,
+  handleDuplicateKeyError,
+  dbUnavailableResponse,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function GET(request: NextRequest) {
   try {
     await dbConnect();
   } catch (err) {
-    return errorResponse("Database connection failed", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
   }
 
   try {
@@ -52,7 +61,10 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
   } catch (err) {
-    return errorResponse("Database connection failed", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Database connection failed", 500, getErrorMessage(err))
+    );
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

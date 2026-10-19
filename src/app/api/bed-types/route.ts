@@ -6,7 +6,13 @@ import {
 import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
 import Printer from "@/models/Printer";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  dbUnavailableResponse,
+  getErrorMessage,
+  errorResponse,
+  errorResponseFromCaught,
+  handleDuplicateKeyError,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function GET(request: NextRequest) {
@@ -44,7 +50,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(enriched);
   } catch (err) {
-    return errorResponse("Failed to fetch bed types", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Failed to fetch bed types", 500, getErrorMessage(err))
+    );
   }
 }
 

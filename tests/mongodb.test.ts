@@ -1,10 +1,23 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import dbConnect, {
+  connectOptionsFor,
   isDuplicateKeyError,
   rerunLegacyNozzleCleanupAfterRestore,
   RestoreCleanupInvalidationError,
 } from "@/lib/mongodb";
+import { isDbUnavailableError } from "@/lib/mongoConnectionError";
+
+describe("connectOptionsFor (GH #1231)", () => {
+  it("defaults the server-selection timeout to 10 s", () => {
+    expect(connectOptionsFor("mongodb://127.0.0.1:27017/db")).toEqual({ serverSelectionTimeoutMS: 10_000 });
+  });
+
+  it("leaves a timeout set in the URI alone (an option would override it)", () => {
+    expect(connectOptionsFor("mongodb://h/db?serverSelectionTimeoutMS=60000")).toEqual({});
+    expect(connectOptionsFor("mongodb+srv://h/db?retryWrites=true&serverselectiontimeoutms=5000")).toEqual({});
+  });
+});
 
 describe("dbConnect", () => {
   beforeEach(() => {
@@ -16,9 +29,12 @@ describe("dbConnect", () => {
     const original = process.env.MONGODB_URI;
     delete process.env.MONGODB_URI;
 
-    await expect(dbConnect()).rejects.toThrow(
-      "Please define the MONGODB_URI environment variable"
-    );
+    // GH #1231: a typed, classified error that names MONGODB_URI (the old
+    // text pointed Docker users at .env.local).
+    const err = await dbConnect().catch((e: unknown) => e);
+    expect(isDbUnavailableError(err)).toBe(true);
+    expect(err).toMatchObject({ kind: "not-configured", atlas: false });
+    expect((err as Error).message).toMatch(/MONGODB_URI/);
 
     process.env.MONGODB_URI = original;
   });
@@ -405,11 +421,15 @@ describe("dbConnect", () => {
   // as a permanently-rejected promise (the next call retries cleanly).
   it("clears the cached promise and rethrows when mongoose.connect rejects", async () => {
     (global as Record<string, unknown>).mongoose = undefined;
-    const connectSpy = vi
-      .spyOn(mongoose, "connect")
-      .mockRejectedValueOnce(new Error("connect boom"));
+    const raw = new Error("connect boom");
+    const connectSpy = vi.spyOn(mongoose, "connect").mockRejectedValueOnce(raw);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      await expect(dbConnect()).rejects.toThrow("connect boom");
+      // GH #1231: rethrown as the typed error, the driver's on `cause`.
+      const err = await dbConnect().catch((e: unknown) => e);
+      expect(isDbUnavailableError(err)).toBe(true);
+      expect(err).toMatchObject({ kind: "unknown", cause: raw });
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("connect boom"));
       const cached = (global as Record<string, unknown>).mongoose as Record<
         string,
         unknown
@@ -417,12 +437,66 @@ describe("dbConnect", () => {
       // The .catch reset the promise so a retry re-attempts the connect.
       expect(cached.promise).toBeNull();
       expect(cached.conn).toBeNull();
+      // An unexplained failure isn't replayed.
+      expect(cached.lastFailure).toBeNull();
     } finally {
       connectSpy.mockRestore();
+      logSpy.mockRestore();
     }
     // Recovery: the next call connects for real (spy consumed once).
     const ok = await dbConnect();
     expect(ok).toBe(mongoose);
+  });
+
+  // GH #1231: a classified failure costs a full server-selection timeout, so
+  // it is replayed briefly instead of re-attempted by every request a page
+  // fires at once.
+  it("replays a classified connect failure for a few seconds, then retries", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    const refused = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), { code: "ECONNREFUSED" });
+    const connectSpy = vi.spyOn(mongoose, "connect").mockRejectedValueOnce(refused);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      const first = await dbConnect().catch((e: unknown) => e);
+      expect(first).toMatchObject({ kind: "unreachable" });
+      // Within the window: the same error, no new attempt.
+      now.mockReturnValue(1_004_000);
+      const second = await dbConnect().catch((e: unknown) => e);
+      expect(second).toBe(first);
+      expect(connectSpy).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledTimes(1);
+      // Past it: a real attempt, which succeeds and clears the record.
+      now.mockReturnValue(1_006_000);
+      connectSpy.mockRestore();
+      const ok = await dbConnect();
+      expect(ok).toBe(mongoose);
+      const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+      expect(cached.lastFailure).toBeNull();
+    } finally {
+      connectSpy.mockRestore();
+      logSpy.mockRestore();
+      now.mockRestore();
+    }
+  });
+
+  it("doesn't replay a failure recorded for a different URI", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    const refused = Object.assign(new Error("connect ECONNREFUSED"), { code: "ECONNREFUSED" });
+    const connectSpy = vi.spyOn(mongoose, "connect").mockRejectedValueOnce(refused);
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dbConnect().catch(() => {});
+      const cached = (global as Record<string, unknown>).mongoose as {
+        lastFailure: { uri: string } | null;
+      };
+      cached.lastFailure!.uri = "mongodb://elsewhere/db";
+      connectSpy.mockRestore();
+      expect(await dbConnect()).toBe(mongoose);
+    } finally {
+      connectSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 
   // src/lib/mongodb.ts:184-186 — the filament-level backfill's own catch. It's

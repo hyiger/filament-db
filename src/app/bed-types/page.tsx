@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 interface BedType {
   _id: string;
@@ -19,6 +21,7 @@ interface BedType {
 export default function BedTypesPage() {
   const [bedTypes, setBedTypes] = useState<BedType[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
@@ -30,20 +33,27 @@ export default function BedTypesPage() {
     try {
       const res = await fetch("/api/bed-types", { signal });
       if (!res.ok) {
-        toast(t("bedTypes.loadError"), "error");
+        // GH #1231: a persistent panel that says why, not a toast
+        // followed by the "nothing here yet" empty state.
+        const failure = await describeLoadFailure(res, signal);
+        if (signal?.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
         return;
       }
       const data = await res.json();
       setBedTypes(data);
+      setLoadFailure(null);
       setSelected(new Set());
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast(t("bedTypes.loadError"), "error");
+      const failure = await describeLoadFailure(null, signal);
+      if (signal?.aborted) return;
+      setLoadFailure(failure);
       setLoading(false);
     }
-  }, [toast, t]);
+  }, []);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -158,6 +168,12 @@ export default function BedTypesPage() {
 
       {loading ? (
         <p className="text-gray-500">{t("bedTypes.loading")}</p>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("bedTypes.loadError")}
+          onRetry={() => fetchBedTypes()}
+        />
       ) : bedTypes.length === 0 ? (
         <div className="text-center py-12">
           <p className="text-gray-500 mb-4">{t("bedTypes.empty")}</p>

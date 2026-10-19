@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
+import DbErrorHint from "@/components/DbErrorHint";
+import type { DbErrorInfo } from "@/lib/dbErrorKinds";
 
 type ConnectionMode = "atlas" | "hybrid" | "offline" | "";
 
@@ -22,7 +24,13 @@ export default function NetworkSettingsPage() {
   const [atlasUri, setAtlasUri] = useState("");
   const [hasStoredUri, setHasStoredUri] = useState(false);
   const [modeSwitching, setModeSwitching] = useState(false);
-  const [modeResult, setModeResult] = useState<{ ok: boolean; message: string } | null>(null);
+  // GH #1231: `hint` classifies a failed connection test for a translated
+  // explanation; `message` is then the raw text shown under its details.
+  const [modeResult, setModeResult] = useState<{
+    ok: boolean;
+    message: string;
+    hint?: DbErrorInfo | null;
+  } | null>(null);
   const [showUriInput, setShowUriInput] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
 
@@ -149,7 +157,11 @@ export default function NetworkSettingsPage() {
                         try {
                           const result = await window.electronAPI!.testConnection(atlasUri.trim());
                           if (!result.success) {
-                            setModeResult({ ok: false, message: result.error || t("settings.connectionFailed") });
+                            const hint =
+                              result.kind && result.kind !== "unknown"
+                                ? { kind: result.kind, atlas: result.atlas === true }
+                                : null;
+                            setModeResult({ ok: false, message: result.error || t("settings.connectionFailed"), hint });
                             setTestingConnection(false);
                             return;
                           }
@@ -235,7 +247,11 @@ export default function NetworkSettingsPage() {
                     ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
                     : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
                 }`}>
-                  {modeResult.message}
+                  {modeResult.hint ? (
+                    <DbErrorHint info={modeResult.hint} surface="desktop" detail={modeResult.message} />
+                  ) : (
+                    modeResult.message
+                  )}
                 </div>
               )}
             </div>

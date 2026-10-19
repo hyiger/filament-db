@@ -169,6 +169,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -232,6 +235,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -744,6 +750,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -1874,10 +1883,13 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "$ref": "#/components/schemas/ConnectionTestError"
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -2323,6 +2335,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -2581,6 +2596,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -2619,6 +2637,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -3376,6 +3397,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -3713,6 +3737,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -3935,6 +3962,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -5929,6 +5959,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -6122,6 +6155,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       },
@@ -6253,6 +6289,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -6827,10 +6866,55 @@
             "content": {
               "application/json": {
                 "schema": {
+                  "$ref": "#/components/schemas/ConnectionTestError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/health": {
+      "get": {
+        "summary": "Can the server reach its database?",
+        "description": "GH #1231: pings the database through the app's own connection. 200 when the ping round-trips; otherwise the same 503 `db_unavailable` body every route returns for an unreachable database. A classified connection failure is replayed for about 5 seconds, so polling soon after one doesn't wait out a fresh connection timeout (an unclassified failure and a failed ping on an established connection are not replayed). A failure that isn't about reaching the database, such as a startup migration that rethrew, is a 500 instead. Not a liveness probe: the Docker HEALTHCHECK deliberately stays on `/`, so an Atlas access-list problem can't make an orchestrator restart-loop the container.",
+        "tags": [
+          "Utilities"
+        ],
+        "responses": {
+          "200": {
+            "description": "The database answered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The database is reachable but the connection setup failed for another reason (e.g. a startup migration)",
+            "content": {
+              "application/json": {
+                "schema": {
                   "$ref": "#/components/schemas/Error"
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/DatabaseUnavailable"
           }
         }
       }
@@ -7491,6 +7575,16 @@
               "required": [
                 "error"
               ]
+            }
+          }
+        }
+      },
+      "DatabaseUnavailable": {
+        "description": "Database unavailable (GH #1231)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/DatabaseUnavailable"
             }
           }
         }
@@ -9329,6 +9423,82 @@
           "parentName",
           "parentColor",
           "spoolCount"
+        ]
+      },
+      "DatabaseUnavailable": {
+        "type": "object",
+        "description": "GH #1231: the server could not reach its database. Ordinary routes return it only when the connection attempt itself failed, before the handler wrote anything; a database error in the middle of a request keeps the route's own 500. `GET /api/health` also returns it when a ping on an established connection fails. Never carries the raw driver message (the server log has it).",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "Database unavailable"
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "db_unavailable"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ip-not-allowed",
+              "auth-failed",
+              "unauthorized",
+              "dns",
+              "tls",
+              "unreachable",
+              "invalid-uri",
+              "not-configured",
+              "unknown"
+            ],
+            "description": "Why the connection failed, classified from driver and Node error codes (never from message text). `ip-not-allowed` is a TLS alert 80 from a public MongoDB Atlas cluster: most often the server's public IP isn't on the project's IP Access List."
+          },
+          "atlas": {
+            "type": "boolean",
+            "description": "The target is a public MongoDB Atlas cluster (hosts *.mongodb.net:27017)."
+          },
+          "hint": {
+            "type": "string",
+            "description": "Plain-English explanation and next step, for clients that display text as-is."
+          }
+        },
+        "required": [
+          "error",
+          "code",
+          "kind",
+          "atlas",
+          "hint"
+        ]
+      },
+      "ConnectionTestError": {
+        "type": "object",
+        "description": "A failed connection test against a caller-supplied URI. `error` is the driver's message with any connection string redacted. `kind`/`atlas` classify the failure (GH #1231): `/api/setup` includes them for every connection failure, while `/api/filaments/import-atlas` omits them when the failure isn't one the classifier can name (`unknown`). Both omit them when the request was rejected before a connection was attempted.",
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "ip-not-allowed",
+              "auth-failed",
+              "unauthorized",
+              "dns",
+              "tls",
+              "unreachable",
+              "invalid-uri",
+              "not-configured",
+              "unknown"
+            ],
+            "description": "Why the connection failed, classified from driver and Node error codes (never from message text). `ip-not-allowed` is a TLS alert 80 from a public MongoDB Atlas cluster: most often the server's public IP isn't on the project's IP Access List."
+          },
+          "atlas": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "error"
         ]
       }
     },

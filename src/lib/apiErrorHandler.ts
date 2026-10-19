@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isDbUnavailableError, redactMongoUri } from "./mongoConnectionError";
 
 export function getErrorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -9,9 +10,39 @@ export function errorResponse(
   status: number,
   detail?: string,
 ): NextResponse {
+  // GH #1231: `detail` is usually a raw error message, and the API answers
+  // unauthenticated LAN callers by default. Never let it carry a
+  // connection string (and the password inside it).
   return NextResponse.json(
-    detail ? { error, detail } : { error },
+    detail ? { error, detail: redactMongoUri(detail) } : { error },
     { status },
+  );
+}
+
+/**
+ * GH #1231: the 503 for a database `dbConnect` could not reach. Returns null
+ * for any other error, so a catch block can try it first and fall through.
+ *
+ * Only the typed `DbUnavailableError` qualifies, and only `dbConnect` throws
+ * it, before a handler has written anything. A network error from the
+ * MIDDLE of a request is deliberately left alone: a multi-step write may
+ * already have partly landed, and "unavailable, retry" would invite a
+ * double debit. The body keeps the existing `{error: "Database
+ * unavailable"}` shape (name-conflicts, opt-tag-review) and adds a machine
+ * `code`, the classified `kind` the UI translates, and an English `hint` for
+ * clients that show text as-is. Never the raw driver message.
+ */
+export function dbUnavailableResponse(err: unknown): NextResponse | null {
+  if (!isDbUnavailableError(err)) return null;
+  return NextResponse.json(
+    {
+      error: "Database unavailable",
+      code: "db_unavailable",
+      kind: err.kind,
+      atlas: err.atlas,
+      hint: err.message,
+    },
+    { status: 503 },
   );
 }
 
@@ -87,6 +118,11 @@ export function errorResponseFromCaught(
   fallbackMessage: string,
   fallbackStatus = 500,
 ): NextResponse {
+  // Name-gated (GH #1231), so no other error can be reclassified as an
+  // outage; checked first so the hint text can never trip the
+  // client-input message patterns below.
+  const unavailable = dbUnavailableResponse(err);
+  if (unavailable) return unavailable;
   if (isClientInputError(err)) {
     return errorResponse(getErrorMessage(err), 400);
   }

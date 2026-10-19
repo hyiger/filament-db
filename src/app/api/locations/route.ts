@@ -6,7 +6,13 @@ import {
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  dbUnavailableResponse,
+  getErrorMessage,
+  errorResponse,
+  errorResponseFromCaught,
+  handleDuplicateKeyError,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
@@ -108,7 +114,10 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(enriched);
   } catch (err) {
-    return errorResponse("Failed to fetch locations", 500, getErrorMessage(err));
+    return (
+      dbUnavailableResponse(err) ??
+      errorResponse("Failed to fetch locations", 500, getErrorMessage(err))
+    );
   }
 }
 

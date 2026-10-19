@@ -47,6 +47,8 @@ import FilamentSwatch from "@/components/FilamentSwatch";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { withReturnTo } from "@/lib/returnTo";
+import LoadErrorPanel from "@/components/LoadErrorPanel";
+import { describeLoadFailure, type LoadFailure } from "@/lib/loadFailure";
 
 // Loaded on demand — the dialog pulls in the TSPL emitter + the qrcode
 // package for its preview, none of which the page needs until a print is
@@ -210,6 +212,7 @@ export default function InventoryPage() {
 
   const [data, setData] = useState<InventoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailure, setLoadFailure] = useState<LoadFailure | null>(null);
   const [locations, setLocations] = useState<LocationOption[]>([]);
 
   // Filters
@@ -344,8 +347,18 @@ export default function InventoryPage() {
     };
   }, [highlightKey, groupBy, loading]);
 
+  // GH #1231: one load in flight at a time. Retry and the post-mutation
+  // refetches call fetchInventory without a signal, so a slow one could land
+  // after a newer filtered load and overwrite it (or cover it with the error
+  // panel). Each call aborts the one before.
+  const inventoryLoadRef = useRef<AbortController | null>(null);
   const fetchInventory = useCallback(
-    async (signal?: AbortSignal) => {
+    async (outer?: AbortSignal) => {
+      inventoryLoadRef.current?.abort();
+      const controller = new AbortController();
+      inventoryLoadRef.current = controller;
+      outer?.addEventListener("abort", () => controller.abort(), { once: true });
+      const signal = controller.signal;
       setLoading(true);
       try {
         const qs = new URLSearchParams();
@@ -355,19 +368,28 @@ export default function InventoryPage() {
         if (includeRetired) qs.set("includeRetired", "1");
         const res = await fetch(`/api/spools/by-location?${qs.toString()}`, { signal });
         if (!res.ok) {
-          toast(t("inventory.loadFailed"), "error");
+          // GH #1231: a persistent panel that says why, not a toast
+          // followed by the "No spools… add a location" empty state.
+          const failure = await describeLoadFailure(res, signal);
+          if (signal.aborted) return;
+          setLoadFailure(failure);
           setLoading(false);
           return;
         }
-        setData(await res.json());
+        const body = await res.json();
+        if (signal.aborted) return;
+        setData(body);
+        setLoadFailure(null);
         setLoading(false);
       } catch (err) {
         if (err instanceof DOMException && err.name === "AbortError") return;
-        toast(t("inventory.loadFailed"), "error");
+        const failure = await describeLoadFailure(null, signal);
+        if (signal.aborted) return;
+        setLoadFailure(failure);
         setLoading(false);
       }
     },
-    [kind, type, vendor, includeRetired, t, toast],
+    [kind, type, vendor, includeRetired],
   );
 
   // Load on mount + whenever a filter changes.
@@ -743,11 +765,12 @@ export default function InventoryPage() {
         </div>
       </div>
 
-      {/* Stats */}
+      {/* Stats — a dash, not 0, while the load has failed (GH #1231): a
+          zero would claim the shelf is empty. */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
-        <StatCard label={t("inventory.stats.spools")} value={stats.spoolCount.toString()} />
-        <StatCard label={t("inventory.stats.locations")} value={stats.locationCount.toString()} />
-        <StatCard label={t("inventory.stats.totalWeight")} value={`${formatNumber(stats.totalGrams / 1000, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} kg`} />
+        <StatCard label={t("inventory.stats.spools")} value={loadFailure ? "—" : stats.spoolCount.toString()} />
+        <StatCard label={t("inventory.stats.locations")} value={loadFailure ? "—" : stats.locationCount.toString()} />
+        <StatCard label={t("inventory.stats.totalWeight")} value={loadFailure ? "—" : `${formatNumber(stats.totalGrams / 1000, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} kg`} />
       </div>
       {/* The cards follow the search, so say so — a shrunken total should
           read as "filtered", never as data loss. */}
@@ -977,6 +1000,12 @@ export default function InventoryPage() {
             </div>
           ))}
         </SkeletonRegion>
+      ) : loadFailure ? (
+        <LoadErrorPanel
+          failure={loadFailure}
+          message={t("inventory.loadFailed")}
+          onRetry={() => fetchInventory()}
+        />
       ) : displayGroups.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg">
           <p className="text-gray-500 mb-3">{t("inventory.empty")}</p>

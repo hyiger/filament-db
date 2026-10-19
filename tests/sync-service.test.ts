@@ -1,7 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { MongoClient } from "mongodb";
 import {
+  connectionErrorInfo,
   getDbNameFromUri,
   isDuplicateKeyError,
+  SyncService,
   wrapSyncErrorMessage,
 } from "../electron/sync-service";
 import { strandedPlaceholderNotice, withStrandingNotice } from "@/lib/renameStaging";
@@ -446,5 +449,88 @@ describe("every quarantine reports (source invariant)", () => {
     expect(catchStart).toBeGreaterThan(-1);
     const catchBlock = src.slice(catchStart, src.indexOf("throw loopErr;", catchStart));
     expect(catchBlock).toContain("[...strandedNotices, ...sweptHoldbacks]");
+  });
+});
+
+describe("connection-phase classification (GH #1231)", () => {
+  const atlasUri = "mongodb+srv://u:secret@cluster0.abcde.mongodb.net/filament-db";
+  const alert80 = () =>
+    Object.assign(new Error("SSL routines:OPENSSL_internal:TLSV1_ALERT_INTERNAL_ERROR … SSL alert number 80"), {
+      code: "ERR_SSL_TLSV1_ALERT_INTERNAL_ERROR",
+    });
+
+  it("connectionErrorInfo classifies, decides Atlas from the URI, and tags the side", () => {
+    expect(connectionErrorInfo(alert80(), atlasUri, "remote")).toEqual({
+      kind: "ip-not-allowed",
+      atlas: true,
+      side: "remote",
+      detail: "SSL routines:OPENSSL_internal:TLSV1_ALERT_INTERNAL_ERROR … SSL alert number 80",
+    });
+    // No side → no side key at all.
+    expect(connectionErrorInfo(alert80(), atlasUri)).not.toHaveProperty("side");
+  });
+
+  it("a failed REMOTE connect lands on status.connectionError; status.error stays the raw text", async () => {
+    const connectSpy = vi
+      .spyOn(MongoClient.prototype, "connect")
+      .mockImplementationOnce(async function (this: MongoClient) {
+        return this; // local connects
+      })
+      .mockRejectedValueOnce(alert80()); // Atlas refuses
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const svc = new SyncService("mongodb://127.0.0.1:1/filament-db", atlasUri);
+    try {
+      await svc.sync();
+      const status = svc.getStatus();
+      expect(status.state).toBe("error");
+      expect(status.connectionError).toMatchObject({ kind: "ip-not-allowed", atlas: true, side: "remote" });
+      expect(status.error).toContain("SSL alert number 80");
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("remote database (ip-not-allowed)"));
+    } finally {
+      connectSpy.mockRestore();
+      logSpy.mockRestore();
+      svc.destroy();
+    }
+  });
+
+  it("a failed LOCAL connect is pinned on the local side, never the Atlas advice", async () => {
+    const connectSpy = vi
+      .spyOn(MongoClient.prototype, "connect")
+      .mockRejectedValueOnce(Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:1"), { code: "ECONNREFUSED" }));
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const svc = new SyncService("mongodb://127.0.0.1:1/filament-db", atlasUri);
+    try {
+      await svc.sync();
+      expect(svc.getStatus().connectionError).toMatchObject({ kind: "unreachable", atlas: false, side: "local" });
+    } finally {
+      connectSpy.mockRestore();
+      logSpy.mockRestore();
+      svc.destroy();
+    }
+  });
+
+  it("checkAtlasConnectivity says why it failed", async () => {
+    const connectSpy = vi.spyOn(MongoClient.prototype, "connect").mockRejectedValueOnce(alert80());
+    const svc = new SyncService("", atlasUri);
+    try {
+      expect(await svc.checkAtlasConnectivity()).toEqual({
+        connected: false,
+        error: expect.objectContaining({ kind: "ip-not-allowed", atlas: true }),
+      });
+    } finally {
+      connectSpy.mockRestore();
+      svc.destroy();
+    }
+  });
+
+  it("setConnectionFallback publishes the fallback and its reason", () => {
+    const svc = new SyncService("", atlasUri);
+    const seen: unknown[] = [];
+    svc.on("statusChange", (s) => seen.push(s.fallback));
+    const reason = connectionErrorInfo(alert80(), atlasUri);
+    svc.setConnectionFallback({ intended: "atlas", actual: "local-fallback", reason });
+    expect(svc.getStatus().fallback).toEqual({ intended: "atlas", actual: "local-fallback", reason });
+    expect(seen).toHaveLength(1);
+    svc.destroy();
   });
 });
