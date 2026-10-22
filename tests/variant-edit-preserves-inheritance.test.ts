@@ -3,6 +3,12 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
 import { POST as createFilament } from "@/app/api/filaments/route";
+import {
+  applyFormSettingFlags,
+  FORM_FLAG_SETTING_KEYS,
+  seedFormSettingFlags,
+  type FormSettingFlags,
+} from "@/lib/formSettingFlags";
 
 /**
  * GH #106 regression guard.
@@ -184,8 +190,9 @@ describe("variant edit round-trip preserves inheritance", () => {
     expect(body._parent.syncId).toBeUndefined();
     expect(body._parent.instanceId).toBeUndefined();
     // PrusaSlicer settings bag must NOT be on the wire (~2KB of irrelevant
-    // keys per request).
-    expect(body._parent.settings).toBeUndefined();
+    // keys per request). Only the four flag keys ride it (audit N016), and
+    // this parent sets none of them.
+    expect(body._parent.settings ?? {}).toEqual({});
     // Populated nozzle/calibration arrays must NOT be on the wire.
     expect(body._parent.compatibleNozzles).toBeUndefined();
     expect(body._parent.calibrations).toBeUndefined();
@@ -453,6 +460,123 @@ describe("variant edit round-trip preserves inheritance", () => {
     const reResolvedRes = await getFilament(reResolvedReq, { params: Promise.resolve({ id: String(created._id) }) });
     const reResolved = await reResolvedRes.json();
     expect(reResolved.cost).toBe(35);
+  });
+
+  describe("settings-bag flag checkboxes on a variant (audit N016)", () => {
+    async function seedFlagFamily() {
+      const template = await Filament.create({
+        name: "Fiberon PET-GF",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: null,
+        settings: {
+          filament_abrasive: "1",
+          filament_wipe: "1",
+          filament_notes: "template-only note",
+        },
+      });
+      const variant = await Filament.create({
+        name: "Fiberon PET-GF Black",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: "#111111",
+        parentId: template._id,
+        settings: { openprinttag_slug: "polymaker-fiberon-pet-gf-black" },
+      });
+      return { template, variant };
+    }
+
+    async function getRaw(id: unknown) {
+      const req = new NextRequest(`http://localhost/api/filaments/${id}?raw=true`);
+      return (await getFilament(req, { params: Promise.resolve({ id: String(id) }) })).json();
+    }
+
+    /** What FilamentForm sends: seed the checkboxes from the raw GET, let the
+     *  caller change some, apply them to the own bag, PUT the echo back. */
+    async function formSave(
+      id: unknown,
+      edit: (seed: FormSettingFlags) => FormSettingFlags = (seed) => seed,
+    ) {
+      const raw = await getRaw(id);
+      const seed = seedFormSettingFlags(
+        raw.settings,
+        raw.parentId ? raw._parent?.settings : undefined,
+      );
+      const settings = { ...(raw.settings ?? {}) };
+      applyFormSettingFlags(settings, edit({ ...seed }), seed, Boolean(raw.parentId));
+      const req = new NextRequest(`http://localhost/api/filaments/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...raw, settings }),
+      });
+      const res = await putFilament(req, { params: Promise.resolve({ id: String(id) }) });
+      expect(res.status).toBe(200);
+      return seed;
+    }
+
+    it("?raw=true puts the parent's four flag keys on _parent and nothing else of its bag", async () => {
+      const { variant } = await seedFlagFamily();
+      const raw = await getRaw(variant._id);
+      expect(raw._parent.settings).toEqual({ filament_abrasive: "1", filament_wipe: "1" });
+    });
+
+    it("an untouched save writes no flag key and the variant keeps inheriting", async () => {
+      const { template, variant } = await seedFlagFamily();
+      const seed = await formSave(variant._id);
+      // The checkboxes showed what the preset exports.
+      expect(seed.filament_abrasive).toBe(true);
+      expect(seed.filament_wipe).toBe(true);
+
+      const fresh = await Filament.findById(variant._id).lean();
+      for (const key of FORM_FLAG_SETTING_KEYS) expect(fresh.settings).not.toHaveProperty(key);
+      expect(fresh.settings.openprinttag_slug).toBe("polymaker-fiberon-pet-gf-black");
+
+      const req = new NextRequest(`http://localhost/api/filaments/${variant._id}`);
+      const resolved = await (
+        await getFilament(req, { params: Promise.resolve({ id: String(variant._id) }) })
+      ).json();
+      expect(resolved.settings.filament_abrasive).toBe("1");
+      expect(resolved.settings.filament_wipe).toBe("1");
+
+      // Still a live link: a later template change reaches the variant.
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      const again = await (
+        await getFilament(new NextRequest(`http://localhost/api/filaments/${variant._id}`), {
+          params: Promise.resolve({ id: String(variant._id) }),
+        })
+      ).json();
+      expect(again.settings.filament_abrasive).toBe("0");
+    });
+
+    it("toggling one checkbox writes only that key", async () => {
+      const { variant } = await seedFlagFamily();
+      await formSave(variant._id, (seed) => ({ ...seed, filament_wipe: false }));
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.filament_wipe).toBe("0");
+      for (const key of FORM_FLAG_SETTING_KEYS.filter((k) => k !== "filament_wipe")) {
+        expect(fresh.settings).not.toHaveProperty(key);
+      }
+    });
+
+    it("a standalone still writes all four on every save", async () => {
+      const standalone = await Filament.create({
+        name: "Standalone PLA",
+        vendor: "Vendor",
+        type: "PLA",
+        settings: { filament_abrasive: "1" },
+      });
+      await formSave(standalone._id);
+      const fresh = await Filament.findById(standalone._id).lean();
+      expect(fresh.settings).toMatchObject({
+        filament_abrasive: "1",
+        filament_soluble: "0",
+        activate_air_filtration: "0",
+        filament_wipe: "0",
+      });
+    });
   });
 
   it("PUT strips server-only response fields (_parent, _variants, _inherited) from the body", async () => {
