@@ -5,11 +5,13 @@ import {
 } from "@/lib/trimmedNameLookup";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import "@/models/Nozzle";
+import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { calibrationToOrcaSlicerKeys } from "@/lib/orcaSlicerBundle";
+import { resolveCalibrationNozzle } from "@/lib/calibrationNozzle";
+import { nozzleIdsOf, resolvePrinterScope } from "@/lib/slicerExportScope";
 
 /**
  * GET /api/filaments/{id}/calibration?nozzle_diameter=0.4&bed_type=Smooth+PEI
@@ -92,6 +94,10 @@ export async function GET(
       );
     }
 
+    // The document whose `calibrations` are effective (own, else the
+    // parent's), read raw for the N041 nozzle choice below.
+    let calibrationsDocId = filament._id;
+
     // Resolve variant inheritance
     if (filament.parentId) {
       const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
@@ -100,6 +106,7 @@ export async function GET(
         .populate("calibrations.bedType")
         .lean();
       if (parent) {
+        if (!((filament.calibrations as unknown[] | undefined)?.length)) calibrationsDocId = parent._id;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         filament = resolveFilament(filament, parent) as any;
       }
@@ -160,6 +167,38 @@ export async function GET(
         (cal) => (cal.nozzle?.type ?? "").trim().toLowerCase() === wanted,
       );
       if (typeMatches.length > 0) scopedMatches = typeMatches;
+    }
+
+    // N041: answer from the nozzle the sync-back WRITES for these inputs.
+    // Two same-spec nozzles on different printers (a Core One INDX nozzle
+    // and an H2D's WC HF 0.4, both 0.4 HF) used to be split by array order
+    // here and by collection order on the write; both now go through
+    // `resolveCalibrationNozzle`. Narrowing, not reordering: printer-scoped
+    // rows of ANOTHER nozzle must not outrank the resolved one below. When
+    // nothing resolves (a tie the write refuses) or the resolved nozzle has
+    // no row yet, the best-effort order below is unchanged: the same
+    // read-soft / write-strict split as the type fallback above.
+    const printerScope = await resolvePrinterScope(Printer, printerParam);
+    const syncNozzle = await resolveCalibrationNozzle(Nozzle, {
+      criteria: {
+        diameter: nozzleDiameter,
+        ...(highFlowParam !== null ? { highFlow: highFlowParam === "1" } : {}),
+        ...(nozzleTypeParam?.trim() ? { type: nozzleTypeParam.trim() } : {}),
+      },
+      compatibleNozzleIds: nozzleIdsOf(filament),
+      calibrations: async () =>
+        (
+          await Filament.findOne({ _id: calibrationsDocId })
+            .select("calibrations.nozzle calibrations.printer")
+            .lean()
+        )?.calibrations,
+      printer: printerScope,
+    });
+    if (syncNozzle.kind === "resolved") {
+      const own = scopedMatches.filter(
+        (cal) => String((cal.nozzle as { _id?: unknown } | undefined)?._id) === syncNozzle.nozzleId,
+      );
+      if (own.length > 0) scopedMatches = own;
     }
 
     // GH #1047: PRIORITIZE by printer — deliberately reordering rather than
