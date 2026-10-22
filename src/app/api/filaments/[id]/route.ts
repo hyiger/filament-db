@@ -34,7 +34,15 @@ import {
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
-import { escapeRegex } from "@/lib/matchFilament";
+import {
+  resolveCalibrationNozzle,
+  type CalibrationNozzleResolution,
+  type NozzleCriteria,
+  type NozzleResolvedBy,
+  type NozzleCandidateScope,
+  type NozzleSummary,
+} from "@/lib/calibrationNozzle";
+import { resolvePrinterScope } from "@/lib/slicerExportScope";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
@@ -901,12 +909,52 @@ export async function PUT(
 }
 
 /**
+ * N041: the `calibration` block of a sync-back 200. `written` names the
+ * nozzle the keys landed on and why; `ambiguous` / `printer_not_found` list
+ * the tied nozzles and nothing was written per-nozzle; `no_match` means no
+ * nozzle matched (a #872 per-nozzle preset's baked values then fall back to
+ * the filament-wide fields, as before).
+ */
+type CalibrationSyncReport = {
+  status: "written" | "ambiguous" | "printer_not_found" | "no_match";
+  fields: string[];
+  nozzle?: { _id: string; name: string };
+  resolvedBy?: NozzleResolvedBy;
+  scope?: NozzleCandidateScope;
+  candidates?: NozzleSummary[];
+  message?: string;
+  printer?: { requested: string | null; _id: string | null; name: string | null };
+};
+
+function ambiguousCalibrationMessage(
+  resolution: Extract<CalibrationNozzleResolution, { kind: "ambiguous" | "printer-not-found" }>,
+  diameter: number,
+  printerParam: string | null,
+): string {
+  const names = resolution.candidates.map((c) => `"${c.name}"`).join(", ");
+  const head = `Calibration not written: ${resolution.candidates.length} nozzles match ${diameter} mm (${names})`;
+  if (resolution.kind === "printer-not-found") {
+    return `${head} and no live printer matches "${printerParam}" to choose between them. Pass the printer's id or exact name.`;
+  }
+  const remedy =
+    resolution.scope === "compatible"
+      ? "untick the compatible nozzles this filament does not run on"
+      : "tick the nozzle this filament runs on as compatible";
+  return `${head} and none is set apart. Pass ?printer=<id or name> for the printer it was tuned on, or ${remedy}.`;
+}
+
+/**
  * POST /api/filaments/:nameOrId
  *
  * Sync a filament preset back from PrusaSlicer. The param can be a
  * URL-encoded preset name (e.g. "The%20K8%20PC") or a MongoDB ObjectId.
  *
  * Body: { name: string, config: Record<string, string> }
+ *
+ * Query: `nozzle_diameter` + `high_flow=0|1` route the calibration keys to a
+ * per-nozzle entry; optional `printer` (id or name, the /calibration read's
+ * identity rules) picks between same-spec nozzles on different printers
+ * (N041, see `src/lib/calibrationNozzle.ts`).
  *
  * Finds the filament by name (falling back to _id), then merges the
  * incoming config keys into the filament's `settings` bag.
@@ -1199,6 +1247,9 @@ export async function POST(
     let calibrationWrite:
       | { nozzleId: string; fields: Record<string, number | null> }
       | null = null;
+    // N041: what happened to the calibration keys, returned on the 200 so a
+    // refused write is visible rather than silently dropped.
+    let calibrationReport: CalibrationSyncReport | null = null;
 
     // Update per-nozzle calibration data when a nozzle is resolvable.
     // PrusaSlicer passes ?nozzle_diameter=0.4&high_flow=0|1; high_flow
@@ -1253,77 +1304,71 @@ export async function POST(
       }
 
       if (Object.keys(calFields).length > 0) {
-        // Find the nozzle by diameter (and optionally high_flow) among the
-        // effective compatible nozzles (`compatTarget`).
-        const compatIds = (compatTarget.compatibleNozzles || []).map((n: unknown) => String(n));
-        if (compatIds.length > 0) {
-          const highFlowParam = request.nextUrl.searchParams.get("high_flow");
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const nozzleQuery: Record<string, any> = {
-            _id: { $in: compatIds },
-            diameter: nozzleDiameter,
-            _deletedAt: null,
-          };
-          // Only filter by highFlow when the param is explicitly provided, else
-          // fall back to the per-nozzle hint's HF flag (#872). A non-HF hint
-          // matches `{ $ne: true }` (false OR unset) so a legacy nozzle without
-          // the field still resolves; an HF hint requires true.
-          if (highFlowParam !== null) {
-            nozzleQuery.highFlow = highFlowParam === "1";
-          } else if (isPerNozzlePreset) {
-            nozzleQuery.highFlow = hintHighFlow ? true : { $ne: true };
-          }
-          // #872: disambiguate same-diameter nozzles (Brass vs Diamondback)
-          // by the hint's type. Case-INSENSITIVE (anchored regex) so it
-          // agrees with the /calibration read path's type match — both sides
-          // must resolve the same nozzle.
-          if (isPerNozzlePreset && hintType) {
-            nozzleQuery.type = { $regex: `^${escapeRegex(hintType)}$`, $options: "i" };
-          }
-          const matchingNozzle = await Nozzle.findOne(nozzleQuery).lean();
-
-          if (matchingNozzle) {
-            // The entry lands on whichever document owns this filament's
-            // effective calibrations (`calTarget`); both cases defer to the
-            // atomic per-entry write below.
-            calibrationWrite = {
-              nozzleId: String(matchingNozzle._id),
-              fields: calFields,
-            };
-          }
+        // Find the nozzle by diameter (and optionally high_flow / the #872
+        // hint's type): the effective compatible nozzles (`compatTarget`)
+        // first, the whole catalog only when none of those match (#859).
+        // N041: the choice is `resolveCalibrationNozzle`, shared with the
+        // /calibration read so both answer the same nozzle. It never picks
+        // by document order: two matches resolve only through the caller's
+        // `?printer=` or an existing row, and otherwise nothing is written.
+        const highFlowParam = request.nextUrl.searchParams.get("high_flow");
+        const criteria: NozzleCriteria = { diameter: nozzleDiameter };
+        // Only filter by highFlow when the param is explicitly provided, else
+        // fall back to the per-nozzle hint's HF flag (#872). A non-HF hint
+        // matches false OR unset so a legacy nozzle without the field still
+        // resolves; an HF hint requires true.
+        if (highFlowParam !== null) {
+          criteria.highFlow = highFlowParam === "1";
+        } else if (isPerNozzlePreset) {
+          criteria.highFlow = hintHighFlow ? true : "not-high-flow";
         }
-
-        // #859: when the filament has no matching COMPATIBLE nozzle
-        // (commonly an empty `compatibleNozzles`), fall back to the GLOBAL
-        // nozzle catalog — mirrors the Bambu/OrcaSlicer sync routes; only
-        // when EXACTLY ONE catalog nozzle matches, so we never guess.
-        // Without this, EM / pressure-advance edits are silently dropped for
-        // any filament with no compatible nozzles set.
-        if (!calibrationWrite) {
-          const highFlowParam = request.nextUrl.searchParams.get("high_flow");
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const globalQuery: Record<string, any> = {
-            diameter: nozzleDiameter,
-            _deletedAt: null,
+        // #872: disambiguate same-diameter nozzles (Brass vs Diamondback)
+        // by the hint's type, case-insensitively; the read path's
+        // ?nozzle_type= takes the same route.
+        if (isPerNozzlePreset && hintType) criteria.type = hintType;
+        const printerParam = request.nextUrl.searchParams.get("printer");
+        const printerScope = await resolvePrinterScope(Printer, printerParam);
+        const resolution = await resolveCalibrationNozzle(Nozzle, {
+          criteria,
+          compatibleNozzleIds: (compatTarget.compatibleNozzles || []).map((n: unknown) => String(n)),
+          calibrations: calTarget.calibrations as unknown as Array<{ nozzle?: unknown; printer?: unknown }>,
+          printer: printerScope,
+        });
+        const printerReport =
+          printerScope.kind === "none"
+            ? {}
+            : {
+                printer:
+                  printerScope.kind === "scoped"
+                    ? { requested: printerParam, _id: printerScope.printerId, name: printerScope.printerName }
+                    : { requested: printerParam, _id: null, name: null },
+              };
+        const fieldNames = Object.keys(calFields);
+        if (resolution.kind === "resolved") {
+          // The entry lands on whichever document owns this filament's
+          // effective calibrations (`calTarget`); both cases defer to the
+          // atomic per-entry write below.
+          calibrationWrite = { nozzleId: resolution.nozzleId, fields: calFields };
+          const winner = resolution.candidates.find((c) => c._id === resolution.nozzleId);
+          calibrationReport = {
+            status: "written",
+            nozzle: { _id: resolution.nozzleId, name: winner?.name ?? "" },
+            resolvedBy: resolution.by,
+            scope: resolution.scope,
+            fields: fieldNames,
+            ...printerReport,
           };
-          if (highFlowParam !== null) {
-            globalQuery.highFlow = highFlowParam === "1";
-          } else if (isPerNozzlePreset) {
-            globalQuery.highFlow = hintHighFlow ? true : { $ne: true };
-          }
-          // #872: the hint's type narrows same-diameter catalog nozzles (the
-          // bare-diameter query would punt as >1). Case-insensitive,
-          // symmetric with the read path.
-          if (isPerNozzlePreset && hintType) {
-            globalQuery.type = { $regex: `^${escapeRegex(hintType)}$`, $options: "i" };
-          }
-          const globalMatches = await Nozzle.find(globalQuery).limit(2).lean();
-          if (globalMatches.length === 1) {
-            calibrationWrite = {
-              nozzleId: String(globalMatches[0]._id),
-              fields: calFields,
-            };
-          }
+        } else if (resolution.kind === "none") {
+          calibrationReport = { status: "no_match", fields: fieldNames, ...printerReport };
+        } else {
+          calibrationReport = {
+            status: resolution.kind === "ambiguous" ? "ambiguous" : "printer_not_found",
+            message: ambiguousCalibrationMessage(resolution, nozzleDiameter, printerParam),
+            scope: resolution.scope,
+            candidates: resolution.candidates,
+            fields: fieldNames,
+            ...printerReport,
+          };
         }
 
         // #872: the baked nozzle-specific values were skipped at the top
@@ -1331,7 +1376,10 @@ export async function POST(
         // nozzle resolved, don't lose them — write the top-level-homed ones
         // (max-vol + temps) back to the filament-wide fields. Fan has no
         // top-level home.
-        if (routeToCalibration && !calibrationWrite) {
+        // N041: a TIE is not "no nozzle". The values belong to one of the
+        // tied nozzles, and writing them filament-wide would overwrite the
+        // shared default with one nozzle's value. They are reported instead.
+        if (routeToCalibration && calibrationReport?.status === "no_match") {
           if (calFields.maxVolumetricSpeed != null) update.maxVolumetricSpeed = calFields.maxVolumetricSpeed;
           if (calFields.nozzleTemp != null) update["temperatures.nozzle"] = calFields.nozzleTemp;
           if (calFields.nozzleTempFirstLayer != null) update["temperatures.nozzleFirstLayer"] = calFields.nozzleTempFirstLayer;
@@ -1646,6 +1694,9 @@ export async function POST(
       // without mutating.
       matchedBy,
       matchedName: filament.name,
+      // N041: present whenever the sync carried calibration keys for a
+      // nozzle diameter; `status` says whether they landed, and where.
+      ...(calibrationReport ? { calibration: calibrationReport } : {}),
       // Per-variant fields the template guard refused to apply — same
       // reporting key the PUT uses.
       ...(strippedTemplateFields.length > 0
