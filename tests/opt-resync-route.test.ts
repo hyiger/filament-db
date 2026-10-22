@@ -303,6 +303,96 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(body.changes).toEqual([]);
   });
 
+  // optTags are a set (audit finding N056): the spec's tag list has no order,
+  // so a stored list OPT offers in another order must never be a change,
+  // and the check and sync routes must agree on that.
+  function upstreamWithTags(tags: string[]) {
+    dbMock.mockResolvedValue({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, tags }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+  }
+
+  const MATCHING_FIELDS = {
+    vendor: "Prusament",
+    type: "PLA",
+    color: "#3d3e3d",
+    density: 1.24,
+    temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+    shoreHardnessD: 81,
+    transmissionDistance: 0.2,
+    settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+  };
+
+  it("check/sync: a reordered optTags list is not offered, and sync refuses it as not-offered", async () => {
+    // OPT maps matte + industrially_compostable to [16, 62]; the row stores
+    // the same set as [62, 16].
+    upstreamWithTags(["matte", "industrially_compostable"]);
+    const f = await Filament.create({ name: "Reordered Tags PLA", ...MATCHING_FIELDS, optTags: [62, 16] });
+
+    const res = await checkGET({} as NextRequest, params(String(f._id)));
+    expect((await res.json()).changes).toEqual([]);
+
+    const syncRes = await syncPOST(syncReq(String(f._id), ["optTags"]), params(String(f._id)));
+    expect(syncRes.status).toBe(400);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.optTags).toEqual([62, 16]); // untouched
+  });
+
+  it("check/sync: reordered secondaryColors are still offered and applied", async () => {
+    dbMock.mockResolvedValue({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, color: null, secondaryColors: ["#98282f", "#000000"] }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+    const f = await Filament.create({
+      name: "Reordered Colors PLA",
+      ...MATCHING_FIELDS,
+      color: null,
+      secondaryColors: ["#000000", "#98282f"],
+    });
+
+    const res = await checkGET({} as NextRequest, params(String(f._id)));
+    const changes = (await res.json()).changes;
+    expect(changes.map((c: { field: string }) => c.field)).toEqual(["secondaryColors"]);
+
+    const syncRes = await syncPOST(syncReq(String(f._id), ["secondaryColors"]), params(String(f._id)));
+    expect(syncRes.status).toBe(200);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.secondaryColors).toEqual(["#98282f", "#000000"]);
+  });
+
+  it("check/sync: a snapshot recorded in another order still classifies an unedited list as adopt", async () => {
+    // OPT added abrasive (4). The row's [16, 62] is the set OPT last offered
+    // (recorded as [62, 16]), so it was never edited → adopt.
+    upstreamWithTags(["matte", "industrially_compostable", "abrasive"]);
+    const f = await Filament.create({
+      name: "Snapshot Order PLA",
+      ...MATCHING_FIELDS,
+      optTags: [16, 62],
+      openprinttagSnapshot: { tagsNumbering: "spec", optTags: [62, 16] },
+    });
+
+    const res = await checkGET({} as NextRequest, params(String(f._id)));
+    const changes = (await res.json()).changes;
+    expect(changes).toHaveLength(1);
+    expect(changes[0]).toMatchObject({ field: "optTags", kind: "adopt", incoming: [16, 62, 4] });
+
+    const syncRes = await syncPOST(syncReq(String(f._id), ["optTags"]), params(String(f._id)));
+    expect(syncRes.status).toBe(200);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.optTags).toEqual([16, 62, 4]);
+
+    // Nothing left to offer afterwards.
+    const after = await checkGET({} as NextRequest, params(String(f._id)));
+    expect((await after.json()).changes).toEqual([]);
+  });
+
   it("check: respects values inherited from the parent (no spurious adopt) (GH #607)", async () => {
     // The parent carries the OPT-matching values; the variant leaves them
     // unset to inherit. Pre-fix the diff read the variant's raw (null) fields
@@ -758,6 +848,28 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(variant.openprinttagSnapshot.temperatures_nozzle).toBe(225);
 
     // A check right after import → everything matches via inheritance → no changes.
+    const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
+    expect((await checkRes.json()).changes).toEqual([]);
+  });
+
+  it("import-variant: optTags equal to the parent's in another order are pruned to inherit", async () => {
+    upstreamWithTags(["matte", "industrially_compostable"]);
+    const parent = await Filament.create({
+      name: "Tag Order Parent",
+      ...MATCHING_FIELDS,
+      settings: {},
+      color: null, // out of the #605 gate (see the pruning test above)
+      optTags: [62, 16],
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(200);
+    const variant = await Filament.findById((await res.json()).filament._id).lean();
+    expect(variant.optTags).toEqual([]); // same set → inherits the parent's
+    // The snapshot still records OPT's full offer.
+    expect(variant.openprinttagSnapshot.optTags).toEqual([16, 62]);
+
     const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
     expect((await checkRes.json()).changes).toEqual([]);
   });
