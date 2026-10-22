@@ -351,6 +351,91 @@ describe("diffOptFields", () => {
     expect(s).toBeDefined();
     expect(s!.incoming).toEqual(["#98282f", "#000000"]);
   });
+
+  // optTags are a SET (the spec's tag list has no order; the encoder sorts
+  // it). Audit finding N056: two rows storing [62, 16] against OPT's [16, 62]
+  // re-surfaced as a conflict on every check.
+  describe("optTags compare as a set", () => {
+    const base = { color: "#3d3e3d", density: 1.24, temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 }, shoreHardnessD: 81, transmissionDistance: 0.2 };
+    const tagChange = (changes: ReturnType<typeof diffOptFields>) => changes.find((c) => c.field === "optTags");
+
+    it("a reordered tag list is not a change (no snapshot)", () => {
+      const changes = diffOptFields({ ...base, optTags: [62, 16] }, payload({ optTags: [16, 62] }), null);
+      expect(changes).toEqual([]);
+    });
+
+    it("a reordered tag list is not a change even when the snapshot disagrees", () => {
+      // Equal sets short-circuit before classification: nothing to sync.
+      const changes = diffOptFields({ ...base, optTags: [62, 16] }, payload({ optTags: [16, 62] }), { optTags: [16] });
+      expect(tagChange(changes)).toBeUndefined();
+    });
+
+    it("reordered secondaryColors in the same diff are still a change", () => {
+      const changes = diffOptFields(
+        { ...base, color: null, secondaryColors: ["#000000", "#98282f"], optTags: [62, 16] },
+        payload({ color: null, secondaryColors: ["#98282f", "#000000"], optTags: [16, 62] }),
+        null,
+      );
+      expect(changes.map((c) => c.field)).toEqual(["secondaryColors"]);
+    });
+
+    it("a genuinely different set is still offered, with OPT's own order as incoming", () => {
+      const changes = diffOptFields({ ...base, optTags: [62, 16] }, payload({ optTags: [16, 62, 4] }), null);
+      const t = tagChange(changes);
+      expect(t).toBeDefined();
+      expect(t!.current).toEqual([62, 16]);
+      expect(t!.incoming).toEqual([16, 62, 4]);
+      expect(t!.kind).toBe("conflict"); // no provenance
+    });
+
+    it("duplicates collapse: [16, 16, 62] holds the same tags as [16, 62]", () => {
+      expect(diffOptFields({ ...base, optTags: [16, 16, 62] }, payload({ optTags: [62, 16] }), null)).toEqual([]);
+    });
+
+    it("duplicates don't mask a missing tag: [16, 16] is not [16, 62]", () => {
+      const t = tagChange(diffOptFields({ ...base, optTags: [16, 16] }, payload({ optTags: [16, 62] }), null));
+      expect(t?.incoming).toEqual([16, 62]);
+    });
+
+    it("an id the encoder can't write is ignored, as in every tag-set compare", () => {
+      // sameOptTagSet semantics: the schema setter strips such an entry on the
+      // next save and the encoder never writes it, so it is not a tag.
+      expect(diffOptFields({ ...base, optTags: [16, -1, 62] }, payload({ optTags: [62, 16] }), null)).toEqual([]);
+    });
+
+    it("a corrupt non-list value still surfaces as a change", () => {
+      const t = tagChange(
+        diffOptFields({ ...base, optTags: "16" as unknown as string[] }, payload({ optTags: [16] }), null),
+      );
+      expect(t?.incoming).toEqual([16]);
+    });
+
+    it("provenance: a snapshot in another order still proves the value is OPT's → adopt", () => {
+      // The user never edited [16, 62]; OPT recorded it as [62, 16] and now
+      // adds a tag. Same set as the snapshot → unedited → adopt.
+      const t = tagChange(
+        diffOptFields({ ...base, optTags: [16, 62] }, payload({ optTags: [16, 62, 4] }), { optTags: [62, 16] }),
+      );
+      expect(t?.kind).toBe("adopt");
+    });
+
+    it("provenance: a snapshot holding a different set still classifies as conflict", () => {
+      const t = tagChange(
+        diffOptFields({ ...base, optTags: [16, 62] }, payload({ optTags: [16, 4] }), { optTags: [16] }),
+      );
+      expect(t?.kind).toBe("conflict");
+    });
+
+    it("a variant's reordered own tags over an empty parent offer nothing", () => {
+      const changes = diffOptFields(
+        { ...base, optTags: [62, 16] },
+        payload({ optTags: [16, 62] }),
+        null,
+        { optTags: [] },
+      );
+      expect(tagChange(changes)).toBeUndefined();
+    });
+  });
 });
 
 describe("getPath edge cases (via public API)", () => {
@@ -526,6 +611,21 @@ describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
     });
     expect(pruned.secondaryColors).toEqual([]); // equal → inherit
     expect(pruned.optTags).toEqual([99]); // differs → kept
+  });
+
+  it("prunes optTags holding the parent's tags in another order (same set → inherit)", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload({ optTags: [16, 62] }), {
+      optTags: [62, 16],
+      optTagsSpec: true,
+    });
+    expect(pruned.optTags).toEqual([]);
+  });
+
+  it("keeps secondaryColors in another order than the parent's (slot order is data)", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload({ secondaryColors: ["#111111", "#000000"] }), {
+      secondaryColors: ["#000000", "#111111"],
+    });
+    expect(pruned.secondaryColors).toEqual(["#111111", "#000000"]);
   });
 
   it("#928: prunes secondaryColors that match the parent only by case", () => {

@@ -27,6 +27,16 @@
  *   - no snapshot entry AND current differs from incoming     → `conflict`
  *       (no provenance to prove it's safe — surface it, let the user decide).
  *
+ * "Equal" and "differs" are per field (`valuesEqualForField`): hex colors
+ * compare case-insensitively (GH #894), and `optTags` compares as a SET:
+ * the spec's tag list has no meaningful order (the CBOR encoder sorts it),
+ * so a stored `[62, 16]` against an offered `[16, 62]` is not a change and is
+ * never offered, neither as a diff nor through the snapshot test. Offering it
+ * would sync nothing a reader can see, and before this rule it re-surfaced as
+ * a `conflict` on every check. `secondaryColors` stays ORDER-sensitive: slot
+ * order is meaningful (it sets the coextruded stripe order and which of CBOR
+ * keys 20–24 each color lands in).
+ *
  * Phase 1 lets the user pick which fields to apply, so the classification is
  * advisory: it drives default-checked vs. needs-confirmation in the UI, not
  * an auto-apply. Nothing here mutates anything.
@@ -37,6 +47,7 @@ import {
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
   optTagsAwaitReview,
+  sameOptTagSet,
   type OptTagReviewRow,
 } from "@/lib/optTagLegacy";
 
@@ -145,7 +156,9 @@ function getPath(obj: Record<string, unknown> | null | undefined, path: string):
 
 /** Order-sensitive structural equality for OptValues. `null` and `[]` both
  *  mean "nothing" and compare equal — so a field a user never set (null) and
- *  one OPT doesn't offer ([]) aren't surfaced as a spurious change. */
+ *  one OPT doesn't offer ([]) aren't surfaced as a spurious change. Callers
+ *  comparing a managed field go through `valuesEqualForField`, which relaxes
+ *  this for the fields where case or order carries no meaning. */
 function valuesEqual(a: OptValue, b: OptValue): boolean {
   const aEmpty = a == null || (Array.isArray(a) && a.length === 0);
   const bEmpty = b == null || (Array.isArray(b) && b.length === 0);
@@ -172,8 +185,38 @@ function canonicalizeColor(v: OptValue): OptValue {
   return v;
 }
 
-/** `valuesEqual`, but case-insensitive for hex-color fields (GH #894). */
+/** Is `v` a tag list (or nothing)? A non-null scalar in `optTags` is corrupt
+ *  data, not a set of tags. */
+function isListOrNothing(v: OptValue): v is string[] | null {
+  return v == null || Array.isArray(v);
+}
+
+/**
+ * `optTags` is a SET: the spec's tag list has no meaningful order (the CBOR
+ * encoder sorts it before writing), so two lists holding the same ids are the
+ * same tags whatever their order. Duplicates collapse too, and an id the
+ * encoder can't write is ignored, as everywhere else the app compares tag
+ * sets (`sameOptTagSet`: the PUT's set-equal drop, the renumber pass). A
+ * corrupt non-list value keeps the strict compare, so it still surfaces as a
+ * change OPT's list can repair, the same posture as a corrupt
+ * `secondaryColors`.
+ */
+function sameTagSet(a: OptValue, b: OptValue): boolean {
+  if (!isListOrNothing(a) || !isListOrNothing(b)) return valuesEqual(a, b);
+  return sameOptTagSet(a, b);
+}
+
+/**
+ * `valuesEqual`, relaxed where the field's meaning allows: case-insensitive
+ * for hex colors (GH #894) and order-insensitive for `optTags`. Every
+ * comparison of a color or array field in this module goes through it (the
+ * diff skip, the snapshot provenance test and the variant-import prune of
+ * the whole-array fields), so the check and sync routes, which both call
+ * `diffOptFields`, keep agreeing on the offered set. `secondaryColors` is
+ * case-folded but stays order-sensitive: its slot order is data.
+ */
 function valuesEqualForField(field: string, a: OptValue, b: OptValue): boolean {
+  if (field === "optTags") return sameTagSet(a, b);
   if (COLOR_FIELDS.has(field)) return valuesEqual(canonicalizeColor(a), canonicalizeColor(b));
   return valuesEqual(a, b);
 }
@@ -233,6 +276,7 @@ function classify(
   if (hasSnapshotEntry) {
     // GH #894: case-fold hex colors so a casing-only difference vs the stored
     // snapshot classifies as `adopt` (unchanged), not a permanent `conflict`.
+    // Likewise a tag list the user only reordered is still OPT's offer.
     return valuesEqualForField(field, current, snapshotVal ?? null) ? "adopt" : "conflict";
   }
   return "conflict";
@@ -311,6 +355,7 @@ export function diffOptFields(
     const current = getPath(filament, field);
     // GH #894: hex colors compare case-insensitively, so `#AABBCC` already
     // stored vs an `#aabbcc` upstream offer isn't surfaced as a spurious change.
+    // optTags compare as a set: a reordered list has nothing to sync.
     if (valuesEqualForField(field, current, incoming)) continue;
     const snapKey = optSnapshotKey(field);
     const hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
@@ -495,10 +540,11 @@ export function pruneOptPayloadAgainstParent(
     // the same tags. Keep the variant's own array, or the parent's later
     // review would decide what the variant's tags mean.
     if (field === "optTags" && optTagsAwaitReview(parentEffective as OptTagReviewRow)) continue;
-    // GH #928: use the case-folding compare for hex-color fields — a variant's
-    // secondaryColors that differ from the parent's only by case (#AABBCC vs
-    // #aabbcc) should still prune to inherit. valuesEqualForField is a no-op for
-    // the non-color array field (optTags), so this is safe for the whole set.
+    // GH #928: use the field-aware compare. A variant's secondaryColors that
+    // differ from the parent's only by case (#AABBCC vs #aabbcc) still prune to
+    // inherit, and so do optTags holding the parent's tags in another order
+    // (inheriting yields the same set). secondaryColors in another ORDER are
+    // kept: inheriting would change the stripe order.
     if (valuesEqualForField(field, v as OptValue, getPath(parentEffective, field))) {
       pruned[field] = [];
     }
