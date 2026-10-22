@@ -39,6 +39,11 @@ import {
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
 import { settingFlagIsOn } from "@/lib/slicerSettings";
+import {
+  applyFormSettingFlags,
+  FORM_FLAG_SETTING_KEYS,
+  seedFormSettingFlags,
+} from "@/lib/formSettingFlags";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -306,6 +311,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     );
   };
 
+  // The four settings-bag checkboxes seed from the bag the row EXPORTS: on a
+  // variant that is its own bag over its parent's, so an inherited
+  // filament_abrasive "1" shows checked instead of reading as off and being
+  // pinned "0" by the next save. See src/lib/formSettingFlags.ts.
+  const flagSeed = seedFormSettingFlags(
+    initialData?.settings,
+    initialData?.parentId
+      ? (initialData?._parent as { settings?: unknown } | undefined)?.settings
+      : undefined,
+  );
+
   const [form, setForm] = useState<FilamentFormData>({
     name: initialData?.name || "",
     vendor: initialData?.vendor || "",
@@ -362,8 +378,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
     glassTempTransition: initialData?.glassTempTransition?.toString() || "",
     heatDeflectionTemp: initialData?.heatDeflectionTemp?.toString() || "",
-    abrasive: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_abrasive"]),
-    soluble: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_soluble"]),
+    abrasive: flagSeed.filament_abrasive,
+    soluble: flagSeed.filament_soluble,
     optTags: initialData?.optTags || [],
     fanMinSpeed: getSettingVal(initialData, "min_fan_speed"),
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
@@ -373,7 +389,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     auxFanSpeed: getSettingVal(initialData, "additional_cooling_fan_speed"),
     fanBelowLayerTime: getSettingVal(initialData, "fan_below_layer_time"),
     slowDownMinSpeed: getSettingVal(initialData, "slow_down_min_speed"),
-    activateAirFiltration: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["activate_air_filtration"]),
+    activateAirFiltration: flagSeed.activate_air_filtration,
     retractLength: getSettingVal(initialData, "filament_retract_length"),
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
@@ -385,7 +401,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     filamentLoadTime: getSettingVal(initialData, "filament_load_time"),
     filamentUnloadTime: getSettingVal(initialData, "filament_unload_time"),
     rammingParameters: getSettingVal(initialData, "filament_ramming_parameters"),
-    wipe: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_wipe"]),
+    wipe: flagSeed.filament_wipe,
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
@@ -873,8 +889,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.extrusion_multiplier = form.extrusionMultiplier || undefined;
     settings.filament_shrinkage_compensation_xy = form.shrinkageXY || undefined;
     settings.filament_shrinkage_compensation_z = form.shrinkageZ || undefined;
-    settings.filament_abrasive = form.abrasive ? "1" : "0";
-    settings.filament_soluble = form.soluble ? "1" : "0";
     settings.chamber_temperature = form.temperatures.chamber || undefined;
     settings.min_fan_speed = form.fanMinSpeed || undefined;
     settings.max_fan_speed = form.fanMaxSpeed || undefined;
@@ -888,14 +902,26 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.additional_cooling_fan_speed = form.auxFanSpeed || undefined;
     settings.fan_below_layer_time = form.fanBelowLayerTime || undefined;
     settings.slow_down_min_speed = form.slowDownMinSpeed || undefined;
-    settings.activate_air_filtration = form.activateAirFiltration ? "1" : "0";
     settings.z_offset = form.zOffset || undefined;
     settings.filament_loading_speed = form.filamentLoadingSpeed || undefined;
     settings.filament_unloading_speed = form.filamentUnloadingSpeed || undefined;
     settings.filament_load_time = form.filamentLoadTime || undefined;
     settings.filament_unload_time = form.filamentUnloadTime || undefined;
     settings.filament_ramming_parameters = form.rammingParameters || undefined;
-    settings.filament_wipe = form.wipe ? "1" : "0";
+    // The four flag checkboxes. A variant writes only the ones the user
+    // changed from their seed; an untouched one keeps inheriting from the
+    // template. A standalone or template writes all four, as it always has.
+    applyFormSettingFlags(
+      settings,
+      {
+        filament_abrasive: form.abrasive,
+        filament_soluble: form.soluble,
+        activate_air_filtration: form.activateAirFiltration,
+        filament_wipe: form.wipe,
+      },
+      flagSeed,
+      Boolean(form.parentId),
+    );
     // GH #1070: escape + wrap via the shared INI value codec — a raw newline
     // or quote from the textarea must not reach the settings bag unescaped
     // (it would split the exported `key = value` line and a re-import would
@@ -981,14 +1007,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
       // Checkbox-backed keys seed via settingFlagIsOn(...) and write back
       // "1"/"0", so display-identity can never detect their unedited case.
-      // Their unedited test mirrors the seed via the SAME helper. Keep this
-      // set in lockstep with the settingFlagIsOn seeds above.
-      const CHECKBOX_SETTING_KEYS = new Set([
-        "filament_abrasive",
-        "filament_soluble",
-        "activate_air_filtration",
-        "filament_wipe",
-      ]);
+      // Their unedited test mirrors the seed via the SAME helper. The set is
+      // the one key list seedFormSettingFlags reads, so it cannot drift. A
+      // stored array here is the row's OWN value, which is also what its
+      // seed read (an own key always wins over the parent's).
+      const CHECKBOX_SETTING_KEYS = new Set<string>(FORM_FLAG_SETTING_KEYS);
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
         if (!Array.isArray(sv)) continue;
