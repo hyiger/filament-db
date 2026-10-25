@@ -393,6 +393,148 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect((await after.json()).changes).toEqual([]);
   });
 
+  // GH #1227 (Codex P1 on PR #1237): tags still awaiting numbering review may
+  // hold the app's pre-v1.83 ids (legacy 2 is "transparent", spec 2 is
+  // "antibacterial"), so neither route compares them with OPT's spec ids.
+  // check lists them as a never-pre-checked `pendingReview` conflict; sync
+  // refuses them with 409 and never stamps optTagsSpec as a side effect.
+  async function syncBody(id: string, fields: string[]) {
+    const res = await syncPOST(syncReq(id, fields), params(id));
+    return { status: res.status, body: await res.json() };
+  }
+
+  it("check/sync: an unreviewed row's tags are pendingReview, and sync refuses them with 409", async () => {
+    // OPT offers matte + antibacterial as spec [16, 2]; the row's unreviewed
+    // [2, 16] is the same set of ids but may be transparent + matte.
+    upstreamWithTags(["matte", "antibacterial"]);
+    const f = await Filament.create({
+      name: "Unreviewed Tags PLA",
+      ...MATCHING_FIELDS,
+      density: null, // something else to adopt in the same check
+      optTags: [2, 16],
+      optTagsSpec: false,
+    });
+    const id = String(f._id);
+
+    const checkBody = await (await checkGET({} as NextRequest, params(id))).json();
+    const tags = checkBody.changes.find((c: { field: string }) => c.field === "optTags");
+    expect(tags).toEqual({
+      field: "optTags",
+      labelKey: "resync.field.optTags",
+      current: [2, 16],
+      incoming: [16, 2],
+      kind: "conflict",
+      pendingReview: true,
+    });
+    expect(checkBody.changes.find((c: { field: string }) => c.field === "density")).toMatchObject({
+      kind: "adopt",
+    });
+
+    // Naming optTags, alone or with another field, writes nothing.
+    for (const fields of [["optTags"], ["optTags", "density"]]) {
+      const { status, body } = await syncBody(id, fields);
+      expect(status).toBe(409);
+      expect(body.error).toBe("opt_tags_pending_review");
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.optTags).toEqual([2, 16]);
+      expect(fresh.optTagsSpec).toBe(false);
+      expect(fresh.density).toBeNull();
+    }
+
+    // The other fields still sync, and the tags stay unreviewed.
+    expect((await syncBody(id, ["density"])).status).toBe(200);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.density).toBe(1.24);
+    expect(fresh.optTags).toEqual([2, 16]);
+    expect(fresh.optTagsSpec).toBe(false);
+    const recheck = await (await checkGET({} as NextRequest, params(id))).json();
+    expect(recheck.changes).toEqual([tags]);
+  });
+
+  it("check/sync: a reordered pre-v1.83 snapshot can't pre-check a tag replacement on an unreviewed row", async () => {
+    // A pre-v1.83 import: stored [2, 16], legacy snapshot [16, 2], no marker
+    // on the row at all. Upstream now adds abrasive. Set equality with the
+    // snapshot classified this adopt, pre-checked in the dialog.
+    upstreamWithTags(["matte", "antibacterial", "abrasive"]);
+    const f = await Filament.create({
+      name: "Legacy Snapshot PLA",
+      ...MATCHING_FIELDS,
+      optTags: [2, 16],
+      openprinttagSnapshot: { optTags: [16, 2] },
+    });
+    await Filament.collection.updateOne({ _id: f._id }, { $unset: { optTagsSpec: "" } });
+    const id = String(f._id);
+
+    const checkBody = await (await checkGET({} as NextRequest, params(id))).json();
+    expect(checkBody.changes).toEqual([
+      expect.objectContaining({ field: "optTags", kind: "conflict", pendingReview: true, incoming: [16, 2, 4] }),
+    ]);
+
+    const { status, body } = await syncBody(id, ["optTags"]);
+    expect(status).toBe(409);
+    expect(body.error).toBe("opt_tags_pending_review");
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.optTags).toEqual([2, 16]);
+    expect(fresh).not.toHaveProperty("optTagsSpec");
+    expect(fresh.openprinttagSnapshot).toEqual({ optTags: [16, 2] });
+  });
+
+  it("check/sync: once the row is reviewed, its tags compare as a set again", async () => {
+    upstreamWithTags(["matte", "antibacterial"]);
+    const f = await Filament.create({
+      name: "Reviewed Tags PLA",
+      ...MATCHING_FIELDS,
+      optTags: [2, 16],
+      optTagsSpec: false,
+    });
+    const id = String(f._id);
+    // The Data health "keep" outcome (the tags came from an NFC tag): the
+    // same ids, now marked spec.
+    await Filament.updateOne({ _id: f._id }, { $set: { optTagsSpec: true } });
+
+    expect((await (await checkGET({} as NextRequest, params(id))).json()).changes).toEqual([]);
+    const { status } = await syncBody(id, ["optTags"]);
+    expect(status).toBe(400); // not offered: nothing to sync
+  });
+
+  it("check/sync: a variant inheriting an unreviewed parent's tags answers for the parent", async () => {
+    upstreamWithTags(["matte", "antibacterial"]);
+    const parent = await Filament.create({
+      name: "Unreviewed Tag Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      optTags: [2, 16],
+      optTagsSpec: false,
+    });
+    const variant = await Filament.create({
+      name: "Inheriting Tag Variant",
+      ...MATCHING_FIELDS,
+      parentId: parent._id,
+      // optTags unset → inherits the parent's [2, 16] and its review state;
+      // the variant's OWN marker (the schema default, true) says nothing.
+    });
+    const id = String(variant._id);
+
+    const checkBody = await (await checkGET({} as NextRequest, params(id))).json();
+    expect(checkBody.changes).toEqual([
+      expect.objectContaining({ field: "optTags", current: [2, 16], kind: "conflict", pendingReview: true }),
+    ]);
+
+    const { status, body } = await syncBody(id, ["optTags"]);
+    expect(status).toBe(409);
+    expect(body.error).toBe("opt_tags_pending_review");
+    const freshVariant = await Filament.findById(variant._id).lean();
+    expect(freshVariant.optTags).toEqual([]);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.optTags).toEqual([2, 16]);
+    expect(freshParent.optTagsSpec).toBe(false);
+
+    // Settle the parent: the variant's inherited tags then compare as a set.
+    await Filament.updateOne({ _id: parent._id }, { $set: { optTagsSpec: true } });
+    expect((await (await checkGET({} as NextRequest, params(id))).json()).changes).toEqual([]);
+    expect((await syncBody(id, ["optTags"])).status).toBe(400);
+  });
+
   it("check: respects values inherited from the parent (no spurious adopt) (GH #607)", async () => {
     // The parent carries the OPT-matching values; the variant leaves them
     // unset to inherit. Pre-fix the diff read the variant's raw (null) fields

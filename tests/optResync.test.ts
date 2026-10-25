@@ -8,6 +8,7 @@ import {
   optSnapshotKey,
   OPT_MANAGED_FIELD_KEYS,
 } from "@/lib/optResync";
+import { effectiveOptTagsAwaitReview } from "@/lib/optTagLegacy";
 
 /**
  * GH #607 Phase 1 — pure diff + provenance classification.
@@ -435,6 +436,183 @@ describe("diffOptFields", () => {
       );
       expect(tagChange(changes)).toBeUndefined();
     });
+  });
+});
+
+// GH #1227 (Codex P1 on PR #1237): tag ids are only comparable between arrays
+// in the same numbering. OPT's offer is always spec ids; a stored array still
+// awaiting review, or a pre-v1.83 snapshot, may hold the app's old ids, where
+// 2 is "transparent" (spec 20) and the spec's 2 is "antibacterial".
+describe("diffOptFields: optTags respect the numbering state (GH #1227)", () => {
+  const base = { color: "#3d3e3d", density: 1.24, temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 }, shoreHardnessD: 81, transmissionDistance: 0.2 };
+  const tagChange = (changes: ReturnType<typeof diffOptFields>) => changes.find((c) => c.field === "optTags");
+  const unreviewed = { optTagsAwaitReview: true };
+
+  it("an unreviewed legacy [2, 16] is not 'equal' to the spec offer [16, 2]: surfaced as pendingReview", () => {
+    const t = tagChange(
+      diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [16, 2] }), null, null, unreviewed),
+    );
+    expect(t).toEqual({
+      field: "optTags",
+      labelKey: "resync.field.optTags",
+      current: [2, 16],
+      incoming: [16, 2],
+      kind: "conflict",
+      pendingReview: true,
+    });
+  });
+
+  it("an unreviewed array is surfaced even when its ids match OPT's in the same order", () => {
+    // Same ids, possibly different tags: "up to date" would be a guess.
+    const t = tagChange(
+      diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [2, 16] }), null, null, unreviewed),
+    );
+    expect(t).toMatchObject({ kind: "conflict", pendingReview: true });
+  });
+
+  it("a reordered legacy snapshot can't make an unreviewed array adopt", () => {
+    // Pre-v1.83 import: stored [2, 16], legacy snapshot [16, 2]; upstream adds
+    // abrasive. Set equality with the snapshot used to classify it adopt,
+    // pre-checking a sync that replaced the array and stamped optTagsSpec.
+    const t = tagChange(
+      diffOptFields(
+        { ...base, optTags: [2, 16] },
+        payload({ optTags: [16, 2, 4] }),
+        { optTags: [16, 2] },
+        null,
+        unreviewed,
+      ),
+    );
+    expect(t).toMatchObject({ kind: "conflict", pendingReview: true });
+  });
+
+  it("an unreviewed array's upstream clear is pendingReview too", () => {
+    const t = tagChange(
+      diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [] }), null, null, unreviewed),
+    );
+    expect(t).toMatchObject({ incoming: [], kind: "conflict", pendingReview: true });
+  });
+
+  it("only optTags is held back: the other fields of the same row diff normally", () => {
+    const changes = diffOptFields(
+      { ...base, density: null, optTags: [2, 16] },
+      payload({ optTags: [16, 2] }),
+      null,
+      null,
+      unreviewed,
+    );
+    expect(changes.find((c) => c.field === "density")).toMatchObject({ kind: "adopt" });
+    expect(changes.filter((c) => c.pendingReview).map((c) => c.field)).toEqual(["optTags"]);
+  });
+
+  it("a verified row keeps set equality: [2, 16] against [16, 2] is not a change", () => {
+    expect(diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [16, 2] }), null)).toEqual([]);
+    expect(
+      diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [16, 2] }), null, null, { optTagsAwaitReview: false }),
+    ).toEqual([]);
+  });
+
+  it("a verified row with a spec-marked snapshot in another order still classifies adopt", () => {
+    const t = tagChange(
+      diffOptFields(
+        { ...base, optTags: [2, 16] },
+        payload({ optTags: [16, 2, 4] }),
+        { tagsNumbering: "spec", optTags: [16, 2] },
+      ),
+    );
+    expect(t).toMatchObject({ kind: "adopt" });
+    expect(t).not.toHaveProperty("pendingReview");
+  });
+
+  it("a pre-v1.83 snapshot is no tag provenance for a verified row: conflict, in either order", () => {
+    // The verified [2, 16] is antibacterial + matte; the legacy snapshot's
+    // [2, 16] recorded transparent + matte. Equal ids prove nothing.
+    for (const snapTags of [[2, 16], [16, 2]]) {
+      const t = tagChange(
+        diffOptFields({ ...base, optTags: [2, 16] }, payload({ optTags: [16, 2, 4] }), { optTags: snapTags }),
+      );
+      expect(t).toMatchObject({ kind: "conflict" });
+    }
+  });
+
+  it("a pre-v1.83 snapshot holding only ids both numberings share is still provenance", () => {
+    // 16 matte and 62 (outside the legacy table) read the same either way.
+    const t = tagChange(
+      diffOptFields({ ...base, optTags: [16, 62] }, payload({ optTags: [16, 62, 4] }), { optTags: [62, 16] }),
+    );
+    expect(t).toMatchObject({ kind: "adopt" });
+  });
+
+  it("a corrupt pre-v1.83 snapshot entry is no provenance either", () => {
+    const t = tagChange(
+      diffOptFields({ ...base, optTags: [16] }, payload({ optTags: [16, 4] }), { optTags: "16" }),
+    );
+    expect(t).toMatchObject({ kind: "conflict" });
+  });
+
+  describe("an inheriting variant answers for its parent's review state", () => {
+    const unreviewedParent = { optTags: [2, 16] }; // no marker, ambiguous ids
+    const reviewedParent = { optTags: [2, 16], optTagsSpec: true };
+
+    it("a variant inheriting an unreviewed parent's tags gets pendingReview", () => {
+      const own = { optTags: [], optTagsSpec: true };
+      const awaitReview = effectiveOptTagsAwaitReview(own, unreviewedParent);
+      expect(awaitReview).toBe(true);
+      const t = tagChange(
+        diffOptFields(
+          { ...base, optTags: [2, 16], optTagsSpec: true }, // effective: the parent's array
+          payload({ optTags: [16, 2] }),
+          null,
+          unreviewedParent,
+          { optTagsAwaitReview: awaitReview },
+        ),
+      );
+      expect(t).toMatchObject({ current: [2, 16], kind: "conflict", pendingReview: true });
+    });
+
+    it("an unapplyable clear stays suppressed, review state or not", () => {
+      const changes = diffOptFields(
+        { ...base, optTags: [2, 16] },
+        payload({ optTags: [] }),
+        null,
+        unreviewedParent,
+        { optTagsAwaitReview: true },
+      );
+      expect(tagChange(changes)).toBeUndefined();
+    });
+
+    it("a variant inheriting a reviewed parent's tags compares them as a set", () => {
+      const awaitReview = effectiveOptTagsAwaitReview({ optTags: [] }, reviewedParent);
+      expect(awaitReview).toBe(false);
+      const changes = diffOptFields(
+        { ...base, optTags: [2, 16] },
+        payload({ optTags: [16, 2] }),
+        null,
+        reviewedParent,
+        { optTagsAwaitReview: awaitReview },
+      );
+      expect(tagChange(changes)).toBeUndefined();
+    });
+
+    it("a variant's own reviewed tags over an unreviewed parent compare normally", () => {
+      const own = { optTags: [16, 62], optTagsSpec: true };
+      const awaitReview = effectiveOptTagsAwaitReview(own, unreviewedParent);
+      expect(awaitReview).toBe(false);
+      const changes = diffOptFields(
+        { ...base, optTags: [16, 62] },
+        payload({ optTags: [62, 16] }),
+        null,
+        unreviewedParent,
+        { optTagsAwaitReview: awaitReview },
+      );
+      expect(tagChange(changes)).toBeUndefined();
+    });
+  });
+
+  it("the variant-import prune keeps reordered tags under an unreviewed parent", () => {
+    // Set equality would have pruned [16, 2] to inherit the parent's legacy
+    // [2, 16]; the parent's later review would then decide the variant's tags.
+    expect(pruneOptPayloadAgainstParent(payload({ optTags: [16, 2] }), { optTags: [2, 16] }).optTags).toEqual([16, 2]);
   });
 });
 

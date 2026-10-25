@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -16,6 +17,10 @@ import { useConfirm } from "@/components/ConfirmDialog";
  * or still matched OPT); `conflict`-classified changes are unchecked and
  * flagged, because the user edited that field away from OPT and we don't
  * want a careless "apply all" to silently revert their work.
+ *
+ * GH #1227: a `pendingReview` change (the row's tags still await numbering
+ * review) is shown with its checkbox disabled and a pointer to Data health:
+ * the sync route refuses it until the row is settled there.
  */
 
 type ChangeKind = "adopt" | "conflict";
@@ -27,6 +32,7 @@ interface FieldChange {
   current: OptValue;
   incoming: OptValue;
   kind: ChangeKind;
+  pendingReview?: boolean;
 }
 
 interface CheckResponse {
@@ -80,9 +86,14 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
           setError(t("resync.error"));
         } else {
           setData(body);
-          // Default-check the safe (adopt) changes only.
+          // Default-check the safe (adopt) changes only. A pendingReview
+          // change is always a conflict, and its checkbox is disabled.
           setSelected(
-            new Set((body.changes ?? []).filter((c) => c.kind === "adopt").map((c) => c.field)),
+            new Set(
+              (body.changes ?? [])
+                .filter((c) => c.kind === "adopt" && !c.pendingReview)
+                .map((c) => c.field),
+            ),
           );
         }
       } catch {
@@ -189,7 +200,8 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
   }, [confirm, filamentId, toast, t, onApplied, onClose]);
 
   const changes = data?.changes ?? [];
-  const hasConflicts = changes.some((c) => c.kind === "conflict");
+  const hasConflicts = changes.some((c) => c.kind === "conflict" && !c.pendingReview);
+  const hasPendingReview = changes.some((c) => c.pendingReview);
   // GH #1150: the link-management actions show whenever the filament IS
   // linked — including the materialGone dead end (linked, found: false),
   // which is exactly where "remove or re-point the link" is the only
@@ -261,17 +273,25 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
                       <td className="py-1.5 pr-2 align-top">
                         <input
                           type="checkbox"
-                          checked={selected.has(c.field)}
+                          checked={!c.pendingReview && selected.has(c.field)}
+                          disabled={c.pendingReview}
                           onChange={() => toggle(c.field)}
                           aria-label={t(c.labelKey)}
+                          className="disabled:cursor-not-allowed"
                         />
                       </td>
                       <td className="py-1.5 pr-2 align-top">
                         <span>{t(c.labelKey)}</span>
-                        {c.kind === "conflict" && (
+                        {c.pendingReview ? (
                           <span className="ml-1.5 text-[10px] uppercase font-semibold text-amber-600 dark:text-amber-400">
-                            {t("resync.conflictBadge")}
+                            {t("resync.pendingReviewBadge")}
                           </span>
+                        ) : (
+                          c.kind === "conflict" && (
+                            <span className="ml-1.5 text-[10px] uppercase font-semibold text-amber-600 dark:text-amber-400">
+                              {t("resync.conflictBadge")}
+                            </span>
+                          )
                         )}
                       </td>
                       <td className="py-1.5 pr-2 align-top text-gray-500 font-mono text-xs break-all">
@@ -287,6 +307,14 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
               {hasConflicts && (
                 <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
                   {t("resync.conflictHint")}
+                </p>
+              )}
+              {hasPendingReview && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 mt-3">
+                  {t("resync.pendingReviewHint")}{" "}
+                  <Link href="/settings/health" className="underline font-medium">
+                    {t("resync.pendingReviewLink")}
+                  </Link>
                 </p>
               )}
             </>
@@ -324,7 +352,7 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
           >
             {t("resync.cancel")}
           </button>
-          {changes.length > 0 && (
+          {changes.some((c) => !c.pendingReview) && (
             <button
               type="button"
               onClick={handleApply}

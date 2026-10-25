@@ -37,6 +37,18 @@
  * order is meaningful (it sets the coextruded stripe order and which of CBOR
  * keys 20–24 each color lands in).
  *
+ * GH #1227: comparing tag ids is only meaningful between arrays in the SAME
+ * numbering. OPT's offer is always spec ids, so tags are compared only when
+ * the other side is known to be spec-numbered too:
+ *   - a row whose effective tags still await numbering review (the caller
+ *     passes `optTagsAwaitReview`) is never compared at all: its tags are
+ *     surfaced as a `conflict` flagged `pendingReview`, never pre-checked,
+ *     and the sync route refuses it with 409 `opt_tags_pending_review` until
+ *     the row is settled on Data health;
+ *   - a snapshot written before v1.83 (no `tagsNumbering: "spec"` marker) is
+ *     no provenance for the tags unless every id it records means the same
+ *     in both numberings, so it cannot turn a tag change into an `adopt`.
+ *
  * Phase 1 lets the user pick which fields to apply, so the classification is
  * advisory: it drives default-checked vs. needs-confirmation in the UI, not
  * an auto-apply. Nothing here mutates anything.
@@ -46,8 +58,10 @@ import { INHERITABLE_FIELDS } from "@/lib/resolveFilament";
 import {
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
+  classifyOptTags,
   optTagsAwaitReview,
   sameOptTagSet,
+  snapshotIsSpecNumbered,
   type OptTagReviewRow,
 } from "@/lib/optTagLegacy";
 
@@ -66,6 +80,14 @@ export interface OptFieldChange {
   /** The value OpenPrintTag currently offers. Never null here. */
   incoming: OptValue;
   kind: OptChangeKind;
+  /**
+   * GH #1227: set (always `true`, and only on `optTags`) when the row's
+   * effective tags still await numbering review. Shown for information only:
+   * the row's ids may be the pre-v1.83 numbering, so they cannot be compared
+   * with OpenPrintTag's spec ids, `kind` is always `conflict`, and the sync
+   * route refuses the field with 409 `opt_tags_pending_review`.
+   */
+  pendingReview?: true;
 }
 
 /**
@@ -200,6 +222,13 @@ function isListOrNothing(v: OptValue): v is string[] | null {
  * corrupt non-list value keeps the strict compare, so it still surfaces as a
  * change OPT's list can repair, the same posture as a corrupt
  * `secondaryColors`.
+ *
+ * GH #1227: this compares IDS, which says nothing about numbering, so both
+ * sides must already be spec-numbered (Codex P1 on PR #1237: an unreviewed
+ * legacy `[2, 16]` is not the spec `[16, 2]`, whatever the set compare says).
+ * Every caller makes sure of it: `diffOptFields` never compares a row whose
+ * tags await review and drops a pre-v1.83 snapshot's tag provenance, and the
+ * variant-import prune keeps a variant's tags under an unreviewed parent.
  */
 function sameTagSet(a: OptValue, b: OptValue): boolean {
   if (!isListOrNothing(a) || !isListOrNothing(b)) return valuesEqual(a, b);
@@ -219,6 +248,23 @@ function valuesEqualForField(field: string, a: OptValue, b: OptValue): boolean {
   if (field === "optTags") return sameTagSet(a, b);
   if (COLOR_FIELDS.has(field)) return valuesEqual(canonicalizeColor(a), canonicalizeColor(b));
   return valuesEqual(a, b);
+}
+
+/**
+ * GH #1227: can the snapshot's recorded `optTags` stand as provenance for a
+ * spec-numbered array? Yes when the snapshot says its tags are spec ids
+ * (every snapshot built since v1.83 does), or when every id it records means
+ * the same in both numberings (`classifyOptTags` → `trivial`). A pre-v1.83
+ * snapshot holding any other id is in the app's old numbering, where the same
+ * id can be a different tag (its 2 is the spec's 20, not the spec's 2), so
+ * equality with it proves nothing about whether the user edited the tags.
+ */
+function snapshotTagsReadAsSpec(
+  snapshot: Record<string, unknown>,
+  snapshotTags: OptValue | undefined,
+): boolean {
+  if (snapshotIsSpecNumbered(snapshot)) return true;
+  return Array.isArray(snapshotTags) && classifyOptTags({ optTags: snapshotTags }).kind === "trivial";
 }
 
 /** Does OPT actually offer a value for this field? (null / empty array = no.) */
@@ -276,7 +322,8 @@ function classify(
   if (hasSnapshotEntry) {
     // GH #894: case-fold hex colors so a casing-only difference vs the stored
     // snapshot classifies as `adopt` (unchanged), not a permanent `conflict`.
-    // Likewise a tag list the user only reordered is still OPT's offer.
+    // Likewise a tag list the user only reordered is still OPT's offer
+    // (diffOptFields only lets a spec-numbered tag snapshot get this far).
     return valuesEqualForField(field, current, snapshotVal ?? null) ? "adopt" : "conflict";
   }
   return "conflict";
@@ -292,9 +339,18 @@ function classify(
  * inheritable (GH #477 / decision 3 on #605), so a template CAN carry the
  * shared multi-color set its variants inherit. `colorName` isn't OPT-managed
  * at all, so `color` is the only key this drops.
+ *
+ * `optTagsAwaitReview` — GH #1227: the row that SUPPLIES the effective
+ * `optTags` (the filament's own array, or its parent's when the own array is
+ * empty) still awaits numbering review. Compute it with
+ * `effectiveOptTagsAwaitReview(rawFilament, parent)`, the gate every other
+ * tag surface uses. Its ids may be the pre-v1.83 numbering, so they are not
+ * compared with OPT's spec ids: `optTags` is surfaced as a `conflict` flagged
+ * `pendingReview` whatever the two arrays hold, which the sync route refuses.
  */
 export interface DiffOptOptions {
   excludeColor?: boolean;
+  optTagsAwaitReview?: boolean;
 }
 
 /**
@@ -312,6 +368,9 @@ export interface DiffOptOptions {
  * but a variant that OWNS a non-empty array over an EMPTY parent keeps the
  * (genuinely applyable) clear. Pass the EFFECTIVE (resolved) filament for the
  * values regardless.
+ *
+ * The check and sync routes must pass the same `options`, so they agree on
+ * the offered set, including whether the `optTags` change is `pendingReview`.
  */
 export function diffOptFields(
   filament: Record<string, unknown>,
@@ -353,13 +412,35 @@ export function diffOptFields(
       continue;
     }
     const current = getPath(filament, field);
+    // GH #1227: tags still awaiting numbering review are never compared with
+    // OPT's spec ids (Codex P1 on PR #1237). The same ids can be different
+    // tags in the pre-v1.83 numbering, so no answer is safe: "equal" would
+    // hide a real difference behind "up to date", and an `adopt` would
+    // pre-check a sync that replaces the array and settles the numbering
+    // without the user's Data health decision. Surfaced instead, never
+    // pre-checked, and refused by the sync route until the row is reviewed.
+    if (field === "optTags" && options?.optTagsAwaitReview) {
+      changes.push({ field, labelKey, current, incoming, kind: "conflict", pendingReview: true });
+      continue;
+    }
     // GH #894: hex colors compare case-insensitively, so `#AABBCC` already
     // stored vs an `#aabbcc` upstream offer isn't surfaced as a spurious change.
     // optTags compare as a set: a reordered list has nothing to sync.
     if (valuesEqualForField(field, current, incoming)) continue;
     const snapKey = optSnapshotKey(field);
-    const hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
+    let hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
     const snapshotVal = hasSnapshotEntry ? getPath(snapshot as Record<string, unknown>, snapKey) : undefined;
+    // GH #1227: a pre-v1.83 snapshot's tags are in the old numbering, so
+    // they are no provenance for the (spec-numbered) stored array: classify
+    // as if there were no snapshot entry, which can only give `conflict`
+    // for a non-empty array.
+    if (
+      hasSnapshotEntry &&
+      field === "optTags" &&
+      !snapshotTagsReadAsSpec(snapshot as Record<string, unknown>, snapshotVal)
+    ) {
+      hasSnapshotEntry = false;
+    }
     const kind = classify(current, snapshotVal, hasSnapshotEntry, field);
     changes.push({ field, labelKey, current, incoming, kind });
   }
