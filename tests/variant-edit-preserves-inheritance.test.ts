@@ -615,6 +615,29 @@ describe("variant edit round-trip preserves inheritance", () => {
       expect((await getResolved(variant._id)).settings.filament_abrasive).toBe("0");
     });
 
+    it("an own pin under a template lacking the key is kept when put back, written when cleared", async () => {
+      // Absent is not off to the slicer, so the form never trades an
+      // explicit value for an absent key the template does not hold.
+      const { variant } = await seedFlagFamily();
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { "settings.activate_air_filtration": "0", "settings.filament_soluble": "1" } },
+      );
+      // Air filtration ticked on and back off; soluble turned off.
+      const seed = await formSave(variant._id, {
+        activate_air_filtration: false,
+        filament_soluble: false,
+      });
+      expect(seed.activate_air_filtration).toBe(false);
+      expect(seed.filament_soluble).toBe(true);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.activate_air_filtration).toBe("0");
+      expect(fresh.settings.filament_soluble).toBe("0");
+      const resolved = await getResolved(variant._id);
+      expect(resolved.settings.activate_air_filtration).toBe("0");
+      expect(resolved.settings.filament_soluble).toBe("0");
+    });
+
     it("Duplicate flow: an untouched copy shows and inherits the template's flags", async () => {
       const { template } = await seedFlagFamily();
       const { shown, created } = await duplicateAndCreate(template._id);

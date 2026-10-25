@@ -24,19 +24,28 @@ import { settingFlagIsOn } from "@/lib/slicerSettings";
  *    loaded as a variant.
  *  - WRITE on a row that saves as a variant only the checkboxes the user
  *    TOUCHED (FormSettingFlagEdits). An untouched key keeps whatever the own
- *    bag held, absent included, so it keeps inheriting. A touched key is
- *    compared with the current parent's value: equal ⇒ the row holds no own
- *    value for it (an own pin is dropped, so the row inherits what the box
- *    shows), different ⇒ written as "1"/"0". A standalone or a template
- *    still writes all four on every save, as before.
+ *    bag held, absent included, so it keeps inheriting. A touched key whose
+ *    own value already reads as what the box shows is left exactly as
+ *    stored (an explicit "0", a nil `null` or a per-extruder array is not
+ *    the same as an absent key to the slicer). Otherwise it is compared with
+ *    the current parent's value. Equal with no own value ⇒ nothing is
+ *    written, the row keeps inheriting. Equal with an own pin and the
+ *    parent's bag HOLDING the key ⇒ the pin is dropped, so the row inherits
+ *    what the box shows. Anything else ⇒ written as "1"/"0": a parent bag
+ *    LACKING the key exports nothing for it, so the slicer would fall back
+ *    to its system preset's (or, for wipe, the printer's) value, and a
+ *    dropped pin could change the preset while the box looks the same. A
+ *    standalone or a template still writes all four on every save, as
+ *    before.
  *
  * Touched, not "differs from the seed": a seed computed before the parent
  * was known (the Duplicate flow, the picker) read the parent's "1" as off,
  * so an off box compared equal to it and the explicit "0" was never
  * written. Comparing a touched value with the parent itself cannot be
  * fooled by a stale seed. When the parent's flags are not known at save
- * time (still loading, or the parent list failed), a touched key is written
- * explicitly: the saved value is then exactly what the box showed.
+ * time (still loading, or the parent list failed), a touched key the own
+ * bag does not already hold as shown is written explicitly: the saved value
+ * is then exactly what the box showed.
  */
 export const FORM_FLAG_SETTING_KEYS = [
   "filament_abrasive",
@@ -166,9 +175,12 @@ export function changedFormSettingFlagEdits(
  *
  * `savesAsVariant` is whether the submitted row has a parent, and `parent`
  * that parent's flag bag (null when unknown). A variant leaves an untouched
- * key exactly as the bag holds it; a touched key equal to the parent's
- * value is removed (the row inherits it), and any other touched key is
- * written. A standalone writes all four from what the boxes show.
+ * key exactly as the bag holds it, and a touched one too when the bag
+ * already holds a value that reads as what the box shows. A touched key
+ * equal to the parent's value stays absent when the row had none, and an
+ * own value is removed (the row inherits it) when the parent's bag holds
+ * the key. Any other touched key is written. A standalone writes all four
+ * from what the boxes show.
  */
 export function applyFormSettingFlags(
   settings: Record<string, unknown>,
@@ -178,13 +190,22 @@ export function applyFormSettingFlags(
   savesAsVariant: boolean,
 ): void {
   const shown = shownFormSettingFlags(seed, edits);
-  const parentFlags = parent ? seedFormSettingFlags(parent.settings) : null;
+  const parentBag = parent ? asBag(parent.settings) : null;
+  const parentFlags = parent ? seedFormSettingFlags(parentBag) : null;
   for (const key of FORM_FLAG_SETTING_KEYS) {
     if (savesAsVariant) {
       if (edits[key] === undefined) continue;
+      const ownHas = Object.prototype.hasOwnProperty.call(settings, key);
+      // Toggled and put back: the stored value already exports what the box
+      // shows, so it is not rewritten (or dropped).
+      if (ownHas && settingFlagIsOn(settings[key]) === shown[key]) continue;
       if (parentFlags && shown[key] === parentFlags[key]) {
-        delete settings[key];
-        continue;
+        // No own value: nothing to drop, the row keeps inheriting.
+        if (!ownHas) continue;
+        if (parentBag && Object.prototype.hasOwnProperty.call(parentBag, key)) {
+          delete settings[key];
+          continue;
+        }
       }
     }
     settings[key] = shown[key] ? "1" : "0";

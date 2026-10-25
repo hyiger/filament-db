@@ -1177,8 +1177,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         settings,
       });
       savedRef.current = true;
-      // GH #286: re-baseline so the just-saved state counts as clean.
-      setDirtyBaseline(JSON.stringify({ form, calibrations, presets }));
+      // GH #286: re-baseline so the just-saved state counts as clean. The
+      // baseline is this render's own snapshot, never a rebuilt one: a
+      // rebuilt string drifts from dirtySnapshot's shape the moment a key is
+      // added there, and the form then stays dirty for the rest of its life.
+      setDirtyBaseline(dirtySnapshot);
     } finally {
       setSaving(false);
     }

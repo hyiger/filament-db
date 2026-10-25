@@ -341,13 +341,77 @@ describe("applyFormSettingFlags", () => {
     const on: Record<string, unknown> = {};
     applyFormSettingFlags(on, seed, { activate_air_filtration: true }, parent, true);
     expect(on).toEqual({ activate_air_filtration: "1" });
-    const off: Record<string, unknown> = { activate_air_filtration: "1" };
-    applyFormSettingFlags(off, seed, { activate_air_filtration: false }, parent, true);
-    expect(off).toEqual({});
+    // Toggled back to off with no own value: nothing is pinned.
+    const back: Record<string, unknown> = {};
+    applyFormSettingFlags(back, seed, { activate_air_filtration: false }, parent, true);
+    expect(back).toEqual({});
     // A parent with no bag at all is known and all off.
     const none: Record<string, unknown> = {};
     applyFormSettingFlags(none, ALL_OFF, { filament_soluble: false }, { settings: undefined }, true);
     expect(none).toEqual({});
+  });
+
+  it("writes a cleared pin as 0 when the parent's bag lacks the key", () => {
+    // Absent is not off to the slicer: the key is not emitted at all and
+    // the preset falls back to its system preset's (or the printer's)
+    // value. So an own "1" turned off is written, never dropped.
+    const parent = { settings: { filament_abrasive: "1" } };
+    const own = { activate_air_filtration: "1", filament_wipe: "1" };
+    const seed = seedFormSettingFlags(own, parent.settings);
+    const settings: Record<string, unknown> = { ...own };
+    applyFormSettingFlags(
+      settings,
+      seed,
+      { activate_air_filtration: false, filament_wipe: false },
+      parent,
+      true,
+    );
+    expect(settings).toEqual({ activate_air_filtration: "0", filament_wipe: "0" });
+    // Same for a parent with no bag at all.
+    const bare: Record<string, unknown> = { filament_wipe: "1" };
+    applyFormSettingFlags(
+      bare,
+      { ...ALL_OFF, filament_wipe: true },
+      { filament_wipe: false },
+      { settings: undefined },
+      true,
+    );
+    expect(bare).toEqual({ filament_wipe: "0" });
+  });
+
+  it("leaves a touched box put back where it started exactly as stored", () => {
+    // Audit-era echo pins: an explicit "0", the nil marker and a
+    // per-extruder array, under a template whose bag lacks every key (an
+    // imported template never saved through the form) and under one that
+    // holds the opposite value.
+    const own = { filament_wipe: "0", filament_soluble: null, filament_abrasive: ["0", "0"] };
+    const opposite = { filament_wipe: "1", filament_soluble: "1", filament_abrasive: "1" };
+    for (const parentSettings of [{}, opposite]) {
+      const form = new FlagForm(own, TEMPLATE_ID, { _id: TEMPLATE_ID, settings: parentSettings });
+      for (const key of ["filament_wipe", "filament_soluble", "filament_abrasive"] as const) {
+        form.toggle(key).toggle(key);
+      }
+      expect(form.edits).toEqual({
+        filament_wipe: false,
+        filament_soluble: false,
+        filament_abrasive: false,
+      });
+      expect(form.save()).toEqual(own);
+    }
+  });
+
+  it("keeps an own value that already reads as the shown state, parent unknown", () => {
+    // The nil marker reads as off: put back to off, it is not rewritten "0".
+    const own = { filament_wipe: null, filament_abrasive: "0" };
+    const settings: Record<string, unknown> = { ...own };
+    applyFormSettingFlags(
+      settings,
+      ALL_OFF,
+      { filament_wipe: false, filament_abrasive: false },
+      null,
+      true,
+    );
+    expect(settings).toEqual(own);
   });
 
   it("writes a touched key explicitly when the parent's flags are unknown", () => {
@@ -531,5 +595,17 @@ describe("FilamentForm wiring", () => {
       /JSON\.stringify\(changedFormSettingFlagEdits\(flagSeed, flagEdits\)\)/,
     );
     expect(form).toMatch(/JSON\.stringify\(\{ form, flagEdits: flagEditsSnapshot, calibrations, presets \}\)/);
+  });
+
+  it("re-baselines after a save with the same snapshot the dirty check compares", () => {
+    // A baseline rebuilt with a different shape never equals dirtySnapshot
+    // again, so the form would stay dirty after every save (GH #286).
+    expect(form).toMatch(/useState\(dirtySnapshot\)/);
+    expect(form).toMatch(/const dirty = dirtySnapshot !== dirtyBaseline;/);
+    const rebaselines = form.match(/setDirtyBaseline\([^)]*\)/g) ?? [];
+    expect(rebaselines.length).toBeGreaterThan(0);
+    for (const call of rebaselines) expect(call).toBe("setDirtyBaseline(dirtySnapshot)");
+    // The snapshot is built in exactly one place.
+    expect(form.match(/JSON\.stringify\(\{ form\b/g)?.length).toBe(1);
   });
 });
