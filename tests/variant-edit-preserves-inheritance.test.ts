@@ -3,10 +3,14 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
 import { POST as createFilament } from "@/app/api/filaments/route";
+import { GET as listParents } from "@/app/api/filaments/parents/route";
 import {
   applyFormSettingFlags,
   FORM_FLAG_SETTING_KEYS,
+  knownParentFlagBag,
   seedFormSettingFlags,
+  shownFormSettingFlags,
+  type FormSettingFlagEdits,
   type FormSettingFlags,
 } from "@/lib/formSettingFlags";
 
@@ -491,19 +495,43 @@ describe("variant edit round-trip preserves inheritance", () => {
       return (await getFilament(req, { params: Promise.resolve({ id: String(id) }) })).json();
     }
 
-    /** What FilamentForm sends: seed the checkboxes from the raw GET, let the
-     *  caller change some, apply them to the own bag, PUT the echo back. */
-    async function formSave(
-      id: unknown,
-      edit: (seed: FormSettingFlags) => FormSettingFlags = (seed) => seed,
+    async function getResolved(id: unknown) {
+      const req = new NextRequest(`http://localhost/api/filaments/${id}`);
+      return (await getFilament(req, { params: Promise.resolve({ id: String(id) }) })).json();
+    }
+
+    /** The picker's candidates, as FilamentForm fetches them. */
+    async function parentOptions(exclude?: unknown) {
+      const qs = exclude ? `?exclude=${exclude}` : "";
+      return (await listParents(new NextRequest(`http://localhost/api/filaments/parents${qs}`))).json();
+    }
+
+    /** FilamentForm's flag state for `initialData` linked to `parentId`,
+     *  composed from the same helpers the form uses: the parent is looked up
+     *  by the current parentId in the row's _parent or the candidates. */
+    async function formFlags(
+      initialData: { _id?: unknown; settings?: unknown; parentId?: unknown; _parent?: unknown },
+      parentId: string,
+      edits: FormSettingFlagEdits,
     ) {
+      const parent = parentId
+        ? knownParentFlagBag(parentId, {
+            initialParentId: initialData.parentId ? String(initialData.parentId) : "",
+            initialParent: initialData._parent,
+            options: await parentOptions(initialData._id),
+          })
+        : null;
+      const seed = seedFormSettingFlags(initialData.settings, parent?.settings);
+      const settings: Record<string, unknown> = { ...((initialData.settings as object) ?? {}) };
+      applyFormSettingFlags(settings, seed, edits, parent, Boolean(parentId));
+      return { seed, shown: shownFormSettingFlags(seed, edits), settings };
+    }
+
+    /** What the edit page sends: seed the checkboxes from the raw GET, apply
+     *  the caller's edits to the own bag, PUT the echo back. */
+    async function formSave(id: unknown, edits: FormSettingFlagEdits = {}) {
       const raw = await getRaw(id);
-      const seed = seedFormSettingFlags(
-        raw.settings,
-        raw.parentId ? raw._parent?.settings : undefined,
-      );
-      const settings = { ...(raw.settings ?? {}) };
-      applyFormSettingFlags(settings, edit({ ...seed }), seed, Boolean(raw.parentId));
+      const { seed, settings } = await formFlags(raw, raw.parentId ? String(raw.parentId) : "", edits);
       const req = new NextRequest(`http://localhost/api/filaments/${id}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -511,7 +539,29 @@ describe("variant edit round-trip preserves inheritance", () => {
       });
       const res = await putFilament(req, { params: Promise.resolve({ id: String(id) }) });
       expect(res.status).toBe(200);
-      return seed;
+      return seed as FormSettingFlags;
+    }
+
+    /** The Duplicate flow: /filaments/new?cloneId= hands the form a
+     *  parentId and no _parent, so the flags come from the candidates. */
+    async function duplicateAndCreate(templateId: unknown, edits: FormSettingFlagEdits = {}) {
+      const initialData = { parentId: String(templateId), settings: undefined };
+      const { shown, settings } = await formFlags(initialData, String(templateId), edits);
+      const req = new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Fiberon PET-GF Black (copy)",
+          vendor: "Polymaker",
+          type: "PET-GF",
+          color: "#222222",
+          parentId: String(templateId),
+          settings,
+        }),
+      });
+      const res = await createFilament(req);
+      expect(res.status).toBe(201);
+      return { shown, created: await res.json() };
     }
 
     it("?raw=true puts the parent's four flag keys on _parent and nothing else of its bag", async () => {
@@ -543,17 +593,90 @@ describe("variant edit round-trip preserves inheritance", () => {
         { _id: template._id },
         { $set: { "settings.filament_abrasive": "0" } },
       );
-      const again = await (
-        await getFilament(new NextRequest(`http://localhost/api/filaments/${variant._id}`), {
-          params: Promise.resolve({ id: String(variant._id) }),
-        })
-      ).json();
+      const again = await getResolved(variant._id);
       expect(again.settings.filament_abrasive).toBe("0");
+    });
+
+    it("an own pin set back to the template's value is dropped and the variant inherits again", async () => {
+      const { template, variant } = await seedFlagFamily();
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      const seed = await formSave(variant._id, { filament_abrasive: true });
+      expect(seed.filament_abrasive).toBe(false);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings).not.toHaveProperty("filament_abrasive");
+      expect((await getResolved(variant._id)).settings.filament_abrasive).toBe("1");
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      expect((await getResolved(variant._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("Duplicate flow: an untouched copy shows and inherits the template's flags", async () => {
+      const { template } = await seedFlagFamily();
+      const { shown, created } = await duplicateAndCreate(template._id);
+      // The boxes showed the template's flags, not the empty own bag's.
+      expect(shown.filament_abrasive).toBe(true);
+      expect(shown.filament_wipe).toBe(true);
+      const fresh = await Filament.findById(created._id).lean();
+      for (const key of FORM_FLAG_SETTING_KEYS) expect(fresh.settings ?? {}).not.toHaveProperty(key);
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("1");
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("Duplicate flow: a copy toggled off persists and exports an explicit 0", async () => {
+      // Codex P2 on PR #1235: the box showed off and the copy exported "1".
+      const { template } = await seedFlagFamily();
+      const { shown, created } = await duplicateAndCreate(template._id, {
+        filament_abrasive: false,
+      });
+      expect(shown.filament_abrasive).toBe(false);
+      const fresh = await Filament.findById(created._id).lean();
+      expect(fresh.settings.filament_abrasive).toBe("0");
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("picker: a standalone linked to the template keeps its own pins and inherits the rest", async () => {
+      const { template } = await seedFlagFamily();
+      const standalone = await Filament.create({
+        name: "Loose PET-GF Red",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: "#aa0000",
+        settings: { filament_soluble: "0" },
+      });
+      const raw = await getRaw(standalone._id);
+      const { shown, settings } = await formFlags(raw, String(template._id), {
+        filament_wipe: false,
+      });
+      expect(shown).toEqual({
+        filament_abrasive: true,
+        filament_soluble: false,
+        activate_air_filtration: false,
+        filament_wipe: false,
+      });
+      const req = new NextRequest(`http://localhost/api/filaments/${standalone._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...raw, parentId: String(template._id), settings }),
+      });
+      const res = await putFilament(req, { params: Promise.resolve({ id: String(standalone._id) }) });
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(standalone._id).lean();
+      expect(fresh.settings).toEqual({ filament_soluble: "0", filament_wipe: "0" });
+      expect((await getResolved(standalone._id)).settings.filament_abrasive).toBe("1");
     });
 
     it("toggling one checkbox writes only that key", async () => {
       const { variant } = await seedFlagFamily();
-      await formSave(variant._id, (seed) => ({ ...seed, filament_wipe: false }));
+      await formSave(variant._id, { filament_wipe: false });
       const fresh = await Filament.findById(variant._id).lean();
       expect(fresh.settings.filament_wipe).toBe("0");
       for (const key of FORM_FLAG_SETTING_KEYS.filter((k) => k !== "filament_wipe")) {

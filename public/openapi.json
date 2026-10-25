@@ -248,7 +248,7 @@
           "Filaments"
         ],
         "summary": "Get filament by ID",
-        "description": "Returns a single filament with resolved inherited values (for variants), populated nozzle/printer references, and any child variants. Pass `?raw=true` to skip parent-inheritance resolution and receive only the variant's own overrides \u2014 used by the edit page to avoid silently copying parent values onto the child (GH #106). When `?raw=true` is passed on a variant the response includes a `_parent` summary projection. The response also carries `_hasTrashedVariants` (GH #1103): true when this row has non-purged children in the trash. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone there \u2014 this flag lets the UI still offer \"Convert to template\", which is the action a refused restore points at.",
+        "description": "Returns a single filament with resolved inherited values (for variants), populated nozzle/printer references, and any child variants. Pass `?raw=true` to skip parent-inheritance resolution and receive only the variant's own overrides \u2014 used by the edit page to avoid silently copying parent values onto the child (GH #106). When `?raw=true` is passed on a variant the response includes a `_parent` summary projection; its `settings` carries only the four settings-bag keys behind the form's checkboxes (filament_abrasive, filament_soluble, activate_air_filtration, filament_wipe), as on `GET /api/filaments/parents`. The response also carries `_hasTrashedVariants` (GH #1103): true when this row has non-purged children in the trash. `_variants` is live-only, so a parent whose variants are all trashed reads as a standalone there \u2014 this flag lets the UI still offer \"Convert to template\", which is the action a refused restore points at.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -2126,7 +2126,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Array of parent filaments (name, vendor, type, color, hasVariants)",
+            "description": "Array of parent filaments (name, vendor, type, color, settings flags, hasVariants)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2150,6 +2150,11 @@
                         "type": "string",
                         "nullable": true,
                         "description": "Primary color hex. May be null for coextruded parents \u2014 children inherit secondaryColors via Filament.secondaryColors."
+                      },
+                      "settings": {
+                        "type": "object",
+                        "additionalProperties": true,
+                        "description": "Only the four settings-bag keys behind the filament form's checkboxes (filament_abrasive, filament_soluble, activate_air_filtration, filament_wipe), each present only when this filament's bag holds it; the rest of the bag is never included. Empty or absent when the bag holds none of them. The form seeds a variant's checkboxes from the parent it is linked to, including one picked in the form."
                       },
                       "hasVariants": {
                         "type": "boolean",
