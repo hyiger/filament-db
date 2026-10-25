@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildOptSnapshot,
+  buildOptSyncSnapshot,
   diffOptFields,
   buildOptSyncUpdate,
   buildOptLinkUpdate,
@@ -99,6 +100,50 @@ describe("buildOptSnapshot", () => {
   it("records the gray sentinel color as absent (not a real offer)", () => {
     const snap = buildOptSnapshot(payload({ color: "#808080" }));
     expect(snap).not.toHaveProperty("color");
+  });
+});
+
+// GH #1227: a sync on a row whose tags await numbering review never compared
+// the tags, so it leaves their provenance (the snapshot's `optTags` entry and
+// numbering marker) as stored and refreshes only the other fields.
+describe("buildOptSyncSnapshot", () => {
+  const offer = () => payload({ density: 1.3, optTags: [16, 2, 4] });
+
+  it("is the full current offer when the tags are settled", () => {
+    const legacy = { optTags: [16, 2], density: 1.2 };
+    expect(buildOptSyncSnapshot(offer(), legacy, false)).toEqual(buildOptSnapshot(offer()));
+    expect(buildOptSyncSnapshot(offer(), null, false)).toEqual(buildOptSnapshot(offer()));
+  });
+
+  it("keeps a pre-v1.83 snapshot's legacy tags and absent marker, refreshing the rest", () => {
+    // A stale key OPT no longer offers is dropped, as in a normal refresh.
+    const legacy = { optTags: [16, 2], density: 1.2, dryingTime: 240 };
+    const snap = buildOptSyncSnapshot(offer(), legacy, true);
+    const expected: Record<string, unknown> = { ...buildOptSnapshot(offer()), optTags: [16, 2] };
+    delete expected.tagsNumbering;
+    expect(snap).toEqual(expected);
+    expect(snap).not.toHaveProperty("tagsNumbering");
+    expect(snap).not.toHaveProperty("dryingTime");
+    expect(snap?.density).toBe(1.3);
+  });
+
+  it("keeps a spec-marked snapshot's earlier tag offer and its marker", () => {
+    const spec = { tagsNumbering: "spec", optTags: [16], density: 1.2 };
+    const snap = buildOptSyncSnapshot(offer(), spec, true);
+    expect(snap).toMatchObject({ tagsNumbering: "spec", optTags: [16], density: 1.3 });
+  });
+
+  it("records no tags when the stored snapshot had none", () => {
+    const snap = buildOptSyncSnapshot(offer(), { density: 1.2 }, true);
+    expect(snap).not.toHaveProperty("optTags");
+    expect(snap).not.toHaveProperty("tagsNumbering");
+    expect(snap?.density).toBe(1.3);
+  });
+
+  it("writes no snapshot when there is no snapshot object to keep the tags in", () => {
+    for (const stored of [null, undefined, [{ optTags: [2] }], "x"]) {
+      expect(buildOptSyncSnapshot(offer(), stored, true)).toBeNull();
+    }
   });
 });
 

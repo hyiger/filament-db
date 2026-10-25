@@ -7,7 +7,7 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import {
-  buildOptSnapshot,
+  buildOptSyncSnapshot,
   buildOptSyncUpdate,
   diffOptFields,
   OPT_MANAGED_FIELD_KEYS,
@@ -35,7 +35,9 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  * The provenance snapshot is refreshed to the FULL current OPT offer on
  * every sync, regardless of which fields were applied, so a later check can
  * still tell "OPT changed it" from "the user changed it" for declined
- * fields.
+ * fields. The one exception is the tags of a row still awaiting numbering
+ * review (GH #1227): they were never compared, so their provenance is left
+ * as stored (`buildOptSyncSnapshot`).
  *
  * GH #1227: a request naming `optTags` while the row's effective tags still
  * await numbering review is refused with 409 `opt_tags_pending_review`, the
@@ -214,12 +216,17 @@ export async function POST(
       }
 
       const update = buildOptSyncUpdate(fields, payload);
-      const snapshot = buildOptSnapshot(payload);
+      // GH #1227: on a row whose tags await review the stored tag provenance
+      // is kept, and with no snapshot object to keep it in, none is written
+      // (the bare link is Data health's `opt-provenance` hint).
+      const snapshot = buildOptSyncSnapshot(
+        payload,
+        locked.openprinttagSnapshot,
+        optTagsAwaitReview,
+      );
 
-      const $set: Record<string, unknown> = {
-        ...update,
-        openprinttagSnapshot: snapshot,
-      };
+      const $set: Record<string, unknown> = { ...update };
+      if (snapshot) $set.openprinttagSnapshot = snapshot;
       // GH #1227: `mapToFilamentPayload` emits spec ids, so a row that adopts
       // OPT's tags is spec-numbered from here on. Only reached for tags that
       // were already settled (an unreviewed row got the 409 above), so the

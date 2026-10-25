@@ -119,7 +119,7 @@ export default function OptResyncDialog({ filamentId, onApplied, onClose, onChan
       if (e.key !== "Tab" || !dialogRef.current) return;
       const focusables = Array.from(
         dialogRef.current.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
       );
       if (focusables.length === 0) return;

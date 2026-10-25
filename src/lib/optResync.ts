@@ -59,6 +59,7 @@ import {
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
   classifyOptTags,
+  isSnapshotDocument,
   optTagsAwaitReview,
   sameOptTagSet,
   snapshotIsSpecNumbered,
@@ -303,6 +304,42 @@ export function buildOptSnapshot(payload: Record<string, unknown>): Record<strin
     // upstream offer is in a stable case; the diff also case-folds, so even a
     // pre-existing mixed-case snapshot compares correctly without a backfill.
     snap[optSnapshotKey(field)] = COLOR_FIELDS.has(field) ? canonicalizeColor(v) : v;
+  }
+  return snap;
+}
+
+/**
+ * The snapshot the sync route writes: normally the full current offer
+ * (`buildOptSnapshot`).
+ *
+ * GH #1227: when the row's effective tags still await numbering review
+ * (`tagsPendingReview`, the flag `diffOptFields` gets), the sync never
+ * compared the tags, so it leaves the stored TAG provenance as it was: the
+ * stored `optTags` entry and numbering marker are carried over, or stay
+ * absent, and only the other fields are refreshed. Recording OPT's tag offer
+ * here would read, after the review, as an offer the user had declined (a
+ * `conflict` where unedited tags should `adopt`), and a pre-v1.83 snapshot is
+ * also what earns the row Data health's `opt-provenance` hint, which selects
+ * it for the bulk conversion. The renumber pass and the Data health
+ * resolution translate a legacy entry when they settle the row, so a
+ * carried-over one stays correct. With no snapshot object to carry from (the
+ * container is absent, `null` or not a document) it returns null and the
+ * sync writes no snapshot: a bare link is itself that hint.
+ */
+export function buildOptSyncSnapshot(
+  payload: Record<string, unknown>,
+  storedSnapshot: unknown,
+  tagsPendingReview: boolean,
+): Record<string, OptValue> | null {
+  const snap = buildOptSnapshot(payload);
+  if (!tagsPendingReview) return snap;
+  if (!isSnapshotDocument(storedSnapshot)) return null;
+  for (const key of [optSnapshotKey("optTags"), OPT_SNAPSHOT_NUMBERING_KEY]) {
+    if (Object.prototype.hasOwnProperty.call(storedSnapshot, key)) {
+      snap[key] = storedSnapshot[key] as OptValue;
+    } else {
+      delete snap[key];
+    }
   }
   return snap;
 }
