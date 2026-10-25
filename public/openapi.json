@@ -1066,7 +1066,7 @@
           "Filaments"
         ],
         "summary": "Apply OpenPrintTag updates",
-        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys \u2192 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields. Exception (GH #1227): while the filament's effective optTags await OpenPrintTag numbering review, the snapshot's optTags entry and tagsNumbering marker are kept as stored (only the other fields are refreshed), and a filament with no snapshot object gets none.",
+        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys \u2192 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields. Exception (GH #1227): while the filament's effective optTags await OpenPrintTag numbering review, the snapshot's optTags entry and tagsNumbering marker are kept as stored (only the other fields are refreshed). With no snapshot object to keep them in, a filament whose own optTags await review gets no snapshot (its bare link is the Data health opt-provenance hint), and a variant that only inherits unreviewed tags gets the refreshed snapshot without an optTags entry.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"

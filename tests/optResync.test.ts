@@ -111,38 +111,56 @@ describe("buildOptSyncSnapshot", () => {
 
   it("is the full current offer when the tags are settled", () => {
     const legacy = { optTags: [16, 2], density: 1.2 };
-    expect(buildOptSyncSnapshot(offer(), legacy, false)).toEqual(buildOptSnapshot(offer()));
-    expect(buildOptSyncSnapshot(offer(), null, false)).toEqual(buildOptSnapshot(offer()));
+    expect(buildOptSyncSnapshot(offer(), legacy, "settled")).toEqual(buildOptSnapshot(offer()));
+    expect(buildOptSyncSnapshot(offer(), null, "settled")).toEqual(buildOptSnapshot(offer()));
   });
 
-  it("keeps a pre-v1.83 snapshot's legacy tags and absent marker, refreshing the rest", () => {
-    // A stale key OPT no longer offers is dropped, as in a normal refresh.
-    const legacy = { optTags: [16, 2], density: 1.2, dryingTime: 240 };
-    const snap = buildOptSyncSnapshot(offer(), legacy, true);
-    const expected: Record<string, unknown> = { ...buildOptSnapshot(offer()), optTags: [16, 2] };
-    delete expected.tagsNumbering;
-    expect(snap).toEqual(expected);
-    expect(snap).not.toHaveProperty("tagsNumbering");
-    expect(snap).not.toHaveProperty("dryingTime");
-    expect(snap?.density).toBe(1.3);
-  });
+  for (const review of ["own", "inherited"] as const) {
+    describe(`while the ${review} tags await review`, () => {
+      it("keeps a pre-v1.83 snapshot's legacy tags and absent marker, refreshing the rest", () => {
+        // A stale key OPT no longer offers is dropped, as in a normal refresh.
+        const legacy = { optTags: [16, 2], density: 1.2, dryingTime: 240 };
+        const snap = buildOptSyncSnapshot(offer(), legacy, review);
+        const expected: Record<string, unknown> = { ...buildOptSnapshot(offer()), optTags: [16, 2] };
+        delete expected.tagsNumbering;
+        expect(snap).toEqual(expected);
+        expect(snap).not.toHaveProperty("tagsNumbering");
+        expect(snap).not.toHaveProperty("dryingTime");
+        expect(snap?.density).toBe(1.3);
+      });
 
-  it("keeps a spec-marked snapshot's earlier tag offer and its marker", () => {
-    const spec = { tagsNumbering: "spec", optTags: [16], density: 1.2 };
-    const snap = buildOptSyncSnapshot(offer(), spec, true);
-    expect(snap).toMatchObject({ tagsNumbering: "spec", optTags: [16], density: 1.3 });
-  });
+      it("keeps a spec-marked snapshot's earlier tag offer and its marker", () => {
+        const spec = { tagsNumbering: "spec", optTags: [16], density: 1.2 };
+        const snap = buildOptSyncSnapshot(offer(), spec, review);
+        expect(snap).toMatchObject({ tagsNumbering: "spec", optTags: [16], density: 1.3 });
+      });
 
-  it("records no tags when the stored snapshot had none", () => {
-    const snap = buildOptSyncSnapshot(offer(), { density: 1.2 }, true);
-    expect(snap).not.toHaveProperty("optTags");
-    expect(snap).not.toHaveProperty("tagsNumbering");
-    expect(snap?.density).toBe(1.3);
-  });
+      it("records no tags when the stored snapshot had none", () => {
+        const snap = buildOptSyncSnapshot(offer(), { density: 1.2 }, review);
+        expect(snap).not.toHaveProperty("optTags");
+        expect(snap).not.toHaveProperty("tagsNumbering");
+        expect(snap?.density).toBe(1.3);
+      });
+    });
+  }
 
-  it("writes no snapshot when there is no snapshot object to keep the tags in", () => {
+  it("writes no snapshot for an unreviewed row of its own with no snapshot object (its bare link is the hint)", () => {
     for (const stored of [null, undefined, [{ optTags: [2] }], "x"]) {
-      expect(buildOptSyncSnapshot(offer(), stored, true)).toBeNull();
+      expect(buildOptSyncSnapshot(offer(), stored, "own")).toBeNull();
+    }
+  });
+
+  it("gives a variant that only inherits unreviewed tags the refreshed offer without a tag entry", () => {
+    // The variant's own empty array is trivial, so there is no hint to keep:
+    // the other fields get their provenance, and the spec marker stays (true
+    // of a snapshot that records no tags).
+    const expected: Record<string, unknown> = { ...buildOptSnapshot(offer()) };
+    delete expected.optTags;
+    for (const stored of [null, undefined, [{ optTags: [2] }], "x"]) {
+      const snap = buildOptSyncSnapshot(offer(), stored, "inherited");
+      expect(snap).toEqual(expected);
+      expect(snap).toMatchObject({ tagsNumbering: "spec", density: 1.3 });
+      expect(snap).not.toHaveProperty("optTags");
     }
   });
 });

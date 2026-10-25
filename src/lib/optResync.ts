@@ -309,31 +309,53 @@ export function buildOptSnapshot(payload: Record<string, unknown>): Record<strin
 }
 
 /**
+ * GH #1227: whose tags still await numbering review, for
+ * `buildOptSyncSnapshot`. `settled`: the effective tags are spec-numbered.
+ * `own`: the row's own array is the unreviewed one, so the row is listed on
+ * Data health and its snapshot and link feed that listing's hints.
+ * `inherited`: the row's own array is empty and it inherits an unreviewed
+ * array from its parent; it classifies as trivial whatever its snapshot or
+ * settings hold, so it has no hint to keep.
+ */
+export type OptSyncTagReview = "settled" | "own" | "inherited";
+
+/**
  * The snapshot the sync route writes: normally the full current offer
  * (`buildOptSnapshot`).
  *
  * GH #1227: when the row's effective tags still await numbering review
- * (`tagsPendingReview`, the flag `diffOptFields` gets), the sync never
- * compared the tags, so it leaves the stored TAG provenance as it was: the
- * stored `optTags` entry and numbering marker are carried over, or stay
+ * (`tagReview` is not `settled`; the flag `diffOptFields` gets), the sync
+ * never compared the tags, so it leaves the stored TAG provenance as it was:
+ * the stored `optTags` entry and numbering marker are carried over, or stay
  * absent, and only the other fields are refreshed. Recording OPT's tag offer
  * here would read, after the review, as an offer the user had declined (a
  * `conflict` where unedited tags should `adopt`), and a pre-v1.83 snapshot is
  * also what earns the row Data health's `opt-provenance` hint, which selects
  * it for the bulk conversion. The renumber pass and the Data health
  * resolution translate a legacy entry when they settle the row, so a
- * carried-over one stays correct. With no snapshot object to carry from (the
- * container is absent, `null` or not a document) it returns null and the
- * sync writes no snapshot: a bare link is itself that hint.
+ * carried-over one stays correct.
+ *
+ * With no snapshot object to carry from (the container is absent, `null` or
+ * not a document) the answer depends on WHOSE tags await review. For `own`
+ * it returns null and the sync writes no snapshot: a bare link is itself
+ * that hint. For `inherited` there is no hint to keep (the row's own empty
+ * array is trivial), so it returns the refreshed offer WITHOUT an `optTags`
+ * entry, keeping the spec marker (true of a snapshot that records no tags):
+ * the other fields get their provenance, and no offer is recorded for tags
+ * that were never compared.
  */
 export function buildOptSyncSnapshot(
   payload: Record<string, unknown>,
   storedSnapshot: unknown,
-  tagsPendingReview: boolean,
+  tagReview: OptSyncTagReview,
 ): Record<string, OptValue> | null {
   const snap = buildOptSnapshot(payload);
-  if (!tagsPendingReview) return snap;
-  if (!isSnapshotDocument(storedSnapshot)) return null;
+  if (tagReview === "settled") return snap;
+  if (!isSnapshotDocument(storedSnapshot)) {
+    if (tagReview === "own") return null;
+    delete snap[optSnapshotKey("optTags")];
+    return snap;
+  }
   for (const key of [optSnapshotKey("optTags"), OPT_SNAPSHOT_NUMBERING_KEY]) {
     if (Object.prototype.hasOwnProperty.call(storedSnapshot, key)) {
       snap[key] = storedSnapshot[key] as OptValue;

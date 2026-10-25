@@ -598,6 +598,63 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.openprinttagSnapshot).toMatchObject({ tagsNumbering: "spec", optTags: [16], density: 1.24 });
   });
 
+  it("sync: a bare-link variant of an unreviewed parent still builds provenance for its other fields", async () => {
+    // The variant's own empty array is trivial, so it is never listed on Data
+    // health and its bare link is no hint to keep. Its density sync records
+    // the offer for every field but the tags, so a later upstream change
+    // reads as an unedited `adopt` rather than a `conflict`.
+    upstreamWithTags(["matte", "antibacterial"]);
+    const parent = await Filament.create({
+      name: "Unreviewed Bare-Link Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      optTags: [2, 16],
+      optTagsSpec: false,
+    });
+    const variant = await Filament.create({
+      name: "Bare-Link Variant",
+      ...MATCHING_FIELDS,
+      density: null,
+      parentId: parent._id,
+    });
+    const id = String(variant._id);
+    const before = await Filament.findById(variant._id).lean();
+    expect(before.openprinttagSnapshot ?? null).toBeNull();
+    expect(classifyOptTags(before).kind).toBe("trivial");
+
+    const checkBody = await (await checkGET({} as NextRequest, params(id))).json();
+    expect(checkBody.changes).toEqual([
+      expect.objectContaining({ field: "density", kind: "adopt" }),
+      expect.objectContaining({ field: "optTags", kind: "conflict", pendingReview: true }),
+    ]);
+
+    expect((await syncBody(id, ["density"])).status).toBe(200);
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.density).toBe(1.24);
+    expect(fresh.optTags).toEqual([]);
+    expect(fresh.openprinttagSnapshot).toMatchObject({ tagsNumbering: "spec", density: 1.24, color: "#3d3e3d" });
+    expect(fresh.openprinttagSnapshot).not.toHaveProperty("optTags");
+    expect(classifyOptTags(fresh).kind).toBe("trivial");
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.optTags).toEqual([2, 16]);
+    expect(freshParent.optTagsSpec).toBe(false);
+
+    // Upstream changes density: the variant still holds the value OPT last
+    // offered, so the change is a pre-checked adopt.
+    dbMock.mockResolvedValue({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, density: 1.3, tags: ["matte", "antibacterial"] }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+    const recheck = await (await checkGET({} as NextRequest, params(id))).json();
+    expect(recheck.changes).toEqual([
+      expect.objectContaining({ field: "density", current: 1.24, incoming: 1.3, kind: "adopt" }),
+      expect.objectContaining({ field: "optTags", kind: "conflict", pendingReview: true }),
+    ]);
+  });
+
   it("check: respects values inherited from the parent (no spurious adopt) (GH #607)", async () => {
     // The parent carries the OPT-matching values; the variant leaves them
     // unset to inherit. Pre-fix the diff read the variant's raw (null) fields

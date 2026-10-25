@@ -14,7 +14,11 @@ import {
 } from "@/lib/optResync";
 import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
-import { effectiveOptTagsAwaitReview, type OptTagReviewRow } from "@/lib/optTagLegacy";
+import {
+  effectiveOptTagsAwaitReview,
+  optTagsAwaitReview as ownOptTagsAwaitReview,
+  type OptTagReviewRow,
+} from "@/lib/optTagLegacy";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -37,7 +41,10 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  * still tell "OPT changed it" from "the user changed it" for declined
  * fields. The one exception is the tags of a row still awaiting numbering
  * review (GH #1227): they were never compared, so their provenance is left
- * as stored (`buildOptSyncSnapshot`).
+ * as stored (`buildOptSyncSnapshot`). A row whose OWN tags await review and
+ * that has no snapshot object gets none (its bare link is Data health's
+ * `opt-provenance` hint); a variant that only inherits unreviewed tags gets
+ * the refreshed offer without a tag entry.
  *
  * GH #1227: a request naming `optTags` while the row's effective tags still
  * await numbering review is refused with 409 `opt_tags_pending_review`, the
@@ -217,12 +224,18 @@ export async function POST(
 
       const update = buildOptSyncUpdate(fields, payload);
       // GH #1227: on a row whose tags await review the stored tag provenance
-      // is kept, and with no snapshot object to keep it in, none is written
-      // (the bare link is Data health's `opt-provenance` hint).
+      // is kept. With no snapshot object to keep it in, a row whose OWN tags
+      // await review gets none (the bare link is Data health's
+      // `opt-provenance` hint); a variant that only inherits them has no hint
+      // to keep, so it gets the refreshed offer without a tag entry.
       const snapshot = buildOptSyncSnapshot(
         payload,
         locked.openprinttagSnapshot,
-        optTagsAwaitReview,
+        !optTagsAwaitReview
+          ? "settled"
+          : ownOptTagsAwaitReview(locked as unknown as OptTagReviewRow)
+            ? "own"
+            : "inherited",
       );
 
       const $set: Record<string, unknown> = { ...update };
