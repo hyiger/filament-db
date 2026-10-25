@@ -379,11 +379,13 @@ describe("applyFormSettingFlags", () => {
     expect(bare).toEqual({ filament_wipe: "0" });
   });
 
-  it("writes a cleared pin as 0 when the parent's value is nil or an empty list", () => {
-    // A parent null exports as `filament_wipe = nil` and an empty list as a
-    // blank value: the slicer falls back exactly as for an absent key, so
-    // the own "1" turned off is written "0", not dropped onto the fallback.
-    for (const parentWipe of [null, [], [null]]) {
+  it("writes a cleared pin as 0 when the parent's value is nil, blank or an empty list", () => {
+    // A parent null or "nil" (the spelling a slicer sync-back or a
+    // Bambu/Orca import stores) exports as `filament_wipe = nil`, and an
+    // empty list or "" as a blank value: the slicer falls back exactly as
+    // for an absent key, so the own "1" turned off is written "0", not
+    // dropped onto the fallback.
+    for (const parentWipe of [null, "nil", ["nil"], "", [], [null]]) {
       const parent = { settings: { filament_abrasive: "1", filament_wipe: parentWipe } };
       const own = { filament_wipe: "1" };
       const seed = seedFormSettingFlags(own, parent.settings);

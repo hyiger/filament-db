@@ -654,6 +654,20 @@ describe("variant edit round-trip preserves inheritance", () => {
       expect((await getResolved(variant._id)).settings.filament_wipe).toBe("0");
     });
 
+    it("an own pin cleared under a template holding the string nil is written 0", async () => {
+      // The PrusaSlicer fork's sync-back stores `nil` verbatim, and the
+      // Bambu/Orca importer unwraps ["nil"] to "nil": both export as
+      // `filament_wipe = nil`, the same fallback as a null.
+      const { template, variant } = await seedFlagFamily();
+      await Filament.updateOne({ _id: template._id }, { $set: { "settings.filament_wipe": "nil" } });
+      await Filament.updateOne({ _id: variant._id }, { $set: { "settings.filament_wipe": "1" } });
+      const seed = await formSave(variant._id, { filament_wipe: false });
+      expect(seed.filament_wipe).toBe(true);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.filament_wipe).toBe("0");
+      expect((await getResolved(variant._id)).settings.filament_wipe).toBe("0");
+    });
+
     it("Duplicate flow: an untouched copy shows and inherits the template's flags", async () => {
       const { template } = await seedFlagFamily();
       const { shown, created } = await duplicateAndCreate(template._id);

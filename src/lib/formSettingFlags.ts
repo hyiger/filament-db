@@ -30,10 +30,11 @@ import { settingFlagIsOn, settingFlagScalar } from "@/lib/slicerSettings";
  *    the same as an absent key to the slicer). Otherwise it is compared with
  *    the current parent's value. Equal with no own value ⇒ nothing is
  *    written, the row keeps inheriting. Equal with an own pin and the
- *    parent's bag HOLDING a non-nil value ⇒ the pin is dropped, so the row
- *    inherits what the box shows. Anything else ⇒ written as "1"/"0": a
+ *    parent's bag HOLDING an explicit "1"/"0" ⇒ the pin is dropped, so the
+ *    row inherits what the box shows. Anything else ⇒ written as "1"/"0": a
  *    parent bag LACKING the key exports nothing for it, and a parent nil
- *    (`null`) exports as `nil`, so in both cases the slicer would fall back
+ *    (`null` or the string "nil"), a blank value or an empty list exports as
+ *    `nil` or blank, so in every such case the slicer would fall back
  *    to its system preset's (or, for wipe, the printer's) value, and a
  *    dropped pin could change the preset while the box looks the same. A
  *    standalone or a template still writes all four on every save, as
@@ -171,6 +172,19 @@ export function changedFormSettingFlagEdits(
 }
 
 /**
+ * Whether the parent's bag holds an explicit flag value ("1"/"0", or the
+ * numeric 1/0 the generic API can store) for `key`, the only values a
+ * dropped own pin can inherit without changing the exported preset.
+ */
+function parentHoldsExplicitFlag(parentBag: Record<string, unknown> | null, key: string): boolean {
+  if (!parentBag) return false;
+  const scalar = settingFlagScalar(parentBag[key]);
+  if (scalar == null) return false;
+  const s = String(scalar);
+  return s === "1" || s === "0";
+}
+
+/**
  * Write the checkbox state into the outgoing `settings` (mutated in place;
  * it starts as a copy of the row's own bag).
  *
@@ -179,8 +193,8 @@ export function changedFormSettingFlagEdits(
  * key exactly as the bag holds it, and a touched one too when the bag
  * already holds a value that reads as what the box shows. A touched key
  * equal to the parent's value stays absent when the row had none, and an
- * own value is removed (the row inherits it) when the parent's bag holds a
- * non-nil value for the key. Any other touched key is written. A standalone
+ * own value is removed (the row inherits it) when the parent's bag holds an
+ * explicit "1"/"0" for the key. Any other touched key is written. A standalone
  * writes all four from what the boxes show.
  */
 export function applyFormSettingFlags(
@@ -203,10 +217,12 @@ export function applyFormSettingFlags(
       if (parentFlags && shown[key] === parentFlags[key]) {
         // No own value: nothing to drop, the row keeps inheriting.
         if (!ownHas) continue;
-        // Only a real parent value can stand in for the pin. An absent key, a
-        // nil `null` (exported as `key = nil`) or an empty list falls back to
-        // the slicer's own value.
-        if (parentBag && settingFlagScalar(parentBag[key]) != null) {
+        // Only an explicit "1"/"0" in the parent can stand in for the pin.
+        // An absent key, the nil marker in either spelling (`null`, or the
+        // string "nil" a slicer sync-back or a Bambu/Orca import stores), a
+        // blank value or an empty list all export as a fallback to the
+        // slicer's own value.
+        if (parentHoldsExplicitFlag(parentBag, key)) {
           delete settings[key];
           continue;
         }
