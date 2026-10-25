@@ -1,4 +1,4 @@
-import { settingFlagIsOn } from "@/lib/slicerSettings";
+import { settingFlagIsOn, settingFlagScalar } from "@/lib/slicerSettings";
 
 /**
  * The four FilamentForm checkboxes backed by the slicer settings bag.
@@ -30,9 +30,10 @@ import { settingFlagIsOn } from "@/lib/slicerSettings";
  *    the same as an absent key to the slicer). Otherwise it is compared with
  *    the current parent's value. Equal with no own value ⇒ nothing is
  *    written, the row keeps inheriting. Equal with an own pin and the
- *    parent's bag HOLDING the key ⇒ the pin is dropped, so the row inherits
- *    what the box shows. Anything else ⇒ written as "1"/"0": a parent bag
- *    LACKING the key exports nothing for it, so the slicer would fall back
+ *    parent's bag HOLDING a non-nil value ⇒ the pin is dropped, so the row
+ *    inherits what the box shows. Anything else ⇒ written as "1"/"0": a
+ *    parent bag LACKING the key exports nothing for it, and a parent nil
+ *    (`null`) exports as `nil`, so in both cases the slicer would fall back
  *    to its system preset's (or, for wipe, the printer's) value, and a
  *    dropped pin could change the preset while the box looks the same. A
  *    standalone or a template still writes all four on every save, as
@@ -178,9 +179,9 @@ export function changedFormSettingFlagEdits(
  * key exactly as the bag holds it, and a touched one too when the bag
  * already holds a value that reads as what the box shows. A touched key
  * equal to the parent's value stays absent when the row had none, and an
- * own value is removed (the row inherits it) when the parent's bag holds
- * the key. Any other touched key is written. A standalone writes all four
- * from what the boxes show.
+ * own value is removed (the row inherits it) when the parent's bag holds a
+ * non-nil value for the key. Any other touched key is written. A standalone
+ * writes all four from what the boxes show.
  */
 export function applyFormSettingFlags(
   settings: Record<string, unknown>,
@@ -202,7 +203,10 @@ export function applyFormSettingFlags(
       if (parentFlags && shown[key] === parentFlags[key]) {
         // No own value: nothing to drop, the row keeps inheriting.
         if (!ownHas) continue;
-        if (parentBag && Object.prototype.hasOwnProperty.call(parentBag, key)) {
+        // Only a real parent value can stand in for the pin. An absent key, a
+        // nil `null` (exported as `key = nil`) or an empty list falls back to
+        // the slicer's own value.
+        if (parentBag && settingFlagScalar(parentBag[key]) != null) {
           delete settings[key];
           continue;
         }
