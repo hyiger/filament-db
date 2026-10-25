@@ -454,7 +454,7 @@
           "Filaments"
         ],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #872: a per-nozzle preset from the bulk export fan-out carries a `filamentdb_nozzle` config hint (`\"<diameter> <type>[ HF]\"`); the sync treats it as a per-nozzle preset when the hint is present AND either the URL is an ObjectId or the URL name is exactly `\"<stored name> <hint>\"`. A recognized per-nozzle preset routes its nozzle-specific keys to the hinted nozzle's calibration entry even without query params (diameter, type and HF flag are parsed from the hint; explicit nozzle_diameter / high_flow params still win) and is exempt from the `name_id_mismatch` 409. When the suffixed name matches no filament (and no filamentdb_id resolves), the route retries the BASE name (the URL name minus the ` <hint>` suffix) instead of returning 404. The ObjectId-path rename below is suppressed whenever the config carries a `filamentdb_nozzle` hint. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first \u2014 so a renamed preset isn't orphaned \u2014 then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative \u2014 a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) \u2014 \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. N041: the nozzle is chosen among the filament's effective compatible nozzles (the whole nozzle catalog only when none of those match), never by document order: a single candidate takes the write; with several, the nozzle the `printer` param's printer has installed wins, then the one already carrying this filament's printer-less calibration row. A tie nothing breaks is NOT written, and the 200's `calibration` block says so and lists the tied nozzles. GET /api/filaments/{id}/calibration makes the same choice for the same inputs. #872: a per-nozzle preset from the bulk export fan-out carries a `filamentdb_nozzle` config hint (`\"<diameter> <type>[ HF]\"`); the sync treats it as a per-nozzle preset when the hint is present AND either the URL is an ObjectId or the URL name is exactly `\"<stored name> <hint>\"`. A recognized per-nozzle preset routes its nozzle-specific keys to the hinted nozzle's calibration entry even without query params (diameter, type and HF flag are parsed from the hint; explicit nozzle_diameter / high_flow params still win) and is exempt from the `name_id_mismatch` 409. When the suffixed name matches no filament (and no filamentdb_id resolves), the route retries the BASE name (the URL name minus the ` <hint>` suffix) instead of returning 404. The ObjectId-path rename below is suppressed whenever the config carries a `filamentdb_nozzle` hint. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first \u2014 so a renamed preset isn't orphaned \u2014 then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative \u2014 a carried filamentdb_id never overrides it, AND it applies the request body's `name` to the record (renaming it) so the fork's 'Update anyway' reconcile sticks; a rename that collides with another active filament returns 409 `name_taken`. The name-addressed path never renames (the name is its addressing key). #1066: `inherits` is lifted out of the settings bag onto the top-level field (matching the bulk INI import) \u2014 \"\"/\"nil\" clears it; a stored pre-lift bag copy is purged on the next sync, adopting its value top-level first when the effective (parent-resolved) value was empty. Oversized values are rejected with 400 (same cap as settings-bag entries).",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentIdOrName"
@@ -478,6 +478,16 @@
               ]
             },
             "description": "Whether the nozzle is high-flow. Disambiguates same-diameter nozzles (e.g. 0.4mm vs 0.4mm HF)."
+          },
+          {
+            "name": "printer",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "N041: the printer the preset was tuned on, as a printer NAME or ObjectId (the identity rules of GET /api/filaments/{id}/calibration's `printer`: an ObjectId is authoritative; names match verbatim, then trimmed, then case-folded; live printers only). Only consulted when two or more nozzles match: the one this printer has installed takes the calibration. A printer that matches no live printer leaves such a tie unwritten (`status: printer_not_found`) rather than falling back to an existing row. The calibration row written stays printer-less.",
+            "example": "Core One INDX"
           }
         ],
         "requestBody": {
@@ -537,6 +547,100 @@
                     },
                     "_strippedTemplateFields": {
                       "$ref": "#/components/schemas/TemplateStrippedFields"
+                    },
+                    "calibration": {
+                      "type": "object",
+                      "description": "N041: present when the sync carried calibration keys for a nozzle diameter (from `nozzle_diameter` or a #872 `filamentdb_nozzle` hint). `written` names the nozzle the keys landed on; `ambiguous` and `printer_not_found` mean nothing was written per-nozzle (a per-nozzle preset's baked temps / max-vol are then NOT written filament-wide either, since they belong to one of the tied nozzles); `no_match` means no nozzle matched, and a per-nozzle preset's baked values fall back to the filament-wide fields as before.",
+                      "required": [
+                        "status",
+                        "fields"
+                      ],
+                      "properties": {
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "written",
+                            "ambiguous",
+                            "printer_not_found",
+                            "no_match"
+                          ]
+                        },
+                        "fields": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "description": "The calibration fields the sync carried (e.g. extrusionMultiplier, pressureAdvance)."
+                        },
+                        "nozzle": {
+                          "type": "object",
+                          "description": "`written` only: the nozzle the row was written for.",
+                          "properties": {
+                            "_id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "resolvedBy": {
+                          "type": "string",
+                          "enum": [
+                            "only",
+                            "printer",
+                            "calibrated"
+                          ],
+                          "description": "`written` only: `only` = the single matching nozzle; `printer` = the one the `printer` param's printer has installed; `calibrated` = the one already carrying this filament's printer-less row (or a row scoped to the named printer)."
+                        },
+                        "scope": {
+                          "type": "string",
+                          "enum": [
+                            "compatible",
+                            "catalog"
+                          ],
+                          "description": "Where the candidates came from: the filament's effective compatible nozzles, or the whole catalog when none of those match (#859)."
+                        },
+                        "candidates": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": {
+                                "type": "string"
+                              },
+                              "name": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "description": "`ambiguous` / `printer_not_found`: the tied nozzles."
+                        },
+                        "message": {
+                          "type": "string",
+                          "description": "`ambiguous` / `printer_not_found`: why nothing was written and what would resolve it."
+                        },
+                        "printer": {
+                          "type": "object",
+                          "description": "Present when the `printer` param was sent. `_id` and `name` are null when it matched no live printer.",
+                          "properties": {
+                            "requested": {
+                              "type": "string"
+                            },
+                            "_id": {
+                              "type": "string",
+                              "nullable": true
+                            },
+                            "name": {
+                              "type": "string",
+                              "nullable": true
+                            }
+                          }
+                        }
+                      }
                     }
                   }
                 }
@@ -1295,7 +1399,7 @@
           "Filaments"
         ],
         "summary": "Get calibration for nozzle diameter",
-        "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer and OrcaSlicer to auto-adjust filament settings when the user switches printer presets. Optional high_flow, nozzle_type, and bed_type params disambiguate multiple calibrations at the same diameter (a type/bed miss falls back to a same-diameter entry rather than 404ing). With format=orcaslicer the response returns OrcaSlicer key names + array values under calibration_orca instead of the default calibration object.",
+        "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer and OrcaSlicer to auto-adjust filament settings when the user switches printer presets. Optional high_flow, nozzle_type, and bed_type params disambiguate multiple calibrations at the same diameter (a type/bed miss falls back to a same-diameter entry rather than 404ing). N041: when the sync-back (POST /api/filaments/{id}) would resolve one nozzle for the same nozzle_diameter / high_flow / nozzle_type / printer, the answer comes from that nozzle's entries, ahead of any other nozzle's (including another nozzle's printer-scoped entry). When the sync-back would refuse a tie, or that nozzle has no entry yet, the previous best-effort choice is unchanged. With format=orcaslicer the response returns OrcaSlicer key names + array values under calibration_orca instead of the default calibration object.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentIdOrName"
@@ -1347,7 +1451,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Printer NAME or ObjectId (same convention as bed_type). Selects the calibration tuned for that machine (GH #1047 Phase 0). Soft: an unknown printer falls back to the shareable printer-less defaults, then to any same-nozzle entry \u2014 never a new 404. With NO printer param the printer-less defaults are preferred (deterministic; previously the first matching entry won regardless of its printer)."
+            "description": "Printer NAME or ObjectId (same convention as bed_type). Selects the calibration tuned for that machine (GH #1047 Phase 0). Soft: an unknown printer falls back to the shareable printer-less defaults, then to any same-nozzle entry \u2014 never a new 404. With NO printer param the printer-less defaults are preferred (deterministic; previously the first matching entry won regardless of its printer). N041: also picks between same-spec nozzles on different printers: the nozzle this printer has installed answers first, matching the sync-back's choice."
           },
           {
             "name": "format",
