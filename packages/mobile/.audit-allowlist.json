@@ -23,18 +23,18 @@
       "reviewBy": "2026-12-01"
     },
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "title": "braces stack-exhaustion DoS through deeply nested patterns",
-      "justification": "NO PATCHED RELEASE EXISTS: the advisory covers braces <=3.0.3 with no first_patched_version, and 3.0.3 is the newest braces on the registry. The only copy is braces@3.0.3 via micromatch@4.0.8, which only the Metro bundler's file watcher pulls in (metro-file-map and @expo/metro-file-map, both requiring micromatch ^4.0.4 -> braces ^3.0.3). No override can help: micromatch 4.0.8 is the newest release and still needs braces ^3.0.3. Exposure: NIL. Metro runs at bundle/dev-server time on the developer machine or the EAS builder and never ships to the device. Its glob patterns come from the project's own Metro/Expo config, not user input. Re-check when micromatch drops braces or braces ships a fix.",
-      "reviewBy": "2026-11-04"
-    },
-    {
       "id": "GHSA-86w9-cpqp-85rv",
       "package": "node-forge",
       "title": "node-forge RSA PKCS#1 v1.5 signature verification accepts extra nested DigestAlgorithm elements",
       "justification": "NO PATCHED RELEASE EXISTS: the advisory covers node-forge <=1.4.0 with no first_patched_version, and 1.4.0 is the newest node-forge on the registry. The only copy is node-forge@1.4.0, required (^1.3.3) by the Expo CLI (expo/node_modules/@expo/cli) and its @expo/code-signing-certificates helper. Exposure: NIL. node-forge is Node-only tooling run on the developer machine or EAS builder (expo start/export/prebuild), never bundled into the app. The flaw is in signature VERIFICATION, which only matters for expo-updates code signing, and this app uses neither expo-updates nor a codeSigningCertificate (checked package.json, app.json and eas.json). Re-check when node-forge ships a fix or @expo/cli drops it.",
       "reviewBy": "2026-11-04"
+    },
+    {
+      "id": "GHSA-mrhx-c7xc-m3w5",
+      "package": "zod",
+      "title": "Zod can exhaust memory while validating oversized constrained collections",
+      "justification": "NO PATCH WITHIN ZOD 3: the advisory covers zod <4.6.6 and its only fixed release is 4.6.6 on the zod 4 major, while the installed copy, zod@3.25.76, is the newest zod 3 on the registry. The copy is required as zod ^3.25.76 by the Expo CLI (expo/node_modules/@expo/cli@56.1.15) and is shared with eslint-plugin-react-hooks (^3.25.0 || ^4.0.0, via eslint-config-expo). Even the newest @expo/cli (58.1.15) still declares zod ^3.25.76, so no Expo upgrade helps, and an override to zod 4 would hand the CLI a breaking major under the bare 'zod' import it calls with the zod 3 API. Exposure: NIL on device. The Expo CLI validates dev-tools plugin manifests and CLI-extension command output with zod while 'expo start' runs on the developer machine or the EAS builder, and the lint plugin validates its own ESLint options; neither ships in the app bundle (packages/mobile/src never imports zod), and the inputs are the project's own installed packages and config, not untrusted data. It shows under --omit=dev only because expo and eslint-config-expo are declared as production dependencies. Re-check when @expo/cli moves to zod 4.6.6 or later.",
+      "reviewBy": "2026-12-23"
     }
   ]
 }
