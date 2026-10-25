@@ -27,6 +27,28 @@
  *   - no snapshot entry AND current differs from incoming     → `conflict`
  *       (no provenance to prove it's safe — surface it, let the user decide).
  *
+ * "Equal" and "differs" are per field (`valuesEqualForField`): hex colors
+ * compare case-insensitively (GH #894), and `optTags` compares as a SET:
+ * the spec's tag list has no meaningful order (the CBOR encoder sorts it),
+ * so a stored `[62, 16]` against an offered `[16, 62]` is not a change and is
+ * never offered, neither as a diff nor through the snapshot test. Offering it
+ * would sync nothing a reader can see, and before this rule it re-surfaced as
+ * a `conflict` on every check. `secondaryColors` stays ORDER-sensitive: slot
+ * order is meaningful (it sets the coextruded stripe order and which of CBOR
+ * keys 20–24 each color lands in).
+ *
+ * GH #1227: comparing tag ids is only meaningful between arrays in the SAME
+ * numbering. OPT's offer is always spec ids, so tags are compared only when
+ * the other side is known to be spec-numbered too:
+ *   - a row whose effective tags still await numbering review (the caller
+ *     passes `optTagsAwaitReview`) is never compared at all: its tags are
+ *     surfaced as a `conflict` flagged `pendingReview`, never pre-checked,
+ *     and the sync route refuses it with 409 `opt_tags_pending_review` until
+ *     the row is settled on Data health;
+ *   - a snapshot written before v1.83 (no `tagsNumbering: "spec"` marker) is
+ *     no provenance for the tags unless every id it records means the same
+ *     in both numberings, so it cannot turn a tag change into an `adopt`.
+ *
  * Phase 1 lets the user pick which fields to apply, so the classification is
  * advisory: it drives default-checked vs. needs-confirmation in the UI, not
  * an auto-apply. Nothing here mutates anything.
@@ -36,7 +58,11 @@ import { INHERITABLE_FIELDS } from "@/lib/resolveFilament";
 import {
   OPT_SNAPSHOT_NUMBERING_KEY,
   OPT_SNAPSHOT_SPEC_NUMBERING,
+  classifyOptTags,
+  isSnapshotDocument,
   optTagsAwaitReview,
+  sameOptTagSet,
+  snapshotIsSpecNumbered,
   type OptTagReviewRow,
 } from "@/lib/optTagLegacy";
 
@@ -55,6 +81,14 @@ export interface OptFieldChange {
   /** The value OpenPrintTag currently offers. Never null here. */
   incoming: OptValue;
   kind: OptChangeKind;
+  /**
+   * GH #1227: set (always `true`, and only on `optTags`) when the row's
+   * effective tags still await numbering review. Shown for information only:
+   * the row's ids may be the pre-v1.83 numbering, so they cannot be compared
+   * with OpenPrintTag's spec ids, `kind` is always `conflict`, and the sync
+   * route refuses the field with 409 `opt_tags_pending_review`.
+   */
+  pendingReview?: true;
 }
 
 /**
@@ -145,7 +179,9 @@ function getPath(obj: Record<string, unknown> | null | undefined, path: string):
 
 /** Order-sensitive structural equality for OptValues. `null` and `[]` both
  *  mean "nothing" and compare equal — so a field a user never set (null) and
- *  one OPT doesn't offer ([]) aren't surfaced as a spurious change. */
+ *  one OPT doesn't offer ([]) aren't surfaced as a spurious change. Callers
+ *  comparing a managed field go through `valuesEqualForField`, which relaxes
+ *  this for the fields where case or order carries no meaning. */
 function valuesEqual(a: OptValue, b: OptValue): boolean {
   const aEmpty = a == null || (Array.isArray(a) && a.length === 0);
   const bEmpty = b == null || (Array.isArray(b) && b.length === 0);
@@ -172,10 +208,64 @@ function canonicalizeColor(v: OptValue): OptValue {
   return v;
 }
 
-/** `valuesEqual`, but case-insensitive for hex-color fields (GH #894). */
+/** Is `v` a tag list (or nothing)? A non-null scalar in `optTags` is corrupt
+ *  data, not a set of tags. */
+function isListOrNothing(v: OptValue): v is string[] | null {
+  return v == null || Array.isArray(v);
+}
+
+/**
+ * `optTags` is a SET: the spec's tag list has no meaningful order (the CBOR
+ * encoder sorts it before writing), so two lists holding the same ids are the
+ * same tags whatever their order. Duplicates collapse too, and an id the
+ * encoder can't write is ignored, as everywhere else the app compares tag
+ * sets (`sameOptTagSet`: the PUT's set-equal drop, the renumber pass). A
+ * corrupt non-list value keeps the strict compare, so it still surfaces as a
+ * change OPT's list can repair, the same posture as a corrupt
+ * `secondaryColors`.
+ *
+ * GH #1227: this compares IDS, which says nothing about numbering, so both
+ * sides must already be spec-numbered (Codex P1 on PR #1237: an unreviewed
+ * legacy `[2, 16]` is not the spec `[16, 2]`, whatever the set compare says).
+ * Every caller makes sure of it: `diffOptFields` never compares a row whose
+ * tags await review and drops a pre-v1.83 snapshot's tag provenance, and the
+ * variant-import prune keeps a variant's tags under an unreviewed parent.
+ */
+function sameTagSet(a: OptValue, b: OptValue): boolean {
+  if (!isListOrNothing(a) || !isListOrNothing(b)) return valuesEqual(a, b);
+  return sameOptTagSet(a, b);
+}
+
+/**
+ * `valuesEqual`, relaxed where the field's meaning allows: case-insensitive
+ * for hex colors (GH #894) and order-insensitive for `optTags`. Every
+ * comparison of a color or array field in this module goes through it (the
+ * diff skip, the snapshot provenance test and the variant-import prune of
+ * the whole-array fields), so the check and sync routes, which both call
+ * `diffOptFields`, keep agreeing on the offered set. `secondaryColors` is
+ * case-folded but stays order-sensitive: its slot order is data.
+ */
 function valuesEqualForField(field: string, a: OptValue, b: OptValue): boolean {
+  if (field === "optTags") return sameTagSet(a, b);
   if (COLOR_FIELDS.has(field)) return valuesEqual(canonicalizeColor(a), canonicalizeColor(b));
   return valuesEqual(a, b);
+}
+
+/**
+ * GH #1227: can the snapshot's recorded `optTags` stand as provenance for a
+ * spec-numbered array? Yes when the snapshot says its tags are spec ids
+ * (every snapshot built since v1.83 does), or when every id it records means
+ * the same in both numberings (`classifyOptTags` → `trivial`). A pre-v1.83
+ * snapshot holding any other id is in the app's old numbering, where the same
+ * id can be a different tag (its 2 is the spec's 20, not the spec's 2), so
+ * equality with it proves nothing about whether the user edited the tags.
+ */
+function snapshotTagsReadAsSpec(
+  snapshot: Record<string, unknown>,
+  snapshotTags: OptValue | undefined,
+): boolean {
+  if (snapshotIsSpecNumbered(snapshot)) return true;
+  return Array.isArray(snapshotTags) && classifyOptTags({ optTags: snapshotTags }).kind === "trivial";
 }
 
 /** Does OPT actually offer a value for this field? (null / empty array = no.) */
@@ -218,6 +308,64 @@ export function buildOptSnapshot(payload: Record<string, unknown>): Record<strin
   return snap;
 }
 
+/**
+ * GH #1227: whose tags still await numbering review, for
+ * `buildOptSyncSnapshot`. `settled`: the effective tags are spec-numbered.
+ * `own`: the row's own array is the unreviewed one, so the row is listed on
+ * Data health and its snapshot and link feed that listing's hints.
+ * `inherited`: the row's own array is empty and it inherits an unreviewed
+ * array from its parent; it classifies as trivial whatever its snapshot or
+ * settings hold, so it has no hint to keep.
+ */
+export type OptSyncTagReview = "settled" | "own" | "inherited";
+
+/**
+ * The snapshot the sync route writes: normally the full current offer
+ * (`buildOptSnapshot`).
+ *
+ * GH #1227: when the row's effective tags still await numbering review
+ * (`tagReview` is not `settled`; the flag `diffOptFields` gets), the sync
+ * never compared the tags, so it leaves the stored TAG provenance as it was:
+ * the stored `optTags` entry and numbering marker are carried over, or stay
+ * absent, and only the other fields are refreshed. Recording OPT's tag offer
+ * here would read, after the review, as an offer the user had declined (a
+ * `conflict` where unedited tags should `adopt`), and a pre-v1.83 snapshot is
+ * also what earns the row Data health's `opt-provenance` hint, which selects
+ * it for the bulk conversion. The renumber pass and the Data health
+ * resolution translate a legacy entry when they settle the row, so a
+ * carried-over one stays correct.
+ *
+ * With no snapshot object to carry from (the container is absent, `null` or
+ * not a document) the answer depends on WHOSE tags await review. For `own`
+ * it returns null and the sync writes no snapshot: a bare link is itself
+ * that hint. For `inherited` there is no hint to keep (the row's own empty
+ * array is trivial), so it returns the refreshed offer WITHOUT an `optTags`
+ * entry, keeping the spec marker (true of a snapshot that records no tags):
+ * the other fields get their provenance, and no offer is recorded for tags
+ * that were never compared.
+ */
+export function buildOptSyncSnapshot(
+  payload: Record<string, unknown>,
+  storedSnapshot: unknown,
+  tagReview: OptSyncTagReview,
+): Record<string, OptValue> | null {
+  const snap = buildOptSnapshot(payload);
+  if (tagReview === "settled") return snap;
+  if (!isSnapshotDocument(storedSnapshot)) {
+    if (tagReview === "own") return null;
+    delete snap[optSnapshotKey("optTags")];
+    return snap;
+  }
+  for (const key of [optSnapshotKey("optTags"), OPT_SNAPSHOT_NUMBERING_KEY]) {
+    if (Object.prototype.hasOwnProperty.call(storedSnapshot, key)) {
+      snap[key] = storedSnapshot[key] as OptValue;
+    } else {
+      delete snap[key];
+    }
+  }
+  return snap;
+}
+
 function classify(
   current: OptValue,
   snapshotVal: OptValue | undefined,
@@ -233,6 +381,8 @@ function classify(
   if (hasSnapshotEntry) {
     // GH #894: case-fold hex colors so a casing-only difference vs the stored
     // snapshot classifies as `adopt` (unchanged), not a permanent `conflict`.
+    // Likewise a tag list the user only reordered is still OPT's offer
+    // (diffOptFields only lets a spec-numbered tag snapshot get this far).
     return valuesEqualForField(field, current, snapshotVal ?? null) ? "adopt" : "conflict";
   }
   return "conflict";
@@ -248,9 +398,18 @@ function classify(
  * inheritable (GH #477 / decision 3 on #605), so a template CAN carry the
  * shared multi-color set its variants inherit. `colorName` isn't OPT-managed
  * at all, so `color` is the only key this drops.
+ *
+ * `optTagsAwaitReview` — GH #1227: the row that SUPPLIES the effective
+ * `optTags` (the filament's own array, or its parent's when the own array is
+ * empty) still awaits numbering review. Compute it with
+ * `effectiveOptTagsAwaitReview(rawFilament, parent)`, the gate every other
+ * tag surface uses. Its ids may be the pre-v1.83 numbering, so they are not
+ * compared with OPT's spec ids: `optTags` is surfaced as a `conflict` flagged
+ * `pendingReview` whatever the two arrays hold, which the sync route refuses.
  */
 export interface DiffOptOptions {
   excludeColor?: boolean;
+  optTagsAwaitReview?: boolean;
 }
 
 /**
@@ -268,6 +427,9 @@ export interface DiffOptOptions {
  * but a variant that OWNS a non-empty array over an EMPTY parent keeps the
  * (genuinely applyable) clear. Pass the EFFECTIVE (resolved) filament for the
  * values regardless.
+ *
+ * The check and sync routes must pass the same `options`, so they agree on
+ * the offered set, including whether the `optTags` change is `pendingReview`.
  */
 export function diffOptFields(
   filament: Record<string, unknown>,
@@ -309,12 +471,35 @@ export function diffOptFields(
       continue;
     }
     const current = getPath(filament, field);
+    // GH #1227: tags still awaiting numbering review are never compared with
+    // OPT's spec ids (Codex P1 on PR #1237). The same ids can be different
+    // tags in the pre-v1.83 numbering, so no answer is safe: "equal" would
+    // hide a real difference behind "up to date", and an `adopt` would
+    // pre-check a sync that replaces the array and settles the numbering
+    // without the user's Data health decision. Surfaced instead, never
+    // pre-checked, and refused by the sync route until the row is reviewed.
+    if (field === "optTags" && options?.optTagsAwaitReview) {
+      changes.push({ field, labelKey, current, incoming, kind: "conflict", pendingReview: true });
+      continue;
+    }
     // GH #894: hex colors compare case-insensitively, so `#AABBCC` already
     // stored vs an `#aabbcc` upstream offer isn't surfaced as a spurious change.
+    // optTags compare as a set: a reordered list has nothing to sync.
     if (valuesEqualForField(field, current, incoming)) continue;
     const snapKey = optSnapshotKey(field);
-    const hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
+    let hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
     const snapshotVal = hasSnapshotEntry ? getPath(snapshot as Record<string, unknown>, snapKey) : undefined;
+    // GH #1227: a pre-v1.83 snapshot's tags are in the old numbering, so
+    // they are no provenance for the (spec-numbered) stored array: classify
+    // as if there were no snapshot entry, which can only give `conflict`
+    // for a non-empty array.
+    if (
+      hasSnapshotEntry &&
+      field === "optTags" &&
+      !snapshotTagsReadAsSpec(snapshot as Record<string, unknown>, snapshotVal)
+    ) {
+      hasSnapshotEntry = false;
+    }
     const kind = classify(current, snapshotVal, hasSnapshotEntry, field);
     changes.push({ field, labelKey, current, incoming, kind });
   }
@@ -495,10 +680,11 @@ export function pruneOptPayloadAgainstParent(
     // the same tags. Keep the variant's own array, or the parent's later
     // review would decide what the variant's tags mean.
     if (field === "optTags" && optTagsAwaitReview(parentEffective as OptTagReviewRow)) continue;
-    // GH #928: use the case-folding compare for hex-color fields — a variant's
-    // secondaryColors that differ from the parent's only by case (#AABBCC vs
-    // #aabbcc) should still prune to inherit. valuesEqualForField is a no-op for
-    // the non-color array field (optTags), so this is safe for the whole set.
+    // GH #928: use the field-aware compare. A variant's secondaryColors that
+    // differ from the parent's only by case (#AABBCC vs #aabbcc) still prune to
+    // inherit, and so do optTags holding the parent's tags in another order
+    // (inheriting yields the same set). secondaryColors in another ORDER are
+    // kept: inheriting would change the stripe order.
     if (valuesEqualForField(field, v as OptValue, getPath(parentEffective, field))) {
       pruned[field] = [];
     }

@@ -1092,7 +1092,7 @@
           "Filaments"
         ],
         "summary": "Check for OpenPrintTag updates",
-        "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote \u2014 safe) or `conflict` (locally edited away from OPT \u2014 surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced.",
+        "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote \u2014 safe) or `conflict` (locally edited away from OPT \u2014 surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced. Tags compare as a set (order and duplicates ignored) only between spec-numbered arrays (GH #1227): when the filament's effective optTags (own, or inherited from the parent when the own array is empty) still await OpenPrintTag numbering review, the tags change is always listed as a `conflict` with `pendingReview: true`, whatever the two arrays hold, and the sync route refuses it with 409 until the row is settled under Settings \u2192 Data health. A snapshot written before v1.83 (no `tagsNumbering: \"spec\"`) is no provenance for the tags unless every id it records means the same in both numberings, so it never turns a tags change into `adopt`.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1138,6 +1138,10 @@
                               "adopt",
                               "conflict"
                             ]
+                          },
+                          "pendingReview": {
+                            "type": "boolean",
+                            "description": "Present (true) only on an `optTags` change whose effective tags still await OpenPrintTag numbering review (GH #1227). Informational: the ids may be the pre-v1.83 numbering and cannot be compared with OpenPrintTag's, `kind` is always `conflict`, and POST .../sync answers 409 `opt_tags_pending_review` for the field."
                           }
                         }
                       }
@@ -1166,7 +1170,7 @@
           "Filaments"
         ],
         "summary": "Apply OpenPrintTag updates",
-        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys \u2192 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
+        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys \u2192 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields. Exception (GH #1227): while the filament's effective optTags await OpenPrintTag numbering review, the snapshot's optTags entry and tagsNumbering marker are kept as stored (only the other fields are refreshed). With no snapshot object to keep them in, a filament whose own optTags await review gets no snapshot (its bare link is the Data health opt-provenance hint), and a variant that only inherits unreviewed tags gets the refreshed snapshot without an optTags entry.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1238,6 +1242,16 @@
           },
           "404": {
             "description": "Filament or upstream material not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "opt_tags_pending_review: `fields` names `optTags` while the filament's effective optTags (own, or inherited from the parent when the own array is empty) still await OpenPrintTag numbering review (GH #1227). Nothing is written, including any other field in the same request, and optTagsSpec is never stamped; settle the row under Settings \u2192 Data health (POST /api/opt-tag-review/{id}) first. The check route lists this change with `pendingReview: true`.",
             "content": {
               "application/json": {
                 "schema": {

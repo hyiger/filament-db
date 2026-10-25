@@ -181,13 +181,14 @@ export const LEGACY_TO_SPEC: Readonly<Record<number, number | null>> = {
  * The `openprinttagSnapshot` entry that says which numbering the snapshot's
  * `optTags` are in. Every snapshot built since the enum was corrected (every
  * link, re-sync and OPT import go through `buildOptSnapshot`) carries
- * `tagsNumbering: "spec"`; a snapshot WITHOUT it was written by the pre-#1227
- * app in the legacy numbering. The classifier needs the distinction (Codex P1
- * r4 on PR #1228): a stored spec `[2]` linked after upgrading to a material
- * whose spec snapshot is also `[2]` would otherwise read as "the legacy
- * importer wrote this" and be remapped to 20. The renumber pass stamps the
- * marker when it translates a legacy snapshot, so no snapshot is translated
- * twice.
+ * `tagsNumbering: "spec"`; a snapshot WITHOUT it holds tags the pre-#1227
+ * app recorded in the legacy numbering (a re-sync of a row still awaiting
+ * review carries that entry over unchanged, `buildOptSyncSnapshot`). The
+ * classifier needs the distinction (Codex P1 r4 on PR #1228): a stored spec
+ * `[2]` linked after upgrading to a material whose spec snapshot is also
+ * `[2]` would otherwise read as "the legacy importer wrote this" and be
+ * remapped to 20. The renumber pass stamps the marker when it translates a
+ * legacy snapshot, so no snapshot is translated twice.
  */
 export const OPT_SNAPSHOT_NUMBERING_KEY = "tagsNumbering";
 export const OPT_SNAPSHOT_SPEC_NUMBERING = "spec";
