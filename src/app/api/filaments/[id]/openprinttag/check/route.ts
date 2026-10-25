@@ -9,6 +9,7 @@ import {
 import { diffOptFields } from "@/lib/optResync";
 import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
+import { effectiveOptTagsAwaitReview, type OptTagReviewRow } from "@/lib/optTagLegacy";
 
 /**
  * GET /api/filaments/{id}/openprinttag/check  (GH #607)
@@ -22,6 +23,8 @@ import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
  *   { linked: true, found: false, slug }  — slug no longer in the OPT db
  *   { linked: true, found: true, slug, materialName, changes: [...] }
  * `changes[]` entries carry `kind ∈ {adopt, conflict}` (src/lib/optResync).
+ * An `optTags` entry flagged `pendingReview: true` (GH #1227) is the row's
+ * unreviewed tags, shown for information only; the sync route refuses it.
  *
  * GH #605: this route deliberately does NOT take the per-filament mutex the
  * sync route holds — its output is ADVISORY, and the sync route re-derives
@@ -80,8 +83,17 @@ export async function GET(
     // primary color. secondaryColors stays offered (inheritable, GH #477).
     // The sibling sync route passes the same flag so check and sync agree.
     const excludeColor = await hasVariants(Filament, id);
+    // GH #1227: tags whose numbering is still unreviewed are not compared
+    // with OPT's spec ids. Read from the row that SUPPLIES the effective
+    // array (an inheriting variant answers for its parent), the gate every
+    // tag surface uses; the sibling sync route derives it the same way.
+    const optTagsAwaitReview = effectiveOptTagsAwaitReview(
+      filament as unknown as OptTagReviewRow,
+      parentEffective as OptTagReviewRow | null,
+    );
     const changes = diffOptFields(effective, payload, snapshot, parentEffective, {
       excludeColor,
+      optTagsAwaitReview,
     });
 
     return NextResponse.json({

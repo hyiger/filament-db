@@ -7,13 +7,18 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import {
-  buildOptSnapshot,
+  buildOptSyncSnapshot,
   buildOptSyncUpdate,
   diffOptFields,
   OPT_MANAGED_FIELD_KEYS,
 } from "@/lib/optResync";
 import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
+import {
+  effectiveOptTagsAwaitReview,
+  optTagsAwaitReview as ownOptTagsAwaitReview,
+  type OptTagReviewRow,
+} from "@/lib/optTagLegacy";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -34,10 +39,20 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  * The provenance snapshot is refreshed to the FULL current OPT offer on
  * every sync, regardless of which fields were applied, so a later check can
  * still tell "OPT changed it" from "the user changed it" for declined
- * fields.
+ * fields. The one exception is the tags of a row still awaiting numbering
+ * review (GH #1227): they were never compared, so their provenance is left
+ * as stored (`buildOptSyncSnapshot`). A row whose OWN tags await review and
+ * that has no snapshot object gets none (its bare link is Data health's
+ * `opt-provenance` hint); a variant that only inherits unreviewed tags gets
+ * the refreshed offer without a tag entry.
+ *
+ * GH #1227: a request naming `optTags` while the row's effective tags still
+ * await numbering review is refused with 409 `opt_tags_pending_review`, the
+ * same answer the PUT gives a changed array on such a row. The check route
+ * lists that change as `pendingReview`, never pre-checked.
  *
  * Responses: 400 not linked / field not offered; 404 slug gone upstream;
- * 200 { applied: string[], filament }.
+ * 409 opt_tags_pending_review; 200 { applied: string[], filament }.
  */
 export async function POST(
   request: NextRequest,
@@ -168,11 +183,34 @@ export async function POST(
       // out of `offered` and 400 as not-offered. Derived IN-LOCK (see the
       // runExclusive rationale above).
       const excludeColor = await hasVariants(Filament, id);
-      const offered = new Set(
-        diffOptFields(effective, payload, snapshotForDiff, parentEffective, {
-          excludeColor,
-        }).map((c) => c.field),
+      // GH #1227: derived exactly as the check route derives it (and in-lock,
+      // like everything that feeds the write), so both list the same
+      // `pendingReview` change.
+      const optTagsAwaitReview = effectiveOptTagsAwaitReview(
+        locked as unknown as OptTagReviewRow,
+        parentEffective as OptTagReviewRow | null,
       );
+      const changes = diffOptFields(effective, payload, snapshotForDiff, parentEffective, {
+        excludeColor,
+        optTagsAwaitReview,
+      });
+      // GH #1227: unreviewed tags can't be replaced from here (Codex P1 on PR
+      // #1237). Whether OPT's spec ids differ from them at all depends on
+      // which numbering they are in, which only the user knows; the Data
+      // health decision settles that, and the sync works normally after it.
+      // Nothing is written, so a request that also names other fields
+      // applies none of them.
+      if (fields.some((f) => changes.some((c) => c.field === f && c.pendingReview))) {
+        return NextResponse.json(
+          {
+            error: "opt_tags_pending_review",
+            message:
+              "This filament's tags (its own, or the ones it inherits from its parent) were saved before Filament DB adopted the OpenPrintTag numbering and have not been reviewed, so they can't be compared with OpenPrintTag's. Resolve them under Settings → Data health first, then check for updates again.",
+          },
+          { status: 409 },
+        );
+      }
+      const offered = new Set(changes.map((c) => c.field));
       const notOffered = fields.filter((f) => !offered.has(f));
       if (notOffered.length > 0) {
         return NextResponse.json(
@@ -185,14 +223,27 @@ export async function POST(
       }
 
       const update = buildOptSyncUpdate(fields, payload);
-      const snapshot = buildOptSnapshot(payload);
+      // GH #1227: on a row whose tags await review the stored tag provenance
+      // is kept. With no snapshot object to keep it in, a row whose OWN tags
+      // await review gets none (the bare link is Data health's
+      // `opt-provenance` hint); a variant that only inherits them has no hint
+      // to keep, so it gets the refreshed offer without a tag entry.
+      const snapshot = buildOptSyncSnapshot(
+        payload,
+        locked.openprinttagSnapshot,
+        !optTagsAwaitReview
+          ? "settled"
+          : ownOptTagsAwaitReview(locked as unknown as OptTagReviewRow)
+            ? "own"
+            : "inherited",
+      );
 
-      const $set: Record<string, unknown> = {
-        ...update,
-        openprinttagSnapshot: snapshot,
-      };
+      const $set: Record<string, unknown> = { ...update };
+      if (snapshot) $set.openprinttagSnapshot = snapshot;
       // GH #1227: `mapToFilamentPayload` emits spec ids, so a row that adopts
-      // OPT's tags is spec-numbered from here on, whatever it held before.
+      // OPT's tags is spec-numbered from here on. Only reached for tags that
+      // were already settled (an unreviewed row got the 409 above), so the
+      // stamp never settles a numbering decision as a side effect.
       if ("optTags" in update) $set.optTagsSpec = true;
 
       // GH #629: re-filter `_deletedAt: null` on the final write so a
