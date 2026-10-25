@@ -2,18 +2,39 @@
   "$comment": "Advisories the CI audit gate (scripts/audit-gate.mjs) tolerates. Each entry MUST carry a justification and a reviewBy date; the gate warns (does not fail) past reviewBy so releases can't be broken by a calendar, but the warning is the nudge to re-check upstream. Remove an entry the moment a fix ships.",
   "allow": [
     {
-      "id": "GHSA-vfj7-8cjw-p6xm",
-      "package": "braces",
-      "title": "braces stack-exhaustion DoS through deeply nested patterns",
-      "justification": "NO PATCHED RELEASE EXISTS: the advisory covers braces <=3.0.3 with no first_patched_version, and 3.0.3 is the newest braces on the registry. The only copy is lint tooling: eslint-config-next (devDependency) -> @next/eslint-plugin-next -> fast-glob@3.3.1 -> micromatch@4.0.8 -> braces@3.0.3. An override can't help: the latest fast-glob still needs micromatch ^4.0.8, which needs braces ^3.0.3, and eslint-config-next 16.3.8 pins the same fast-glob@3.3.1. Exposure: NIL. The plugin's only glob call (dist/utils/get-root-dirs.js) expands settings.next.rootDir from this repo's own eslint.config.mjs (unset here, so the default), at lint time only. No user input reaches a brace pattern, and the package is not in the standalone server or the Electron app. Re-check when micromatch or fast-glob drops braces, or braces ships a fix.",
-      "reviewBy": "2026-11-04"
+      "id": "GHSA-jr5w-w6x2-84p9",
+      "package": "electron",
+      "title": "Electron: Mitigation for compromised eMudhra intermediate certificates",
+      "justification": "NO PATCH ON THE ELECTRON 41 LINE: 41.10.7 (installed) is the newest 41.x on the registry and the 41 line is out of support; the advisory's fixed versions are on 42.11.x, 43.x, 44.x and 45.x only, so the fix is a semver-MAJOR Electron upgrade. That upgrade swaps the bundled Chromium and Node (native ABI), so it needs @pokusew/pcsclite rebuilt and NFC, label printing, macOS signing/notarization and the auto-updater re-verified on hardware; it is out of scope for this patch-level dependency PR and is the follow-up that removes this entry. EXPOSURE: REACHABLE, and the advisory says there is no app-side workaround. The fix blocks a set of compromised eMudhra intermediate certificates in both Chromium networking and Node tls/https/fetch, and the desktop app makes TLS connections through both: the main process (hybrid sync) and the embedded Next server (an Electron utilityProcess, so Electron's Node) connect to MongoDB Atlas, the server calls the Anthropic and Gemini APIs with the user's keys and fetches TDS pages and the OpenPrintTag tarball, and electron-updater reads the GitHub release feed. Exploitation needs an attacker who can intercept the user's traffic AND holds a certificate issued through one of those intermediates. Desktop build only: electron is a devDependency that never reaches the Docker or web server. Do the major upgrade (to a supported line: 43.8.1+, 44.9.1+ or 45) before reviewBy rather than renewing this entry.",
+      "reviewBy": "2026-12-23"
     },
     {
-      "id": "GHSA-hp3w-g68c-fv3c",
-      "package": "sprintf-js",
-      "title": "sprintf-js denial of service through unbounded precision specifiers",
-      "justification": "NO PATCHED RELEASE EXISTS: the advisory covers sprintf-js <=1.1.3 with no first_patched_version, and 1.1.3 (published 2024-10-22) is the newest sprintf-js on the registry; npm's only 'fix' is a semver-MAJOR DOWNGRADE of swagger-ui-react to 3.23.3 or of electron-builder to 26.5.0. Two copies, neither reachable by input: (1) swagger-ui-react -> remarkable@2.0.1 -> argparse@1.0.10 -> sprintf-js@1.0.3 — remarkable requires argparse ONLY in its CLI entry (dist/cjs/cli.js behind bin/remarkable.js), which the browser bundle never loads, and argparse formats only its own help text with it; (2) electron-builder (devDependency) -> app-builder-lib -> @electron/get -> global-agent -> roarr -> sprintf-js@1.1.3, a build-time logger formatting its own messages on the release runner. No user- or network-supplied string reaches a sprintf format specifier in either. Not in the standalone server bundle's runtime paths. Re-check when sprintf-js ships a fix or remarkable/global-agent drop it.",
-      "reviewBy": "2026-12-01"
+      "id": "GHSA-fw47-9c62-h3vw",
+      "package": "electron",
+      "title": "Electron: HID and USB permission checks can be attributed to the wrong origin",
+      "justification": "NO PATCH ON THE ELECTRON 41 LINE: 41.10.7 (installed) is the newest 41.x on the registry and the 41 line is out of support; the advisory's fixed versions are on 42.11.x, 43.x, 44.x and 45.x only, so the fix is a semver-MAJOR Electron upgrade. That upgrade swaps the bundled Chromium and Node (native ABI), so it needs @pokusew/pcsclite rebuilt and NFC, label printing, macOS signing/notarization and the auto-updater re-verified on hardware; it is out of scope for this patch-level dependency PR and is the follow-up that removes this entry. EXPOSURE: NIL. Only apps that call session.setPermissionCheckHandler with origin-based logic for hid or usb AND embed cross-origin iframes carrying allow=\"hid\" or allow=\"usb\" are affected. electron/ installs no permission check, request or device handler, the app's only iframe (the TDS preview on the filament detail page) carries no allow attribute, and the renderer never uses WebHID or WebUSB: the NFC reader and the label printers are driven from the main process and the server (PC/SC, CUPS, the Windows spooler).",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "id": "GHSA-2p8c-gr87-2676",
+      "package": "electron",
+      "title": "Electron: SameSite cookie restrictions are not applied to windows opened from links",
+      "justification": "NO PATCH ON THE ELECTRON 41 LINE: 41.10.7 (installed) is the newest 41.x on the registry and the 41 line is out of support; the advisory's fixed versions are on 42.11.x, 43.x, 44.x and 45.x only, so the fix is a semver-MAJOR Electron upgrade. That upgrade swaps the bundled Chromium and Node (native ABI), so it needs @pokusew/pcsclite rebuilt and NFC, label printing, macOS signing/notarization and the auto-updater re-verified on hardware; it is out of scope for this patch-level dependency PR and is the follow-up that removes this entry. EXPOSURE: NIL. Only apps that let untrusted content open new windows are affected, and the advisory names returning { action: 'deny' } from setWindowOpenHandler as the workaround. The web-contents-created listener in electron/main.ts installs that handler on EVERY WebContents and always returns { action: 'deny' } (an http(s) URL is handed to the OS browser through shell.openExternal instead), so no window is ever opened inside Electron.",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "id": "GHSA-x562-297c-g43g",
+      "package": "electron",
+      "title": "Electron: Pointer lock permission requests can be attributed to the wrong frame",
+      "justification": "NO PATCH ON THE ELECTRON 41 LINE: 41.10.7 (installed) is the newest 41.x on the registry and the 41 line is out of support; the advisory's fixed versions are on 42.11.x, 43.x, 44.x and 45.x only, so the fix is a semver-MAJOR Electron upgrade. That upgrade swaps the bundled Chromium and Node (native ABI), so it needs @pokusew/pcsclite rebuilt and NFC, label printing, macOS signing/notarization and the auto-updater re-verified on hardware; it is out of scope for this patch-level dependency PR and is the follow-up that removes this entry. EXPOSURE: NIL. The bug passes the wrong requestingUrl and isMainFrame to session.setPermissionRequestHandler, so only apps that decide pointerLock by origin in that handler are affected. electron/ installs no permission request handler, so nothing reads the misattributed origin, and the app UI never requests pointer lock.",
+      "reviewBy": "2026-12-23"
+    },
+    {
+      "id": "GHSA-997q-gvvc-jwmx",
+      "package": "electron",
+      "title": "Electron: openExternal permission requests can be attributed to the wrong origin",
+      "justification": "NO PATCH ON THE ELECTRON 41 LINE: 41.10.7 (installed) is the newest 41.x on the registry and the 41 line is out of support; the advisory's fixed versions are on 42.11.x, 43.x, 44.x and 45.x only, so the fix is a semver-MAJOR Electron upgrade. That upgrade swaps the bundled Chromium and Node (native ABI), so it needs @pokusew/pcsclite rebuilt and NFC, label printing, macOS signing/notarization and the auto-updater re-verified on hardware; it is out of scope for this patch-level dependency PR and is the follow-up that removes this entry. EXPOSURE: NIL. Only apps that grant openExternal by requesting origin AND let untrusted content open or navigate windows are affected. electron/ installs no permission request handler; every WebContents denies new windows (setWindowOpenHandler) and cancels top-level navigation away from the app origin (will-navigate); and the only untrusted content, the TDS preview iframe, is sandboxed to allow-same-origin allow-scripts, with no allow-popups or allow-top-navigation.",
+      "reviewBy": "2026-12-23"
     }
   ]
 }
