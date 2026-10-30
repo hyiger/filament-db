@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import os from "os";
 import { Bonjour, type Service, type ServiceConfig } from "bonjour-service";
 
@@ -19,6 +20,8 @@ const SERVICE_NAME = "Filament DB";
 const HOST_PREFIX = "filamentdb";
 /** RFC 1035 §2.3.4: a DNS label is at most 63 octets. */
 const MAX_DNS_LABEL = 63;
+/** Hex digits of the hostname digest that keeps sanitized host names distinct. */
+const HOST_DIGEST_HEX = 8;
 
 let bonjour: Bonjour | null = null;
 let service: Service | null = null;
@@ -32,6 +35,12 @@ function readHostname(): string {
   }
 }
 
+/** The machine name both advertised names are built from: the hostname
+ *  without surrounding whitespace, trailing dots or a `.local` suffix. */
+function hostIdentity(hostname: string): string {
+  return hostname.trim().replace(/\.+$/, "").replace(/\.local$/i, "").trim();
+}
+
 /**
  * A per-machine instance name. mDNS instance names must be unique on a LAN —
  * two desktops publishing the bare "Filament DB" would collide and bonjour-
@@ -39,7 +48,7 @@ function readHostname(): string {
  * Suffix the hostname so each host is distinct.
  */
 export function instanceName(hostname: string): string {
-  const host = hostname.replace(/\.local$/i, "").trim();
+  const host = hostIdentity(hostname);
   return host ? `${SERVICE_NAME} (${host})` : SERVICE_NAME;
 }
 
@@ -57,27 +66,32 @@ export function instanceName(hostname: string): string {
  * hostname … is already in use on this network" on every app start. A name
  * only this process answers for can't conflict with anyone.
  *
- * The name is `filamentdb-<hostname>.local`: the same hostname the instance
- * name carries (without `.local`), sanitized to one DNS label (lowercase
- * letters, digits and inner hyphens, so dots become hyphens; at most 63
- * octets). Built from the same string as the instance name, it stays unique
- * on the LAN wherever the instance name is (#723): `mac.lan` and `mac.home`
- * get different names, not a shared `filamentdb-mac`. An empty or unusable
- * hostname yields `filamentdb.local`.
+ * The name is `filamentdb-<hostname>-<digest>.local`, one DNS label of at
+ * most 63 octets. `<hostname>` is the readable part: the machine name the
+ * instance name carries, lowercased, with anything outside letters, digits
+ * and hyphens turned into a hyphen (dots included) and cut to fit. That
+ * sanitizing and cutting can merge distinct hostnames (`my_host` and
+ * `my-host`, two long names sharing their first 43 characters, two non-ASCII
+ * names), and two desktops under one host name would each answer with their
+ * own addresses, so a phone could resolve one instance to the other machine.
+ * `<digest>` is a SHA-256 prefix of the unsanitized machine name (lowercased,
+ * as DNS compares names), which keeps the host name as distinct as the
+ * instance name (#723) and stable across restarts. No hostname at all yields
+ * `filamentdb.local`, matching the bare "Filament DB" instance name.
  */
 export function advertisedHostName(hostname: string): string {
-  const sanitized = hostname
-    .trim()
-    .replace(/\.+$/, "")
-    .replace(/\.local$/i, "")
-    .toLowerCase()
+  const identity = hostIdentity(hostname).toLowerCase();
+  if (!identity) return `${HOST_PREFIX}.local`;
+  const digest = createHash("sha256").update(identity).digest("hex").slice(0, HOST_DIGEST_HEX);
+  // Two hyphens join the prefix, the readable part and the digest.
+  const readableBudget = MAX_DNS_LABEL - HOST_PREFIX.length - HOST_DIGEST_HEX - 2;
+  const readable = identity
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  const label = sanitized
-    ? `${HOST_PREFIX}-${sanitized}`.slice(0, MAX_DNS_LABEL).replace(/-+$/, "")
-    : HOST_PREFIX;
-  return `${label}.local`;
+    .replace(/^-|-$/g, "")
+    .slice(0, readableBudget)
+    .replace(/-+$/, "");
+  return `${[HOST_PREFIX, readable, digest].filter(Boolean).join("-")}.local`;
 }
 
 /** The bonjour-service publish options for this machine. Pure. */

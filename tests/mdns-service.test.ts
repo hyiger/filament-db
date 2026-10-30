@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 /**
@@ -34,40 +35,62 @@ import {
   stopMdnsAdvertisement,
 } from "../electron/mdns-service";
 
+/** The 8-hex SHA-256 prefix advertisedHostName appends, recomputed here. */
+function digest(machineName: string): string {
+  return createHash("sha256").update(machineName.toLowerCase()).digest("hex").slice(0, 8);
+}
+
 describe("advertisedHostName", () => {
   it.each([
-    ["MacBook-Pro.local", "filamentdb-macbook-pro.local"],
-    ["Studio-Mac.local", "filamentdb-studio-mac.local"],
-    ["Mac-mini.lan", "filamentdb-mac-mini-lan.local"],
-    ["printers.example.com", "filamentdb-printers-example-com.local"],
-    ["DESKTOP-4F2K9QZ", "filamentdb-desktop-4f2k9qz.local"],
-    ["raspberrypi", "filamentdb-raspberrypi.local"],
-    ["my_host", "filamentdb-my-host.local"],
-    ["  spaced name  ", "filamentdb-spaced-name.local"],
-    ["--edge--", "filamentdb-edge.local"],
-    ["a__--__b", "filamentdb-a-b.local"],
-    ["Büro-PC", "filamentdb-b-ro-pc.local"],
-    ["MacBook-Pro.local.", "filamentdb-macbook-pro.local"],
-  ])("derives a dedicated name from %j", (input, expected) => {
-    expect(advertisedHostName(input)).toBe(expected);
+    ["MacBook-Pro.local", "macbook-pro", "MacBook-Pro"],
+    ["Studio-Mac.local", "studio-mac", "Studio-Mac"],
+    ["Mac-mini.lan", "mac-mini-lan", "Mac-mini.lan"],
+    ["printers.example.com", "printers-example-com", "printers.example.com"],
+    ["DESKTOP-4F2K9QZ", "desktop-4f2k9qz", "DESKTOP-4F2K9QZ"],
+    ["raspberrypi", "raspberrypi", "raspberrypi"],
+    ["my_host", "my-host", "my_host"],
+    ["  spaced name  ", "spaced-name", "spaced name"],
+    ["--edge--", "edge", "--edge--"],
+    ["a__--__b", "a-b", "a__--__b"],
+    ["Büro-PC", "b-ro-pc", "Büro-PC"],
+    ["MacBook-Pro.local.", "macbook-pro", "MacBook-Pro"],
+  ])("derives a dedicated name from %j", (input, readable, machineName) => {
+    expect(advertisedHostName(input)).toBe(`filamentdb-${readable}-${digest(machineName)}.local`);
   });
 
-  it.each([[""], ["   "], [".local"], ["___"], ["éè"]])(
-    "falls back to filamentdb.local for an unusable hostname %j",
+  it("pins the digest algorithm, so a released build's name doesn't drift", () => {
+    expect(advertisedHostName("Studio-Mac.local")).toBe("filamentdb-studio-mac-972477ff.local");
+  });
+
+  it.each([[""], ["   "], [".local"], [" .local. "]])(
+    "falls back to filamentdb.local when there is no hostname (%j)",
     (input) => {
       expect(advertisedHostName(input)).toBe("filamentdb.local");
     },
   );
 
-  it("stays distinct wherever the instance name is (#723)", () => {
-    // Same first label, different domains: the instance names differ, so the
-    // host names must too, or both desktops would answer for one name.
-    expect(instanceName("mac.lan")).not.toBe(instanceName("mac.home"));
-    expect(advertisedHostName("mac.lan")).toBe("filamentdb-mac-lan.local");
-    expect(advertisedHostName("mac.home")).toBe("filamentdb-mac-home.local");
-    // The same machine name with and without .local is one instance name, and
-    // one host name.
+  it("keeps a digest-only name for a hostname with no usable characters", () => {
+    expect(advertisedHostName("___")).toBe(`filamentdb-${digest("___")}.local`);
+    expect(advertisedHostName("éè")).toBe(`filamentdb-${digest("éè")}.local`);
+  });
+
+  it("keeps distinct hostnames distinct after sanitizing and truncating", () => {
+    const pairs: Array<[string, string]> = [
+      ["mac.lan", "mac.home"],
+      ["mac.lan", "mac-lan"],
+      ["my_host", "my-host"],
+      ["éè", "ëë"],
+      [`${"x".repeat(60)}-one`, `${"x".repeat(60)}-two`],
+    ];
+    for (const [a, b] of pairs) {
+      expect(advertisedHostName(a)).not.toBe(advertisedHostName(b));
+    }
+  });
+
+  it("is stable for one machine name, ignoring case and a .local suffix", () => {
     expect(advertisedHostName("Studio-Mac")).toBe(advertisedHostName("Studio-Mac.local"));
+    expect(advertisedHostName("STUDIO-MAC.LOCAL")).toBe(advertisedHostName("studio-mac"));
+    expect(advertisedHostName("Studio-Mac.local")).toBe(advertisedHostName("Studio-Mac.local"));
   });
 
   it("never returns the machine's own .local name", () => {
@@ -78,21 +101,21 @@ describe("advertisedHostName", () => {
     }
   });
 
-  it("keeps the label within the 63-octet DNS limit with no trailing hyphen", () => {
-    const long = `${"a".repeat(51)}-${"b".repeat(40)}.local`;
-    const label = advertisedHostName(long).replace(/\.local$/, "");
+  it("keeps the label within the 63-octet DNS limit with no doubled hyphen", () => {
+    // 43 readable characters fit; this cut lands on the hyphen after the a's.
+    const cutOnHyphen = `${"a".repeat(42)}-${"b".repeat(40)}.local`;
+    const label = advertisedHostName(cutOnHyphen).replace(/\.local$/, "");
+    expect(label).toBe(`filamentdb-${"a".repeat(42)}-${digest(cutOnHyphen.replace(/\.local$/, ""))}`);
     expect(label.length).toBeLessThanOrEqual(63);
-    // "filamentdb-" + 51 a's is 62 chars; the cut lands on the hyphen after them.
-    expect(label).toBe(`filamentdb-${"a".repeat(51)}`);
-    expect(label.endsWith("-")).toBe(false);
+    expect(label).not.toMatch(/--/);
 
-    const exact = advertisedHostName("c".repeat(100)).replace(/\.local$/, "");
-    expect(exact).toBe(`filamentdb-${"c".repeat(52)}`);
-    expect(exact.length).toBe(63);
+    const full = advertisedHostName("c".repeat(100)).replace(/\.local$/, "");
+    expect(full).toBe(`filamentdb-${"c".repeat(43)}-${digest("c".repeat(100))}`);
+    expect(full.length).toBe(63);
   });
 
   it("produces only DNS-label characters", () => {
-    for (const host of ["Office's MacBook Pro", "host.with.dots", "日本語-pc", "x!@#$%^&*()y"]) {
+    for (const host of ["Office's MacBook Pro", "host.with.dots", "日本語-pc", "x!@#$%^&*()y", "___"]) {
       expect(advertisedHostName(host)).toMatch(/^[a-z0-9]([a-z0-9-]*[a-z0-9])?\.local$/);
     }
   });
@@ -116,7 +139,7 @@ describe("advertisementConfig", () => {
       name: "Filament DB (Studio-Mac)",
       type: "filamentdb",
       port: 3456,
-      host: "filamentdb-studio-mac.local",
+      host: `filamentdb-studio-mac-${digest("Studio-Mac")}.local`,
       txt: { app: "filament-db", version: "1.84.0" },
     });
   });
@@ -137,7 +160,7 @@ describe("startMdnsAdvertisement", () => {
     startMdnsAdvertisement(3456, "1.84.0");
     expect(publish).toHaveBeenCalledTimes(1);
     const config = (publish.mock.calls[0] as unknown[])[0] as { host?: string; name?: string };
-    expect(config.host).toBe("filamentdb-studio-mac.local");
+    expect(config.host).toBe(`filamentdb-studio-mac-${digest("Studio-Mac")}.local`);
     expect(config.host).not.toBe("Studio-Mac.local");
     expect(config.name).toBe("Filament DB (Studio-Mac)");
   });
