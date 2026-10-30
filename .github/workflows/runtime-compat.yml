@@ -5,9 +5,9 @@ name: Runtime compatibility
 # server. A major-version mismatch between the two broke every guarded fetch
 # on Node 26 while the 20/22 gate stayed green. This job runs the fetch-path
 # suites on the runtimes the gate doesn't cover: Node 24 (the runtime Electron
-# 41 embeds), Node 26, and `current` — whatever Node release is newest when it
-# runs, so the weekly cron reaches a new Node major (and the undici it bundles)
-# without anyone editing this list.
+# 41 embeds), Node 26, and `current`: the newest Node RELEASE when it runs, so
+# the weekly cron reaches a new Node major (and the undici it bundles) without
+# anyone editing this list. Pre-releases don't count; see the setup-node step.
 #
 # Deliberately NOT part of test.yml / ci-gate.yml and not a required check:
 # ci-gate.yml gates release.yml and docker.yml, and neither shipped artifact
@@ -49,7 +49,13 @@ jobs:
       - name: Use Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          # `current` is this matrix's label, not setup-node's alias of that
+          # name: the alias takes the top of nodejs.org/dist/index.json, which
+          # also lists Node 27's alpha builds. `*` takes the newest stable row
+          # of the actions/node-versions manifest, but only with check-latest;
+          # without it `*` stops at the newest Node in the runner's tool cache.
+          node-version: ${{ matrix.node-version == 'current' && '*' || matrix.node-version }}
+          check-latest: ${{ matrix.node-version == 'current' }}
           cache: npm
 
       - name: Install dependencies
