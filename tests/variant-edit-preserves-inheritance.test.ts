@@ -3,6 +3,16 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
 import { POST as createFilament } from "@/app/api/filaments/route";
+import { GET as listParents } from "@/app/api/filaments/parents/route";
+import {
+  applyFormSettingFlags,
+  FORM_FLAG_SETTING_KEYS,
+  knownParentFlagBag,
+  seedFormSettingFlags,
+  shownFormSettingFlags,
+  type FormSettingFlagEdits,
+  type FormSettingFlags,
+} from "@/lib/formSettingFlags";
 
 /**
  * GH #106 regression guard.
@@ -184,8 +194,9 @@ describe("variant edit round-trip preserves inheritance", () => {
     expect(body._parent.syncId).toBeUndefined();
     expect(body._parent.instanceId).toBeUndefined();
     // PrusaSlicer settings bag must NOT be on the wire (~2KB of irrelevant
-    // keys per request).
-    expect(body._parent.settings).toBeUndefined();
+    // keys per request). Only the four flag keys ride it (audit N016), and
+    // this parent sets none of them.
+    expect(body._parent.settings ?? {}).toEqual({});
     // Populated nozzle/calibration arrays must NOT be on the wire.
     expect(body._parent.compatibleNozzles).toBeUndefined();
     expect(body._parent.calibrations).toBeUndefined();
@@ -453,6 +464,295 @@ describe("variant edit round-trip preserves inheritance", () => {
     const reResolvedRes = await getFilament(reResolvedReq, { params: Promise.resolve({ id: String(created._id) }) });
     const reResolved = await reResolvedRes.json();
     expect(reResolved.cost).toBe(35);
+  });
+
+  describe("settings-bag flag checkboxes on a variant (audit N016)", () => {
+    async function seedFlagFamily() {
+      const template = await Filament.create({
+        name: "Fiberon PET-GF",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: null,
+        settings: {
+          filament_abrasive: "1",
+          filament_wipe: "1",
+          filament_notes: "template-only note",
+        },
+      });
+      const variant = await Filament.create({
+        name: "Fiberon PET-GF Black",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: "#111111",
+        parentId: template._id,
+        settings: { openprinttag_slug: "polymaker-fiberon-pet-gf-black" },
+      });
+      return { template, variant };
+    }
+
+    async function getRaw(id: unknown) {
+      const req = new NextRequest(`http://localhost/api/filaments/${id}?raw=true`);
+      return (await getFilament(req, { params: Promise.resolve({ id: String(id) }) })).json();
+    }
+
+    async function getResolved(id: unknown) {
+      const req = new NextRequest(`http://localhost/api/filaments/${id}`);
+      return (await getFilament(req, { params: Promise.resolve({ id: String(id) }) })).json();
+    }
+
+    /** The picker's candidates, as FilamentForm fetches them. */
+    async function parentOptions(exclude?: unknown) {
+      const qs = exclude ? `?exclude=${exclude}` : "";
+      return (await listParents(new NextRequest(`http://localhost/api/filaments/parents${qs}`))).json();
+    }
+
+    /** FilamentForm's flag state for `initialData` linked to `parentId`,
+     *  composed from the same helpers the form uses: the parent is looked up
+     *  by the current parentId in the row's _parent or the candidates. */
+    async function formFlags(
+      initialData: { _id?: unknown; settings?: unknown; parentId?: unknown; _parent?: unknown },
+      parentId: string,
+      edits: FormSettingFlagEdits,
+    ) {
+      const parent = parentId
+        ? knownParentFlagBag(parentId, {
+            initialParentId: initialData.parentId ? String(initialData.parentId) : "",
+            initialParent: initialData._parent,
+            options: await parentOptions(initialData._id),
+          })
+        : null;
+      const seed = seedFormSettingFlags(initialData.settings, parent?.settings);
+      const settings: Record<string, unknown> = { ...((initialData.settings as object) ?? {}) };
+      applyFormSettingFlags(settings, seed, edits, parent, Boolean(parentId));
+      return { seed, shown: shownFormSettingFlags(seed, edits), settings };
+    }
+
+    /** What the edit page sends: seed the checkboxes from the raw GET, apply
+     *  the caller's edits to the own bag, PUT the echo back. */
+    async function formSave(id: unknown, edits: FormSettingFlagEdits = {}) {
+      const raw = await getRaw(id);
+      const { seed, settings } = await formFlags(raw, raw.parentId ? String(raw.parentId) : "", edits);
+      const req = new NextRequest(`http://localhost/api/filaments/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...raw, settings }),
+      });
+      const res = await putFilament(req, { params: Promise.resolve({ id: String(id) }) });
+      expect(res.status).toBe(200);
+      return seed as FormSettingFlags;
+    }
+
+    /** The Duplicate flow: /filaments/new?cloneId= hands the form a
+     *  parentId and no _parent, so the flags come from the candidates. */
+    async function duplicateAndCreate(templateId: unknown, edits: FormSettingFlagEdits = {}) {
+      const initialData = { parentId: String(templateId), settings: undefined };
+      const { shown, settings } = await formFlags(initialData, String(templateId), edits);
+      const req = new NextRequest("http://localhost/api/filaments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: "Fiberon PET-GF Black (copy)",
+          vendor: "Polymaker",
+          type: "PET-GF",
+          color: "#222222",
+          parentId: String(templateId),
+          settings,
+        }),
+      });
+      const res = await createFilament(req);
+      expect(res.status).toBe(201);
+      return { shown, created: await res.json() };
+    }
+
+    it("?raw=true puts the parent's four flag keys on _parent and nothing else of its bag", async () => {
+      const { variant } = await seedFlagFamily();
+      const raw = await getRaw(variant._id);
+      expect(raw._parent.settings).toEqual({ filament_abrasive: "1", filament_wipe: "1" });
+    });
+
+    it("an untouched save writes no flag key and the variant keeps inheriting", async () => {
+      const { template, variant } = await seedFlagFamily();
+      const seed = await formSave(variant._id);
+      // The checkboxes showed what the preset exports.
+      expect(seed.filament_abrasive).toBe(true);
+      expect(seed.filament_wipe).toBe(true);
+
+      const fresh = await Filament.findById(variant._id).lean();
+      for (const key of FORM_FLAG_SETTING_KEYS) expect(fresh.settings).not.toHaveProperty(key);
+      expect(fresh.settings.openprinttag_slug).toBe("polymaker-fiberon-pet-gf-black");
+
+      const req = new NextRequest(`http://localhost/api/filaments/${variant._id}`);
+      const resolved = await (
+        await getFilament(req, { params: Promise.resolve({ id: String(variant._id) }) })
+      ).json();
+      expect(resolved.settings.filament_abrasive).toBe("1");
+      expect(resolved.settings.filament_wipe).toBe("1");
+
+      // Still a live link: a later template change reaches the variant.
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      const again = await getResolved(variant._id);
+      expect(again.settings.filament_abrasive).toBe("0");
+    });
+
+    it("an own pin set back to the template's value is dropped and the variant inherits again", async () => {
+      const { template, variant } = await seedFlagFamily();
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      const seed = await formSave(variant._id, { filament_abrasive: true });
+      expect(seed.filament_abrasive).toBe(false);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings).not.toHaveProperty("filament_abrasive");
+      expect((await getResolved(variant._id)).settings.filament_abrasive).toBe("1");
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      expect((await getResolved(variant._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("an own pin under a template lacking the key is kept when put back, written when cleared", async () => {
+      // Absent is not off to the slicer, so the form never trades an
+      // explicit value for an absent key the template does not hold.
+      const { variant } = await seedFlagFamily();
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { "settings.activate_air_filtration": "0", "settings.filament_soluble": "1" } },
+      );
+      // Air filtration ticked on and back off; soluble turned off.
+      const seed = await formSave(variant._id, {
+        activate_air_filtration: false,
+        filament_soluble: false,
+      });
+      expect(seed.activate_air_filtration).toBe(false);
+      expect(seed.filament_soluble).toBe(true);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.activate_air_filtration).toBe("0");
+      expect(fresh.settings.filament_soluble).toBe("0");
+      const resolved = await getResolved(variant._id);
+      expect(resolved.settings.activate_air_filtration).toBe("0");
+      expect(resolved.settings.filament_soluble).toBe("0");
+    });
+
+    it("an own pin cleared under a template holding nil is written 0, not dropped onto the nil", async () => {
+      // A template imported from PrusaSlicer carries `filament_wipe = nil`;
+      // the export writes a null bag value back as nil, which falls back to
+      // the printer's wipe exactly like an absent key.
+      const { template, variant } = await seedFlagFamily();
+      await Filament.updateOne({ _id: template._id }, { $set: { "settings.filament_wipe": null } });
+      await Filament.updateOne({ _id: variant._id }, { $set: { "settings.filament_wipe": "1" } });
+      const raw = await getRaw(variant._id);
+      expect(raw._parent.settings).toEqual({ filament_abrasive: "1", filament_wipe: null });
+      const seed = await formSave(variant._id, { filament_wipe: false });
+      expect(seed.filament_wipe).toBe(true);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.filament_wipe).toBe("0");
+      expect((await getResolved(variant._id)).settings.filament_wipe).toBe("0");
+    });
+
+    it("an own pin cleared under a template holding the string nil is written 0", async () => {
+      // The PrusaSlicer fork's sync-back stores `nil` verbatim, and the
+      // Bambu/Orca importer unwraps ["nil"] to "nil": both export as
+      // `filament_wipe = nil`, the same fallback as a null.
+      const { template, variant } = await seedFlagFamily();
+      await Filament.updateOne({ _id: template._id }, { $set: { "settings.filament_wipe": "nil" } });
+      await Filament.updateOne({ _id: variant._id }, { $set: { "settings.filament_wipe": "1" } });
+      const seed = await formSave(variant._id, { filament_wipe: false });
+      expect(seed.filament_wipe).toBe(true);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.filament_wipe).toBe("0");
+      expect((await getResolved(variant._id)).settings.filament_wipe).toBe("0");
+    });
+
+    it("Duplicate flow: an untouched copy shows and inherits the template's flags", async () => {
+      const { template } = await seedFlagFamily();
+      const { shown, created } = await duplicateAndCreate(template._id);
+      // The boxes showed the template's flags, not the empty own bag's.
+      expect(shown.filament_abrasive).toBe(true);
+      expect(shown.filament_wipe).toBe(true);
+      const fresh = await Filament.findById(created._id).lean();
+      for (const key of FORM_FLAG_SETTING_KEYS) expect(fresh.settings ?? {}).not.toHaveProperty(key);
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("1");
+      await Filament.updateOne(
+        { _id: template._id },
+        { $set: { "settings.filament_abrasive": "0" } },
+      );
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("Duplicate flow: a copy toggled off persists and exports an explicit 0", async () => {
+      // Codex P2 on PR #1235: the box showed off and the copy exported "1".
+      const { template } = await seedFlagFamily();
+      const { shown, created } = await duplicateAndCreate(template._id, {
+        filament_abrasive: false,
+      });
+      expect(shown.filament_abrasive).toBe(false);
+      const fresh = await Filament.findById(created._id).lean();
+      expect(fresh.settings.filament_abrasive).toBe("0");
+      expect((await getResolved(created._id)).settings.filament_abrasive).toBe("0");
+    });
+
+    it("picker: a standalone linked to the template keeps its own pins and inherits the rest", async () => {
+      const { template } = await seedFlagFamily();
+      const standalone = await Filament.create({
+        name: "Loose PET-GF Red",
+        vendor: "Polymaker",
+        type: "PET-GF",
+        color: "#aa0000",
+        settings: { filament_soluble: "0" },
+      });
+      const raw = await getRaw(standalone._id);
+      const { shown, settings } = await formFlags(raw, String(template._id), {
+        filament_wipe: false,
+      });
+      expect(shown).toEqual({
+        filament_abrasive: true,
+        filament_soluble: false,
+        activate_air_filtration: false,
+        filament_wipe: false,
+      });
+      const req = new NextRequest(`http://localhost/api/filaments/${standalone._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ...raw, parentId: String(template._id), settings }),
+      });
+      const res = await putFilament(req, { params: Promise.resolve({ id: String(standalone._id) }) });
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(standalone._id).lean();
+      expect(fresh.settings).toEqual({ filament_soluble: "0", filament_wipe: "0" });
+      expect((await getResolved(standalone._id)).settings.filament_abrasive).toBe("1");
+    });
+
+    it("toggling one checkbox writes only that key", async () => {
+      const { variant } = await seedFlagFamily();
+      await formSave(variant._id, { filament_wipe: false });
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.filament_wipe).toBe("0");
+      for (const key of FORM_FLAG_SETTING_KEYS.filter((k) => k !== "filament_wipe")) {
+        expect(fresh.settings).not.toHaveProperty(key);
+      }
+    });
+
+    it("a standalone still writes all four on every save", async () => {
+      const standalone = await Filament.create({
+        name: "Standalone PLA",
+        vendor: "Vendor",
+        type: "PLA",
+        settings: { filament_abrasive: "1" },
+      });
+      await formSave(standalone._id);
+      const fresh = await Filament.findById(standalone._id).lean();
+      expect(fresh.settings).toMatchObject({
+        filament_abrasive: "1",
+        filament_soluble: "0",
+        activate_air_filtration: "0",
+        filament_wipe: "0",
+      });
+    });
   });
 
   it("PUT strips server-only response fields (_parent, _variants, _inherited) from the body", async () => {

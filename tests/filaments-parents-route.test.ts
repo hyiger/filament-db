@@ -88,4 +88,31 @@ describe("GET /api/filaments/parents — hasVariants annotation", () => {
     expect(body.find((p) => p.name === "Variant of Top")).toBeUndefined();
     expect(body.find((p) => p.name === "Top")).toBeDefined();
   });
+
+  it("carries each candidate's four flag-checkbox settings and nothing else of its bag", async () => {
+    // FilamentForm seeds a variant's flag checkboxes from the parent it is
+    // linked to; a parent picked in the form or reached through the
+    // Duplicate flow has no `_parent`, so the candidate carries the keys.
+    await Filament.create({
+      name: "Flagged",
+      vendor: "Test",
+      type: "PET-GF",
+      settings: {
+        filament_abrasive: "1",
+        filament_wipe: ["1", "0"],
+        filament_notes: "stays off the wire",
+        start_filament_gcode: "M572 S0.04",
+      },
+    });
+    await Filament.create({ name: "No bag", vendor: "Test", type: "PLA" });
+    const res = await listParents(
+      new NextRequest("http://localhost/api/filaments/parents"),
+    );
+    const body = (await res.json()) as Array<{ name: string; settings?: Record<string, unknown> }>;
+    expect(body.find((p) => p.name === "Flagged")?.settings).toEqual({
+      filament_abrasive: "1",
+      filament_wipe: ["1", "0"],
+    });
+    expect(body.find((p) => p.name === "No bag")?.settings ?? {}).toEqual({});
+  });
 });

@@ -55,7 +55,7 @@ describe("GET /api/abrasive-nozzles", () => {
   });
 
   it("reports the flag contradiction that ships in the exported preset", async () => {
-    // `FilamentForm` persists `form.abrasive ? "1" : "0"` while its own
+    // `FilamentForm` persists the abrasive checkbox as "1"/"0" while its own
     // predicate also honours OPT tag 4, so a tag-marked abrasive exports
     // `filament_abrasive = 0` — telling the INDX firmware's M862.1 check the
     // filament is safe. Nozzles right, flag lying.
