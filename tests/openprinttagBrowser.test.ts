@@ -2393,7 +2393,9 @@ describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () 
   it("GH #1220: proxies through socks5://, which undici supports", async () => {
     // A minimal SOCKS5 server (no auth, CONNECT only) that tunnels to the origin.
     const socksTargets: string[] = [];
+    const sockets = new Set<net.Socket>();
     const socks = net.createServer((client) => {
+      sockets.add(client);
       client.on("error", () => {});
       client.once("data", () => {
         client.write(Buffer.from([5, 0])); // version 5, "no authentication"
@@ -2420,6 +2422,11 @@ describe("proxy dispatcher — end to end over the global fetch (GH #1216)", () 
       expect(await res.text()).toBe("via proxy");
       expect(socksTargets).toEqual([String(originPort)]);
     } finally {
+      // close() waits for every client to hang up, and a net.Server has no
+      // closeAllConnections(). undici holds this tunnel open for the origin's
+      // Keep-Alive hint less 2 s: 3 s on Node 26, but 63 s on Node 27, whose
+      // http.Server.keepAliveTimeout default is 65 s, past the test timeout.
+      for (const sock of sockets) sock.destroy();
       await new Promise<void>((resolve) => socks.close(() => resolve()));
     }
   });
