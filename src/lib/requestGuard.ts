@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { errorResponse } from "@/lib/apiErrorHandler";
+import { allowedOriginsFromEnv, isAllowedOrigin } from "@/lib/corsOrigins";
 
 /** Split a `host`, `host:port`, `[ipv6]` or `[ipv6]:port` value into a
  * lower-cased hostname and its (possibly empty) port. */
@@ -42,10 +43,24 @@ function splitAuthority(value: string): { hostname: string; port: string } {
  * an instance that is reachable from an untrusted network is a
  * deployment concern the README already calls out.
  *
+ * GH #1243: an `Origin` listed in `ALLOWED_ORIGINS` passes, before either
+ * check. The operator has declared that origin trusted like the app's own UI,
+ * and a browser cannot forge `Origin`, so a page elsewhere still can't borrow
+ * the exemption. Unset (the default), nothing changes.
+ *
  * Returns a 403 `NextResponse` to short-circuit the handler, or `null`
  * when the request may proceed.
  */
 export function assertSameOriginRequest(request: NextRequest): NextResponse | null {
+  if (
+    isAllowedOrigin(
+      request.headers.get("origin"),
+      allowedOriginsFromEnv(process.env.ALLOWED_ORIGINS),
+    )
+  ) {
+    return null;
+  }
+
   const secFetchSite = request.headers.get("sec-fetch-site");
   if (
     secFetchSite &&
