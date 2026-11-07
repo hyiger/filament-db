@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { PARENT_FLAG_SETTINGS_PROJECTION } from "@/lib/formSettingFlags";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -30,8 +31,12 @@ export async function GET(request: NextRequest) {
       filter._id = { $ne: exclude };
     }
 
+    // The four settings-bag flags ride each option, never the rest of the
+    // bag (GH #162): FilamentForm seeds a variant's flag checkboxes from the
+    // parent it is linked to, including one picked in the form or reached
+    // through the Duplicate flow, which carry no `_parent`.
     const parents = await Filament.find(filter)
-      .select("name vendor type color")
+      .select(`name vendor type color ${PARENT_FLAG_SETTINGS_PROJECTION}`)
       .sort({ vendor: 1, name: 1 })
       .lean();
 

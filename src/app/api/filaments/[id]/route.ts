@@ -32,6 +32,7 @@ import {
   bodyHasRawMultilineSettings,
 } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
+import { PARENT_FLAG_SETTINGS_PROJECTION } from "@/lib/formSettingFlags";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import {
@@ -140,6 +141,7 @@ export async function GET(
       _id: unknown; name?: string; vendor?: string; type?: string; color?: string;
       cost?: number | null; density?: number | null; diameter?: number | null;
       inherits?: string | null;
+      settings?: Record<string, unknown>;
       // GH #1148: every field the edit form renders as an INHERITED
       // placeholder (FilamentForm's parentPh) must ride this projection.
       maxVolumetricSpeed?: number | null; minPrintSpeed?: number | null; maxPrintSpeed?: number | null;
@@ -170,7 +172,14 @@ export async function GET(
               "maxVolumetricSpeed minPrintSpeed maxPrintSpeed dryingTemperature dryingTime " +
               "glassTempTransition heatDeflectionTemp shoreHardnessA shoreHardnessD " +
               "shrinkageXY shrinkageZ spoolWeight netFilamentWeight transmissionDistance " +
-              "tdsUrl temperatures",
+              "tdsUrl temperatures " +
+              // The four settings-bag flags only, never the rest of the bag,
+              // per GH #162. The form seeds a variant's checkboxes from them
+              // so an inherited filament_abrasive "1" doesn't read as off and
+              // get pinned "0" on save. Keep this comment free of closing
+              // parentheses: the GH #1148 test scans the select up to the
+              // first one.
+              PARENT_FLAG_SETTINGS_PROJECTION,
           )
           .lean()) as typeof parentSummary;
         parentForTags = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })

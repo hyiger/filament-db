@@ -117,8 +117,8 @@ describe("abrasiveReasons", () => {
   });
 
   it("does NOT let an explicit 0 suppress a fibre type or the OPT tag", () => {
-    // This is the crux. `FilamentForm` writes `form.abrasive ? "1" : "0"`
-    // while its own predicate is `form.abrasive || optTags.includes(4)`, so a
+    // This is the crux. `FilamentForm` writes the abrasive checkbox as "1"/"0"
+    // while its own predicate is `checkbox || optTags.includes(4)`, so a
     // tag-marked abrasive is PERSISTED as "0". Trusting that "0" would make
     // the audit blind to exactly the filaments most likely to be misfiled.
     const off = { filament_abrasive: "0" };
