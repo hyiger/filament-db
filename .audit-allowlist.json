@@ -2,6 +2,13 @@
   "$comment": "Advisories the CI audit gate (scripts/audit-gate.mjs) tolerates. Each entry MUST carry a justification and a reviewBy date; the gate warns (does not fail) past reviewBy so releases can't be broken by a calendar, but the warning is the nudge to re-check upstream. Remove an entry the moment a fix ships.",
   "allow": [
     {
+      "id": "GHSA-g3hv-75wg-m249",
+      "package": "minimatch",
+      "title": "minimatch has potential denial of service via globparts amplification",
+      "justification": "NO COMPATIBLE PATCH: the only fix is minimatch 11.0.1, the advisory lists no backport, and the tree resolves v3, v5, v9 and v10 through eslint, electron-builder, exceljs and swagger-ui-react. An override to 11 would break the v3 and v5 consumers, which call the old default-function export. EXPOSURE: the bug needs an attacker who can supply the glob PATTERN, and no path here accepts one. Nothing under src/, electron/ or scripts/ imports minimatch or glob. In production, exceljs reaches it only through archiver, and exceljs calls neither archiver's glob nor directory API, so uploaded workbooks never become patterns. @swagger-api/apidom-reference uses it only in its Node file resolver, against the fileAllowList option, and /api-docs loads this app's own public/openapi.json. The dev-tool paths (eslint, electron-builder, jake) match repo-controlled patterns at build time. Remove this entry when exceljs and swagger-ui-react move to a fixed minimatch line or replace it.",
+      "reviewBy": "2026-12-23"
+    },
+    {
       "id": "GHSA-jr5w-w6x2-84p9",
       "package": "electron",
       "title": "Electron: Mitigation for compromised eMudhra intermediate certificates",
