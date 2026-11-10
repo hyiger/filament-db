@@ -39,6 +39,17 @@ import {
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
 import { settingFlagIsOn } from "@/lib/slicerSettings";
+import {
+  applyFormSettingFlags,
+  changedFormSettingFlagEdits,
+  FORM_FLAG_SETTING_KEYS,
+  knownParentFlagBag,
+  seedFormSettingFlags,
+  shownFormSettingFlags,
+  type FormFlagSettingKey,
+  type FormSettingFlagEdits,
+  type ParentFlagBag,
+} from "@/lib/formSettingFlags";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -87,8 +98,10 @@ interface FilamentFormData {
   shoreHardnessD: string;
   glassTempTransition: string;
   heatDeflectionTemp: string;
-  abrasive: boolean;
-  soluble: boolean;
+  // The four settings-bag flag checkboxes (abrasive, soluble, air
+  // filtration, wipe) are NOT form fields: what they show is derived from
+  // the current parent's flags plus the user's edits. See flagEdits below
+  // and src/lib/formSettingFlags.ts.
   optTags: number[];
   fanMinSpeed: string;
   fanMaxSpeed: string;
@@ -98,7 +111,6 @@ interface FilamentFormData {
   auxFanSpeed: string;
   fanBelowLayerTime: string;
   slowDownMinSpeed: string;
-  activateAirFiltration: boolean;
   retractLength: string;
   retractSpeed: string;
   retractLift: string;
@@ -110,7 +122,6 @@ interface FilamentFormData {
   filamentLoadTime: string;
   filamentUnloadTime: string;
   rammingParameters: string;
-  wipe: boolean;
   spoolWeight: string;
   netFilamentWeight: string;
   totalWeight: string;
@@ -139,6 +150,10 @@ interface ParentOption {
   /** Annotated by /api/filaments/parents — true when this candidate
    * currently has ≥1 variant. Drives the cross-hatch swatch in the picker. */
   hasVariants?: boolean;
+  /** The four settings-bag flag keys of this candidate's bag, and nothing
+   *  else of it. The flag checkboxes seed from the parent the form is
+   *  currently linked to (src/lib/formSettingFlags.ts). */
+  settings?: Record<string, unknown>;
 }
 
 interface PrinterOption {
@@ -362,8 +377,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
     glassTempTransition: initialData?.glassTempTransition?.toString() || "",
     heatDeflectionTemp: initialData?.heatDeflectionTemp?.toString() || "",
-    abrasive: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_abrasive"]),
-    soluble: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_soluble"]),
     optTags: initialData?.optTags || [],
     fanMinSpeed: getSettingVal(initialData, "min_fan_speed"),
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
@@ -373,7 +386,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     auxFanSpeed: getSettingVal(initialData, "additional_cooling_fan_speed"),
     fanBelowLayerTime: getSettingVal(initialData, "fan_below_layer_time"),
     slowDownMinSpeed: getSettingVal(initialData, "slow_down_min_speed"),
-    activateAirFiltration: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["activate_air_filtration"]),
     retractLength: getSettingVal(initialData, "filament_retract_length"),
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
@@ -385,7 +397,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     filamentLoadTime: getSettingVal(initialData, "filament_load_time"),
     filamentUnloadTime: getSettingVal(initialData, "filament_unload_time"),
     rammingParameters: getSettingVal(initialData, "filament_ramming_parameters"),
-    wipe: settingFlagIsOn((initialData?.settings as Record<string, unknown> | undefined)?.["filament_wipe"]),
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
@@ -422,6 +433,36 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     compatPrintersCondition: getSettingVal(initialData, "compatible_printers_condition"),
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
+
+  // The four settings-bag checkboxes (src/lib/formSettingFlags.ts). They
+  // seed from the bag the row EXPORTS: its own bag over the CURRENT parent's,
+  // so an inherited filament_abrasive "1" shows checked instead of reading
+  // as off and being pinned "0" by the next save. The parent is looked up by
+  // form.parentId on every render: the row's own `_parent` answers for the
+  // parent it loaded with, the picker's candidates (which carry the four
+  // keys) for one picked here or reached through the Duplicate flow. A
+  // variant then writes only the boxes the user touched (flagEdits).
+  const [flagEdits, setFlagEdits] = useState<FormSettingFlagEdits>({});
+  // Unlinking keeps showing the parent's flags: the row saves as a
+  // standalone with no parent to inherit from, so all four are written with
+  // the values the user saw (an unlinked glass-fiber color stays abrasive).
+  const [unlinkedFlagParent, setUnlinkedFlagParent] = useState<ParentFlagBag | null>(null);
+  const flagParent = form.parentId
+    ? knownParentFlagBag(form.parentId, {
+        initialParentId: String(initialData?.parentId?._id || initialData?.parentId || ""),
+        initialParent: initialData?._parent,
+        options: parentOptions,
+      })
+    : unlinkedFlagParent;
+  const flagSeed = seedFormSettingFlags(initialData?.settings, flagParent?.settings);
+  const flags = shownFormSettingFlags(flagSeed, flagEdits);
+  // The linked parent's flags are still on their way (the candidate list is
+  // loading). The boxes stay disabled so nothing is toggled against a seed
+  // that is about to change; a save in this window leaves untouched keys
+  // inheriting and writes an earlier-touched one explicitly.
+  const flagsPending = Boolean(form.parentId) && !flagParent && parentsLoading;
+  const editFlag = (key: FormFlagSettingKey, value: boolean) =>
+    setFlagEdits((prev) => ({ ...prev, [key]: value }));
   const [saving, setSaving] = useState(false);
   const savedRef = useRef(false);
   // Dirty state is derived below, after `calibrations` and `presets`.
@@ -656,9 +697,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   // render (not an effect watching only `form`) makes it both two-way
   // (reverting an edit un-dirties) and complete (calibration/preset-only
   // edits count).
+  // The flag checkboxes are not form fields; only the edits that change
+  // what a box shows count, so the seed moving when the parent's flags
+  // arrive never dirties the form on its own.
+  const flagEditsSnapshot = JSON.stringify(changedFormSettingFlagEdits(flagSeed, flagEdits));
   const dirtySnapshot = useMemo(
-    () => JSON.stringify({ form, calibrations, presets }),
-    [form, calibrations, presets],
+    () => JSON.stringify({ form, flagEdits: flagEditsSnapshot, calibrations, presets }),
+    [form, flagEditsSnapshot, calibrations, presets],
   );
 
   // Printer tabs in the Calibrations section only offer printers that
@@ -728,7 +773,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   // bypassed when only the tag is set. Already-selected nozzles stay visible
   // (even if soft) so the user can still deselect them — they're flagged;
   // only NEW soft nozzles are hidden.
-  const isAbrasive = form.abrasive || form.optTags.includes(OPT_TAG.ABRASIVE);
+  const isAbrasive = flags.filament_abrasive || form.optTags.includes(OPT_TAG.ABRASIVE);
 
   // GH #1227: an existing row whose stored tags still await numbering review
   // (see the Material tags section). Computed from the SEEDED data, not the
@@ -873,8 +918,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.extrusion_multiplier = form.extrusionMultiplier || undefined;
     settings.filament_shrinkage_compensation_xy = form.shrinkageXY || undefined;
     settings.filament_shrinkage_compensation_z = form.shrinkageZ || undefined;
-    settings.filament_abrasive = form.abrasive ? "1" : "0";
-    settings.filament_soluble = form.soluble ? "1" : "0";
     settings.chamber_temperature = form.temperatures.chamber || undefined;
     settings.min_fan_speed = form.fanMinSpeed || undefined;
     settings.max_fan_speed = form.fanMaxSpeed || undefined;
@@ -888,14 +931,23 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.additional_cooling_fan_speed = form.auxFanSpeed || undefined;
     settings.fan_below_layer_time = form.fanBelowLayerTime || undefined;
     settings.slow_down_min_speed = form.slowDownMinSpeed || undefined;
-    settings.activate_air_filtration = form.activateAirFiltration ? "1" : "0";
     settings.z_offset = form.zOffset || undefined;
     settings.filament_loading_speed = form.filamentLoadingSpeed || undefined;
     settings.filament_unloading_speed = form.filamentUnloadingSpeed || undefined;
     settings.filament_load_time = form.filamentLoadTime || undefined;
     settings.filament_unload_time = form.filamentUnloadTime || undefined;
     settings.filament_ramming_parameters = form.rammingParameters || undefined;
-    settings.filament_wipe = form.wipe ? "1" : "0";
+    // The four flag checkboxes. A variant writes only the ones the user
+    // touched, and drops one set back to the parent's value so it inherits
+    // it; an untouched one keeps inheriting from the template. A standalone
+    // or template writes all four, as it always has.
+    applyFormSettingFlags(
+      settings,
+      flagSeed,
+      flagEdits,
+      form.parentId ? flagParent : null,
+      Boolean(form.parentId),
+    );
     // GH #1070: escape + wrap via the shared INI value codec — a raw newline
     // or quote from the textarea must not reach the settings bag unescaped
     // (it would split the exported `key = value` line and a re-import would
@@ -981,14 +1033,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       const stored = (initialData?.settings ?? {}) as Record<string, unknown>;
       // Checkbox-backed keys seed via settingFlagIsOn(...) and write back
       // "1"/"0", so display-identity can never detect their unedited case.
-      // Their unedited test mirrors the seed via the SAME helper. Keep this
-      // set in lockstep with the settingFlagIsOn seeds above.
-      const CHECKBOX_SETTING_KEYS = new Set([
-        "filament_abrasive",
-        "filament_soluble",
-        "activate_air_filtration",
-        "filament_wipe",
-      ]);
+      // Their unedited test mirrors the seed via the SAME helper. The set is
+      // the one key list seedFormSettingFlags reads, so it cannot drift. A
+      // stored array here is the row's OWN value, which is also what its
+      // seed read (an own key always wins over the parent's). A flag the
+      // variant path removed (set back to the parent's value) is no longer
+      // in `settings`, so this loop never sees it and it stays removed.
+      const CHECKBOX_SETTING_KEYS = new Set<string>(FORM_FLAG_SETTING_KEYS);
       for (const [k, v] of Object.entries(settings)) {
         const sv = stored[k];
         if (!Array.isArray(sv)) continue;
@@ -1126,8 +1177,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         settings,
       });
       savedRef.current = true;
-      // GH #286: re-baseline so the just-saved state counts as clean.
-      setDirtyBaseline(JSON.stringify({ form, calibrations, presets }));
+      // GH #286: re-baseline so the just-saved state counts as clean. The
+      // baseline is this render's own snapshot, never a rebuilt one: a
+      // rebuilt string drifts from dirtySnapshot's shape the moment a key is
+      // added there, and the form then stays dirty for the rest of its life.
+      setDirtyBaseline(dirtySnapshot);
     } finally {
       setSaving(false);
     }
@@ -1320,7 +1374,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             })()}
             <button
               type="button"
-              onClick={() => setForm({ ...form, parentId: "" })}
+              onClick={() => {
+                setUnlinkedFlagParent(flagParent);
+                setForm({ ...form, parentId: "" });
+              }}
               className="text-red-500 hover:text-red-700 text-xs ml-2"
             >
               {t("form.remove")}
@@ -2347,8 +2404,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3">
-          <input type="checkbox" id="airFiltration" checked={form.activateAirFiltration}
-            onChange={(e) => setForm({ ...form, activateAirFiltration: e.target.checked })} className="w-4 h-4" />
+          <input type="checkbox" id="airFiltration" checked={flags.activate_air_filtration}
+            disabled={flagsPending}
+            onChange={(e) => editFlag("activate_air_filtration", e.target.checked)} className="w-4 h-4" />
           <label htmlFor="airFiltration" className="text-sm font-medium">{t("form.activateAirFiltration")}</label>
         </div>
       </CollapsibleSection>
@@ -2398,8 +2456,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3">
-          <input type="checkbox" id="wipe" checked={form.wipe}
-            onChange={(e) => setForm({ ...form, wipe: e.target.checked })} className="w-4 h-4" />
+          <input type="checkbox" id="wipe" checked={flags.filament_wipe}
+            disabled={flagsPending}
+            onChange={(e) => editFlag("filament_wipe", e.target.checked)} className="w-4 h-4" />
           <label htmlFor="wipe" className="text-sm font-medium">{t("form.enableWipe")}</label>
         </div>
       </CollapsibleSection>
@@ -2617,18 +2676,20 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
                         type="checkbox"
                         checked={
                           form.optTags.includes(val) ||
-                          (val === OPT_TAG.ABRASIVE && form.abrasive) ||
-                          (val === OPT_TAG.WATER_SOLUBLE && form.soluble)
+                          (val === OPT_TAG.ABRASIVE && flags.filament_abrasive) ||
+                          (val === OPT_TAG.WATER_SOLUBLE && flags.filament_soluble)
+                        }
+                        disabled={
+                          flagsPending &&
+                          (val === OPT_TAG.ABRASIVE || val === OPT_TAG.WATER_SOLUBLE)
                         }
                         onChange={(e) => {
                           const checked = e.target.checked;
-                          // Keep abrasive/soluble booleans in sync
-                          const updates: Partial<FilamentFormData> = {};
-                          if (val === OPT_TAG.ABRASIVE) updates.abrasive = checked;
-                          if (val === OPT_TAG.WATER_SOLUBLE) updates.soluble = checked;
+                          // Keep the abrasive/soluble settings flags in sync
+                          if (val === OPT_TAG.ABRASIVE) editFlag("filament_abrasive", checked);
+                          if (val === OPT_TAG.WATER_SOLUBLE) editFlag("filament_soluble", checked);
                           setForm((prev) => ({
                             ...prev,
-                            ...updates,
                             optTags: checked
                               ? [...new Set([...prev.optTags, val])]
                               : prev.optTags.filter((ft) => ft !== val),

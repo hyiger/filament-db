@@ -24,8 +24,9 @@
  * second line of defence — Prusa's INDX start G-code passes it to `M862.1`, so
  * the firmware itself can refuse the print. But it is written from only half of
  * the app's own abrasive predicate: `FilamentForm` computes
- * `form.abrasive || form.optTags.includes(4)` when filtering the nozzle picker,
- * then persists `form.abrasive ? "1" : "0"`. A filament marked abrasive by the
+ * `flags.filament_abrasive || form.optTags.includes(4)` when filtering the
+ * nozzle picker, then persists the abrasive checkbox alone as `"1"`/`"0"`
+ * (src/lib/formSettingFlags.ts). A filament marked abrasive by the
  * OPT tag is therefore stored, and exported, as `"0"` — a positive assertion of
  * safety. So a `"0"` here is evidence of nothing, and this audit treats it as
  * suppressing only the weakest heuristic. Reporting that contradiction is one

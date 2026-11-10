@@ -80,7 +80,7 @@ highest-severity category:
 - it compared `filament_abrasive` by identity, so a legitimate per-extruder `['1','1']` from an
   Orca/Bambu round trip read as "off" (the app collapses it with `settingFlagScalar`, GH #678);
 - it called a setting-only record unrestricted, when `FilamentForm` computes
-  `isAbrasive = form.abrasive || form.optTags.includes(4)`;
+  `isAbrasive` from the abrasive checkbox `|| optTags.includes(4)`;
 - it audited templates, which are not printable stock and whose values every child may override;
 - it accepted a **soft-deleted** nozzle as a safe assignment, where the app treats a reference
   missing from the active catalogue as unsafe, because a dangling ref is not evidence of hardness.
