@@ -105,7 +105,8 @@ volumes:
 | `GEMINI_API_KEY` | Nein | Google-Gemini-API-Key für TDS-Extraktion |
 | `ANTHROPIC_API_KEY` | Nein | Anthropic-Claude-API-Key für TDS-Extraktion |
 | `OPENAI_API_KEY` | Nein | OpenAI-API-Key für TDS-Extraktion |
-| `ALLOWED_DEV_ORIGINS` | Nein | Komma-separierte Hostnamen, die auf den Dev-Server zugreifen dürfen (z. B. `myhost.local`) |
+| `ALLOWED_ORIGINS` | Nein | Komma-separierte vollständige Origins (z. B. `https://dash.example.com,http://10.0.0.5:8123`), deren Browser-Seiten `/api/*` cross-origin aufrufen dürfen. Funktioniert auch in Produktion. Siehe [Die API von einem anderen Web-Origin aufrufen (CORS)](#die-api-von-einem-anderen-web-origin-aufrufen-cors). |
+| `ALLOWED_DEV_ORIGINS` | Nein | Komma-separierte Hostnamen, die auf den **Dev**-Server zugreifen dürfen (z. B. `myhost.local`). Nur für Dev und kein CORS: dafür `ALLOWED_ORIGINS` verwenden. |
 
 ### Eine netzwerkexponierte Instanz absichern
 
@@ -131,6 +132,23 @@ Es gibt zwei Wege, eine exponierte Instanz abzusichern — je nachdem, **wer** s
 - **Browser-Web-UI-Zugriff über das LAN** — verlasse dich **nicht** auf `FILAMENTDB_API_KEY` (er bricht die UI, siehe oben). Binde stattdessen den Port an Loopback und nutze die Desktop-App, oder stelle Filament DB hinter einen **authentifizierenden Reverse-Proxy** (nginx/Caddy/Authelia mit Basic-Auth, SSO oder mTLS), der die Authentifizierung übernimmt, bevor die Anfrage die App erreicht. Wenn du einen Reverse-Proxy nutzt, **binde Filament DB selbst an Loopback** (`-p 127.0.0.1:3456:3000` bei Docker, `HOSTNAME=127.0.0.1` beim systemd-Dienst) oder sperre den direkten Port per Firewall — sonst bleibt die App unter `http://<host>:3456` erreichbar und Browser-Nutzer umgehen den Proxy direkt zur nicht authentifizierten API. Der Proxy muss der einzige Zugang sein.
 
   > **Konfiguriere den Proxy so, dass er den ursprünglichen `Host`-Header (inklusive Port) beibehält.** Der CSRF-Guard der App vergleicht den `Origin` einer Anfrage mit ihrem `Host`. Ein Proxy, der `Host` auf die Upstream-Adresse umschreibt (z. B. nginx' bloßes `proxy_pass`, das `Host: 127.0.0.1:3000` sendet), lässt Browser-Anfragen wie Cross-Origin aussehen, sodass sie mit `403` abgelehnt werden. **Das betrifft normale Mutationen moderner Browser** (Erstellen/Bearbeiten/Löschen), nicht nur Randfälle — Browser senden `Origin` bei Same-Origin-`POST`/`PUT`/`PATCH`/`DELETE`, und der Guard vergleicht ihn unabhängig von `Sec-Fetch`-Metadaten mit `Host`. Für nginx verwende `proxy_set_header Host $http_host;` — **`$http_host`, nicht `$host`**: `$host` verwirft den Port, sodass eine unter `http://box:3456` betriebene Instanz `Host: box` weiterleiten würde und der Portvergleich des Guards weiterhin mit `403` ablehnt. Füge außerdem `proxy_set_header X-Forwarded-Proto $scheme;` hinzu. Caddys `reverse_proxy` behält den vollständigen `Host` standardmäßig bei.
+
+### Die API von einem anderen Web-Origin aufrufen (CORS)
+
+Eine Webseite, die von einem anderen Origin ausgeliefert wird (ein Dashboard, ein Hausautomations-Panel), kann die API von Filament DB nur lesen, wenn der Server mit CORS-Headern antwortet, und standardmäßig tut er das nicht: Browser blockieren diese Lesezugriffe, und der CSRF-Schutz der App weist Cross-Origin-Änderungen mit `403` ab. Um bestimmte Origins zuzulassen, setze `ALLOWED_ORIGINS` auf eine komma-separierte Liste **vollständiger Origins**: Schema, Host und Port, wenn er nicht der Standard ist.
+
+```bash
+docker run -p 3456:3000 \
+  -e MONGODB_URI="..." \
+  -e ALLOWED_ORIGINS="https://dash.example.com,http://10.0.0.5:8123" \
+  ghcr.io/hyiger/filament-db
+```
+
+Für einen gelisteten Origin beantwortet `/api/*` Preflight-Anfragen (`OPTIONS`) und setzt `Access-Control-Allow-Origin` auf jede Antwort, und der CSRF-Schutz akzeptiert seine Änderungen. Die Seite darf die Request-Header `Authorization` und `Content-Type` senden; Credentials (Cookies) werden nicht verwendet.
+
+> **Ein gelisteter Origin wird wie die eigene UI der App vertraut.** Ohne `FILAMENTDB_API_KEY` kann jede von ihm ausgelieferte Seite alles lesen und ändern, einschließlich Löschen oder Wiederherstellen der Datenbank. Liste nur Origins, die du kontrollierst. Um zusätzlich einen Schlüssel zu verlangen, setze `FILAMENTDB_API_KEY` und lass die Seite `Authorization: Bearer <key>` senden.
+
+`*` und reine Hostnamen (`dash.example.com`) werden mit einer Warnung im Server-Log ignoriert. Ein Wildcard würde die nicht authentifizierte API für jede besuchte Webseite öffnen. Der Etikettendruck (`POST /api/labels/print`) bleibt für Cross-Origin-Seiten gesperrt: sein Druck-Token-Header steht nicht auf der erlaubten Liste. `ALLOWED_DEV_ORIGINS` hat damit nichts zu tun: es lässt nur einen anderen Hostnamen den Next.js-Dev-Server laden.
 
 ### Aus Quellen bauen
 
