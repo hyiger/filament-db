@@ -102,7 +102,8 @@ volumes:
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
-| `ALLOWED_DEV_ORIGINS` | No | Comma-separated hostnames allowed to access the dev server (e.g. `myhost.local`) |
+| `ALLOWED_ORIGINS` | No | Comma-separated full origins (e.g. `https://dash.example.com,http://10.0.0.5:8123`) whose browser pages may call `/api/*` cross-origin. Works in production. See [Calling the API from another web origin (CORS)](#calling-the-api-from-another-web-origin-cors). |
+| `ALLOWED_DEV_ORIGINS` | No | Comma-separated hostnames allowed to access the **dev** server (e.g. `myhost.local`). Dev-only, and not CORS: use `ALLOWED_ORIGINS` for that. |
 
 ### Securing a network-exposed instance
 
@@ -128,6 +129,23 @@ You have two ways to secure an exposed instance, depending on **who** needs to r
 - **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app. When you use a reverse proxy, **bind Filament DB itself to loopback** (`-p 127.0.0.1:3456:3000` for Docker, `HOSTNAME=127.0.0.1` for the systemd service) or firewall its direct port — otherwise the app stays reachable at `http://<host>:3456` and browser users bypass the proxy straight to the unauthenticated API. The proxy must be the only way in.
 
   > **Configure the proxy to preserve the original `Host` header (with its port).** The app's CSRF guard compares a request's `Origin` against its `Host`. A proxy that rewrites `Host` to the upstream address (e.g. nginx's bare `proxy_pass`, which sends `Host: 127.0.0.1:3000`) makes browser requests look cross-origin, so they're rejected with a `403`. **This affects normal modern-browser mutations** (create/edit/delete), not just edge cases — browsers send `Origin` on same-origin `POST`/`PUT`/`PATCH`/`DELETE`, and the guard compares it to `Host` regardless of `Sec-Fetch` metadata. For nginx use `proxy_set_header Host $http_host;` — **`$http_host`, not `$host`**: `$host` drops the port, so an instance served on `http://box:3456` would forward `Host: box` and the guard's port comparison would still `403`. Also add `proxy_set_header X-Forwarded-Proto $scheme;`. Caddy's `reverse_proxy` preserves the full `Host` by default.
+
+### Calling the API from another web origin (CORS)
+
+A web page served from a different origin (a dashboard, a home-automation panel) can only read Filament DB's API if the server answers with CORS headers, and by default it doesn't: browsers block those reads, and the app's CSRF guard refuses cross-origin mutations with a `403`. To allow specific origins, set `ALLOWED_ORIGINS` to a comma-separated list of **full origins**: scheme, host, and port when it isn't the default.
+
+```bash
+docker run -p 3456:3000 \
+  -e MONGODB_URI="..." \
+  -e ALLOWED_ORIGINS="https://dash.example.com,http://10.0.0.5:8123" \
+  ghcr.io/hyiger/filament-db
+```
+
+For a listed origin, `/api/*` answers preflight (`OPTIONS`) requests and adds `Access-Control-Allow-Origin` to every response, and the CSRF guard accepts its mutations. The page may send the `Authorization` and `Content-Type` request headers; credentials (cookies) are not used.
+
+> **A listed origin is trusted like the app's own UI.** Without `FILAMENTDB_API_KEY`, any page served from it can read and change everything, including wiping or restoring the database. List only origins you control. To require a key as well, set `FILAMENTDB_API_KEY` and have the page send `Authorization: Bearer <key>`.
+
+`*` and bare hostnames (`dash.example.com`) are ignored, with a warning in the server log. A wildcard would open the unauthenticated API to every web page you visit. Label printing (`POST /api/labels/print`) stays unavailable to cross-origin pages: its print-token header is not on the allowed list. `ALLOWED_DEV_ORIGINS` is unrelated: it only lets another hostname load the Next.js dev server.
 
 ### Building from Source
 
