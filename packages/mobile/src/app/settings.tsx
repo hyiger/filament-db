@@ -75,12 +75,21 @@ export default function SettingsScreen() {
     }
     setFailed(null);
     setPhase('checking');
-    const result = await checkConnection({ baseUrl: plan.baseUrl, apiKey: plan.apiKey }, PLATFORM);
-    if (result.ok) {
-      await persist(plan);
-      return;
+    try {
+      const result = await checkConnection(
+        { baseUrl: plan.baseUrl, apiKey: plan.apiKey },
+        PLATFORM,
+      );
+      if (result.ok) {
+        await persist(plan);
+        return;
+      }
+      setFailed({ problem: result.problem, plan });
+    } catch (e) {
+      // checkConnection reports failures as a result; this is only so an
+      // unexpected throw cannot leave the form locked in "Checking…".
+      Alert.alert('Could not check the connection', (e as Error).message);
     }
-    setFailed({ problem: result.problem, plan });
     setPhase('idle');
   }
 

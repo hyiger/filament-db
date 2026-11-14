@@ -155,8 +155,15 @@ response, the app asks the same port over plain HTTP for
 certificate coming back means the host is up and is a secure gateway with its
 own CA, so the HTTPS failure is a trust problem. A redirect to `https://` means
 a gateway that was given a certificate, which the phone does not accept. An
-ordinary HTTP answer means the port is not HTTPS at all (an older desktop). See
+ordinary HTTP answer means the port is not HTTPS at all (an older desktop).
+That download says what the port is, not why a request failed, so a timeout, a
+reply that started and then dropped, and an error that names a refused or reset
+connection are never reported as a certificate problem. See
 `src/lib/connectionDiagnosis.ts`.
+
+The check also needs the reply to be what the API returns (a list): a `200`
+from a Wi-Fi sign-in page or a proxy's login page is reported as "not
+Filament DB" instead of being saved.
 
 #### The API key stays with its server
 

@@ -3,6 +3,7 @@ import {
   classifyCaProbe,
   diagnoseConnectionFailure,
   type CaProbeResult,
+  type ConnectionFailure,
   type ConnectionProblem,
   type DevicePlatform,
 } from './connectionDiagnosis';
@@ -71,24 +72,45 @@ export async function checkConnection(
   cfg: ApiConfig,
   platform: DevicePlatform,
 ): Promise<ConnectionCheck> {
+  const diagnose = (failure: ConnectionFailure, caProbe: CaProbeResult): ConnectionCheck => ({
+    ok: false,
+    problem: diagnoseConnectionFailure({
+      baseUrl: cfg.baseUrl,
+      hasKey: Boolean(cfg.apiKey),
+      failure,
+      caProbe,
+      platform,
+    }),
+  });
   try {
-    await createApi(cfg).getLocations();
+    // A 2xx is not enough: the API client reads a body that is not JSON as
+    // null, so a captive portal's or a proxy's HTML page would pass. The route
+    // has returned a bare array in every version.
+    const locations: unknown = await createApi(cfg).getLocations();
+    if (!Array.isArray(locations)) {
+      return diagnose(
+        { status: 200, message: 'The reply was not a list of locations.', unexpectedReply: true },
+        'skipped',
+      );
+    }
     return { ok: true };
   } catch (e) {
-    const failure =
+    const failure: ConnectionFailure =
       e instanceof ApiError
-        ? { status: e.status, message: e.message, detail: e.detail, timedOut: e.timedOut }
+        ? {
+            status: e.status,
+            message: e.message,
+            detail: e.detail,
+            timedOut: e.timedOut,
+            responseReceived: e.responseReceived,
+          }
         : { status: 0, message: (e as Error).message, detail: (e as Error).message };
-    const caProbe = failure.status === 0 ? await probeCaCertificate(cfg.baseUrl) : 'skipped';
-    return {
-      ok: false,
-      problem: diagnoseConnectionFailure({
-        baseUrl: cfg.baseUrl,
-        hasKey: Boolean(cfg.apiKey),
-        failure,
-        caProbe,
-        platform,
-      }),
-    };
+    // Ask the port what it is only when HTTPS produced no response at all. A
+    // lost body means the handshake worked: there is nothing to ask.
+    const caProbe =
+      failure.status === 0 && !failure.responseReceived
+        ? await probeCaCertificate(cfg.baseUrl)
+        : 'skipped';
+    return diagnose(failure, caProbe);
   }
 }

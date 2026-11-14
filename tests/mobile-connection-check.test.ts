@@ -48,6 +48,54 @@ describe("checkConnection", () => {
     expect(header(calls[0], "authorization")).toBe(`Bearer ${KEY}`);
   });
 
+  it("does not accept a 200 that is not the API's reply (Codex P2 on PR #1249)", async () => {
+    // A captive portal or a proxy's login page: the API client reads a body
+    // that is not JSON as null, so awaiting the call alone proved nothing.
+    for (const body of ["<!DOCTYPE html><html>Sign in to Wi-Fi</html>", "", '{"ok":true}', "null"]) {
+      stubFetch({ [`${GATEWAY}/api/locations`]: async () => reply(200, body) });
+      const result = await checkConnection({ baseUrl: GATEWAY, apiKey: KEY }, "ios");
+      expect(result.ok, body).toBe(false);
+      if (!result.ok) expect(result.problem.kind, body).toBe("not-filament-db");
+    }
+  });
+
+  it("does not call a lost reply body a certificate problem, or ask the port for its CA", async () => {
+    // HTTPS answered 200, then the body never arrived: TLS worked.
+    const calls = stubFetch({
+      [`${GATEWAY}/api/locations`]: async () =>
+        ({
+          ok: true,
+          status: 200,
+          text: () => Promise.reject(new Error("connection reset")),
+        }) as unknown as Response,
+      [CA_URL]: async () => reply(200, PEM),
+    });
+    const result = await checkConnection({ baseUrl: GATEWAY, apiKey: KEY }, "ios");
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem.kind).toBe("interrupted");
+      expect(result.problem.caUrl).toBeNull();
+    }
+    expect(calls.map((c) => c.url)).toEqual([`${GATEWAY}/api/locations`]);
+  });
+
+  it("does not call a timeout a certificate problem, even when the CA is downloadable", async () => {
+    vi.useFakeTimers();
+    stubFetch({
+      [`${GATEWAY}/api/locations`]: () => new Promise<Response>(() => {}),
+      [CA_URL]: async () => reply(200, PEM),
+    });
+    const pending = checkConnection({ baseUrl: GATEWAY, apiKey: KEY }, "android");
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.problem.kind).toBe("timeout");
+      expect(result.problem.caUrl).toBeNull();
+      expect(result.problem.message).toMatch(/accepts connections/);
+    }
+  });
+
   it("diagnoses an untrusted certificate from the CA download, without sending the key over http", async () => {
     const calls = stubFetch({
       [`${GATEWAY}/api/locations`]: async () => {

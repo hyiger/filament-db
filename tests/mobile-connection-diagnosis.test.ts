@@ -3,6 +3,7 @@ import {
   classifyCaProbe,
   diagnoseConnectionFailure,
   looksLikeCertificateError,
+  looksLikeTransportFailure,
   unreachableMessage,
   type CaProbeResult,
   type ConnectionFailure,
@@ -99,13 +100,71 @@ describe("looksLikeCertificateError", () => {
   });
 });
 
+describe("looksLikeTransportFailure", () => {
+  it("recognises a refused, reset or cut connection", () => {
+    expect(looksLikeTransportFailure(REFUSED)).toBe(true);
+    expect(looksLikeTransportFailure("fetch failed: java.net.SocketException: Connection reset")).toBe(true);
+    expect(looksLikeTransportFailure("fetch failed: java.net.UnknownHostException: nas.local")).toBe(true);
+  });
+
+  it("never claims a TLS or certificate error, or a text it cannot read", () => {
+    expect(looksLikeTransportFailure(ANDROID_UNTRUSTED)).toBe(false);
+    expect(looksLikeTransportFailure(ANDROID_HOSTNAME)).toBe(false);
+    expect(looksLikeTransportFailure(ANDROID_NOT_TLS)).toBe(false);
+    expect(looksLikeTransportFailure(IOS_UNTRUSTED_EN)).toBe(false);
+    // Unreadable (another language): no opinion, so the port's answer decides.
+    expect(looksLikeTransportFailure(IOS_UNTRUSTED_DE)).toBe(false);
+    expect(looksLikeTransportFailure(null)).toBe(false);
+  });
+});
+
 describe("diagnoseConnectionFailure — https address, no response", () => {
   it("names the certificate when the port serves the gateway's CA, whatever the error text", () => {
     for (const detail of [ANDROID_UNTRUSTED, IOS_UNTRUSTED_EN, IOS_UNTRUSTED_DE, "fetch failed: ???", null]) {
       const p = diagnose(noResponse(detail), "certificate");
       expect(p.kind, String(detail)).toBe("untrusted-certificate");
       expect(p.caUrl).toBe("http://192.168.1.50:3457/__filamentdb/ca.crt");
-      expect(p.message).toMatch(/Nothing was sent/);
+      // A claim that holds whatever went wrong: no certificate, no request.
+      expect(p.message).toMatch(/only sent once the certificate is accepted/);
+    }
+  });
+
+  it("does not blame the certificate for a reply whose body was lost", () => {
+    // TLS worked, the status line arrived, the key was sent: the CA being
+    // downloadable says nothing about that (Codex P2 on PR #1249).
+    const p = diagnose(
+      { status: 0, message: "The connection dropped while reading the server's reply.", responseReceived: true },
+      "certificate",
+    );
+    expect(p.kind).toBe("interrupted");
+    expect(p.caUrl).toBeNull();
+    expect(p.steps).toEqual([]);
+    expect(p.message).not.toMatch(/certificate/i);
+  });
+
+  it("does not blame the certificate for a timeout", () => {
+    // A refused certificate fails the handshake at once; it does not leave the
+    // request unanswered. A reachable gateway only changes what to check.
+    for (const probe of ["certificate", "https-only"] as const) {
+      const p = diagnose(noResponse(null, true), probe);
+      expect(p.kind, probe).toBe("timeout");
+      expect(p.caUrl).toBeNull();
+      expect(p.message).toMatch(/accepts connections, but Filament DB did not answer in time/);
+    }
+    expect(diagnose(noResponse(null, true), "unreachable").message).toMatch(/Nothing answered/);
+  });
+
+  it("does not blame the certificate when the text names a transport failure", () => {
+    for (const detail of [
+      "fetch failed: java.net.SocketException: Connection reset",
+      "fetch failed: java.io.IOException: unexpected end of stream on https://192.168.1.50:3457/...",
+      REFUSED,
+    ]) {
+      const p = diagnose(noResponse(detail), "certificate");
+      expect(p.kind, detail).toBe("unreachable");
+      expect(p.caUrl).toBeNull();
+      expect(p.message).toMatch(/is there, but the request failed before a reply arrived/);
+      expect(p.message).toContain(detail);
     }
   });
 
@@ -140,7 +199,6 @@ describe("diagnoseConnectionFailure — https address, no response", () => {
       expect(p.caUrl).toBeNull();
       expect(p.steps).toEqual([]);
       expect(p.message).toMatch(/given its own certificate/);
-      expect(p.message).toMatch(/Nothing was sent/);
     }
   });
 
@@ -151,6 +209,11 @@ describe("diagnoseConnectionFailure — https address, no response", () => {
     expect(p.kind).toBe("not-https");
     expect(p.suggestedAddress).toBe("http://192.168.1.50:3456");
     expect(p.caUrl).toBeNull();
+    // A plain port can also show up as a reset; the port's answer still decides.
+    const reset = diagnose(noResponse("fetch failed: java.net.SocketException: Connection reset"), "plain-http", {
+      baseUrl: "https://192.168.1.50:3456",
+    });
+    expect(reset.kind).toBe("not-https");
   });
 
   it("falls back on the error text when the CA request got no answer", () => {
@@ -208,6 +271,15 @@ describe("diagnoseConnectionFailure — the server answered", () => {
 
   it("flags an address that is not Filament DB", () => {
     expect(diagnose(answered(404, "Request failed (404)"), "skipped").kind).toBe("not-filament-db");
+  });
+
+  it("flags a 2xx that is not the API's reply", () => {
+    const p = diagnose(
+      { status: 200, message: "The reply was not a list of locations.", unexpectedReply: true },
+      "skipped",
+    );
+    expect(p.kind).toBe("not-filament-db");
+    expect(p.message).toMatch(/sign-in page/);
   });
 
   it("reports the server's own trouble in the server's words", () => {

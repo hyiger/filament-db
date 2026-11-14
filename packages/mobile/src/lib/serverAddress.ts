@@ -41,15 +41,19 @@ const IPV6_HOST_RE = /^\[[0-9a-f:.]+\]$/i;
 
 /**
  * Read the scheme, host and port out of an address. Null when it is not an
- * `http://` or `https://` address with a host, and null for one that carries
+ * `http://` or `https://` address with a host; null for one that carries
  * credentials (`https://user@host`): the part before the `@` reads like the
- * server's name while the request goes to what follows it.
+ * server's name while the request goes to what follows it; and null for one
+ * with a query or fragment. A path is allowed (a reverse proxy's prefix).
  */
 export function parseServerAddress(input: string | null | undefined): ServerAddress | null {
   const url = normalizeServerAddress(input);
   if (!url) return null;
   const m = ADDRESS_RE.exec(url);
   if (!m) return null;
+  // The address is used as a prefix (`${baseUrl}/api/…`), so a query or
+  // fragment would swallow every path appended to it.
+  if (/[?#]/.test(url.slice(m[0].length))) return null;
   const scheme = m[1].toLowerCase() as 'http' | 'https';
   const authority = m[2];
 

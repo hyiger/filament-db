@@ -25,6 +25,14 @@ import { caCertificateUrl, parseServerAddress, withScheme } from './serverAddres
  * certificate, the host is up, the port is a Filament DB gateway using its
  * own CA, and the HTTPS failure is this device not trusting it. That holds on
  * both platforms and in every language.
+ *
+ * WHAT THE CA DOWNLOAD DOES NOT PROVE. It says the port is a gateway, not why
+ * the request failed, so three failures are kept out of that conclusion:
+ * - a response whose BODY was lost (`responseReceived`): the handshake
+ *   succeeded and the key was sent;
+ * - a timeout: a refused certificate fails the handshake at once, it does not
+ *   leave the request unanswered for fifteen seconds;
+ * - an error that names a transport failure (connection refused or reset).
  */
 
 /** What the plain-HTTP request for the CA certificate found. */
@@ -72,6 +80,18 @@ const HOSTNAME_MISMATCH_RE = /SSLPeerUnverifiedException|Hostname .* not verifie
 const NOT_TLS_RE =
   /WRONG_VERSION_NUMBER|Unable to parse TLS packet header|not an SSL\/TLS record|SSLProtocolException/i;
 
+// A failure of the connection itself, named by Android's exception classes or
+// OkHttp's messages. When the text says this, the certificate was not the problem.
+const TRANSPORT_ERROR_RE =
+  /java\.net\.(?:ConnectException|SocketException|SocketTimeoutException|UnknownHostException|NoRouteToHostException)|java\.io\.EOFException|unexpected end of stream|Connection reset|Connection refused/i;
+
+/** Does a low-level error text name a failure of the connection, not of TLS? */
+export function looksLikeTransportFailure(detail: string | null | undefined): boolean {
+  if (!detail) return false;
+  if (/javax\.net\.ssl|certificate/i.test(detail)) return false;
+  return TRANSPORT_ERROR_RE.test(detail);
+}
+
 /** Does a low-level error text say the certificate was refused? */
 export function looksLikeCertificateError(detail: string | null | undefined): boolean {
   if (!detail) return false;
@@ -93,6 +113,8 @@ export type ConnectionProblemKind =
   | 'not-filament-db'
   /** Filament DB answered and reported a problem of its own. */
   | 'server-error'
+  /** A response started and its body never arrived. */
+  | 'interrupted'
   | 'timeout'
   | 'unreachable';
 
@@ -118,6 +140,10 @@ export interface ConnectionFailure {
   /** The low-level error text behind a status-0 failure. */
   detail?: string | null;
   timedOut?: boolean;
+  /** Status 0, but the status line had arrived: only the body was lost. */
+  responseReceived?: boolean;
+  /** A 2xx whose body is not what the API returns (an HTML page, say). */
+  unexpectedReply?: boolean;
 }
 
 const FINGERPRINT_PLACE = 'Settings → Network on the Filament DB desktop';
@@ -178,8 +204,59 @@ export function diagnoseConnectionFailure(input: {
   const https = address?.scheme === 'https';
   const shown = address?.origin ?? baseUrl;
 
+  if (failure.unexpectedReply) {
+    return problem(
+      'not-filament-db',
+      "This doesn't look like Filament DB",
+      `${shown} answered, but not with what Filament DB's API returns. A Wi-Fi sign-in page, ` +
+        `a proxy's login page or another product on that address can do this. Check the ` +
+        `address and port.`,
+    );
+  }
+
   if (failure.status === 0) {
-    if (https) {
+    if (failure.responseReceived) {
+      // TLS worked and the request went out: not a certificate problem, and
+      // not a case for "nothing was sent".
+      return problem(
+        'interrupted',
+        'The connection dropped',
+        `${shown} started to answer, then the connection dropped before the reply arrived. ` +
+          `Check that this device is on the same network and try again.`,
+      );
+    }
+    if (failure.timedOut) {
+      const gatewayUp = caProbe === 'certificate' || caProbe === 'https-only';
+      return problem(
+        'timeout',
+        "The server didn't respond",
+        gatewayUp
+          ? `${shown} accepts connections, but Filament DB did not answer in time. It may ` +
+              `still be starting, or its database may be unreachable. Check it on the computer ` +
+              `it runs on and try again.`
+          : `Nothing answered at ${shown} in time. Check the address and port, that Filament ` +
+              `DB is running with "Share on local network" on, and that this device is on the ` +
+              `same network.`,
+      );
+    }
+    // A plain-HTTP server on the port is a fact about the port, whatever the
+    // failed handshake was called.
+    if (https && caProbe === 'plain-http') {
+      const suggestedAddress = withScheme(baseUrl, 'http');
+      return problem(
+        'not-https',
+        'This address does not use HTTPS',
+        `${shown} answers, but in plain HTTP. A Filament DB desktop older than the secure ` +
+          `gateway is reached at an http:// address` +
+          (suggestedAddress ? ` (${suggestedAddress})` : '') +
+          `; a current one shows its https:// address and port under Settings → Network.`,
+        { suggestedAddress },
+      );
+    }
+    // The text names a refused or reset connection: whatever the port serves
+    // over plain HTTP, the certificate was not what failed.
+    const transport = looksLikeTransportFailure(failure.detail);
+    if (https && !transport) {
       const caUrl = caCertificateUrl(baseUrl);
       const mismatch = HOSTNAME_MISMATCH_RE.test(failure.detail ?? '');
       if (caProbe === 'certificate' && caUrl) {
@@ -189,10 +266,12 @@ export function diagnoseConnectionFailure(input: {
           mismatch
             ? `Filament DB at ${shown} answered, but its certificate is not valid for this ` +
                 `address. Use the address shown in ${FINGERPRINT_PLACE}; if that is this one, ` +
-                `install its certificate authority as below. Nothing was sent.`
+                `install its certificate authority as below. A request is only sent once the ` +
+                `certificate is accepted.`
             : `Filament DB at ${shown} uses a certificate from its own certificate authority, ` +
-                `which this device has not been told to trust yet. Nothing was sent, including ` +
-                `the API key. Install the certificate authority once:`,
+                `which this device has not been told to trust yet. A request, and the API key ` +
+                `with it, is only sent once the certificate is accepted. Install the ` +
+                `certificate authority once:`,
           { steps: installSteps(platform, caUrl), caUrl },
         );
       }
@@ -202,23 +281,11 @@ export function diagnoseConnectionFailure(input: {
           "This device couldn't make a secure connection",
           `${shown} expects HTTPS, but this device does not accept its certificate` +
             (mismatch ? ' for this address' : '') +
-            `. Nothing was sent. A Filament DB that was given its own certificate offers no ` +
+            `. A Filament DB that was given its own certificate offers no ` +
             `certificate authority to download: that certificate may be self-signed, expired, ` +
             `or issued for a different name than the one in this address. Use the name it was ` +
             `issued for, or install the authority that issued it on this device. If this is ` +
             `not Filament DB's secure address at all, check the port.`,
-        );
-      }
-      if (caProbe === 'plain-http') {
-        const suggestedAddress = withScheme(baseUrl, 'http');
-        return problem(
-          'not-https',
-          'This address does not use HTTPS',
-          `${shown} answers, but in plain HTTP. A Filament DB desktop older than the secure ` +
-            `gateway is reached at an http:// address` +
-            (suggestedAddress ? ` (${suggestedAddress})` : '') +
-            `; a current one shows its https:// address and port under Settings → Network.`,
-          { suggestedAddress },
         );
       }
       if (looksLikeCertificateError(failure.detail)) {
@@ -227,26 +294,22 @@ export function diagnoseConnectionFailure(input: {
           "This device doesn't trust the server's certificate",
           `${shown} answered, but this device does not accept its certificate` +
             (mismatch ? ' for this address' : '') +
-            `. Nothing was sent. If this is a Filament DB that generated its own certificate, ` +
+            `. If this is a Filament DB that generated its own certificate, ` +
             `install its certificate authority once:`,
           caUrl ? { steps: installSteps(platform, caUrl), caUrl } : {},
         );
       }
     }
-    if (failure.timedOut) {
-      return problem(
-        'timeout',
-        "The server didn't respond",
-        `Nothing answered at ${shown} in time. Check the address and port, that Filament DB is ` +
-          `running with "Share on local network" on, and that this device is on the same network.`,
-      );
-    }
+    const portAnswers = caProbe === 'certificate' || caProbe === 'https-only';
     return problem(
       'unreachable',
       "Can't reach the server",
-      `Nothing answered at ${shown}. Check the address and port, that Filament DB is running ` +
-        `with "Share on local network" on, and that this device is on the same network.` +
-        (failure.detail ? ` (${failure.detail})` : ''),
+      (portAnswers
+        ? `${shown} is there, but the request failed before a reply arrived. Check that this ` +
+          `device is on the same network and try again.`
+        : `Nothing answered at ${shown}. Check the address and port, that Filament DB is ` +
+          `running with "Share on local network" on, and that this device is on the same ` +
+          `network.`) + (failure.detail ? ` (${failure.detail})` : ''),
     );
   }
 

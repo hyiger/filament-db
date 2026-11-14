@@ -84,6 +84,10 @@ describe("parseServerAddress", () => {
       "https://[fd00::1]x",
       "https://[fd00::1]:",
       "https://[not-v6]:3457",
+      // Used as a prefix for `/api/…`: a query or fragment would swallow the path.
+      "https://192.168.1.50:3457?x=1",
+      "https://192.168.1.50:3457/#top",
+      "https://192.168.1.50:3457/base?x",
     ]) {
       expect(parseServerAddress(bad), bad).toBeNull();
     }

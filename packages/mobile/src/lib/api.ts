@@ -29,6 +29,10 @@ export class ApiError extends Error {
   detail: string | null = null;
   /** For a status-0 failure: nothing answered before the deadline. */
   timedOut = false;
+  /** For a status-0 failure: the status line DID arrive and only the reply's
+   *  body was lost. The secure connection therefore worked and the request,
+   *  key included, was sent — so this is never a certificate problem. */
+  responseReceived = false;
   constructor(status: number, message: string, committed = false) {
     super(message);
     this.status = status;
@@ -116,10 +120,12 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
     const method = (init?.method ?? 'GET').toUpperCase();
     // A read has nothing to lose — report it like any network failure.
     if (method === 'GET') {
-      throw new ApiError(
+      const error = new ApiError(
         0,
         `The connection dropped while reading the server's reply. Check that this device is on the same network.`,
       );
+      error.responseReceived = true;
+      throw error;
     }
     throw new ApiError(
       res.status,
