@@ -2,8 +2,10 @@ import { describe, it, expect, afterEach } from "vitest";
 import path from "node:path";
 import { httpPortApiKey } from "@/lib/apiAuth";
 import {
+  DEFAULT_DESKTOP_HTTPS_PORT,
   DEFAULT_SECURE_DIR_NAME,
   GATEWAY_GLOBAL_KEY,
+  desktopHttpsPort,
   parseGatewayEnv,
   secureGatewayRunning,
 } from "@/lib/gatewayConfig";
@@ -138,6 +140,41 @@ describe("parseGatewayEnv", () => {
     );
     expect(enabled({ FILAMENTDB_HTTPS_PORT: "3443", FILAMENTDB_API_KEY: "   " }).envApiKey).toBeNull();
     expect(enabled({ FILAMENTDB_HTTPS_PORT: "3443", FILAMENTDB_API_KEY: "" }).envApiKey).toBeNull();
+  });
+});
+
+describe("desktopHttpsPort", () => {
+  it("defaults to 3457", () => {
+    expect(DEFAULT_DESKTOP_HTTPS_PORT).toBe(3457);
+    expect(desktopHttpsPort(undefined, 3456)).toBe(3457);
+    expect(desktopHttpsPort("", 3456)).toBe(3457);
+  });
+
+  it("uses a requested port that is a real port", () => {
+    expect(desktopHttpsPort("8443", 3456)).toBe(8443);
+    expect(desktopHttpsPort(" 8443 ", 3456)).toBe(8443);
+  });
+
+  it("falls back to the default for a value that is not a port", () => {
+    for (const requested of ["https", "0", "65536", "34.57", "-1"]) {
+      expect(desktopHttpsPort(requested, 3456)).toBe(3457);
+    }
+  });
+
+  it("never returns the HTTP port, requested or by default", () => {
+    // Requested the same port as HTTP: fall back.
+    expect(desktopHttpsPort("3456", 3456)).toBe(3457);
+    // The app itself runs on 3457 (PORT=3457): the default would collide.
+    expect(desktopHttpsPort(undefined, 3457)).toBe(3458);
+    expect(desktopHttpsPort("3457", 3457)).toBe(3458);
+    expect(desktopHttpsPort("nope", 3457)).toBe(3458);
+    // Whatever comes out is a pair parseGatewayEnv accepts.
+    for (const [requested, http] of [[undefined, 3457], ["3457", 3457], ["3456", 3456], [undefined, 3456]] as const) {
+      const port = desktopHttpsPort(requested, http);
+      expect(
+        parseGatewayEnv({ FILAMENTDB_HTTPS_PORT: String(port), PORT: String(http) }, CWD, HOME).state,
+      ).toBe("enabled");
+    }
   });
 });
 

@@ -12,6 +12,7 @@ import {
   type LabelPrinterKind,
 } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
+import { desktopHttpsPort } from "../src/lib/gatewayConfig";
 import { listLanIpv4 } from "../src/lib/getLanIp";
 import { isNtagSizeName, type NtagSizeName } from "../src/lib/ntagVersion";
 import {
@@ -165,12 +166,7 @@ const PORT = parseInt(process.env.PORT || "3456", 10);
 /** Port of the secure gateway (HTTPS + API key) that "Share on local network"
  * opens to other devices. The embedded server's plain HTTP port (PORT) is
  * always loopback-only. */
-const HTTPS_PORT = (() => {
-  const requested = Number(process.env.FILAMENTDB_HTTPS_PORT);
-  const usable =
-    Number.isInteger(requested) && requested >= 1 && requested <= 65535 && requested !== PORT;
-  return usable ? requested : 3457;
-})();
+const HTTPS_PORT = desktopHttpsPort(process.env.FILAMENTDB_HTTPS_PORT, PORT);
 
 // ── Single-instance lock ──
 // Prevent multiple app windows / duplicate servers on the same port. On

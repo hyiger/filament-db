@@ -143,6 +143,24 @@ export function parseGatewayEnv(
   };
 }
 
+/** The desktop app's gateway port when nothing else is asked for. */
+export const DEFAULT_DESKTOP_HTTPS_PORT = 3457;
+
+/**
+ * The port the desktop app gives its gateway: `requested`
+ * (`FILAMENTDB_HTTPS_PORT`) when that is a usable port, otherwise the default.
+ * Either way it never equals the HTTP port: `parseGatewayEnv` refuses that
+ * pair, and the app would then show sharing as on with nothing listening. So
+ * an app started with `PORT=3457` gets the next port up.
+ */
+export function desktopHttpsPort(requested: string | undefined, httpPort: number): number {
+  const asked = parsePort(requested);
+  if (asked !== null && asked !== httpPort) return asked;
+  return httpPort === DEFAULT_DESKTOP_HTTPS_PORT
+    ? DEFAULT_DESKTOP_HTTPS_PORT + 1
+    : DEFAULT_DESKTOP_HTTPS_PORT;
+}
+
 /** Where src/lib/gatewayRuntime.ts keeps the process's gateway on `globalThis`. */
 export const GATEWAY_GLOBAL_KEY = "__filamentDbSecureGateway__";
 
