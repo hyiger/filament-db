@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. The plain HTTP port is unauthenticated by default, for the machine the server runs on. Other devices use the secure gateway: a second, HTTPS port that requires `Authorization: Bearer <key>` (see the bearerAuth security scheme and the Security tag). Without the gateway, deployments that set the FILAMENTDB_API_KEY environment variable require the key on every /api request of the HTTP port. Because the gate is optional and all-or-nothing, it is modelled as an optional top-level requirement (anonymous OR bearerAuth) rather than per-operation, so tooling sends the token when one is configured and works unauthenticated when none is.",
-    "version": "1.85.0",
+    "version": "1.86.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
