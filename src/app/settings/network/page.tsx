@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 import DbErrorHint from "@/components/DbErrorHint";
+import SecureAccessCard from "@/components/SecureAccessCard";
 import type { DbErrorInfo } from "@/lib/dbErrorKinds";
 
 type ConnectionMode = "atlas" | "hybrid" | "offline" | "";
@@ -34,11 +35,6 @@ export default function NetworkSettingsPage() {
   const [showUriInput, setShowUriInput] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
 
-  const [exposeToLan, setExposeToLan] = useState(false);
-  const [lanInfo, setLanInfo] = useState<{ ips: string[]; port: number } | null>(null);
-  const [lanSaving, setLanSaving] = useState(false);
-  const [lanError, setLanError] = useState(false);
-
   useEffect(() => {
     const controller = new AbortController();
     const api = window.electronAPI;
@@ -47,29 +43,9 @@ export default function NetworkSettingsPage() {
       if (controller.signal.aborted) return;
       if (cfg.connectionMode) setCurrentMode(cfg.connectionMode as ConnectionMode);
       if (cfg.atlasUri) setHasStoredUri(true);
-      if (typeof cfg.exposeToLan === "boolean") setExposeToLan(cfg.exposeToLan);
-    }).catch(() => {});
-    api.getLanInfo?.().then((info) => {
-      if (!controller.signal.aborted) setLanInfo(info);
     }).catch(() => {});
     return () => { controller.abort(); };
   }, []);
-
-  async function toggleLanShare(next: boolean) {
-    const api = window.electronAPI;
-    if (!api?.saveConfig) return;
-    setLanSaving(true);
-    setLanError(false);
-    try {
-      const res = await api.saveConfig({ exposeToLan: next });
-      if (res?.success) setExposeToLan(next);
-      else setLanError(true);
-    } catch {
-      setLanError(true);
-    } finally {
-      setLanSaving(false);
-    }
-  }
 
   return (
     <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
@@ -77,14 +53,15 @@ export default function NetworkSettingsPage() {
       <h1 className="text-3xl font-bold mb-2 mt-2">{t("settings.group.network")}</h1>
       <p className="text-gray-500 text-sm mb-8">{t("settings.group.network.desc")}</p>
 
-      {!isElectron ? (
-        <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5 text-sm text-gray-500">
-          {t("settings.network.desktopOnly")}
-        </div>
-      ) : (
-        <div className="space-y-4">
-          {/* Connection Mode */}
-          {currentMode && (
+      <div className="space-y-4">
+          {/* Connection Mode — the desktop app owns its database connection;
+              a server deployment sets MONGODB_URI in its environment. */}
+          {!isElectron && (
+            <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5 text-sm text-gray-500">
+              {t("settings.network.desktopOnly")}
+            </div>
+          )}
+          {isElectron && currentMode && (
             <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">{t("settings.connectionMode")}</h2>
               <p className="text-sm text-gray-500 mb-4">{t("settings.connectionModeDesc")}</p>
@@ -257,65 +234,8 @@ export default function NetworkSettingsPage() {
             </div>
           )}
 
-          {/* Share on local network */}
-          <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
-            <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">{t("settings.lanShare.title")}</h2>
-            <p className="text-sm text-gray-500 mb-4">{t("settings.lanShare.desc")}</p>
-
-            <div className="flex items-center gap-3 flex-wrap">
-              <button
-                type="button"
-                role="switch"
-                aria-checked={exposeToLan}
-                disabled={lanSaving}
-                onClick={() => toggleLanShare(!exposeToLan)}
-                className={`px-4 py-2 text-sm rounded border transition-colors disabled:opacity-50 ${
-                  exposeToLan
-                    ? "border-green-500 bg-green-50 dark:bg-green-600/20 text-green-700 dark:text-green-300"
-                    : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
-                }`}
-              >
-                {lanSaving ? t("settings.lanShare.applying") : exposeToLan ? t("settings.lanShare.on") : t("settings.lanShare.off")}
-              </button>
-              {exposeToLan && !lanSaving && (
-                <span className="text-sm text-green-700 dark:text-green-300">{t("settings.lanShare.activeHint")}</span>
-              )}
-            </div>
-
-            {lanError && (
-              <div className="mt-3 text-sm px-3 py-2 rounded bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
-                {t("settings.lanShare.error")}
-              </div>
-            )}
-
-            {exposeToLan && (
-              <div className="mt-4">
-                <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">{t("settings.lanShare.autoDiscover")}</p>
-                {lanInfo && lanInfo.ips.length > 0 ? (
-                  <>
-                    <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">{t("settings.lanShare.connectAt")}</p>
-                    <ul className="space-y-1">
-                      {lanInfo.ips.map((ip) => (
-                        <li key={ip}>
-                          <code className="text-sm px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded font-mono text-gray-800 dark:text-gray-200">
-                            http://{ip}:{lanInfo.port}
-                          </code>
-                        </li>
-                      ))}
-                    </ul>
-                  </>
-                ) : (
-                  <p className="text-sm text-amber-600 dark:text-amber-400">{t("settings.lanShare.noIp")}</p>
-                )}
-              </div>
-            )}
-
-            <div className="mt-4 text-xs text-amber-700 dark:text-amber-300/90 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded px-3 py-2">
-              {t("settings.lanShare.warning")}
-            </div>
-          </div>
-        </div>
-      )}
+          <SecureAccessCard />
+      </div>
     </main>
   );
 }

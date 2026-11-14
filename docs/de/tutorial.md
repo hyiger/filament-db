@@ -641,10 +641,10 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 
 Standardmäßig ist die Datenbank der Desktop-App nur von dem Computer aus erreichbar, auf dem sie läuft. Um sie für Smartphones und andere Geräte in deinem WLAN zu öffnen — für die Begleit-App (Schritt 27) oder zum Scannen des URL-QR-Codes eines Etiketts (Schritt 13) — aktiviere die LAN-Freigabe:
 
-1. Suche unter **Einstellungen → Netzwerkeinstellungen** die Option **Im lokalen Netzwerk freigeben** und schalte sie ein. Der eingebettete Server bindet neu an deine LAN-Adresse (statt localhost), und die Einstellungen zeigen die URL, die andere Geräte verwenden können.
+1. Suche unter **Einstellungen → Netzwerkeinstellungen** die Option **Im lokalen Netzwerk freigeben** und schalte sie ein. Die App öffnet einen gesicherten Port (HTTPS mit API-Schlüssel) für andere Geräte, und die Einstellungen zeigen die Adressen, die sie verwenden können, sowie den Schlüssel.
 2. Bei aktivierter Freigabe kündigt sich die App außerdem per Bonjour/mDNS an (`_filamentdb._tcp`), sodass die Mobile-App sie findet, ohne dass du eine IP eintippen musst.
 
-> **Eine freigegebene Instanz absichern:** Setze die Umgebungsvariable `FILAMENTDB_API_KEY`, um bei jeder API-Anfrage ein Bearer-Token zu verlangen. Ungesetzt ist eine ins LAN exponierte Instanz nicht authentifiziert. Das Gate ist Alles-oder-Nichts und **deaktiviert die Browser-Web-UI** (sie sendet den Key nicht) — nutze es für Nicht-Browser-Clients (Mobile-App, Slicer); für Browser-UI-Zugriff im LAN nutze Loopback oder einen authentifizierenden Reverse-Proxy. Siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
+> **Schlüssel und Zertifikat:** Der API-Schlüssel ist zufällig und steht unter dem Schalter; **Schlüssel erneuern …** ersetzt ihn jederzeit. Das Zertifikat erzeugt die App selbst; ein anderes Gerät zeigt deshalb eine Warnung, bis du die Zertifizierungsstelle der App darauf installierst (**Zertifizierungsstelle herunterladen**). Siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
 
 ---
 

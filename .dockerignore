@@ -16,3 +16,4 @@ coverage
 *.deb
 *.bin
 prusa-tag*.bin
+.filamentdb-secure

@@ -94,6 +94,11 @@ export function advertisedHostName(hostname: string): string {
   return `${[HOST_PREFIX, readable, digest].filter(Boolean).join("-")}.local`;
 }
 
+/** The host name this machine's advertisement owns (see advertisedHostName). */
+export function currentAdvertisedHostName(): string {
+  return advertisedHostName(readHostname());
+}
+
 /** The bonjour-service publish options for this machine. Pure. */
 export function advertisementConfig(
   port: number,
@@ -105,7 +110,10 @@ export function advertisementConfig(
     type: SERVICE_TYPE,
     port,
     host: advertisedHostName(hostname),
-    txt: { app: "filament-db", version },
+    // `tls` + `auth` tell a client what the advertised port is: the secure
+    // gateway, reached over https:// with the API key. A client that predates
+    // them assumes plain http:// and is told "HTTPS only" by the gateway.
+    txt: { app: "filament-db", version, tls: "1", auth: "key" },
   };
 }
 
