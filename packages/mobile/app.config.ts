@@ -29,14 +29,21 @@ const plugins: NonNullable<ExpoConfig['plugins']> = [
   ],
   'expo-secure-store',
   [
-    // Android 9+ blocks cleartext http by default; the app reaches a self-hosted
-    // Filament DB over http on the LAN, so allow cleartext. (usesCleartextTraffic
-    // isn't a typed Expo android.* key — it must go through this plugin. The
-    // user-entered URL is http(s)-validated and the bearer key is the auth, so
-    // this isn't a blanket "trust any http". GH #693 review.)
+    // Android 9+ blocks cleartext http by default; a Filament DB desktop older
+    // than the secure gateway is reached over http on the LAN, so allow
+    // cleartext. (usesCleartextTraffic isn't a typed Expo android.* key — it
+    // must go through this plugin. GH #693 review.) On Android 7+ the network
+    // security config below is what actually decides this, and it repeats the
+    // allowance; this attribute stays so the manifest says the same thing.
     'expo-build-properties',
     { android: { usesCleartextTraffic: true } },
   ],
+  // Android: trust certificate authorities the owner installed on the device,
+  // next to the system ones. A desktop sharing through its secure gateway
+  // serves a certificate from a CA it generated itself; without this the app
+  // refuses it even after that CA is installed. See
+  // plugins/networkSecurityConfig.js for exactly what is and is not trusted.
+  './plugins/withNetworkSecurityConfig.js',
 ];
 
 if (nfcEnabled) {

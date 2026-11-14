@@ -1,3 +1,4 @@
+import { unreachableMessage } from './connectionDiagnosis';
 import type {
   DecodedOpenPrintTag,
   Filament,
@@ -21,6 +22,17 @@ export class ApiError extends Error {
    *  the reply body never arrived. Treat the change as done: retrying (or
    *  queueing it) would apply it twice or replay it over a newer edit. */
   committed: boolean;
+  /** For a status-0 failure: the low-level error text (on Android the Java
+   *  exception, on iOS a sentence in the phone's language). The Server
+   *  connection screen reads it to tell a refused certificate from an
+   *  unreachable host — see connectionDiagnosis.ts. */
+  detail: string | null = null;
+  /** For a status-0 failure: nothing answered before the deadline. */
+  timedOut = false;
+  /** For a status-0 failure: the status line DID arrive and only the reply's
+   *  body was lost. The secure connection therefore worked and the request,
+   *  key included, was sent — so this is never a certificate problem. */
+  responseReceived = false;
   constructor(status: number, message: string, committed = false) {
     super(message);
     this.status = status;
@@ -82,12 +94,12 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
   } catch (e) {
     // `signal.aborted`, not `e.name === 'AbortError'`: Expo's fetch rejects
     // an abort with an error named plain 'Error'.
-    throw new ApiError(
-      0,
-      controller.signal.aborted
-        ? `The server didn't respond. Check the address and that this device is on the same network.`
-        : `Can't reach the server. Check the address and that this device is on the same network. (${(e as Error).message})`,
-    );
+    const timedOut = controller.signal.aborted;
+    const detail = timedOut ? null : (e as Error).message;
+    const error = new ApiError(0, unreachableMessage({ baseUrl: cfg.baseUrl, detail, timedOut }));
+    error.detail = detail;
+    error.timedOut = timedOut;
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -108,10 +120,12 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
     const method = (init?.method ?? 'GET').toUpperCase();
     // A read has nothing to lose — report it like any network failure.
     if (method === 'GET') {
-      throw new ApiError(
+      const error = new ApiError(
         0,
         `The connection dropped while reading the server's reply. Check that this device is on the same network.`,
       );
+      error.responseReceived = true;
+      throw error;
     }
     throw new ApiError(
       res.status,

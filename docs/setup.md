@@ -190,7 +190,7 @@ Unless you provide one, the server generates a **local certificate authority (CA
 
 The CA is valid for ten years. The server certificate is reissued automatically, before it expires and whenever the machine's address changes, without devices noticing.
 
-> **Android apps do not trust a CA you install yourself unless the app opts in**, and the current Filament DB mobile app does not. Android browsers do. For the mobile app on Android, use your own certificate from a public CA (below) for now.
+> **The Filament DB mobile app** accepts the generated certificate once the CA is installed on the phone, on iOS and on Android. When it cannot connect because the certificate is not trusted, its **Server connection** screen says so and opens the download above. Android apps trust a CA you install yourself only if they opt in: the app does, but a build of it from before the secure gateway did not. Update the app, or give the server a certificate from a public CA (below).
 
 **Your own certificate.** Mount the PEM files and name them by absolute path:
 
