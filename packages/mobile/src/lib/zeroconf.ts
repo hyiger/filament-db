@@ -18,6 +18,12 @@ export interface DiscoveredServer {
   /** Full base URL to use as the server address, e.g. https://192.168.1.50:3457
    *  (http://…:3456 for a desktop older than the secure gateway). */
   url: string;
+  /** The advertisement carried `tls=1`: the desktop is sharing through its
+   *  secure gateway, so the address is https and wants the API key. False for
+   *  an older desktop — and for anything else on the network that answers the
+   *  scan, which is why the list shows it and why a key is never sent to such
+   *  an address without asking (serverKeyPolicy.ts). */
+  secure: boolean;
 }
 
 /** Subset of react-native-zeroconf's resolved-service object that we read. */
@@ -63,10 +69,11 @@ export function discoveredServersFromService(
   // A desktop that advertises `tls=1` is sharing its secure gateway: the port
   // speaks HTTPS and wants the API key. Older desktops advertise no such
   // record and serve plain HTTP.
-  const scheme = String(svc.txt?.tls ?? "") === "1" ? "https" : "http";
+  const secure = String(svc.txt?.tls ?? '') === '1';
+  const scheme = secure ? 'https' : 'http';
   return hosts.map((host) => {
     const url = `${scheme}://${host}:${svc.port}`;
-    return { id: url, name: name || host, url };
+    return { id: url, name: name || host, url, secure };
   });
 }
 

@@ -1,12 +1,22 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
+import {
+  INVALID_ADDRESS_MESSAGE,
+  normalizeServerAddress,
+  parseServerAddress,
+} from './serverAddress';
 import { clearQueue } from './writeQueue';
 
 /**
- * The server connection (base URL + optional API key), persisted in the OS
- * secure store (iOS Keychain / Android Keystore) — never plain storage, since
- * the API key is a credential. Loaded once at app start and exposed app-wide.
+ * The server connection (base URL + API key), persisted in the OS secure store
+ * (iOS Keychain / Android Keystore) — never plain storage, since the API key
+ * is a credential. Loaded once at app start and exposed app-wide.
+ *
+ * `save` stores what it is given. WHICH key may go with which address is
+ * decided before it is called, by serverKeyPolicy.planSave: a saved key
+ * belongs to the server it was saved for and is never carried over to
+ * another address.
  */
 
 const BASE_URL_KEY = 'filamentdb.baseUrl';
@@ -51,14 +61,15 @@ export function ServerConfigProvider({ children }: { children: ReactNode }) {
 
   const save = async (cfg: ServerConfig) => {
     // Normalize: strip trailing slashes off the base URL, treat blanks as unset.
-    const url = cfg.baseUrl?.trim().replace(/\/+$/, '') || null;
+    const url = normalizeServerAddress(cfg.baseUrl);
     // Only persist http(s) addresses — the base URL is concatenated into fetch()
     // and the bearer API key rides every request, so a bad/foreign scheme would
     // either fail obscurely or send the credential somewhere unintended. (GH #693.)
-    if (url && !/^https?:\/\/[^/]+/i.test(url)) {
-      throw new Error('Enter a full http:// or https:// address, e.g. http://192.168.1.50:3456');
+    if (url && !parseServerAddress(url)) {
+      throw new Error(INVALID_ADDRESS_MESSAGE);
     }
-    const key = cfg.apiKey?.trim() || null;
+    // Without an address there is no server a key could belong to.
+    const key = url ? cfg.apiKey?.trim() || null : null;
     // If the server address changes, drop any queued offline writes — they were
     // made against the previous server and must not replay to a different
     // Filament DB instance (GH #709). Validation above has passed, so
