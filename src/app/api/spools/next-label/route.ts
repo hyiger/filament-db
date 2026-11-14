@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { type FilamentDoc } from "@/models/Filament";
 import { computeNextSpoolLabel } from "@/lib/nextSpoolLabel";
 import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
@@ -23,7 +23,10 @@ import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
 export async function GET() {
   try {
     await dbConnect();
-    const docs = await Filament.find({}, { "spools.label": 1 }).lean();
+    // The explicit type argument keeps the full document type: mongoose's
+    // projection inference keys on top-level fields only, so a dotted
+    // sub-path like "spools.label" would type `spools` out of the result.
+    const docs = await Filament.find<FilamentDoc>({}, { "spools.label": 1 }).lean();
     const labels: (string | null | undefined)[] = [];
     for (const doc of docs) {
       for (const spool of doc.spools ?? []) {

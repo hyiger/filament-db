@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { MongoClient, type ObjectId as ObjectIdType } from "mongodb";
 import type { Types } from "mongoose";
 import dbConnect from "@/lib/mongodb";
-import Filament, { generateInstanceId } from "@/models/Filament";
+import Filament, { generateInstanceId, type FilamentDoc } from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
 import { classifyMongoConnectionError, redactMongoUri } from "@/lib/mongoConnectionError";
@@ -328,7 +328,9 @@ export async function POST(request: NextRequest) {
             const owners =
               ids.length === 0
                 ? []
-                : await Filament.find(
+                : // Explicit type argument: mongoose's projection inference
+                  // would type `spools` out for the dotted "spools._id".
+                  await Filament.find<FilamentDoc>(
                     {
                       ...(targetId != null ? { _id: { $ne: targetId } } : {}),
                       _purged: { $ne: true },

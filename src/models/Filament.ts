@@ -645,6 +645,14 @@ const Filament: Model<IFilament> =
   mongoose.models.Filament || mongoose.model<IFilament>("Filament", FilamentSchema);
 
 /**
+ * A Filament document as a query returns it. Pass it as `find`'s type
+ * argument when the projection names dotted sub-paths ("spools.label"):
+ * mongoose infers the result type from the projection's top-level keys, and
+ * would otherwise type the whole `spools` array out of the result.
+ */
+export type FilamentDoc = mongoose.HydratedDocument<IFilament>;
+
+/**
  * Backfill instanceId for any existing filaments that don't have one.
  * Safe to call multiple times — only updates documents missing the field.
  */
@@ -680,7 +688,9 @@ export async function backfillInstanceIds(): Promise<number> {
  * so a spool's other fields and concurrent edits aren't clobbered.
  */
 export async function backfillSpoolInstanceIds(): Promise<number> {
-  const docs = await Filament.find(
+  // Explicit type argument: mongoose's projection inference would type
+  // `spools` out of the result for the dotted "spools.*" sub-paths.
+  const docs = await Filament.find<FilamentDoc>(
     {
       $or: [
         { spools: { $elemMatch: { instanceId: { $exists: false } } } },

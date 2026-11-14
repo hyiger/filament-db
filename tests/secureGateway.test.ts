@@ -763,6 +763,42 @@ describe("connections", () => {
       expect(chunks.length).toBeGreaterThan(5);
     });
 
+    it("does not start the deadline while a pipelined request is still being answered", async () => {
+      // Two requests written at once on one connection: a quick one, then a
+      // stream. The first response ending must not arm a deadline that cuts
+      // the second off, since its head has already arrived.
+      const socket = tls.connect({ host: "127.0.0.1", port, ca: material.caCert!, servername: "localhost" }, () => {
+        const head = (path: string) =>
+          `GET ${path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${KEY}\r\n\r\n`;
+        socket.write(head("/api/first") + head("/stream"));
+      });
+      let received = "";
+      let closed = false;
+      socket.on("data", (c: Buffer) => (received += c.toString()));
+      socket.on("close", () => (closed = true));
+      socket.on("error", () => {});
+      // Four times the 150 ms head deadline.
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      const ticksSoFar = received.split("data: tick").length - 1;
+      expect(closed).toBe(false);
+      expect(received).toContain("/api/first");
+      expect(ticksSoFar).toBeGreaterThan(10);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(received.split("data: tick").length - 1).toBeGreaterThan(ticksSoFar);
+      socket.destroy();
+    });
+
+    it("starts the deadline again once every pipelined response has ended", async () => {
+      const socket = tls.connect({ host: "127.0.0.1", port, ca: material.caCert!, servername: "localhost" }, () => {
+        const head = (path: string) =>
+          `GET ${path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer ${KEY}\r\n\r\n`;
+        socket.write(head("/api/one") + head("/api/two"));
+      });
+      socket.on("data", () => {});
+      expect(await closesWithin(socket, 8000)).toBe(true);
+      expect(seen.map((r) => r.url)).toEqual(["/api/one", "/api/two"]);
+    });
+
     it("gives a kept-alive connection a fresh deadline for each request", async () => {
       const agent = new https.Agent({ keepAlive: true, maxSockets: 1 });
       const get = () =>

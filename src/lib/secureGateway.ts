@@ -497,25 +497,34 @@ export function createSecureGateway(options: SecureGatewayOptions): SecureGatewa
   // as the raw socket under it: the request handlers only ever see the former.
   const peerKey = (socket: { remoteAddress?: string; remotePort?: number }) =>
     `${socket.remoteAddress}|${socket.remotePort}`;
-  const awaitingHead = new Map<string, { socket: Socket; timer: ReturnType<typeof setTimeout> }>();
+  interface Connection {
+    socket: Socket;
+    timer: ReturnType<typeof setTimeout> | undefined;
+    /** Requests whose head has arrived and whose response has not ended. */
+    active: number;
+  }
+  const connections = new Map<string, Connection>();
 
-  /** Give `socket` the request-head time to deliver its next request head. */
-  function expectRequestHead(key: string, socket: Socket): void {
-    clearTimeout(awaitingHead.get(key)?.timer);
-    const timer = setTimeout(() => socket.destroy(), requestHeadMs);
-    awaitingHead.set(key, { socket, timer });
+  /** Give the connection the request-head time to deliver its next request head. */
+  function expectRequestHead(connection: Connection): void {
+    clearTimeout(connection.timer);
+    connection.timer = setTimeout(() => connection.socket.destroy(), requestHeadMs);
   }
 
-  /** A request head arrived: stop the clock until its response has ended. */
+  /**
+   * A request head arrived: stop the clock until the connection is idle again.
+   * "Idle" counts every request in flight, not just this one: a client may
+   * pipeline a second request behind the first, and the first response ending
+   * must not start a deadline that would cut the second off mid-response.
+   */
   function requestHeadArrived(req: IncomingMessage, res: ServerResponse): void {
-    const key = peerKey(req.socket);
-    const entry = awaitingHead.get(key);
-    if (!entry) return;
-    clearTimeout(entry.timer);
+    const connection = connections.get(peerKey(req.socket));
+    if (!connection) return;
+    clearTimeout(connection.timer);
+    connection.active++;
     res.on("close", () => {
-      if (!entry.socket.destroyed && awaitingHead.get(key) === entry) {
-        expectRequestHead(key, entry.socket);
-      }
+      connection.active--;
+      if (connection.active === 0 && !connection.socket.destroyed) expectRequestHead(connection);
     });
   }
 
@@ -539,15 +548,15 @@ export function createSecureGateway(options: SecureGatewayOptions): SecureGatewa
   // byte is pushed back, and TLSSocket replays a socket's buffered data.
   const front = net.createServer((socket) => {
     const key = peerKey(socket);
+    const connection: Connection = { socket, timer: undefined, active: 0 };
     sockets.add(socket);
-    expectRequestHead(key, socket);
+    connections.set(key, connection);
+    expectRequestHead(connection);
     socket.on("close", () => {
       sockets.delete(socket);
-      const entry = awaitingHead.get(key);
-      if (entry?.socket === socket) {
-        clearTimeout(entry.timer);
-        awaitingHead.delete(key);
-      }
+      clearTimeout(connection.timer);
+      // The peer's address and port may already belong to a newer connection.
+      if (connections.get(key) === connection) connections.delete(key);
     });
     // A reset before either server owns the socket must not crash the process.
     socket.on("error", () => {});
