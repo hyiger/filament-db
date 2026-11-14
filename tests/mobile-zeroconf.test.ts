@@ -19,8 +19,25 @@ describe("discoveredServersFromService", () => {
         id: "https://192.168.1.50:3457",
         name: "Filament DB (studio)",
         url: "https://192.168.1.50:3457",
+        secure: true,
       },
     ]);
+  });
+
+  it("marks each entry secure or not, for the list and for the key rule", () => {
+    // The settings screen shows this flag, and serverKeyPolicy asks before a
+    // key goes to an address that was discovered without it.
+    const [secure] = discoveredServersFromService({
+      port: 3457,
+      addresses: ["192.168.1.50"],
+      txt: { tls: "1" },
+    });
+    const [legacy] = discoveredServersFromService({ port: 3456, addresses: ["192.168.1.50"] });
+    expect(secure.secure).toBe(true);
+    expect(legacy.secure).toBe(false);
+    // The flag and the scheme never disagree.
+    expect(secure.url.startsWith("https://")).toBe(true);
+    expect(legacy.url.startsWith("http://")).toBe(true);
   });
 
   it("keeps http for a desktop that predates the gateway (no tls record)", () => {

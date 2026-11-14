@@ -12,8 +12,9 @@ Built with Expo (SDK 56) + expo-router + TypeScript.
 
 ## Current scope
 
-- **Connect** to a Filament DB server (base URL + optional API key), stored in
-  the device keychain (`expo-secure-store`).
+- **Connect** to a Filament DB server (its address + API key), stored in the
+  device keychain (`expo-secure-store`). Saving checks the connection first and
+  explains what to fix when it fails (see "Connecting to your server" below).
 - **Scan a QR code** (`expo-camera`) — a Filament DB label deep-link or a bare
   `instanceId` — and open the matched filament.
 - **Scan an OpenPrintTag or OpenTag3D** NFC tag (`react-native-nfc-manager`) —
@@ -92,33 +93,91 @@ gate) and `src/lib/features.ts` (runtime UI gate). Free provisioning certs also
 expire after ~7 days, so re-run the build weekly.
 
 Then in the app: open **Server connection**, enter your Filament DB address and
-the API key. Scan away.
+API key, and tap **Save**. Scan away.
 
-The address and key are shown on the desktop under **Settings → Network →
-Share on local network** (e.g. `https://192.168.1.50:3457`); a server shows them
-on the same page once `FILAMENTDB_HTTPS_PORT` is set. That address is the
-server's secure gateway: HTTPS, with a certificate the server generated itself
-unless you gave it one. The phone has to trust it:
+### Connecting to your server
 
-- **iOS:** download the certificate authority from that Settings page (or
-  `http://<address>:3457/__filamentdb/ca.crt` in Safari), install the profile,
-  and turn it on under *Settings → General → About → Certificate Trust Settings*.
-- **Android:** apps only trust a certificate authority you install yourself if
-  they opt in, and this app does not yet. Give the server a certificate from a
-  public CA (`FILAMENTDB_TLS_CERT` / `FILAMENTDB_TLS_KEY`) instead.
+The address and key are shown on the desktop under **Settings → Network** once
+**Share on local network** is on (e.g. `https://192.168.1.50:3457`); a server
+shows them on the same page once `FILAMENTDB_HTTPS_PORT` is set. That address is
+the server's **secure gateway**: HTTPS, and every request carries the API key.
 
 A desktop older than the secure gateway is reached at `http://<address>:3456`,
-with a key only if it sets `FILAMENTDB_API_KEY`.
+with a key only if it sets `FILAMENTDB_API_KEY`. The app still accepts that.
+
+**Save checks the connection before storing anything** and, when it fails, says
+which of these it was: the certificate is not trusted, the address needs
+`https://` (or is an older desktop that needs `http://`), the key is missing or
+wrong, or nothing answered. **Save anyway** stores the address without a
+successful check, for setting up away from the network.
+
+#### Trusting the server's certificate
+
+Unless you gave the server a certificate of your own, it generated a **local
+certificate authority (CA)** and a certificate signed by it, and the phone has to
+be told to trust that CA once. When the check finds this, the app shows the
+steps and a button that opens the download:
+
+1. Download the CA from the same address and port over plain `http://`, e.g.
+   `http://192.168.1.50:3457/__filamentdb/ca.crt` (the certificate is public,
+   and the next step is what protects you).
+2. Check that its **SHA-256 fingerprint** matches the one under **Settings →
+   Network** on the desktop.
+3. Install it.
+   - **iOS:** open the link in Safari, install the downloaded profile from the
+     Settings app (the fingerprint is under the profile's *More Details*), then
+     turn it on under *Settings → General → About → Certificate Trust Settings*.
+   - **Android:** *Settings → Security → Encryption & credentials → Install a
+     certificate → CA certificate* (the path differs between phones; search
+     Settings for "CA certificate"). The fingerprint is shown afterwards under
+     *Trusted credentials → User*.
+
+A server with a certificate from a public CA (`FILAMENTDB_TLS_CERT` /
+`FILAMENTDB_TLS_KEY`, e.g. Let's Encrypt or `tailscale cert`) needs none of this.
+
+**What the Android build trusts.** Android apps ignore user-installed CAs unless
+they opt in, so the app ships a network security configuration
+(`plugins/withNetworkSecurityConfig.js`, wired in `app.config.ts`) that trusts
+the **system** store and the **user** store, and still allows plain `http://` for
+older desktops. It does not accept self-signed or unknown certificates and does
+not relax host-name checking: a certificate is accepted only if it chains to a
+CA that is on the device, and a CA gets into the user store only through the
+phone's own settings (behind the screen lock) or a device-management policy.
+The trade-off is the same one a browser makes: anyone who can install a CA on
+the phone could read this app's traffic to the server. A build made before this
+configuration existed cannot use the generated certificate on Android at all.
+
+How a certificate failure is detected: the app's `fetch` reports it as readable
+text only on Android (the Java exception); on iOS it is a sentence in the
+phone's language with no error code. So when an `https://` address gives no
+response, the app asks the same port over plain HTTP for
+`/__filamentdb/ca.crt` (without the key, and without following redirects). A
+certificate coming back means the host is up and is a secure gateway with its
+own CA, so the HTTPS failure is a trust problem. A redirect to `https://` means
+a gateway that was given a certificate, which the phone does not accept. An
+ordinary HTTP answer means the port is not HTTPS at all (an older desktop). See
+`src/lib/connectionDiagnosis.ts`.
+
+#### The API key stays with its server
+
+A saved key belongs to the address it was saved for (scheme, host and port). If
+you pick a discovered server or edit the address to a different one, the key
+field empties and says so; enter the new server's key. The app also asks before
+sending a key to any `http://` address, where it travels unencrypted, and warns
+more strongly when that address came from a network scan. See
+`src/lib/serverKeyPolicy.ts`.
 
 ### Find your server automatically (mDNS)
 
 Instead of typing an IP, tap **Find on your network → Scan** on the Server
 connection screen. The phone discovers desktop instances advertising
-`_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you (`https://`
-when the desktop advertises its secure gateway; the API key is still entered by
-hand). This
-requires the desktop app to have **"Share on local network"** turned on
-(Settings → Network Settings) and both devices on the same Wi-Fi. (Discovery uses a
+`_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you; the API
+key is still entered by hand. Each result is marked **Secure** (the desktop
+advertised its secure gateway with `tls=1`, so the address is `https://`) or
+**Not encrypted** (an older desktop — or anything else on the network that
+answered the scan, which is why no key goes to such an address without asking).
+This requires the desktop app to have **"Share on local network"** turned on
+(Settings → Network) and both devices on the same Wi-Fi. (Discovery uses a
 native module, so it works only in a development/standalone build, not Expo Go.)
 
 ### Offline support

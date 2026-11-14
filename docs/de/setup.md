@@ -181,7 +181,7 @@ Wenn du keines bereitstellst, erzeugt der Server eine **lokale Zertifizierungsst
 
 Die CA ist zehn Jahre gültig. Das Serverzertifikat wird automatisch neu ausgestellt, vor Ablauf und immer dann, wenn sich die Adresse der Maschine ändert, ohne dass Geräte etwas davon merken.
 
-> **Android-Apps vertrauen einer selbst installierten CA nur, wenn die App das ausdrücklich zulässt**, und die aktuelle mobile Filament-DB-App tut das nicht. Android-Browser schon. Verwende für die mobile App unter Android vorerst ein eigenes Zertifikat einer öffentlichen CA (siehe unten).
+> **Die mobile Filament-DB-App** akzeptiert das erzeugte Zertifikat, sobald die CA auf dem Telefon installiert ist, unter iOS und unter Android. Kann sie keine Verbindung herstellen, weil dem Zertifikat nicht vertraut wird, sagt ihr Bildschirm **Server connection** das und öffnet den oben genannten Download. Android-Apps vertrauen einer selbst installierten CA nur, wenn die App das ausdrücklich zulässt: Die App tut das, eine Version von vor dem sicheren Gateway jedoch nicht. Aktualisiere die App oder gib dem Server ein Zertifikat einer öffentlichen CA (siehe unten).
 
 **Dein eigenes Zertifikat.** Binde die PEM-Dateien ein und benenne sie mit absolutem Pfad:
 
