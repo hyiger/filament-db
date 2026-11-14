@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 
+import { createCheckedSave, type CheckedSave, type CheckedSavePhase } from '@/lib/checkedSave';
 import { checkConnection } from '@/lib/connectionCheck';
 import type { ConnectionProblem, DevicePlatform } from '@/lib/connectionDiagnosis';
 import { ADDRESS_EXAMPLE, LEGACY_ADDRESS_EXAMPLE, parseServerAddress } from '@/lib/serverAddress';
@@ -34,7 +35,7 @@ export default function SettingsScreen() {
   // SAVED key only while the address still names the server it was saved for
   // (serverKeyPolicy.keyFieldState) — never for a discovered or retyped one.
   const [typedKey, setTypedKey] = useState<string | null>(null);
-  const [phase, setPhase] = useState<'idle' | 'checking' | 'saving'>('idle');
+  const [phase, setPhase] = useState<CheckedSavePhase>('idle');
   // The last check that failed, and the exact plan it was run for, so "Save
   // anyway" can only save what was checked. Editing either field clears both.
   const [failed, setFailed] = useState<{ problem: ConnectionProblem; plan: OkPlan } | null>(null);
@@ -46,51 +47,64 @@ export default function SettingsScreen() {
   const keyField = keyFieldState({ stored, address: url, typedKey });
   const busy = phase !== 'idle';
 
+  // The check-then-save sequence for THIS visit to the screen. A check can
+  // outlive the screen (native back while it runs); disposing here is what
+  // stops its result from saving over a server saved since, navigating, or
+  // setting state (checkedSave.ts). Created in the effect, not during render,
+  // so a development double-mount gets a fresh one.
+  const flowRef = useRef<CheckedSave | null>(null);
+  useEffect(() => {
+    const flow = createCheckedSave();
+    flowRef.current = flow;
+    return () => {
+      flow.dispose();
+      if (flowRef.current === flow) flowRef.current = null;
+    };
+  }, []);
+
+  /** Either field changed: a pending check, and a shown result, are for the
+   *  old values. */
+  function supersede() {
+    if (flowRef.current?.abandonCheck()) setPhase('idle');
+    setFailed(null);
+  }
+
   function editUrl(next: string) {
     setUrl(next);
-    setFailed(null);
+    supersede();
   }
 
   function editKey(next: string) {
     setTypedKey(next);
-    setFailed(null);
+    supersede();
   }
 
-  async function persist(plan: OkPlan) {
-    setPhase('saving');
-    try {
-      await save({ baseUrl: plan.baseUrl, apiKey: plan.apiKey });
-      router.back();
-    } catch (e) {
-      Alert.alert('Could not save', (e as Error).message);
-    } finally {
-      setPhase('idle');
-    }
-  }
-
-  async function checkAndSave(plan: OkPlan) {
-    if (plan.baseUrl === null) {
-      await persist(plan);
-      return;
-    }
-    setFailed(null);
-    setPhase('checking');
-    try {
-      const result = await checkConnection(
-        { baseUrl: plan.baseUrl, apiKey: plan.apiKey },
-        PLATFORM,
-      );
-      if (result.ok) {
-        await persist(plan);
-        return;
-      }
-      setFailed({ problem: result.problem, plan });
-    } catch (e) {
-      // checkConnection reports failures as a result; this is only so an
-      // unexpected throw cannot leave the form locked in "Checking…".
-      Alert.alert('Could not check the connection', (e as Error).message);
-    }
-    setPhase('idle');
+  /** Check `plan` (unless told not to) and save it. Every result goes through
+   *  the flow, which drops it when it is no longer this screen's current one. */
+  function submit(plan: OkPlan, options: { check: boolean }) {
+    const flow = flowRef.current;
+    if (!flow) return;
+    const target = plan.baseUrl;
+    void flow.run<ConnectionProblem>({
+      check:
+        options.check && target !== null
+          ? () => checkConnection({ baseUrl: target, apiKey: plan.apiKey }, PLATFORM)
+          : null,
+      save: () => save({ baseUrl: plan.baseUrl, apiKey: plan.apiKey }),
+      on: {
+        onPhase: (next) => {
+          if (next === 'checking') setFailed(null);
+          setPhase(next);
+        },
+        onFailed: (problem) => setFailed({ problem, plan }),
+        onSaved: () => router.back(),
+        onError: (stage, e) =>
+          Alert.alert(
+            stage === 'check' ? 'Could not check the connection' : 'Could not save',
+            e instanceof Error ? e.message : String(e),
+          ),
+      },
+    });
   }
 
   function onSave() {
@@ -112,12 +126,12 @@ export default function SettingsScreen() {
         {
           text: warning.confirmLabel,
           style: 'destructive',
-          onPress: () => void checkAndSave(plan),
+          onPress: () => submit(plan, { check: true }),
         },
       ]);
       return;
     }
-    void checkAndSave(plan);
+    submit(plan, { check: true });
   }
 
   const inputStyle = [
@@ -258,6 +272,7 @@ export default function SettingsScreen() {
             {problem.suggestedAddress && (
               <Pressable
                 style={[styles.secondaryButton, { borderColor: c.tint }]}
+                disabled={busy}
                 onPress={() => editUrl(problem.suggestedAddress ?? url)}
               >
                 <Text style={[styles.secondaryText, { color: c.tint }]}>
@@ -268,7 +283,8 @@ export default function SettingsScreen() {
             <Pressable
               style={[styles.secondaryButton, { borderColor: c.border }]}
               disabled={busy}
-              onPress={() => failed && void persist(failed.plan)}
+              // Only ever the plan that was checked: an edit clears `failed`.
+              onPress={() => failed && submit(failed.plan, { check: false })}
             >
               <Text style={[styles.secondaryText, { color: c.muted }]}>Save anyway</Text>
             </Pressable>
