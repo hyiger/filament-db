@@ -868,7 +868,7 @@ Der Stream sendet ein `retry: 5000`-Prelude (EventSource-Clients verbinden sich 
 
 Der Bus ist in-process (Node `EventEmitter` auf `globalThis`). „In-process" bedeutet hier **eine Filament-DB-Instanz, nicht eine physische Maschine** — Abonnenten können überall sitzen, wo sie per HTTP erreichbar sind (ein Pi, der Filament DB ausführt, kann PrusaSlicer auf einem Mac über das LAN ansteuern; der Slicer verbindet sich einfach mit `http://<filament-db-host>:3456/api/scan/stream`). Was auf eine einzelne Maschine festgenagelt ist, ist der Publisher: NFC-Lesungen kommen aus dem `NfcProvider` des Electron-Renderers, also muss der Reader an die Box angeschlossen sein, die die Electron-App ausführt — ein Headless-Docker-/Web-Only-Deploy hat keinen `NfcProvider` und veröffentlicht nichts. Ein horizontal skaliertes Multi-Prozess-Deployment bräuchte einen externen Broker hinter dem Bus.
 
-Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Die API ist standardmäßig nicht authentifiziert (Single-User-Vertrauensmodell — siehe README-Warnung), also überlege bewusst, auf welchem Netzwerk Port 3456 freigegeben ist. Für freigegebene Deployments kannst du `FILAMENTDB_API_KEY` setzen; danach muss jede `/api`-Anfrage — einschließlich dieses SSE-Streams und der Slicer-Integrationen — den Header `Authorization: Bearer <key>` senden; bei nicht gesetztem Schlüssel ist es ein No-op. Der eingebettete Server der Desktop-App bindet sich standardmäßig nur an `localhost` und ignoriert eine selbst gesetzte `HOSTNAME`-Variable; wenn cross-machine-Abonnenten sich nicht verbinden können, aktiviere **Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** (electron-store-Schlüssel `exposeToLan`), wodurch er an `0.0.0.0` gebunden wird. Die Umgebungsvariable `HOSTNAME` spielt nur bei einem selbst gestarteten Standalone-Deployment eine Rolle (das Docker-Image setzt bereits `HOSTNAME=0.0.0.0`). Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
+Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Der einfache HTTP-Port ist nicht authentifiziert (Single-User-Vertrauensmodell) und für die Maschine gedacht, auf der Filament DB läuft. Der eingebettete Server der Desktop-App bindet ihn nur an `localhost` und ignoriert eine selbst gesetzte `HOSTNAME`-Variable. Ein Abonnent auf einer anderen Maschine verbindet sich stattdessen über das **sichere Gateway**: Aktiviere **Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** (Desktop) oder setze `FILAMENTDB_HTTPS_PORT` (Server), verwende dann die `https://`-Adresse und sende `Authorization: Bearer <key>` wie bei jeder anderen `/api`-Anfrage, auch bei diesem SSE-Stream. Der Client muss dem Zertifikat des Gateways vertrauen: siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern). Ohne Gateway sichert `FILAMENTDB_API_KEY` allein jede `/api`-Anfrage am HTTP-Port (unverschlüsselt). Die Umgebungsvariable `HOSTNAME` spielt nur bei einem selbst gestarteten Standalone-Deployment eine Rolle (das Docker-Image setzt bereits `HOSTNAME=0.0.0.0`). Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
 
 ### POST /api/scan/publish
 
@@ -928,7 +928,7 @@ Liefert `202 Accepted`:
 
 Dekodiert rohe NFC-Tag-Bytes in ein `DecodedOpenPrintTag` und hängt in einem einzigen Roundtrip einen DB-Match an. Die mobile Scanner-App liest die Tag-Bytes auf dem Gerät, sendet sie per POST hierher und rendert das Ergebnis — die Dekodierlogik (OpenPrintTag-CBOR, Bambu MIFARE Classic mit seinem aus der UID abgeleiteten HKDF-Schlüssel) ist komplex und hängt bei Bambu von Node-`crypto` ab, das in React Native nicht läuft, deshalb liegt sie auf dem Server. Das hält zudem einen einzigen, getesteten Codepfad gemeinsam mit dem Desktop-Reader, statt eines abdriftenden Client-Dekoders.
 
-Wie `GET /api/filaments/match` ist diese Route absichtlich **nicht** durch `assertSameOriginRequest` geschützt — sie führt keine Mutation aus (Dekodierung + reiner Lesezugriff) und ist dafür gedacht, von der Cross-Origin-Mobile-App erreicht zu werden. Wenn `FILAMENTDB_API_KEY` gesetzt ist, verlangt `src/proxy.ts` von jedem `/api`-Aufrufer (auch von dieser Route) ein `Authorization: Bearer <key>`; dieser Schlüssel — nicht eine Same-Origin-Prüfung — regelt den Zugriff von außerhalb des Geräts.
+Wie `GET /api/filaments/match` ist diese Route absichtlich **nicht** durch `assertSameOriginRequest` geschützt: Sie führt keine Mutation aus (Dekodierung + reiner Lesezugriff) und ist dafür gedacht, von der Cross-Origin-Mobil-App erreicht zu werden. Den Zugriff von anderen Geräten sichert der API-Schlüssel, keine Same-Origin-Prüfung: Das sichere Gateway verlangt `Authorization: Bearer <key>` an seinem HTTPS-Port, und ohne Gateway lässt `FILAMENTDB_API_KEY` `src/proxy.ts` ihn von jedem `/api`-Aufrufer am HTTP-Port verlangen.
 
 Sende einen JSON-Body. `tagType` wählt den Dekoder; die Byte-Felder sind base64-kodiert:
 
@@ -1742,6 +1742,50 @@ Entfernt die Spule aus dem Slot, in dem sie sich befindet. Idempotent — liefer
 
 ---
 
+## Netzwerksicherheit
+
+Der einfache HTTP-Port hat keine Authentifizierung und ist für die Maschine gedacht, auf der Filament DB läuft. Andere Geräte nutzen das **sichere Gateway**, einen zweiten Port, der HTTPS spricht und einen API-Schlüssel verlangt: `Authorization: Bearer <key>` von API-Clients, eine Anmeldeseite mit Sitzungs-Cookie für Browser. Eingeschaltet wird es über **Im lokalen Netzwerk freigeben** in der Desktop-App oder `FILAMENTDB_HTTPS_PORT` auf einem Server. Einrichtung, Zertifikate und Begründung stehen unter [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
+
+Über das Gateway ist jeder Pfad der App unverändert verfügbar. Das Gateway fügt eigene Pfade unter einem Präfix hinzu, das es nie weiterleitet:
+
+| Pfad | |
+|------|--|
+| `GET /__filamentdb/login` | Die Anmeldeseite. `?next=<pfad>` gibt an, wohin es danach geht (nur Pfade dieses Origins). |
+| `POST /__filamentdb/login` | Formularfelder `key` und `next`. `303` mit Sitzungs-Cookie; `401` bei falschem Schlüssel; `429` bei falschem Schlüssel nach zehn davon pro Minute von einer Adresse (der richtige Schlüssel wird nie abgewiesen); `403`, wenn eine andere Website das Formular absendet. |
+| `POST /__filamentdb/logout` | Löscht das Sitzungs-Cookie. |
+| `GET /__filamentdb/ca.crt` | Die erzeugte Zertifizierungsstelle, zur Installation auf einem Gerät. Wird am selben Port auch über einfaches HTTP ausgeliefert. `404` bei eigenem Zertifikat. |
+
+Eine vom Gateway abgewiesene Anfrage erhält `401` mit `WWW-Authenticate: Bearer realm="filament-db"` oder, wenn ein Browser eine Seite öffnet, eine `302`-Weiterleitung zur Anmeldeseite.
+
+### GET /api/security
+
+Wie der Server gerade geschützt ist. Enthält nie den Schlüssel.
+
+- `configured` — das Gateway wurde angefordert. `running: false` mit einem `error` bedeutet, dass es nicht starten konnte (Port belegt, Zertifikat nicht lesbar, ungültiger Port, ein `FILAMENTDB_API_KEY` mit weniger als 32 Zeichen).
+- `port`, `urls` — der HTTPS-Port und die `https://`-Adressen für andere Geräte.
+- `key.source` — `file`: erzeugt und gespeichert, `rollable`. `env`: durch `FILAMENTDB_API_KEY` festgelegt.
+- `tls.mode` — `self-signed` (erzeugte CA; `caFingerprint256` ist der Wert, den ein Gerät vergleichen sollte) oder `custom` (dein Zertifikat; `caFingerprint256` ist `null`). Dazu `fingerprint256`, `notAfter`, `names`.
+- `httpKeyRequired` — `FILAMENTDB_API_KEY` sichert den HTTP-Port: Es gibt kein Gateway, oder es läuft nicht.
+
+### GET /api/security/ca
+
+Lädt das erzeugte CA-Zertifikat herunter (`application/x-x509-ca-cert`). `404`, wenn das Gateway aus ist oder dein eigenes Zertifikat verwendet.
+
+### POST /api/security/key/reveal
+
+Gibt den API-Schlüssel zurück: `{ "key": "fdb_…", "source": "file", "rollable": true }`.
+
+### POST /api/security/key/roll
+
+Ersetzt den API-Schlüssel durch einen neuen zufälligen und gibt ihn zurück: `{ "key": "fdb_…" }`. Gilt sofort und ohne Neustart: Der bisherige Schlüssel funktioniert nicht mehr, und jede damit angemeldete Browser-Sitzung endet.
+
+Beide Schlüssel-Routen:
+
+- `403` — eine Cross-Origin-Browser-Anfrage oder (`code: "foreign_host"`) eine Anfrage, deren `Host` weder Loopback noch ein Name im Zertifikat des Gateways ist. Die zweite Prüfung stoppt eine DNS-Rebinding-Seite, die die Same-Origin-Prüfung nicht von der App unterscheiden kann.
+- `409` `gateway_off` — es läuft kein Gateway.
+- `409` `env_key` (nur roll) — der Schlüssel ist durch `FILAMENTDB_API_KEY` festgelegt.
+
+
 ## Etikettendruck
 
 | Methode | Endpunkt | Beschreibung |
@@ -1756,7 +1800,7 @@ Rendert das Etikett serverseitig und übergibt die Raster-Bytes an das Drucksyst
 
 - `404` — auf diesem Server ist kein Token konfiguriert. Das ist die Antwort bei Docker- und Web-Deployments sowie unter `npm run electron:dev` (der Dev-Server erhält das Token nicht, außer du setzt `FILAMENTDB_LOCAL_PRINT_TOKEN` selbst).
 - `403` — der Header fehlt oder stimmt nicht überein.
-- `401` — der Server setzt `FILAMENTDB_API_KEY`; sende zusätzlich zum Druck-Token `Authorization: Bearer <key>`.
+- `401` — die Anfrage kam über das sichere Gateway, oder der Server setzt `FILAMENTDB_API_KEY` ohne Gateway; sende zusätzlich zum Druck-Token `Authorization: Bearer <key>`.
 
 Request-Body — ein JSON-Objekt. **Unbekannte Top-Level-Schlüssel werden mit `400` abgelehnt**, damit ein Tippfehler wie `dryrun` nicht stillschweigend zu einem echten Druck führt:
 

@@ -101,7 +101,12 @@ volumes:
 | `PORT` | Nein | Serverport im Container (Standard: `3000`) |
 | `HOSTNAME` | Nein | Schnittstelle, an die der Server im Container bindet (Standard: `0.0.0.0`). Die Erreichbarkeit steuert das `docker run -p`-Mapping, nicht diese Variable. |
 | `TZ` | Nein | IANA-Zeitzone für die Container-Uhr, z. B. `Europe/Berlin` (Standard: UTC). Das Image enthält `tzdata`, sodass ein Zonenname korrekt aufgelöst wird. |
-| `FILAMENTDB_API_KEY` | Nein | Bearer-Token-Gate für **jede** `/api/*`-Anfrage. Siehe [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern). **Hinweis:** deaktiviert die Browser-Web-UI — nur für Nicht-Browser-Clients (Mobile-App, Slicer, Skripte) verwenden. |
+| `FILAMENTDB_HTTPS_PORT` | Nein | Schaltet das **sichere Gateway** ein: einen zweiten Port, der HTTPS spricht und einen API-Schlüssel verlangt, für den Zugriff von anderen Geräten. Der HTTP-Port bleibt für diese Maschine offen. Siehe [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern). |
+| `FILAMENTDB_HTTPS_HOST` | Nein | Schnittstelle, an die das sichere Gateway bindet (Standard: `0.0.0.0`). |
+| `FILAMENTDB_API_KEY` | Nein | Der API-Schlüssel. Bei laufendem sicherem Gateway: der Schlüssel des Gateways, 32 bis 512 Zeichen lang (ungesetzt wird ein zufälliger erzeugt, der sich in den Einstellungen erneuern lässt). Sonst: ein Bearer-Token-Gate für **jede** `/api/*`-Anfrage am HTTP-Port, das auch die Browser-Web-UI deaktiviert. |
+| `FILAMENTDB_SECURE_DIR` | Nein | Wo das sichere Gateway den erzeugten API-Schlüssel und die Zertifikate ablegt. Standard im Image: `/data/secure` (binde ein Volume unter `/data` ein, um sie zu behalten). Sonst `~/.filament-db/secure` des Benutzers, unter dem der Server läuft; setze für einen Systemdienst einen absoluten Pfad, in den dieser Benutzer schreiben darf. |
+| `FILAMENTDB_TLS_CERT`, `FILAMENTDB_TLS_KEY` | Nein | Absolute Pfade der PEM-Dateien deines eigenen Zertifikats für das sichere Gateway. Ungesetzt erzeugt es eine lokale Zertifizierungsstelle und ein Serverzertifikat. |
+| `FILAMENTDB_TLS_HOSTS` | Nein | Zusätzliche, durch Komma getrennte DNS-Namen und IP-Adressen für das erzeugte Zertifikat, z. B. `192.168.1.10,nas.local`. Nötig in einem Container, der die Adresse seines Hosts nicht kennt. |
 | `GEMINI_API_KEY` | Nein | Google-Gemini-API-Key für TDS-Extraktion |
 | `ANTHROPIC_API_KEY` | Nein | Anthropic-Claude-API-Key für TDS-Extraktion |
 | `OPENAI_API_KEY` | Nein | OpenAI-API-Key für TDS-Extraktion |
@@ -110,28 +115,97 @@ volumes:
 
 ### Eine netzwerkexponierte Instanz absichern
 
-Das Vertrauensmodell von Filament DB ist **localhost / Einzelnutzer**: Standardmäßig ist die API **nicht authentifiziert**, was in Ordnung ist, solange der Port an Loopback (`127.0.0.1:`) gebunden ist oder du die Desktop-App nutzt. Eine Freigabe ins LAN (ein bloßes `-p 3456:3000` oder ein Headless-Dienst, der an `0.0.0.0` bindet) gibt die gesamte `/api`-Oberfläche für jedes Gerät im Netz frei.
+Das Vertrauensmodell von Filament DB ist **localhost / Einzelnutzer**: Der HTTP-Port hat **keine Authentifizierung**. Das passt, solange der Port an Loopback (`127.0.0.1:`) gebunden ist oder du die Desktop-App verwendest, und es passt nicht mehr, sobald er in ein Netzwerk veröffentlicht wird (ein bloßes `-p 3456:3000` oder ein Dienst, der an `0.0.0.0` bindet): Jedes Gerät, das ihn erreicht, kann alles lesen und ändern.
 
-Es gibt zwei Wege, eine exponierte Instanz abzusichern — je nachdem, **wer** sie erreichen muss:
+Um Filament DB von anderen Geräten aus zu erreichen, lass den HTTP-Port, wo er ist, und schalte das **sichere Gateway** ein: einen zweiten Port, der HTTPS spricht und einen API-Schlüssel verlangt.
 
-- **Nur Nicht-Browser-Clients** (die [mobile Begleit-App](../../packages/mobile/README.md), PrusaSlicer/OrcaSlicer-Integrationen, Skripte) — setze `FILAMENTDB_API_KEY` auf einen starken Zufallswert. Jede `/api/*`-Anfrage muss dann `Authorization: Bearer <key>` senden; die Mobile-App und die Slicer-Integrationen unterstützen das. **Erzeuge den Schlüssel einmal, speichere ihn und verwende genau diesen Wert wieder** — deine Clients brauchen ihn, und er muss über Neustarts hinweg gleich bleiben (nicht inline erzeugen, sonst ändert er sich bei jedem Start und nichts kann sich mehr authentifizieren):
+| Port | Spricht | Für | Schlüssel |
+|------|---------|-----|-----------|
+| HTTP (`PORT`; `3000` im Container) | einfaches HTTP | diese Maschine: der Browser darauf, ein Slicer darauf | keiner |
+| HTTPS (`FILAMENTDB_HTTPS_PORT`) | TLS | jedes andere Gerät: Smartphones, andere Computer, Skripte | erforderlich |
+
+Ein Port kann nicht beides leisten. Der Server kann eine lokale Anfrage nicht verlässlich von einer entfernten unterscheiden (jeden Header, der das aussagen könnte, kann der Client selbst setzen), deshalb braucht „für mich offen, für alle anderen gesperrt“ zwei Ports.
+
+#### Einschalten
+
+```bash
+docker run \
+  -p 127.0.0.1:3456:3000 \
+  -p 3443:3443 \
+  -v filamentdb-data:/data \
+  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
+  -e FILAMENTDB_HTTPS_PORT=3443 \
+  -e FILAMENTDB_TLS_HOSTS="192.168.1.10,nas.local" \
+  ghcr.io/hyiger/filament-db
+```
+
+- `-p 127.0.0.1:3456:3000` hält den offenen HTTP-Port auf dieser Maschine. `-p 3443:3443` veröffentlicht den sicheren Port ins Netzwerk.
+- `-v filamentdb-data:/data` bewahrt den API-Schlüssel und die Zertifikate auf. **Ohne Volume werden bei jedem Neuerstellen des Containers ein neuer Schlüssel und eine neue Zertifizierungsstelle erzeugt**, und jedes Gerät muss erneut eingerichtet werden.
+- `FILAMENTDB_TLS_HOSTS` nennt die Namen und Adressen, die andere Geräte eintippen. Ein Container kennt die Adresse seines Hosts nicht; das erzeugte Zertifikat würde sonst nur Adressen nennen, die außerhalb des Containers niemand nutzen kann.
+
+Für einen mit `npm start` oder systemd gestarteten Dienst setzt du dieselben Variablen in dessen Umgebung und bindest den HTTP-Port mit `HOSTNAME=127.0.0.1` an Loopback.
+
+> **Solange das Gateway läuft, braucht der HTTP-Port keinen Schlüssel, auch wenn `FILAMENTDB_API_KEY` gesetzt ist.** Lass diesen Port an Loopback, oder veröffentliche ihn auf einer Maschine, an der niemand surft, gar nicht. Der Server schreibt bei jedem Start eine Erinnerung ins Log. Kann das Gateway nicht starten (Port belegt, Zertifikat nicht lesbar), schreibt der Server den Grund ins Log, **Einstellungen → Netzwerk** zeigt ihn an, und ein von dir gesetzter `FILAMENTDB_API_KEY` sichert weiterhin den HTTP-Port.
+
+Der Server muss nach `/data` schreiben können. Ein benanntes Volume wie oben funktioniert ohne Weiteres. Ein per Bind-Mount eingebundenes Host-Verzeichnis muss für die uid `1001` beschreibbar sein, unter der der Container läuft.
+
+#### Der API-Schlüssel
+
+Beim ersten Start erzeugt der Server einen zufälligen 256-Bit-Schlüssel und legt ihn in `/data/secure/api-key` ab, lesbar nur für den Benutzer des Servers.
+
+- **Ansehen:** Öffne Filament DB auf dem Server selbst (`http://localhost:3456`) und gehe zu **Einstellungen → Netzwerk**, oder führe `docker exec <container> cat /data/secure/api-key` aus.
+- **Erneuern:** **Einstellungen → Netzwerk → Schlüssel erneuern …** ersetzt ihn durch einen neuen zufälligen Schlüssel. Die Änderung gilt sofort und ohne Neustart: Der alte Schlüssel funktioniert nicht mehr, und jeder damit angemeldete Browser wird abgemeldet.
+- **Selbst festlegen:** Setze `FILAMENTDB_API_KEY` auf mindestens 32 Zeichen (`openssl rand -hex 32`). Dieser Schlüssel lässt sich nicht in der App erneuern; ändere die Variable und starte neu. Ein kürzerer Schlüssel wird abgelehnt, und das Gateway startet nicht: Ein Client, der immer weiter rät, wird nicht ausgesperrt; der Schutz ist die Länge des Schlüssels.
+
+Nach zehn falschen Schlüsseln innerhalb einer Minute von einer Adresse werden weitere falsche Schlüssel von dort für den Rest dieser Minute mit `429` beantwortet. Der richtige Schlüssel wird nie abgewiesen; ein Gerät, das einen alten Schlüssel wiederholt, kann also die anderen hinter derselben Adresse nicht aussperren.
+
+#### Verbinden
+
+- **Skripte, die mobile App, jeder API-Client** senden den Schlüssel mit jeder Anfrage:
 
   ```bash
-  # 1. Schlüssel einmal erzeugen und kopieren (in die Mobile-App / den Slicer einfügen):
-  openssl rand -hex 32
-
-  # 2. Mit diesem gespeicherten Wert starten:
-  docker run -p 3456:3000 \
-    -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
-    -e FILAMENTDB_API_KEY="<erzeugten-schlüssel-einfügen>" \
-    ghcr.io/hyiger/filament-db
+  curl --cacert filament-db-ca.crt \
+    -H "Authorization: Bearer <key>" \
+    https://192.168.1.10:3443/api/filaments
   ```
 
-  > **Das Bearer-Gate ist Alles-oder-Nichts und deaktiviert die Browser-Web-UI.** Die Web-UI sendet einfache Same-Origin-Anfragen ohne den Schlüssel, daher lädt die UI zwar, aber jeder Aufruf liefert `401`. Es gibt bewusst keine Same-Origin-Ausnahme (diese Signale sind fälschbar). Nutze den Schlüssel nur, wenn der Zugriff auf diese Instanz nicht über die Browser-UI erfolgt.
+- **Ein Browser**, der `https://192.168.1.10:3443` öffnet, erhält eine Anmeldeseite, die einmalig nach dem Schlüssel fragt. Die Sitzung gilt 30 Tage oder bis der Schlüssel erneuert wird. **Einstellungen → Netzwerk → In diesem Browser abmelden** beendet sie.
 
-- **Browser-Web-UI-Zugriff über das LAN** — verlasse dich **nicht** auf `FILAMENTDB_API_KEY` (er bricht die UI, siehe oben). Binde stattdessen den Port an Loopback und nutze die Desktop-App, oder stelle Filament DB hinter einen **authentifizierenden Reverse-Proxy** (nginx/Caddy/Authelia mit Basic-Auth, SSO oder mTLS), der die Authentifizierung übernimmt, bevor die Anfrage die App erreicht. Wenn du einen Reverse-Proxy nutzt, **binde Filament DB selbst an Loopback** (`-p 127.0.0.1:3456:3000` bei Docker, `HOSTNAME=127.0.0.1` beim systemd-Dienst) oder sperre den direkten Port per Firewall — sonst bleibt die App unter `http://<host>:3456` erreichbar und Browser-Nutzer umgehen den Proxy direkt zur nicht authentifizierten API. Der Proxy muss der einzige Zugang sein.
+#### Das Zertifikat
 
-  > **Konfiguriere den Proxy so, dass er den ursprünglichen `Host`-Header (inklusive Port) beibehält.** Der CSRF-Guard der App vergleicht den `Origin` einer Anfrage mit ihrem `Host`. Ein Proxy, der `Host` auf die Upstream-Adresse umschreibt (z. B. nginx' bloßes `proxy_pass`, das `Host: 127.0.0.1:3000` sendet), lässt Browser-Anfragen wie Cross-Origin aussehen, sodass sie mit `403` abgelehnt werden. **Das betrifft normale Mutationen moderner Browser** (Erstellen/Bearbeiten/Löschen), nicht nur Randfälle — Browser senden `Origin` bei Same-Origin-`POST`/`PUT`/`PATCH`/`DELETE`, und der Guard vergleicht ihn unabhängig von `Sec-Fetch`-Metadaten mit `Host`. Für nginx verwende `proxy_set_header Host $http_host;` — **`$http_host`, nicht `$host`**: `$host` verwirft den Port, sodass eine unter `http://box:3456` betriebene Instanz `Host: box` weiterleiten würde und der Portvergleich des Guards weiterhin mit `403` ablehnt. Füge außerdem `proxy_set_header X-Forwarded-Proto $scheme;` hinzu. Caddys `reverse_proxy` behält den vollständigen `Host` standardmäßig bei.
+Wenn du keines bereitstellst, erzeugt der Server eine **lokale Zertifizierungsstelle (CA)** und ein von ihr signiertes Serverzertifikat. Ein Gerät zeigt eine Zertifikatswarnung, bis es dieser CA vertraut:
+
+1. Lade das CA-Zertifikat herunter: **Einstellungen → Netzwerk → Zertifizierungsstelle herunterladen**, oder von einem anderen Gerät aus `http://192.168.1.10:3443/__filamentdb/ca.crt`. (Der sichere Port beantwortet einfaches HTTP für genau zwei Dinge: diesen Download und die Weiterleitung einer versehentlich mit `http://` eingegebenen Adresse auf `https://`. Die App selbst liefert er nie über einfaches HTTP aus.)
+2. Prüfe, ob der SHA-256-Fingerabdruck mit dem unter **Einstellungen → Netzwerk** übereinstimmt. Ein Zertifikat ist öffentlich; der Download über einfaches HTTP ist unbedenklich, solange der Fingerabdruck stimmt.
+3. Installiere es. **macOS:** Datei öffnen, zur Schlüsselbundverwaltung hinzufügen und auf *Immer vertrauen* stellen. **Windows:** in *Vertrauenswürdige Stammzertifizierungsstellen* installieren. **iOS:** Profil installieren, dann unter *Einstellungen → Allgemein → Info → Zertifikatsvertrauenseinstellungen* einschalten. **Android:** *Einstellungen → Sicherheit → Zertifikat installieren → CA-Zertifikat*.
+
+Die CA ist zehn Jahre gültig. Das Serverzertifikat wird automatisch neu ausgestellt, vor Ablauf und immer dann, wenn sich die Adresse der Maschine ändert, ohne dass Geräte etwas davon merken.
+
+> **Android-Apps vertrauen einer selbst installierten CA nur, wenn die App das ausdrücklich zulässt**, und die aktuelle mobile Filament-DB-App tut das nicht. Android-Browser schon. Verwende für die mobile App unter Android vorerst ein eigenes Zertifikat einer öffentlichen CA (siehe unten).
+
+**Dein eigenes Zertifikat.** Binde die PEM-Dateien ein und benenne sie mit absolutem Pfad:
+
+```bash
+  -v /srv/filament-db/certs:/certs:ro \
+  -e FILAMENTDB_TLS_CERT=/certs/fullchain.pem \
+  -e FILAMENTDB_TLS_KEY=/certs/privkey.pem \
+```
+
+Ein Zertifikat einer öffentlichen CA (Let's Encrypt, `tailscale cert` von Tailscale) braucht keine Einrichtung auf den anderen Geräten. Eine erneuerte Datei wird innerhalb von zehn Minuten übernommen, ohne Neustart. Die Schlüsseldatei darf nicht mit einer Passphrase geschützt sein, und beide Dateien müssen für die uid `1001` lesbar sein.
+
+> **Let's Encrypt:** Die Dateien unter `/etc/letsencrypt/live/<domain>/` sind Symlinks nach `../../archive`, und `privkey.pem` ist nur für root lesbar. Bindest du nur das Verzeichnis `live/<domain>` ein, erhält der Container ins Leere zeigende Links. Kopiere `fullchain.pem` und `privkey.pem` über einen Erneuerungs-Hook (`--deploy-hook`) in ein eigenes Verzeichnis, mache sie für die uid `1001` lesbar und binde dieses Verzeichnis ein.
+
+#### Ohne Gateway: der Schlüssel am HTTP-Port
+
+`FILAMENTDB_API_KEY` **ohne** `FILAMENTDB_HTTPS_PORT` behält die ältere Anordnung bei: Jede `/api/*`-Anfrage am HTTP-Port muss `Authorization: Bearer <key>` senden.
+
+> **Dieses Gate gilt ganz oder gar nicht und deaktiviert die hauseigene Browser-Web-UI.** Die Web-UI stellt einfache Same-Origin-Anfragen und hängt den Schlüssel nicht an; die UI lädt, aber jeder Aufruf liefert `401`. Außerdem wird der Schlüssel unverschlüsselt übertragen. Verwende es nur für Nicht-Browser-Clients in einem Netzwerk, dem du vertraust; nimm sonst das sichere Gateway.
+
+#### Hinter deinem eigenen Reverse-Proxy
+
+Wenn du bereits nginx, Caddy oder Authelia betreibst, kannst du stattdessen dort TLS terminieren und authentifizieren. **Binde Filament DB selbst an Loopback** (`-p 127.0.0.1:3456:3000` bei Docker, `HOSTNAME=127.0.0.1` beim systemd-Dienst) oder sperre den Port per Firewall; sonst bleibt die App unter `http://<host>:3456` erreichbar, und Nutzer umgehen den Proxy. Der Proxy muss der einzige Weg hinein sein.
+
+> **Konfiguriere den Proxy so, dass er den ursprünglichen `Host`-Header (mit Port) erhält.** Der CSRF-Schutz der App vergleicht das `Origin` einer Anfrage mit ihrem `Host`. Ein Proxy, der `Host` auf die Upstream-Adresse umschreibt (z. B. das bloße `proxy_pass` von nginx, das `Host: 127.0.0.1:3000` sendet), lässt Browser-Anfragen wie Cross-Origin aussehen; sie werden mit `403` abgelehnt. **Das betrifft normale Änderungen in modernen Browsern** (Anlegen/Bearbeiten/Löschen), nicht nur Randfälle. Verwende bei nginx `proxy_set_header Host $http_host;` (**`$http_host`, nicht `$host`**: `$host` lässt den Port weg) und zusätzlich `proxy_set_header X-Forwarded-Proto $scheme;`. `reverse_proxy` von Caddy erhält den vollständigen `Host` standardmäßig.
 
 ### Die API von einem anderen Web-Origin aufrufen (CORS)
 
@@ -146,7 +220,7 @@ docker run -p 3456:3000 \
 
 Für einen gelisteten Origin beantwortet `/api/*` Preflight-Anfragen (`OPTIONS`) und setzt `Access-Control-Allow-Origin` auf jede Antwort, und der CSRF-Schutz akzeptiert seine Änderungen. Die Seite darf die Request-Header `Authorization` und `Content-Type` senden; Credentials (Cookies) werden nicht verwendet.
 
-> **Ein gelisteter Origin wird wie die eigene UI der App vertraut.** Ohne `FILAMENTDB_API_KEY` kann jede von ihm ausgelieferte Seite alles lesen und ändern, einschließlich Löschen oder Wiederherstellen der Datenbank. Liste nur Origins, die du kontrollierst. Um zusätzlich einen Schlüssel zu verlangen, setze `FILAMENTDB_API_KEY` und lass die Seite `Authorization: Bearer <key>` senden.
+> **Ein gelisteter Origin wird wie die eigene UI der App vertraut.** Am offenen HTTP-Port kann jede von ihm ausgelieferte Seite alles lesen und ändern, einschließlich Löschen oder Wiederherstellen der Datenbank. Liste nur Origins, die du kontrollierst. Um zusätzlich einen Schlüssel zu verlangen, lass die Seite die `https://`-Adresse des sicheren Gateways aufrufen (oder setze ohne Gateway `FILAMENTDB_API_KEY`) und `Authorization: Bearer <key>` senden.
 
 `*` und reine Hostnamen (`dash.example.com`) werden mit einer Warnung im Server-Log ignoriert. Ein Wildcard würde die nicht authentifizierte API für jede besuchte Webseite öffnen. Der Etikettendruck (`POST /api/labels/print`) bleibt für Cross-Origin-Seiten gesperrt: sein Druck-Token-Header steht nicht auf der erlaubten Liste. `ALLOWED_DEV_ORIGINS` hat damit nichts zu tun: es lässt nur einen anderen Hostnamen den Next.js-Dev-Server laden.
 
@@ -310,9 +384,9 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 `HOSTNAME=0.0.0.0` sorgt dafür, dass der Server auf allen Netzwerkschnittstellen lauscht, sodass andere Geräte im Netz ihn erreichen können.
 
-> **Sicherheit:** Das Binden an `0.0.0.0` gibt die **nicht authentifizierte** `/api`-Oberfläche für alle im Netz frei. Lies vorher [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern) — setze `FILAMENTDB_API_KEY`, wenn nur Nicht-Browser-Clients (Mobile-App, Slicer) Zugriff brauchen, oder stelle den Dienst hinter einen authentifizierenden Reverse-Proxy, wenn du die Browser-UI im LAN willst (der Schlüssel deaktiviert die Web-UI). Beim Reverse-Proxy-Weg setze hier `HOSTNAME=127.0.0.1` (nicht `0.0.0.0`) — oder sperre Port 3456 per Firewall — damit die App nur über den Proxy erreichbar ist; sonst können Browser-Nutzer `http://<host>:3456` direkt aufrufen und ihn umgehen.
+> **Sicherheit:** Das Binden an `0.0.0.0` gibt den **nicht authentifizierten** HTTP-Port für alle im Netz frei. Um den Dienst von anderen Geräten aus zu erreichen, setze hier `HOSTNAME=127.0.0.1` und füge stattdessen das sichere Gateway hinzu (`FILAMENTDB_HTTPS_PORT` sowie ein absolutes `FILAMENTDB_SECURE_DIR`, in das der Dienstbenutzer schreiben darf): siehe [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern). Derselbe Abschnitt behandelt auch den Betrieb hinter einem eigenen Reverse-Proxy.
 
-> **Hinweis:** Wenn du statt eines headless Dienstes die Desktop-App verwendest, musst du `HOSTNAME` nicht von Hand setzen — aktiviere in den Einstellungen den Schalter **„Im lokalen Netzwerk freigeben"** (electron-store-Schlüssel `exposeToLan`, standardmäßig aus), dann bindet der eingebettete Server für dich an `0.0.0.0`. Er arbeitet mit mDNS-Auto-Discovery zusammen, sodass die Mobile-Begleit-App deine Instanz im Netzwerk findet, ohne dass du eine URL eintippen musst.
+> **Hinweis:** Wenn du statt eines headless Dienstes die Desktop-App verwendest, musst du nichts davon von Hand setzen: Aktiviere in den Einstellungen den Schalter **„Im lokalen Netzwerk freigeben“** (electron-store-Schlüssel `exposeToLan`, standardmäßig aus), und die App startet das sichere Gateway für dich, mit einem erzeugten API-Schlüssel. Zusammen mit der mDNS-Erkennung findet die mobile Begleit-App deine Instanz im Netzwerk, ohne dass du eine URL eintippen musst.
 
 ### 2. Dienst anlegen
 

@@ -874,11 +874,13 @@ Unter macOS sind Release-Builds Developer-ID-signiert **und** notarisiert (seit 
 
 ## Im lokalen Netzwerk freigeben (Desktop) *(v1.45)*
 
-**Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** lässt andere Geräte in deinem LAN den eingebauten Server dieser Desktop-Instanz erreichen. Standardmäßig ist die Option **aus** — dann bindet der eingebettete Server nur an localhost und nichts außerhalb dieses Rechners kann sich verbinden.
+**Einstellungen → Netzwerkeinstellungen → Im lokalen Netzwerk freigeben** lässt andere Geräte in deinem LAN diese Desktop-Instanz erreichen. Standardmäßig ist die Option **aus**: Der eingebaute Server der App lauscht nur auf diesem Computer, und von außerhalb kann sich nichts verbinden.
 
-Schalte sie ein, und der Server bindet neu an `0.0.0.0` (alle Schnittstellen); das Einstellungs-Panel zeigt die LAN-URL, auf die du ein anderes Gerät richten kannst (z. B. `http://192.168.1.50:3456`). Mit dieser Adresse verbindet sich die mobile Scanner-App.
+Schalte sie ein, und die App öffnet einen zweiten, gesicherten Port: **HTTPS mit API-Schlüssel**. Das Einstellungs-Panel zeigt die Adressen, auf die du ein anderes Gerät richten kannst (z. B. `https://192.168.1.50:3457`), und den Schlüssel. Dieser Computer nutzt weiterhin seine eigene lokale Adresse ohne Schlüssel; der einfache Port wird nie ins Netzwerk geöffnet.
 
-**Eine freigegebene Instanz absichern**: Setze die Umgebungsvariable `FILAMENTDB_API_KEY` auf dem Desktop-Host (oder Server), um ein Bearer-Token-Gate vor jede `/api/*`-Anfrage zu stellen — Clients müssen dann einen passenden API-Key senden. Bleibt sie ungesetzt (Standard), ist die API nicht authentifiziert — in einem vertrauenswürdigen Heimnetz in Ordnung, in einem exponierten nicht. Beachte: Das Gate ist Alles-oder-Nichts und **deaktiviert die Browser-Web-UI** (die den Key nicht sendet); es ist also für Nicht-Browser-Clients gedacht (Mobile-App, Slicer, Skripte). Für Browser-UI-Zugriff im LAN nutze Loopback + die Desktop-App oder einen authentifizierenden Reverse-Proxy — siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
+**Der API-Schlüssel**: Er wird beim ersten Einschalten der Freigabe zufällig erzeugt. **Anzeigen** blendet ihn ein, damit du ihn auf ein anderes Gerät kopieren kannst; **Schlüssel erneuern …** ersetzt ihn sofort und sperrt damit jedes Gerät und jeden Browser aus, die den alten verwendet haben, bis du ihnen den neuen gibst. Ein Browser auf einem anderen Gerät fragt einmalig auf einer Anmeldeseite nach dem Schlüssel.
+
+**Die Zertifikatswarnung**: Die App erzeugt ihr eigenes Zertifikat; ein anderes Gerät warnt deshalb davor, bis es der Zertifizierungsstelle der App vertraut. Nutze **Zertifizierungsstelle herunterladen**, installiere die Datei auf dem Gerät und vergleiche den Fingerabdruck mit dem in den Einstellungen. Die Schritt-für-Schritt-Anleitung und wie du stattdessen ein eigenes Zertifikat verwendest, steht unter [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
 
 ## Im Netzwerk finden — mDNS-Auto-Discovery *(v1.47)*
 

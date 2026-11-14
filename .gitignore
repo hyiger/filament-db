@@ -50,6 +50,9 @@ next-env.d.ts
 /standalone/
 .claude/scheduled_tasks.lock
 
+# secure gateway: generated API key + certificates of the `dev-secure` launch config
+/.filamentdb-secure/
+
 # backfill-spools rollback logs (scripts/backfill-spools.ts --apply)
 backfill-spools-*.json
 

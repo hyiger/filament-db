@@ -15,7 +15,8 @@ export interface DiscoveredServer {
   id: string;
   /** Advertised instance name, e.g. "Filament DB". */
   name: string;
-  /** Full base URL to use as the server address, e.g. http://192.168.1.50:3456 */
+  /** Full base URL to use as the server address, e.g. https://192.168.1.50:3457
+   *  (http://…:3456 for a desktop older than the secure gateway). */
   url: string;
 }
 
@@ -25,6 +26,8 @@ export interface ZeroconfService {
   host?: string;
   port?: number;
   addresses?: string[];
+  /** TXT record. A desktop sharing through its secure gateway sets `tls: "1"`. */
+  txt?: Record<string, unknown>;
 }
 
 const IPV4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
@@ -57,8 +60,12 @@ export function discoveredServersFromService(
     .filter((a) => IPV4_RE.test(a) && !a.startsWith('169.254.')) // skip link-local APIPA
     .sort((a, b) => (isPrivateIpv4(a) ? 0 : 1) - (isPrivateIpv4(b) ? 0 : 1));
   const hosts = ipv4s.length > 0 ? ipv4s : svc.host ? [svc.host.replace(/\.$/, '')] : [];
+  // A desktop that advertises `tls=1` is sharing its secure gateway: the port
+  // speaks HTTPS and wants the API key. Older desktops advertise no such
+  // record and serve plain HTTP.
+  const scheme = String(svc.txt?.tls ?? "") === "1" ? "https" : "http";
   return hosts.map((host) => {
-    const url = `http://${host}:${svc.port}`;
+    const url = `${scheme}://${host}:${svc.port}`;
     return { id: url, name: name || host, url };
   });
 }

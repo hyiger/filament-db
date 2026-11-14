@@ -91,15 +91,32 @@ to turn NFC back on. The flag is read in both `app.config.ts` (build-time plugin
 gate) and `src/lib/features.ts` (runtime UI gate). Free provisioning certs also
 expire after ~7 days, so re-run the build weekly.
 
-Then in the app: open **Server connection**, enter your Filament DB address
-(e.g. `http://192.168.1.50:3456`) and, if the server sets `FILAMENTDB_API_KEY`,
+Then in the app: open **Server connection**, enter your Filament DB address and
 the API key. Scan away.
+
+The address and key are shown on the desktop under **Settings → Network →
+Share on local network** (e.g. `https://192.168.1.50:3457`); a server shows them
+on the same page once `FILAMENTDB_HTTPS_PORT` is set. That address is the
+server's secure gateway: HTTPS, with a certificate the server generated itself
+unless you gave it one. The phone has to trust it:
+
+- **iOS:** download the certificate authority from that Settings page (or
+  `http://<address>:3457/__filamentdb/ca.crt` in Safari), install the profile,
+  and turn it on under *Settings → General → About → Certificate Trust Settings*.
+- **Android:** apps only trust a certificate authority you install yourself if
+  they opt in, and this app does not yet. Give the server a certificate from a
+  public CA (`FILAMENTDB_TLS_CERT` / `FILAMENTDB_TLS_KEY`) instead.
+
+A desktop older than the secure gateway is reached at `http://<address>:3456`,
+with a key only if it sets `FILAMENTDB_API_KEY`.
 
 ### Find your server automatically (mDNS)
 
 Instead of typing an IP, tap **Find on your network → Scan** on the Server
 connection screen. The phone discovers desktop instances advertising
-`_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you. This
+`_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you (`https://`
+when the desktop advertises its secure gateway; the API key is still entered by
+hand). This
 requires the desktop app to have **"Share on local network"** turned on
 (Settings → Network Settings) and both devices on the same Wi-Fi. (Discovery uses a
 native module, so it works only in a development/standalone build, not Expo Go.)
