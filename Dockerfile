@@ -28,6 +28,13 @@ RUN apk add --no-cache tzdata
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
+# Secure gateway (opt-in via FILAMENTDB_HTTPS_PORT): the generated API key and
+# certificates live here. Mount a volume at /data to keep them across container
+# re-creation; without one a new key and CA are generated each time. Created
+# and owned here because /app itself is not writable by the runtime user.
+RUN mkdir -p /data/secure && chown -R nextjs:nodejs /data
+ENV FILAMENTDB_SECURE_DIR=/data/secure
+
 # Copy standalone server and dependencies
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 # Copy static assets and pre-rendered pages

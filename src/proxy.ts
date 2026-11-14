@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { decideApiAuth } from "@/lib/apiAuth";
+import { decideApiAuth, httpPortApiKey } from "@/lib/apiAuth";
 import { allowedOriginsFromEnv, decideCors } from "@/lib/corsOrigins";
 
 /**
@@ -26,6 +26,11 @@ import { allowedOriginsFromEnv, decideCors } from "@/lib/corsOrigins";
  *    app) or sit behind an authenticating reverse proxy — see docs/setup.md
  *    "Securing a network-exposed instance". Logic + rationale live in
  *    src/lib/apiAuth.ts (pure + unit-tested).
+ *
+ *    While the secure gateway is running (`FILAMENTDB_HTTPS_PORT`) the key is
+ *    checked there, on the HTTPS port, and this port is the open local one, so
+ *    the gate here is off (`httpPortApiKey`). A gateway that failed to start
+ *    leaves this gate on.
  */
 export function proxy(request: NextRequest): NextResponse {
   const cors = decideCors(allowedOriginsFromEnv(process.env.ALLOWED_ORIGINS), {
@@ -38,7 +43,7 @@ export function proxy(request: NextRequest): NextResponse {
     return new NextResponse(null, { status: 204, headers: cors.headers });
   }
 
-  const decision = decideApiAuth(process.env.FILAMENTDB_API_KEY, {
+  const decision = decideApiAuth(httpPortApiKey(process.env), {
     authorization: request.headers.get("authorization"),
   });
 

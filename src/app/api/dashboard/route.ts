@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { type FilamentDoc } from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
@@ -62,7 +62,10 @@ export async function GET() {
       // GH #517: project only the fields the dashboard actually reads —
       // this is a hot path, and pulling whole documents streams photo blobs
       // + usage ledgers it never uses.
-      Filament.find(
+      // The explicit type argument keeps the full document type: mongoose's
+      // projection inference keys on top-level fields only, so the
+      // dotted "spools.*" sub-paths below would type `spools` out of the result.
+      Filament.find<FilamentDoc>(
         { _deletedAt: null },
         {
           _id: 1,

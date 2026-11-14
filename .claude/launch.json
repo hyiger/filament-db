@@ -4,9 +4,21 @@
     {
       "name": "dev",
       "runtimeExecutable": "/bin/bash",
-      "runtimeArgs": ["-c", "PATH=/opt/homebrew/bin:$PATH npm run dev"],
+      "runtimeArgs": [
+        "-c",
+        "PATH=/opt/homebrew/bin:$PATH npm run dev"
+      ],
       "port": 3456,
       "autoPort": true
+    },
+    {
+      "name": "dev-secure",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "PATH=/opt/homebrew/bin:$PATH FILAMENTDB_HTTPS_PORT=3557 FILAMENTDB_SECURE_DIR=.filamentdb-secure npx next dev -p 3556"
+      ],
+      "port": 3556
     }
   ]
 }

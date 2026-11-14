@@ -36,7 +36,7 @@ docker run -p 127.0.0.1:3456:3000 \
 
 Open http://localhost:3456.
 
-> **Security:** the `127.0.0.1:` prefix binds the port to **this machine only**. A bare `-p 3456:3000` publishes on **all** host interfaces, exposing Filament DB's API to your whole LAN — and the API is **unauthenticated by default**. Only drop the `127.0.0.1:` prefix if you intend to reach it from other devices, and read [Securing a network-exposed instance](#securing-a-network-exposed-instance) first.
+> **Security:** the `127.0.0.1:` prefix binds the port to **this machine only**. A bare `-p 3456:3000` publishes on **all** host interfaces, exposing Filament DB's API to your whole LAN, and this port is **unauthenticated**. To reach Filament DB from other devices, keep the prefix and turn on the secure gateway (HTTPS + API key) instead: see [Securing a network-exposed instance](#securing-a-network-exposed-instance).
 
 ### Docker Compose
 
@@ -47,16 +47,27 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      # Loopback-only — reachable from this host. To reach it from other
-      # devices, use "3456:3000" and read "Securing a network-exposed instance".
+      # Loopback-only: the open HTTP port, for this host.
       - "127.0.0.1:3456:3000"
+      # Optional: HTTPS + API key for other devices (needs FILAMENTDB_HTTPS_PORT
+      # below). See "Securing a network-exposed instance".
+      # - "3443:3443"
     environment:
       - MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/filament-db
+      # Optional: the secure gateway. Also uncomment the "3443:3443" port above
+      # and BOTH volumes blocks below (they keep the generated key + certificates).
+      # - FILAMENTDB_HTTPS_PORT=3443
+      # - FILAMENTDB_TLS_HOSTS=192.168.1.10,nas.local
       # Optional: AI provider for TDS extraction (choose one)
       # - GEMINI_API_KEY=your-key
       # - ANTHROPIC_API_KEY=your-key
       # - OPENAI_API_KEY=your-key
+    # volumes:
+    #   - filamentdb-data:/data
     restart: unless-stopped
+
+# volumes:
+#   filamentdb-data:
 ```
 
 ```bash
@@ -72,7 +83,8 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      # Loopback-only (see the note above). Use "3456:3000" to expose on the LAN.
+      # Loopback-only (see the note above). For other devices, add the secure
+      # gateway as in the previous example rather than publishing this port.
       - "127.0.0.1:3456:3000"
     environment:
       - MONGODB_URI=mongodb://mongo:27017/filament-db
@@ -98,7 +110,12 @@ volumes:
 | `PORT` | No | Server port inside the container (default: `3000`) |
 | `HOSTNAME` | No | Interface the server binds inside the container (default: `0.0.0.0`). Reachability is governed by the `docker run -p` mapping, not this. |
 | `TZ` | No | IANA timezone for the container clock, e.g. `America/Los_Angeles` (defaults to UTC). The image bundles `tzdata`, so a zone name resolves correctly. |
-| `FILAMENTDB_API_KEY` | No | Bearer-token gate on **every** `/api/*` request. See [Securing a network-exposed instance](#securing-a-network-exposed-instance). **Note:** it disables the browser web UI — use it only for non-browser clients (mobile app, slicers, scripts). |
+| `FILAMENTDB_HTTPS_PORT` | No | Turns on the **secure gateway**: a second port that speaks HTTPS and requires an API key, for access from other devices. The HTTP port stays open for this machine. See [Securing a network-exposed instance](#securing-a-network-exposed-instance). |
+| `FILAMENTDB_HTTPS_HOST` | No | Interface the secure gateway binds (default: `0.0.0.0`). |
+| `FILAMENTDB_API_KEY` | No | The API key. With the secure gateway running: the gateway's key, which must be 32 to 512 characters (unset, a random one is generated and can be rolled in Settings). Otherwise: a bearer-token gate on **every** `/api/*` request of the HTTP port, which also disables the browser web UI. |
+| `FILAMENTDB_SECURE_DIR` | No | Where the secure gateway keeps its generated API key and certificates. Image default: `/data/secure` (mount a volume at `/data` to keep them). Otherwise `~/.filament-db/secure` of the user the server runs as; for a system service, set an absolute path that user can write to. |
+| `FILAMENTDB_TLS_CERT`, `FILAMENTDB_TLS_KEY` | No | Absolute paths of the PEM files of your own certificate for the secure gateway. Unset, it generates a local certificate authority and server certificate. |
+| `FILAMENTDB_TLS_HOSTS` | No | Extra comma-separated DNS names and IP addresses for the generated certificate, e.g. `192.168.1.10,nas.local`. Needed in a container, which cannot see its host's address. |
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
@@ -107,28 +124,97 @@ volumes:
 
 ### Securing a network-exposed instance
 
-Filament DB's trust model is **localhost / single-user**: by default the API is **unauthenticated**, which is fine when the port is bound to loopback (`127.0.0.1:`) or you're using the desktop app. Publishing it to the LAN (a bare `-p 3456:3000`, or a headless service binding `0.0.0.0`) exposes the full `/api` surface to every device on the network.
+Filament DB's trust model is **localhost / single-user**: the HTTP port has **no authentication**. That is right while the port is bound to loopback (`127.0.0.1:`) or you use the desktop app, and wrong the moment it is published to a network (a bare `-p 3456:3000`, or a service binding `0.0.0.0`): every device that can reach it can read and change everything.
 
-You have two ways to secure an exposed instance, depending on **who** needs to reach it:
+To reach Filament DB from other devices, leave the HTTP port where it is and turn on the **secure gateway**: a second port that speaks HTTPS and requires an API key.
 
-- **Non-browser clients only** (the [mobile companion app](../packages/mobile/README.md), PrusaSlicer/OrcaSlicer integrations, scripts) — set `FILAMENTDB_API_KEY` to a strong random value. Every `/api/*` request must then send `Authorization: Bearer <key>`; the mobile app and the slicer integrations support this. **Generate the key once, save it, and reuse that exact value** — your clients need it, and it must stay the same across restarts (don't generate it inline, or it changes every run and nothing can authenticate):
+| Port | Speaks | For | Key |
+|------|--------|-----|-----|
+| HTTP (`PORT`; `3000` in the container) | plain HTTP | this machine: the browser on it, a slicer on it | none |
+| HTTPS (`FILAMENTDB_HTTPS_PORT`) | TLS | every other device: phones, other computers, scripts | required |
+
+One port cannot do both jobs. The server has no trustworthy way to tell a local request from a remote one (every header that could say so can be set by the client), so "open for me, locked for everyone else" takes two ports.
+
+#### Turning it on
+
+```bash
+docker run \
+  -p 127.0.0.1:3456:3000 \
+  -p 3443:3443 \
+  -v filamentdb-data:/data \
+  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
+  -e FILAMENTDB_HTTPS_PORT=3443 \
+  -e FILAMENTDB_TLS_HOSTS="192.168.1.10,nas.local" \
+  ghcr.io/hyiger/filament-db
+```
+
+- `-p 127.0.0.1:3456:3000` keeps the open HTTP port on this machine. `-p 3443:3443` publishes the secure port to the network.
+- `-v filamentdb-data:/data` keeps the API key and certificates. **Without a volume, a new key and a new certificate authority are generated every time the container is re-created**, and every device has to be set up again.
+- `FILAMENTDB_TLS_HOSTS` lists the names and addresses other devices will type. A container cannot see its host's address, so the generated certificate would otherwise only name addresses nobody outside the container can use.
+
+For a service started with `npm start` or systemd, set the same variables in its environment and bind the HTTP port to loopback with `HOSTNAME=127.0.0.1`.
+
+> **While the gateway is running, the HTTP port needs no key, even if `FILAMENTDB_API_KEY` is set.** Keep that port on loopback, or don't publish it at all on a machine nobody browses from. The server logs a reminder at every start. If the gateway cannot start (a port already in use, an unreadable certificate), the server logs why, **Settings → Network** shows it, and a `FILAMENTDB_API_KEY` you set goes on gating the HTTP port.
+
+The server needs to write to `/data`. A named volume, as above, works as is. A bind-mounted host directory must be writable by uid `1001`, the user the container runs as.
+
+#### The API key
+
+On first start the server generates a random 256-bit key and stores it in `/data/secure/api-key`, readable only by the server's user.
+
+- **See it:** open Filament DB on the server itself (`http://localhost:3456`) and go to **Settings → Network**, or run `docker exec <container> cat /data/secure/api-key`.
+- **Roll it:** **Settings → Network → Roll key…** replaces it with a new random key. The change is immediate and needs no restart: the old key stops working, and every browser signed in with it is signed out.
+- **Choose it yourself:** set `FILAMENTDB_API_KEY` to at least 32 characters (`openssl rand -hex 32`). That key cannot be rolled from the app; change the variable and restart. A shorter key is refused and the gateway does not start: nothing locks out a client that keeps guessing, so the key's length is the protection.
+
+After ten wrong keys in a minute from one address, further wrong keys from it are answered `429` for the rest of that minute. The right key is never refused, so one device retrying an old key cannot lock out the others behind the same address.
+
+#### Connecting
+
+- **Scripts, the mobile app, any API client** send the key with every request:
 
   ```bash
-  # 1. Generate a key once and copy it (paste this into the mobile app / slicer):
-  openssl rand -hex 32
-
-  # 2. Run with that saved value:
-  docker run -p 3456:3000 \
-    -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
-    -e FILAMENTDB_API_KEY="<paste-the-generated-key>" \
-    ghcr.io/hyiger/filament-db
+  curl --cacert filament-db-ca.crt \
+    -H "Authorization: Bearer <key>" \
+    https://192.168.1.10:3443/api/filaments
   ```
 
-  > **The bearer gate is all-or-nothing and disables the first-party browser web UI.** The web UI makes plain same-origin requests and does not attach the key, so with `FILAMENTDB_API_KEY` set the UI loads but every call returns `401`. There is deliberately no same-origin exemption (those request signals are forgeable). Use the key only when the browser UI isn't how you'll access this instance.
+- **A browser** opening `https://192.168.1.10:3443` gets a sign-in page that asks for the key once. The session lasts 30 days, or until the key is rolled. **Settings → Network → Sign out of this browser** ends it.
 
-- **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app. When you use a reverse proxy, **bind Filament DB itself to loopback** (`-p 127.0.0.1:3456:3000` for Docker, `HOSTNAME=127.0.0.1` for the systemd service) or firewall its direct port — otherwise the app stays reachable at `http://<host>:3456` and browser users bypass the proxy straight to the unauthenticated API. The proxy must be the only way in.
+#### The certificate
 
-  > **Configure the proxy to preserve the original `Host` header (with its port).** The app's CSRF guard compares a request's `Origin` against its `Host`. A proxy that rewrites `Host` to the upstream address (e.g. nginx's bare `proxy_pass`, which sends `Host: 127.0.0.1:3000`) makes browser requests look cross-origin, so they're rejected with a `403`. **This affects normal modern-browser mutations** (create/edit/delete), not just edge cases — browsers send `Origin` on same-origin `POST`/`PUT`/`PATCH`/`DELETE`, and the guard compares it to `Host` regardless of `Sec-Fetch` metadata. For nginx use `proxy_set_header Host $http_host;` — **`$http_host`, not `$host`**: `$host` drops the port, so an instance served on `http://box:3456` would forward `Host: box` and the guard's port comparison would still `403`. Also add `proxy_set_header X-Forwarded-Proto $scheme;`. Caddy's `reverse_proxy` preserves the full `Host` by default.
+Unless you provide one, the server generates a **local certificate authority (CA)** and a server certificate signed by it. A device shows a certificate warning until it trusts that CA:
+
+1. Download the CA certificate: **Settings → Network → Download the certificate authority**, or from another device `http://192.168.1.10:3443/__filamentdb/ca.crt`. (The secure port answers plain HTTP for exactly two things: this download, and redirecting a mistyped `http://` address to `https://`. It never serves the app over plain HTTP.)
+2. Check that its SHA-256 fingerprint matches the one in **Settings → Network**. A certificate is public, so downloading it over plain HTTP is safe as long as the fingerprint matches.
+3. Install it. **macOS:** open the file, add it to Keychain Access, and set it to *Always Trust*. **Windows:** install it into *Trusted Root Certification Authorities*. **iOS:** install the profile, then turn it on under *Settings → General → About → Certificate Trust Settings*. **Android:** *Settings → Security → Install a certificate → CA certificate*.
+
+The CA is valid for ten years. The server certificate is reissued automatically, before it expires and whenever the machine's address changes, without devices noticing.
+
+> **Android apps do not trust a CA you install yourself unless the app opts in**, and the current Filament DB mobile app does not. Android browsers do. For the mobile app on Android, use your own certificate from a public CA (below) for now.
+
+**Your own certificate.** Mount the PEM files and name them by absolute path:
+
+```bash
+  -v /srv/filament-db/certs:/certs:ro \
+  -e FILAMENTDB_TLS_CERT=/certs/fullchain.pem \
+  -e FILAMENTDB_TLS_KEY=/certs/privkey.pem \
+```
+
+A certificate from a public CA (Let's Encrypt, Tailscale's `tailscale cert`) needs no setup on the other devices. A renewed file is picked up within ten minutes, without a restart. The key file must not be passphrase-protected, and both files must be readable by uid `1001`.
+
+> **Let's Encrypt:** the files under `/etc/letsencrypt/live/<domain>/` are symlinks into `../../archive`, and `privkey.pem` is readable by root only. Mounting the `live/<domain>` directory alone gives the container dangling links. Copy `fullchain.pem` and `privkey.pem` to a directory of their own from a renewal hook (`--deploy-hook`), make them readable by uid `1001`, and mount that directory.
+
+#### Without the gateway: the key on the HTTP port
+
+Setting `FILAMENTDB_API_KEY` **without** `FILAMENTDB_HTTPS_PORT` keeps the older arrangement: every `/api/*` request on the HTTP port must send `Authorization: Bearer <key>`.
+
+> **This gate is all-or-nothing and disables the first-party browser web UI.** The web UI makes plain same-origin requests and does not attach the key, so the UI loads but every call returns `401`. It also sends the key unencrypted. Use it only for non-browser clients on a network you trust; otherwise use the secure gateway.
+
+#### Behind your own reverse proxy
+
+If you already run nginx, Caddy or Authelia, you can let it terminate TLS and authenticate instead. **Bind Filament DB itself to loopback** (`-p 127.0.0.1:3456:3000` for Docker, `HOSTNAME=127.0.0.1` for the systemd service) or firewall its port; otherwise the app stays reachable at `http://<host>:3456` and users bypass the proxy. The proxy must be the only way in.
+
+> **Configure the proxy to preserve the original `Host` header (with its port).** The app's CSRF guard compares a request's `Origin` against its `Host`. A proxy that rewrites `Host` to the upstream address (e.g. nginx's bare `proxy_pass`, which sends `Host: 127.0.0.1:3000`) makes browser requests look cross-origin, so they're rejected with a `403`. **This affects normal modern-browser mutations** (create/edit/delete), not just edge cases: browsers send `Origin` on same-origin `POST`/`PUT`/`PATCH`/`DELETE`, and the guard compares it to `Host` regardless of `Sec-Fetch` metadata. For nginx use `proxy_set_header Host $http_host;` (**`$http_host`, not `$host`**: `$host` drops the port, so an instance served on `http://box:3456` would forward `Host: box` and the guard's port comparison would still `403`). Also add `proxy_set_header X-Forwarded-Proto $scheme;`. Caddy's `reverse_proxy` preserves the full `Host` by default.
 
 ### Calling the API from another web origin (CORS)
 
@@ -143,7 +229,7 @@ docker run -p 3456:3000 \
 
 For a listed origin, `/api/*` answers preflight (`OPTIONS`) requests and adds `Access-Control-Allow-Origin` to every response, and the CSRF guard accepts its mutations. The page may send the `Authorization` and `Content-Type` request headers; credentials (cookies) are not used.
 
-> **A listed origin is trusted like the app's own UI.** Without `FILAMENTDB_API_KEY`, any page served from it can read and change everything, including wiping or restoring the database. List only origins you control. To require a key as well, set `FILAMENTDB_API_KEY` and have the page send `Authorization: Bearer <key>`.
+> **A listed origin is trusted like the app's own UI.** On the open HTTP port, any page served from it can read and change everything, including wiping or restoring the database. List only origins you control. To require a key as well, have the page call the secure gateway's `https://` address (or, without the gateway, set `FILAMENTDB_API_KEY`) and send `Authorization: Bearer <key>`.
 
 `*` and bare hostnames (`dash.example.com`) are ignored, with a warning in the server log. A wildcard would open the unauthenticated API to every web page you visit. Label printing (`POST /api/labels/print`) stays unavailable to cross-origin pages: its print-token header is not on the allowed list. `ALLOWED_DEV_ORIGINS` is unrelated: it only lets another hostname load the Next.js dev server.
 
@@ -307,9 +393,9 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 `HOSTNAME=0.0.0.0` makes the server listen on all network interfaces so other devices on your network can reach it.
 
-> **Security:** binding `0.0.0.0` exposes the **unauthenticated** `/api` surface to everyone on your network. Before doing this, read [Securing a network-exposed instance](#securing-a-network-exposed-instance) — set `FILAMENTDB_API_KEY` if only non-browser clients (the mobile app, slicers) need access, or front the service with an authenticating reverse proxy if you want the browser UI on the LAN (the key disables the web UI). If you go the reverse-proxy route, set `HOSTNAME=127.0.0.1` here (not `0.0.0.0`) — or firewall port 3456 — so the app is reachable only through the proxy; otherwise browser users can hit `http://<host>:3456` directly and bypass it.
+> **Security:** binding `0.0.0.0` exposes the **unauthenticated** HTTP port to everyone on your network. To reach the service from other devices, set `HOSTNAME=127.0.0.1` here and add the secure gateway instead (`FILAMENTDB_HTTPS_PORT`, plus an absolute `FILAMENTDB_SECURE_DIR` the service user can write to): see [Securing a network-exposed instance](#securing-a-network-exposed-instance). The same section covers fronting the service with your own reverse proxy.
 
-> **Note:** If you're running the desktop app instead of a headless service, you don't need to set `HOSTNAME` by hand — flip on the **Share on local network** toggle in Settings (electron-store key `exposeToLan`, off by default) and the embedded server binds `0.0.0.0` for you. It pairs with mDNS auto-discovery, so the mobile companion app can find your instance on the network without typing a URL.
+> **Note:** If you're running the desktop app instead of a headless service, you don't set any of this by hand: flip on the **Share on local network** toggle in Settings (electron-store key `exposeToLan`, off by default) and the app starts the secure gateway for you, with a generated API key. It pairs with mDNS auto-discovery, so the mobile companion app can find your instance on the network without typing a URL.
 
 ### 2. Create the service
 

@@ -2,7 +2,7 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Filament DB API",
-    "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. Authentication is off by default; deployments that set the FILAMENTDB_API_KEY environment variable require `Authorization: Bearer <key>` on every /api request (see the bearerAuth security scheme). Because the gate is optional and all-or-nothing, it is modelled as an optional top-level requirement (anonymous OR bearerAuth) rather than per-operation, so tooling sends the token when one is configured and works unauthenticated when none is.",
+    "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports. The plain HTTP port is unauthenticated by default, for the machine the server runs on. Other devices use the secure gateway: a second, HTTPS port that requires `Authorization: Bearer <key>` (see the bearerAuth security scheme and the Security tag). Without the gateway, deployments that set the FILAMENTDB_API_KEY environment variable require the key on every /api request of the HTTP port. Because the gate is optional and all-or-nothing, it is modelled as an optional top-level requirement (anonymous OR bearerAuth) rather than per-operation, so tooling sends the token when one is configured and works unauthenticated when none is.",
     "version": "1.85.0",
     "license": {
       "name": "AGPL-3.0-or-later",
@@ -109,6 +109,10 @@
     {
       "name": "Maintenance",
       "description": "Read-only data-health scans (name conflicts, abrasive-filament / nozzle mismatches)"
+    },
+    {
+      "name": "Security",
+      "description": "The secure gateway (HTTPS + API key) for access from other devices: status, certificate, and the API key."
     }
   ],
   "paths": {
@@ -7593,6 +7597,200 @@
           }
         ]
       }
+    },
+    "/api/security": {
+      "get": {
+        "summary": "How this server is protected",
+        "description": "Whether the secure gateway (HTTPS + API key) is running, the addresses other devices can use, where the API key comes from, and the certificate in use. Backs the Settings → Network card. Never returns the key.",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "Current status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SecurityStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/security/ca": {
+      "get": {
+        "summary": "Download the generated certificate authority",
+        "description": "The certificate of the local CA that signs the secure gateway's generated server certificate. Installing it on another device makes that device trust the gateway's `https://` address. Also served by the gateway itself, before sign-in and over plain HTTP, at `/__filamentdb/ca.crt`.",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "PEM certificate",
+            "content": {
+              "application/x-x509-ca-cert": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The gateway is off, or uses the operator's own certificate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/security/key/reveal": {
+      "post": {
+        "summary": "Show the API key",
+        "description": "Returns the secure gateway's API key so Settings can display and copy it. A POST behind the same-origin guard rather than a field of `GET /api/security`, so the secret does not ride a cacheable read.",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "The key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "file",
+                        "env"
+                      ]
+                    },
+                    "rollable": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin browser request, or (`code: foreign_host`) a `Host` that is neither loopback nor a name in the gateway's certificate. The second check stops a DNS-rebinding page, which the same-origin check cannot tell from the app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`gateway_off`: no gateway is running. `env_key` (roll only): the key is fixed by `FILAMENTDB_API_KEY`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/security/key/roll": {
+      "post": {
+        "summary": "Roll the API key",
+        "description": "Replaces the secure gateway's API key with a new random one and returns it. Effective immediately, with no restart: the previous key stops working and every browser session signed in with it ends.",
+        "tags": [
+          "Security"
+        ],
+        "responses": {
+          "200": {
+            "description": "The new key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin browser request, or (`code: foreign_host`) a `Host` that is neither loopback nor a name in the gateway's certificate. The second check stops a DNS-rebinding page, which the same-origin check cannot tell from the app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "`gateway_off`: no gateway is running. `env_key` (roll only): the key is fixed by `FILAMENTDB_API_KEY`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    },
+                    "code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9623,13 +9821,111 @@
         "required": [
           "error"
         ]
+      },
+      "SecurityStatus": {
+        "type": "object",
+        "required": [
+          "configured",
+          "running",
+          "error",
+          "port",
+          "urls",
+          "key",
+          "tls",
+          "httpKeyRequired"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean",
+            "description": "The secure gateway was asked for (`FILAMENTDB_HTTPS_PORT` is set)."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "The gateway is listening. `false` with `configured: true` means it could not start; see `error`."
+          },
+          "error": {
+            "type": "string",
+            "nullable": true,
+            "description": "Why a configured gateway is not running (port in use, unreadable certificate, invalid port)."
+          },
+          "port": {
+            "type": "integer",
+            "nullable": true,
+            "description": "The HTTPS port."
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "`https://` addresses other devices can use, taken from the names in the certificate. Empty while the gateway is not running."
+          },
+          "key": {
+            "type": "object",
+            "nullable": true,
+            "description": "Where the API key comes from. Never the key itself.",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "file",
+                  "env"
+                ],
+                "description": "`file`: generated and stored in the secure directory. `env`: fixed by `FILAMENTDB_API_KEY`."
+              },
+              "rollable": {
+                "type": "boolean",
+                "description": "True for a `file` key."
+              }
+            }
+          },
+          "tls": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "self-signed",
+                  "custom"
+                ],
+                "description": "`self-signed`: a generated local CA signs the server certificate. `custom`: the operator's own certificate."
+              },
+              "fingerprint256": {
+                "type": "string",
+                "description": "SHA-256 fingerprint of the server certificate."
+              },
+              "caFingerprint256": {
+                "type": "string",
+                "nullable": true,
+                "description": "SHA-256 fingerprint of the generated CA, the value a device should compare before trusting it. Null in `custom` mode."
+              },
+              "notAfter": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Expiry of the server certificate. A generated one is reissued automatically 30 days before."
+              },
+              "names": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "DNS names and IP addresses the server certificate is valid for."
+              }
+            }
+          },
+          "httpKeyRequired": {
+            "type": "boolean",
+            "description": "The older arrangement: no gateway, and `FILAMENTDB_API_KEY` gates the plain HTTP port."
+          }
+        }
       }
     },
     "securitySchemes": {
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "Optional bearer-token gate, applied only when the server's FILAMENTDB_API_KEY environment variable is set (off by default — the API is unauthenticated for localhost/desktop use). When set, EVERY /api request must send `Authorization: Bearer <key>`; there is no same-origin exemption, so the gate also locks out the first-party browser UI. Requests without a valid key get 401 with `WWW-Authenticate: Bearer`."
+        "description": "The API key. Where it is required depends on how the server runs. (1) Secure gateway on (`FILAMENTDB_HTTPS_PORT`, or the desktop app's \"Share on local network\"): the HTTPS port requires `Authorization: Bearer <key>` on every request (a browser signs in once at `/__filamentdb/login` and carries a session cookie instead), while the plain HTTP port is the open, local one and needs no key. The key is random, generated on first start, and can be rolled with `POST /api/security/key/roll`; `FILAMENTDB_API_KEY` fixes it instead. (2) Gateway off and `FILAMENTDB_API_KEY` set: EVERY /api request on the HTTP port must send the key; there is no same-origin exemption, so this also locks out the first-party browser UI. (3) Neither (the default): the API is unauthenticated, for localhost/desktop use. A refused request gets 401 with `WWW-Authenticate: Bearer`; ten wrong keys in a minute from one address get 429 from the gateway."
       },
       "LocalPrintToken": {
         "type": "apiKey",

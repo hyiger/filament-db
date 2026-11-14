@@ -870,11 +870,13 @@ On macOS, release builds are Developer ID-signed **and** notarized (since v1.39.
 
 ## Share on Local Network (Desktop) *(v1.45)*
 
-**Settings → Network Settings → Share on local network** lets other devices on your LAN reach this desktop instance's built-in server. It's **off by default** — when off, the embedded server binds to localhost only and nothing outside the machine can connect.
+**Settings → Network Settings → Share on local network** lets other devices on your LAN reach this desktop instance. It's **off by default**: the app's built-in server listens on this computer only, and nothing outside the machine can connect.
 
-Turn it on and the server re-binds to `0.0.0.0` (all interfaces), and the settings panel shows the LAN URL to point another device at (e.g. `http://192.168.1.50:3456`). This is what the mobile scanner app connects to.
+Turn it on and the app opens a second, secured port: **HTTPS, with an API key**. The settings panel shows the addresses to point another device at (e.g. `https://192.168.1.50:3457`) and the key. This computer keeps using its own local address without a key; the plain port is never opened to the network.
 
-**Securing a shared instance**: set the `FILAMENTDB_API_KEY` environment variable on the desktop host (or server) to put a bearer-token gate in front of every `/api/*` request — clients must then send a matching API key. Leaving it unset (the default) leaves the API unauthenticated, which is fine for a trusted home network but not for an exposed one. Note the gate is all-or-nothing and **disables the browser web UI** (which doesn't send the key), so it's for non-browser clients (the mobile app, slicers, scripts); for browser-UI access on a LAN, use loopback + the desktop app or an authenticating reverse proxy — see [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
+**The API key**: generated at random the first time you turn sharing on. **Show** reveals it so you can copy it to another device; **Roll key…** replaces it immediately, which locks out every device and browser that used the old one until you give it the new key. A browser on another device asks for the key once, on a sign-in page.
+
+**The certificate warning**: the app generates its own certificate, so another device warns about it until that device trusts the app's certificate authority. Use **Download the certificate authority**, install the file on the device, and compare the fingerprint with the one shown in Settings. Step-by-step instructions, and how to use your own certificate instead, are in [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
 
 ## Find on Your Network — mDNS Auto-Discovery *(v1.47)*
 

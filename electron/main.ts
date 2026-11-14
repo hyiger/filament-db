@@ -12,9 +12,14 @@ import {
   type LabelPrinterKind,
 } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
+import { desktopHttpsPort } from "../src/lib/gatewayConfig";
 import { listLanIpv4 } from "../src/lib/getLanIp";
 import { isNtagSizeName, type NtagSizeName } from "../src/lib/ntagVersion";
-import { startMdnsAdvertisement, stopMdnsAdvertisement } from "./mdns-service";
+import {
+  currentAdvertisedHostName,
+  startMdnsAdvertisement,
+  stopMdnsAdvertisement,
+} from "./mdns-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import {
   SyncService,
@@ -158,6 +163,10 @@ let pendingFallbackNotice: ConnectionFallback | null = null;
 let nfcInitStarted = false;
 let syncService: SyncService | null = null;
 const PORT = parseInt(process.env.PORT || "3456", 10);
+/** Port of the secure gateway (HTTPS + API key) that "Share on local network"
+ * opens to other devices. The embedded server's plain HTTP port (PORT) is
+ * always loopback-only. */
+const HTTPS_PORT = desktopHttpsPort(process.env.FILAMENTDB_HTTPS_PORT, PORT);
 
 // ── Single-instance lock ──
 // Prevent multiple app windows / duplicate servers on the same port. On
@@ -505,13 +514,31 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PORT: String(PORT),
-      // Bind loopback-only by default; "Share on local network" (Settings)
-      // flips this to 0.0.0.0 so LAN devices (the mobile scanner) can reach
-      // the embedded server. Toggling it restarts the server (see save-config).
-      HOSTNAME: store.get("exposeToLan") ? "0.0.0.0" : "localhost",
+      // The plain HTTP port is ALWAYS loopback-only: it has no key, and this
+      // computer's own window and a slicer on it are its only users.
+      HOSTNAME: "localhost",
       NODE_ENV: "production",
       FILAMENTDB_LOCAL_PRINT_TOKEN: LOCAL_PRINT_TOKEN,
+      // Where the server keeps the gateway's API key and certificates.
+      FILAMENTDB_SECURE_DIR: path.join(app.getPath("userData"), "secure"),
     };
+
+    // "Share on local network" (Settings) starts the secure gateway inside the
+    // server process (src/instrumentation.ts): HTTPS on every interface,
+    // requiring the API key. Other devices reach the app only through it.
+    // Toggling the setting restarts the server (see save-config). An inherited
+    // FILAMENTDB_HTTPS_PORT must not start a gateway the setting says is off.
+    if (store.get("exposeToLan")) {
+      env.FILAMENTDB_HTTPS_PORT = String(HTTPS_PORT);
+      env.FILAMENTDB_HTTPS_HOST = "0.0.0.0";
+      // The mDNS advertisement's own host name is what a discovering client
+      // may connect to, so the generated certificate has to be valid for it.
+      env.FILAMENTDB_TLS_HOSTS = [process.env.FILAMENTDB_TLS_HOSTS, currentAdvertisedHostName()]
+        .filter(Boolean)
+        .join(",");
+    } else {
+      delete env.FILAMENTDB_HTTPS_PORT;
+    }
 
     if (uri) {
       env.MONGODB_URI = uri;
@@ -694,9 +721,20 @@ function stopServer(): Promise<void> {
     };
     proc.once("exit", finish);
     proc.kill();
-    // Safety net: never hang the caller if "exit" doesn't fire (already-dead
-    // handle, etc.). In practice the utility process exits within a few ms.
-    setTimeout(finish, 5000);
+    // The server's graceful shutdown waits for open connections, and a stream
+    // (a slicer on /api/scan/stream) never ends. A server that is still alive
+    // after the grace period is ended outright: left running, it would keep
+    // whatever it still holds while its replacement starts beside it.
+    setTimeout(() => {
+      if (settled) return;
+      try {
+        if (proc.pid !== undefined) process.kill(proc.pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+      // Safety net: never hang the caller if "exit" doesn't fire.
+      setTimeout(finish, 2000);
+    }, 5000);
   });
 }
 
@@ -705,13 +743,38 @@ function stopServer(): Promise<void> {
  * app can auto-discover it on the LAN. Only when packaged AND "Share on local
  * network" is enabled — in dev the renderer is served by a separate `next dev`,
  * and when exposeToLan is off the server is loopback-only (nothing to reach).
+ * What is advertised is the secure gateway's HTTPS port, never the open HTTP one.
  * Idempotent; call it after the server's bind state settles.
  */
+let mdnsSyncGeneration = 0;
+
 function syncMdnsAdvertisement(): void {
-  if (!isDev && store.get("exposeToLan")) {
-    startMdnsAdvertisement(PORT, app.getVersion());
-  } else {
+  const generation = ++mdnsSyncGeneration;
+  if (isDev || !store.get("exposeToLan")) {
     stopMdnsAdvertisement();
+    return;
+  }
+  // Advertise only a gateway that is actually listening: one that could not
+  // start (its port taken by another program) would send phones to a dead
+  // port, or to that other program.
+  void secureGatewayIsRunning().then((running) => {
+    if (generation !== mdnsSyncGeneration) return; // a newer sync superseded this one
+    if (running) startMdnsAdvertisement(HTTPS_PORT, app.getVersion());
+    else stopMdnsAdvertisement();
+  });
+}
+
+/** Ask the embedded server whether its secure gateway came up. */
+async function secureGatewayIsRunning(): Promise<boolean> {
+  try {
+    const res = await fetch(`http://localhost:${PORT}/api/security`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { running?: unknown };
+    return body.running === true;
+  } catch {
+    return false;
   }
 }
 
@@ -896,10 +959,12 @@ ipcMain.handle("get-config", (event) => {
 
 // "Share on local network" needs to tell the user which URL to point a phone
 // at. Returns the machine's LAN IPv4 candidates (private ranges first) + the
-// server port. Empty `ips` → no usable LAN interface (e.g. Wi-Fi is off).
+// secure gateway's HTTPS port. Empty `ips` → no usable LAN interface (e.g.
+// Wi-Fi is off). The Settings card itself reads GET /api/security, which also
+// knows whether the gateway actually came up.
 ipcMain.handle("get-lan-ip", (event) => {
   assertTrustedSender(event, "get-lan-ip");
-  return { ips: listLanIpv4(), port: PORT };
+  return { ips: listLanIpv4(), port: HTTPS_PORT };
 });
 
 // (#489) Whether Electron runs packaged or dev. In dev the renderer is
@@ -978,9 +1043,9 @@ ipcMain.handle("save-config", async (event, config: {
     store.set("ntagDefaultSize", config.ntagDefaultSize);
   }
 
-  // "Share on local network": flips the embedded server's bind address
-  // (localhost ⇄ 0.0.0.0). Only a real change needs a server respawn; record
-  // it before writing so we can decide below.
+  // "Share on local network": starts or stops the secure gateway (HTTPS + API
+  // key) inside the embedded server. Only a real change needs a server
+  // respawn; record it before writing so we can decide below.
   let exposeToLanChanged = false;
   if (config.exposeToLan !== undefined) {
     if ((store.get("exposeToLan") as boolean) !== config.exposeToLan) {
@@ -1078,7 +1143,7 @@ ipcMain.handle("save-config", async (event, config: {
     }
   } else if (exposeToLanChanged && !isDev) {
     // LAN-share toggled with no connection change: respawn the embedded
-    // server so it rebinds to the new HOSTNAME, reusing the already-resolved
+    // server so it starts or drops the secure gateway, reusing the already-resolved
     // active URI. No URI re-resolution (sync / local-mongo aren't
     // re-initialised) and no window reload (the renderer talks to localhost
     // either way). The await means this resolves only once the server is

@@ -30,6 +30,7 @@ vi.mock("os", async (importOriginal) => {
 import {
   advertisedHostName,
   advertisementConfig,
+  currentAdvertisedHostName,
   instanceName,
   startMdnsAdvertisement,
   stopMdnsAdvertisement,
@@ -140,8 +141,34 @@ describe("advertisementConfig", () => {
       type: "filamentdb",
       port: 3456,
       host: `filamentdb-studio-mac-${digest("Studio-Mac")}.local`,
-      txt: { app: "filament-db", version: "1.84.0" },
+      txt: { app: "filament-db", version: "1.84.0", tls: "1", auth: "key" },
     });
+  });
+});
+
+describe("secure gateway advertisement", () => {
+  it("tells clients the advertised port speaks HTTPS and wants the API key", () => {
+    // The port passed in is the gateway's; an older client that ignores these
+    // records assumes http:// and is answered "HTTPS only" by the gateway.
+    expect(advertisementConfig(3457, "1.86.0", "Studio-Mac.local").txt).toEqual({
+      app: "filament-db",
+      version: "1.86.0",
+      tls: "1",
+      auth: "key",
+    });
+  });
+
+  it("exposes this machine's advertised host name for the certificate", () => {
+    // electron/main.ts adds it to FILAMENTDB_TLS_HOSTS: a client that connects
+    // to the SRV target must find that name in the gateway's certificate.
+    hostname.mockReturnValue("Studio-Mac.local");
+    expect(currentAdvertisedHostName()).toBe(advertisedHostName("Studio-Mac.local"));
+    hostname.mockImplementation(() => {
+      throw new Error("uv_os_gethostname failed");
+    });
+    expect(currentAdvertisedHostName()).toBe("filamentdb.local");
+    hostname.mockReset();
+    hostname.mockReturnValue("Studio-Mac.local");
   });
 });
 
