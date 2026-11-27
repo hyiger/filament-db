@@ -1827,6 +1827,7 @@
   "detail.spool.belowTareWarning": "{weight} g liegt unter dem Leergewicht der Spule ({tare} g), daher zeigt „Verbleibend“ 0 an. Gib das Gesamtgewicht inklusive Spule ein.",
   "common.select": "Auswählen",
   "nozzleType.Brass": "Messing",
+  "nozzleType.Steel": "Stahl",
   "nozzleType.HardenedSteel": "Gehärteter Stahl",
   "nozzleType.StainlessSteel": "Edelstahl",
   "nozzleType.Copper": "Kupfer",

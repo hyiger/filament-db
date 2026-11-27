@@ -1827,6 +1827,7 @@
   "detail.spool.belowTareWarning": "{weight} g is below the empty spool weight ({tare} g), so Remaining will read 0. Enter the total weight including the spool.",
   "common.select": "Select",
   "nozzleType.Brass": "Brass",
+  "nozzleType.Steel": "Steel",
   "nozzleType.HardenedSteel": "Hardened Steel",
   "nozzleType.StainlessSteel": "Stainless Steel",
   "nozzleType.Copper": "Copper",
