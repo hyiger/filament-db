@@ -21,6 +21,7 @@
  *  test fails otherwise. */
 export const NOZZLE_TYPES: { value: string; i18nKey: string }[] = [
   { value: "Brass", i18nKey: "nozzleType.Brass" },
+  { value: "Steel", i18nKey: "nozzleType.Steel" },
   { value: "Hardened Steel", i18nKey: "nozzleType.HardenedSteel" },
   { value: "Stainless Steel", i18nKey: "nozzleType.StainlessSteel" },
   { value: "Copper", i18nKey: "nozzleType.Copper" },

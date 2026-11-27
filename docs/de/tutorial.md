@@ -115,7 +115,7 @@ Bevor du Filamente hinzufügst, benötigst du mindestens ein Düsenprofil, damit
 3. Fülle das Formular aus:
    - **Name** — kurze Bezeichnung, z. B. `0.4 Brass`
    - **Durchmesser** — Wert eintippen oder aus der Dropdown-Liste wählen (0.1 bis 2.0 mm)
-   - **Typ** — Messing (Brass), gehärteter Stahl, Edelstahl, Kupfer, ObXidian, Diamondback usw.
+   - **Typ** — Messing (Brass), Stahl, gehärteter Stahl, Edelstahl, Kupfer, ObXidian, Diamondback usw.
    - **High Flow** — anhaken, wenn es eine High-Flow-Düse ist
    - **Hardened** — anhaken, wenn sie abrasive Materialien drucken kann
    - **Installiert in** — optional den einen Drucker wählen, in dem die Düse installiert ist (oder **Nicht in einem Drucker installiert** lassen); kann später gesetzt werden

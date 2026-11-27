@@ -25,6 +25,9 @@ describe("nozzleTypeLabel", () => {
     expect(nozzleTypeLabel("Hardened Steel", t)).toBe(
       "T(nozzleType.HardenedSteel)",
     );
+    // Plain, non-hardened steel (e.g. the nitrocarburized Bondtech INDX
+    // nozzles): distinct from both Hardened Steel and Stainless Steel.
+    expect(nozzleTypeLabel("Steel", t)).toBe("T(nozzleType.Steel)");
   });
 
   it("passes unknown legacy values through raw (never an empty cell)", () => {

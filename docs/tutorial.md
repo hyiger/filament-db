@@ -113,7 +113,7 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 3. Fill in the form:
    - **Name** -- a short label, e.g. `0.4 Brass`
    - **Diameter** -- type a value or pick from the dropdown (0.1 to 2.0mm)
-   - **Type** -- Brass, Hardened Steel, Stainless Steel, Copper, ObXidian, Diamondback, etc.
+   - **Type** -- Brass, Steel, Hardened Steel, Stainless Steel, Copper, ObXidian, Diamondback, etc.
    - **High Flow** -- check if this is a high-flow nozzle
    - **Hardened** -- check if it can print abrasive materials
    - **Installed in** -- optionally pick the single printer this nozzle is installed in (or leave it as **Not installed in a printer**); you can set this later

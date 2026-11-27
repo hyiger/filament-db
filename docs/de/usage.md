@@ -288,7 +288,7 @@ Gehe zu **Einstellungen** und klicke auf **Düsen**, um Düsenprofile anzusehen,
 
 Jede Düse hat:
 - **Durchmesser** (0.25 mm, 0.4 mm, 0.6 mm usw.)
-- **Typ** (Messing, gehärteter Stahl, Edelstahl, ObXidian, Diamondback usw.)
+- **Typ** (Messing, Stahl, gehärteter Stahl, Edelstahl, ObXidian, Diamondback usw.)
 - **High Flow**-Flag
 - **Hardened**-Flag
 - **Installiert in** — den einen Drucker, in dem diese physische Düse aktuell installiert ist, aus einer Radio-Liste gewählt (oder **Nicht in einem Drucker installiert**). Eine Düse kann nur in einem Drucker gleichzeitig sein; wählst du hier einen Drucker, wird sie aus dem vorherigen entfernt.

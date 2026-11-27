@@ -286,7 +286,7 @@ Go to **Settings** and click **Nozzles** to view, create, edit, and delete nozzl
 
 Each nozzle has:
 - **Diameter** (0.25mm, 0.4mm, 0.6mm, etc.)
-- **Type** (Brass, Hardened Steel, Stainless Steel, ObXidian, Diamondback, etc.)
+- **Type** (Brass, Steel, Hardened Steel, Stainless Steel, ObXidian, Diamondback, etc.)
 - **High Flow** flag
 - **Hardened** flag
 - **Installed in** -- the single printer this physical nozzle is currently installed in, chosen from a radio list (or **Not installed in a printer**). A nozzle can only be in one printer at a time; picking a printer here moves it off any printer it was previously on.
