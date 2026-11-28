@@ -832,7 +832,7 @@ describe("generatePrusaSlicerBundle", () => {
         calibrations: [
           {
             nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" },
-            printer: { name: "MK3S+" },
+            printer: null,
             extrusionMultiplier: 0.95,
             retractLength: 0.8,
           },
@@ -877,7 +877,7 @@ describe("generatePrusaSlicerBundle", () => {
         settings: {},
         calibrations: [
           { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
-          { nozzle: { name: "0.4 brass", diameter: 0.4, type: "brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.97 },
+          { nozzle: { name: "0.4 brass", diameter: 0.4, type: "brass" }, printer: null, bedType: { name: "Textured" }, extrusionMultiplier: 0.97 },
         ],
       },
     ];
@@ -919,10 +919,11 @@ describe("generatePrusaSlicerBundle", () => {
     expect(bundle).not.toContain("filamentdb_nozzle");
   });
 
-  it("#872: prefers the any-printer/any-bed default over a printer-specific calibration for the same nozzle (line 459)", () => {
-    // Same nozzle key appears twice. The FIRST seen is printer-specific; the SECOND
-    // is the any-printer/any-bed default. The default must win as the representative
-    // (existing exists but new isDefault && !existingIsDefault → replace).
+  it("#872: prefers the any-bed default over a bed-specific calibration for the same nozzle", () => {
+    // Same nozzle key appears three times. The FIRST seen is printer-specific
+    // (never a candidate), the SECOND is printer-less but bed-specific, the THIRD
+    // is the any-printer/any-bed default. The default must win as the
+    // representative (existing exists but new isDefault && !existingIsDefault → replace).
     const bundle = generatePrusaSlicerBundle([
       {
         name: "PLA",
@@ -935,19 +936,22 @@ describe("generatePrusaSlicerBundle", () => {
           // second-nozzle entry so byNozzle.size >= 2 → suffixed presets are emitted
           { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, extrusionMultiplier: 0.9 },
           // 0.4 Brass, printer-specific FIRST
-          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, bedType: { name: "Textured" }, extrusionMultiplier: 0.91 },
-          // 0.4 Brass default SECOND — should become the representative
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, bedType: null, extrusionMultiplier: 0.91 },
+          // 0.4 Brass, printer-less but bed-specific SECOND
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: { name: "Textured" }, extrusionMultiplier: 0.92 },
+          // 0.4 Brass default THIRD: it should become the representative
           { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.95 },
         ],
       },
     ]);
-    // The default's extrusion multiplier is baked, not the printer-specific one.
+    // The default's extrusion multiplier is baked, not the bed- or printer-specific one.
     expect(bundle).toContain("extrusion_multiplier = 0.95");
     expect(bundle).not.toContain("extrusion_multiplier = 0.91");
+    expect(bundle).not.toContain("extrusion_multiplier = 0.92");
   });
 
-  it("#872: keeps the first-seen default when a later printer-specific cal shares its nozzle (line 459 no-replace branch)", () => {
-    // FIRST 0.4 Brass is the default; a later printer-specific one for the same
+  it("#872: keeps the first-seen default when a later bed-specific cal shares its nozzle (no-replace branch)", () => {
+    // FIRST 0.4 Brass is the default; a later bed-specific one for the same
     // nozzle must NOT replace it (existing is already default → keep existing).
     const bundle = generatePrusaSlicerBundle([
       {
@@ -960,7 +964,7 @@ describe("generatePrusaSlicerBundle", () => {
         calibrations: [
           { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, extrusionMultiplier: 0.9 },
           { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.95 },
-          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.91 },
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: { name: "Textured" }, extrusionMultiplier: 0.91 },
         ],
       },
     ]);
@@ -1956,5 +1960,184 @@ describe("GH #1040 — high-flow discriminator in compatible_printers_condition"
     expect(kept.settings.compatible_printers_condition).toBe(
       "nozzle_diameter[0]==0.4 and !nozzle_high_flow[0]",
     );
+  });
+});
+
+describe("printer-scoped calibration rows never become PrusaSlicer sections", () => {
+  // The live case: a Core One INDX row (printer-less, 0.4 HF), an H2D row
+  // (scoped to the H2D, 0.4 HF tungsten carbide) and a 0.25 standard row. Both
+  // 0.4 nozzles are high-flow, so the condition alone could never tell the
+  // H2D's section apart from the INDX's: the H2D preset was offered on the INDX.
+  const indx = { name: "INDX", diameter: 0.4, type: "Other", highFlow: true };
+  const wc = { name: "WC HF 0.4", diameter: 0.4, type: "Tungsten Carbide", highFlow: true };
+  const indx025 = { name: "INDX 0.25 STD", diameter: 0.25, type: "Other", highFlow: false };
+  const h2d = { _id: "6a1a7bef677d648e9ba9cd01", name: "Bambu Labs H2D" };
+
+  const indxRow = { nozzle: indx, printer: null, bedType: null, retractLength: 0.8, maxVolumetricSpeed: 12 };
+  const h2dRow = {
+    nozzle: wc,
+    printer: h2d,
+    bedType: null,
+    nozzleTemp: 270,
+    retractLength: 0.2,
+    retractLift: 0.6,
+    fanMinSpeed: 0,
+  };
+  const smallRow = { nozzle: indx025, printer: null, bedType: null, retractLength: 0.5 };
+
+  const base = {
+    _id: "6a936f381cbfb70b5cd8db4d",
+    name: "Pro PCTG Natural",
+    vendor: "3D-Fuel",
+    type: "PCTG",
+    diameter: 1.75,
+    temperatures: { nozzle: 255, bed: 80 },
+    settings: {},
+  };
+  const sections = (bundle: string) =>
+    (bundle.match(/^\[filament:[^\]]*\]/gm) ?? []).map((s) => s.slice(10, -1));
+  const section = (bundle: string, name: string) => {
+    const start = bundle.indexOf(`[filament:${name}]\n`);
+    if (start === -1) return "";
+    const end = bundle.indexOf("\n\n", start);
+    return bundle.slice(start, end === -1 ? undefined : end);
+  };
+
+  it("drops the H2D's section and keeps fanning out over the printer-agnostic nozzles", () => {
+    const bundle = generatePrusaSlicerBundle([{ ...base, calibrations: [indxRow, h2dRow, smallRow] }]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.4 Other HF", "Pro PCTG Natural 0.25 Other"]);
+    expect(bundle).not.toContain("Tungsten Carbide");
+    // None of the H2D's tuning reaches any section.
+    expect(bundle).not.toContain("temperature = 270");
+    expect(bundle).not.toContain("filament_retract_length = 0.2");
+    expect(bundle).not.toContain("filament_retract_lift = 0.6");
+    // The INDX section is byte-for-byte what it was before: its own bake and
+    // the plain diameter condition (0.4 still has only one high-flow state).
+    const indxSection = section(bundle, "Pro PCTG Natural 0.4 Other HF");
+    expect(indxSection).toContain("filament_retract_length = 0.8");
+    expect(indxSection).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4\n");
+    expect(indxSection).toContain("filamentdb_nozzle = 0.4 Other HF");
+    expect(indxSection).toContain("temperature = 255");
+  });
+
+  it("a scoped row listed first changes nothing but section order", () => {
+    const bundle = generatePrusaSlicerBundle([{ ...base, calibrations: [h2dRow, smallRow, indxRow] }]);
+    expect(sections(bundle).sort()).toEqual(["Pro PCTG Natural 0.25 Other", "Pro PCTG Natural 0.4 Other HF"]);
+    expect(bundle).not.toContain("Tungsten Carbide");
+  });
+
+  it("when the scoped row was the second nozzle, the remaining section keeps its name, bake and condition", () => {
+    // Counting only agnostic nozzles would turn this into an unsuffixed,
+    // unbaked preset: a rename of a preset in use, and its tuned values
+    // (fans off here) replaced by the base filament's without a word.
+    const fansOff = { ...indxRow, fanMinSpeed: 0, fanMaxSpeed: 0, fanBridgeSpeed: 0, maxVolumetricSpeed: 3.6 };
+    const bundle = generatePrusaSlicerBundle([{ ...base, calibrations: [fansOff, h2dRow] }]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.4 Other HF"]);
+    const kept = section(bundle, "Pro PCTG Natural 0.4 Other HF");
+    expect(kept).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4\n");
+    expect(kept).toContain("filamentdb_nozzle = 0.4 Other HF");
+    expect(kept).toContain("min_fan_speed = 0");
+    expect(kept).toContain("max_fan_speed = 0");
+    expect(kept).toContain("bridge_fan_speed = 0");
+    expect(kept).toContain("filament_max_volumetric_speed = 3.6");
+    expect(bundle).not.toContain("Tungsten Carbide");
+    expect(bundle).not.toContain("temperature = 270");
+  });
+
+  it("a diameter only a scoped row covered gets no section, as with any fan-out", () => {
+    // Agnostic row on 0.6, the printer's row on 0.4. The fan-out offers a
+    // filament only on the diameters it has a section for; the 0.4 section was
+    // the other printer's tuning, so 0.4 printers now get none.
+    const db06 = { name: "Diamondback 0.6", diameter: 0.6, type: "Diamondback", highFlow: false };
+    const bundle = generatePrusaSlicerBundle([
+      { ...base, calibrations: [{ nozzle: db06, printer: null, retractLength: 0.8 }, h2dRow] },
+    ]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.6 Diamondback"]);
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.6\n");
+    expect(bundle).not.toContain("nozzle_diameter[0]==0.4");
+  });
+
+  it("a user pin on the bag still wins over the remaining section's condition", () => {
+    const pin = "printer_model!~/(COREONE_INDX8T|COREONE_INDX4T)/";
+    const db06 = { name: "Diamondback 0.6", diameter: 0.6, type: "Diamondback", highFlow: false };
+    const bundle = generatePrusaSlicerBundle([
+      {
+        ...base,
+        settings: { compatible_printers_condition: pin },
+        calibrations: [{ nozzle: db06, printer: null, extrusionMultiplier: 0.87 }, h2dRow],
+      },
+    ]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.6 Diamondback"]);
+    expect(bundle).toContain(`compatible_printers_condition = ${pin}\n`);
+    expect(bundle).toContain("extrusion_multiplier = 0.87");
+  });
+
+  it("a filament whose every row is printer-scoped exports the plain base preset", () => {
+    const db06 = { name: "Diamondback 0.6", diameter: 0.6, type: "Diamondback", highFlow: false };
+    const bundle = generatePrusaSlicerBundle([
+      { ...base, calibrations: [h2dRow, { nozzle: db06, printer: h2d, retractLength: 0.9 }] },
+    ]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural"]);
+    expect(bundle).not.toContain("filament_retract_length");
+    expect(bundle).toContain("compatible_printers_condition = \n");
+  });
+
+  it("the #1040 high-flow term is decided by the sections actually emitted", () => {
+    // 0.4 standard (agnostic) + 0.4 HF (scoped) + 0.6 (agnostic). With the HF
+    // section gone, 0.4 has one state left, so its condition stays plain and the
+    // preset is not newly hidden from high-flow 0.4 printers.
+    const brass04 = { name: "0.4 Brass", diameter: 0.4, type: "Brass", highFlow: false };
+    const brass06 = { name: "0.6 Brass", diameter: 0.6, type: "Brass", highFlow: false };
+    const bundle = generatePrusaSlicerBundle([
+      {
+        ...base,
+        calibrations: [
+          { nozzle: brass04, printer: null, extrusionMultiplier: 0.95 },
+          h2dRow,
+          { nozzle: brass06, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.4 Brass", "Pro PCTG Natural 0.6 Brass"]);
+    expect(section(bundle, "Pro PCTG Natural 0.4 Brass")).toContain(
+      "compatible_printers_condition = nozzle_diameter[0]==0.4\n",
+    );
+    expect(bundle).not.toContain("nozzle_high_flow");
+  });
+
+  it("an unpopulated printer ref and a soft-deleted printer are both still a scope", () => {
+    for (const printer of [
+      "6a1a7bef677d648e9ba9cd01",
+      { _id: "6a1a7bef677d648e9ba9cd02", name: "Old MK3S", _deletedAt: new Date("2026-01-01") },
+    ]) {
+      const bundle = generatePrusaSlicerBundle([
+        { ...base, calibrations: [indxRow, smallRow, { ...h2dRow, printer }] },
+      ]);
+      expect(sections(bundle)).toEqual(["Pro PCTG Natural 0.4 Other HF", "Pro PCTG Natural 0.25 Other"]);
+    }
+  });
+
+  it("a printer-scoped row never outranks a printer-less one on the same nozzle, even a bed-scoped one", () => {
+    const bundle = generatePrusaSlicerBundle([
+      {
+        ...base,
+        calibrations: [
+          { nozzle: indx, printer: h2d, bedType: null, extrusionMultiplier: 0.91 },
+          { nozzle: indx, printer: null, bedType: { name: "Satin" }, extrusionMultiplier: 0.93 },
+          smallRow,
+        ],
+      },
+    ]);
+    expect(bundle).toContain("extrusion_multiplier = 0.93");
+    expect(bundle).not.toContain("extrusion_multiplier = 0.91");
+  });
+
+  it("the emitted sections still collapse back to one base filament on import", () => {
+    const bundle = generatePrusaSlicerBundle([{ ...base, calibrations: [indxRow, h2dRow, smallRow] }]);
+    const collapsed = collapsePerNozzleImportSections(parseIniFilaments(bundle));
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].name).toBe("Pro PCTG Natural");
+    expect(collapsed[0].filamentdbId).toBe("6a936f381cbfb70b5cd8db4d");
+    expect("compatible_printers_condition" in collapsed[0].settings).toBe(false);
   });
 });

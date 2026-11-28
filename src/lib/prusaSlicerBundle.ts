@@ -656,8 +656,32 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
 
   for (const filament of filaments) {
     // #872: group calibrations by DISTINCT nozzle (diameter + type), preferring the
-    // any-printer/any-bed "default" entry as each nozzle's representative.
+    // any-bed "default" entry as each nozzle's representative.
+    //
+    // A row scoped to a printer never becomes a section. A section's only
+    // scope is its `compatible_printers_condition`, which can name a nozzle
+    // diameter and the high-flow flag but no printer: Filament DB has no
+    // mapping from its printers to PrusaSlicer printer presets, and the fork
+    // sends none. So a section baked from one printer's row is offered on
+    // EVERY printer with the same nozzle shape. Real case: an H2D-scoped row on
+    // a 0.4 HF tungsten carbide nozzle was offered on a Core One INDX (also
+    // 0.4 HF) at 15 °C hotter with a quarter of the retraction. Bambu imports
+    // write exactly these rows (`matchPrinterNozzle`), for printers PrusaSlicer
+    // never drives. The rows stay in the database for the dynamic
+    // `/calibration?printer=` read and the Orca/Bambu exports.
+    //
+    // Scoped rows still COUNT toward the fan-out decision (`calibratedNozzles`),
+    // so the sections that remain keep their names, baked values and
+    // conditions. Counting only agnostic nozzles would turn a filament whose
+    // second nozzle has only a scoped row into an unsuffixed, unbaked preset:
+    // a rename for every such preset already in use, and its tuned values
+    // (fans off for PMMA, say) silently replaced by the base filament's.
+    //
+    // A populated soft-deleted printer is still an object, so its rows stay
+    // scoped; only a ref to a printer document that no longer exists at all
+    // (populate yields null) reads as printer-less.
     const byNozzle = new Map<string, FilamentDoc>();
+    const calibratedNozzles = new Set<string>();
     for (const cal of Array.isArray(filament.calibrations) ? filament.calibrations : []) {
       const nz = cal?.nozzle;
       if (!nz || typeof nz !== "object" || nz.diameter == null) continue;
@@ -669,14 +693,18 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
       // type match on the sync-back + /calibration read paths (the human-readable
       // suffix/hint still uses the representative nozzle's original-cased type).
       const key = `${nz.diameter}|${(nz.type ?? "").trim().toLowerCase()}|${nz.highFlow ? "HF" : ""}`;
+      calibratedNozzles.add(key);
+      if (cal.printer != null) continue;
       const existing = byNozzle.get(key);
-      const isDefault = cal.printer == null && cal.bedType == null;
-      const existingIsDefault =
-        existing && existing.printer == null && existing.bedType == null;
+      const isDefault = cal.bedType == null;
+      const existingIsDefault = existing && existing.bedType == null;
       if (!existing || (isDefault && !existingIsDefault)) byNozzle.set(key, cal);
     }
 
-    if (byNozzle.size >= 2) {
+    // With no printer-agnostic nozzle left there is nothing safe to bake: the
+    // filament falls through to the single base preset, exactly as an
+    // uncalibrated one would.
+    if (calibratedNozzles.size >= 2 && byNozzle.size >= 1) {
       // Multiple nozzle profiles → one FLAT preset per nozzle, name suffixed with the
       // nozzle (e.g. "Inslogic PA12-CF 0.4 Diamondback") because PrusaSlicer has no
       // parent/child for USER filament presets. Each bakes its nozzle's filament-level
@@ -686,7 +714,9 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
       // GH #1040: when a diameter appears with BOTH highFlow states in the group,
       // diameter alone cannot disambiguate the two presets and each section's
       // condition additionally encodes its nozzle's HF flag. Diameters present in
-      // only one state keep the plain condition (today's visibility).
+      // only one state keep the plain condition (today's visibility). The group
+      // is the sections actually emitted: a dropped printer-scoped section
+      // leaves nothing to disambiguate against.
       const hfStatesByDiameter = new Map<number, Set<boolean>>();
       for (const cal of byNozzle.values()) {
         const nz = cal.nozzle as { diameter: number; highFlow?: boolean | null };
@@ -704,9 +734,9 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
         );
       }
     } else {
-      // 0 or 1 distinct nozzle → a single preset (unchanged). Any per-nozzle
-      // calibration is applied dynamically by the fork when the printer changes
-      // (GET /api/filaments/{name}/calibration).
+      // 0 or 1 distinct nozzle, or only printer-scoped ones → a single preset.
+      // Any per-nozzle calibration is applied dynamically by the fork when the
+      // printer changes (GET /api/filaments/{name}/calibration).
       writeSection(lines, filament.name, filamentToSlicerKeys(filament));
     }
   }
